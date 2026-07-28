@@ -63,11 +63,27 @@ import { backendSingletonOwner } from '../infra/lock'
  *  downgrade quietly drops the fields it did not know about. */
 export const SURFACE_SIDECAR_SCHEMA_VERSION = 1
 
-/** How many idempotency receipts survive in the snapshot. Bounded because KTD5
- *  requires the sidecar to stay bounded and a receipt is only useful for the
- *  window between a lost response and its retry — measured in seconds, not days.
- *  Oldest are evicted first. */
-const MAX_IDEMPOTENCY_ENTRIES = 256
+/**
+ * How long a receipt survives, and the count that backstops it.
+ *
+ * RETENTION IS BY AGE, and the count is only a ceiling. That ordering is the
+ * whole point. A receipt is useful for the window between a lost response and its
+ * retry — a window measured in TIME — so a table trimmed by COUNT revokes the
+ * no-duplicate guarantee exactly when it is most needed: a burst of 256 unrelated
+ * mutations evicts a receipt that is four seconds old, and the retry behind it is
+ * then a fresh transaction that appends the same thread message a second time,
+ * reports success, and leaves no trace that it double-applied.
+ *
+ * The count that would make an age policy expensive does not exist at this size.
+ * A receipt is a scalar envelope measured at ~353 B (see the receipt note in
+ * `surface-service.ts`), so the ceiling below is ~700 KiB against the sidecar's
+ * measured 4.5 MiB latency knee — and reaching it needs 2,048 DISTINCT keys
+ * inside the retention window, which is orders of magnitude past any real retry
+ * burst. Minutes of retention is free; the count is there so a pathological
+ * client cannot make the file unbounded.
+ */
+export const IDEMPOTENCY_RETENTION_MS = 10 * 60_000
+const MAX_IDEMPOTENCY_ENTRIES = 2048
 
 /** Anything `JSON.stringify` round-trips unchanged. The caller's idempotency
  *  result is opaque to this module — it is whatever that caller needs to hand back
@@ -125,6 +141,10 @@ export interface SurfaceLoadOutcome {
    *  partly damaged: the readable records were kept, the rest are reported rather
    *  than silently discarded. */
   quarantined: number
+  /** spaceId → persisted topology revision. Empty for a snapshot written before
+   *  U3, which carried no counter; the store then starts from the floor its records
+   *  imply (see `buildTopologyIndex`). */
+  topologyRevs: Record<string, number>
   /** Present exactly when `health === 'faulted-read-only'`. */
   fault?: SurfaceStoreFault
 }
@@ -213,6 +233,10 @@ export interface SurfaceSidecarOptions {
   hooks?: SidecarHooks
   /** Defaults to {@link nodeSidecarIo}. */
   io?: SidecarIo
+  /** Epoch-ms source for receipt stamping and age eviction. Injectable for the
+   *  same reason the two fsyncs are: retention is now measured in TIME, and a
+   *  test that has to sleep for ten minutes to assert it is a test nobody runs. */
+  now?: () => number
 }
 
 /** Why a transaction was refused. Returned rather than thrown for the same reason
@@ -229,6 +253,15 @@ export type SurfaceCommitRejection =
   /** A record failed the shape guard, or the candidate did not survive a
    *  serialize/parse round trip. Caught BEFORE any file is touched. */
   | 'invalid-record'
+  /** The idempotency key is on file for a DIFFERENT request. `detail` carries the
+   *  fingerprint the key already belongs to. Never a replayed success: a reused
+   *  key on a `purge` would otherwise report an irreversible operation as having
+   *  succeeded when it never ran. */
+  | 'idempotency-key-reuse'
+  /** The caller's own {@link SurfaceTransaction.precommit} re-validation refused,
+   *  from inside the queue and before any file was touched. `detail` carries the
+   *  caller's reason verbatim — this module deliberately does not interpret it. */
+  | 'precommit-refused'
   /** The durable write failed. Live state is unchanged — see `commit`. */
   | 'write-failed'
 
@@ -272,9 +305,49 @@ export interface SurfaceTransaction {
    *  persisted `result` and re-applies NOTHING (KTD7's "crash after SSE but before
    *  response"). */
   idempotencyKey?: string
+  /**
+   * What this key is a retry OF — operation, target, and a digest of the request.
+   *
+   * A key alone does not identify a transaction; it identifies a CALLER'S INTENT
+   * to retry one. Keying the replay on the header alone means a client that reuses
+   * a key across two different requests gets the first one's receipt back with
+   * `committed: true`, having applied nothing — and on a `purge` that is a success
+   * response for an irreversible operation that never ran. So a key hit whose
+   * fingerprint differs is refused as {@link SurfaceCommitRejection}
+   * `idempotency-key-reuse` rather than replayed.
+   */
+  fingerprint?: string
   /** Persisted alongside the records IN THE SAME snapshot write, so a receipt can
    *  never exist for a transaction whose records did not land, or vice versa. */
   result?: JsonValue
+  /**
+   * Re-validate, from INSIDE the transaction queue, immediately before the durable
+   * write — and optionally replace what is written.
+   *
+   * This is the plan/apply seam's serialization point. The caller validates a
+   * candidate against ITS live state before calling `commit`; between that
+   * validation and this write, live state is free to move, and the whole-file
+   * rewrite this module performs is not a short window. Running the caller's own
+   * re-validation here puts it in the same serialized domain as the write without
+   * dragging the caller's planning into the queue — which would serialize every
+   * mutation in a space behind a file write and was rejected for that reason.
+   *
+   * Returning `ok: false` aborts with `precommit-refused` and touches nothing.
+   * Returning `puts`/`topologyRevs`/`result` replaces the transaction's own, which
+   * is how a caller allocates a revision at COMMIT time rather than at plan time —
+   * and then reports the revision it actually allocated rather than the one it
+   * proposed. The replacement goes through every check the originals would have:
+   * shape guard, `expectedRevs`, and the newer-revision rule.
+   *
+   * NOT called on a replayed retry: a replay applies nothing, so there is nothing
+   * to re-validate.
+   */
+  precommit?: () =>
+    | { ok: true; puts?: Surface[]; topologyRevs?: Record<string, number>; result?: JsonValue }
+    | { ok: false; reason: string }
+  /** spaceId → topology revision to persist with this transaction. Merged
+   *  monotonically into the stored counters — the sidecar never lowers one. */
+  topologyRevs?: Record<string, number>
   /**
    * Invoked exactly once, AFTER the durable write and after the sidecar's own
    * record set is updated — the "install in memory, then emit one batch" half of
@@ -292,17 +365,41 @@ interface SidecarSnapshot {
   version: number
   records: Surface[]
   idempotency: IdempotencyEntry[]
+  /**
+   * spaceId → topology revision. PERSISTED rather than derived from the records,
+   * which is the KTD5 amendment U3 forced: `purge` erases records, so a revision
+   * reconstructed as `max(homeRev)` over the survivors runs backwards and stops
+   * being a usable compare-and-swap token.
+   *
+   * OPTIONAL on read, deliberately, and NOT a schema-version bump: a snapshot
+   * written by U1/U1e has no counter, and treating that as an unreadable version
+   * would fault an existing install into read-only on the strength of a field it
+   * predates. Absent, the store starts each space at the floor its records imply,
+   * which is exactly the old behaviour.
+   */
+  topologyRevs?: Record<string, number>
 }
 
-interface IdempotencyEntry {
+/** A persisted receipt, as a caller may inspect it BEFORE deciding to plan
+ *  anything. Exported so the service can consult the table ahead of its own
+ *  existence, liveness and compare-and-swap pre-checks — a retry that reaches
+ *  those checks gets a spurious conflict (or a not-found, if its target was
+ *  purged meanwhile) instead of the replay it is entitled to. */
+export interface SurfaceIdempotencyReceipt {
   key: string
-  /** Epoch ms of the commit, used only for eviction order. */
+  /** Epoch ms of the commit. Used for eviction AND for replay eligibility — see
+   *  {@link IDEMPOTENCY_RETENTION_MS}. */
   at: number
   /** Ids the transaction wrote, so a replay can say WHAT it applied without
    *  duplicating whole records into the receipt. */
   ids: string[]
+  /** See {@link SurfaceTransaction.fingerprint}. Absent on a receipt written by an
+   *  older build; treated as "unknown intent", which never matches. */
+  fingerprint?: string
   result?: JsonValue
 }
+
+type IdempotencyEntry = SurfaceIdempotencyReceipt
 
 /** The guard every persisted record must pass. Deliberately structural and
  *  minimal: it checks the fields the store INDEXES by (`SurfaceStore.load` skips
@@ -314,7 +411,13 @@ function isUsableRecord(r: unknown): r is Surface {
   if (typeof s.id !== 'string' || s.id.length === 0) return false
   if (typeof s.spaceId !== 'string' || s.spaceId.length === 0) return false
   if (!s.home || typeof s.home !== 'object') return false
-  if (s.home.kind === 'canvas') {
+  // All three home kinds, `recovery` included. It is not optional: under KTD15 a
+  // deleted subtree's root IS a record whose home is the recovery store, so a
+  // guard that knew only two kinds would reject every delete at the durable
+  // boundary — and, worse, would quarantine an already-persisted deleted record
+  // on the next boot, erasing the one copy of work the recovery store exists to
+  // keep.
+  if (s.home.kind === 'canvas' || s.home.kind === 'recovery') {
     if (typeof s.home.spaceId !== 'string') return false
   } else if (s.home.kind === 'surface') {
     if (typeof s.home.surfaceId !== 'string') return false
@@ -328,8 +431,26 @@ function isUsableRecord(r: unknown): r is Surface {
 }
 
 type ReadResult =
-  | { ok: true; records: Surface[]; idempotency: IdempotencyEntry[]; quarantined: number }
+  | {
+      ok: true
+      records: Surface[]
+      idempotency: IdempotencyEntry[]
+      quarantined: number
+      topologyRevs: Record<string, number>
+    }
   | { ok: false; problem: SurfaceSnapshotProblem }
+
+/** Keep only finite numeric entries. A hand-edited snapshot is a ratified property
+ *  of the JSON sidecar, so a counter someone typed `"3"` into must not become the
+ *  space's revision — it would compare unequal to every real token forever. */
+function readTopologyRevs(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, number> = {}
+  for (const [spaceId, rev] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof rev === 'number' && Number.isFinite(rev)) out[spaceId] = rev
+  }
+  return out
+}
 
 /** Read and validate one snapshot file. Never repairs, never writes. */
 function readSnapshotFile(path: string): ReadResult {
@@ -383,7 +504,7 @@ function readSnapshotFile(path: string): ReadResult {
           !!e && typeof e === 'object' && typeof (e as IdempotencyEntry).key === 'string',
       )
     : []
-  return { ok: true, records, idempotency, quarantined }
+  return { ok: true, records, idempotency, quarantined, topologyRevs: readTopologyRevs(snap.topologyRevs) }
 }
 
 interface SidecarHydration {
@@ -403,7 +524,10 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
   const primary = readSnapshotFile(paths.primary)
   if (primary.ok) {
     return {
-      outcome: { health: 'healthy', from: 'primary', records: primary.records, quarantined: primary.quarantined },
+      outcome: {
+        health: 'healthy', from: 'primary', records: primary.records,
+        quarantined: primary.quarantined, topologyRevs: primary.topologyRevs,
+      },
       idempotency: primary.idempotency,
       primaryIsKnownGood: true,
     }
@@ -414,7 +538,10 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
     // Covers both "primary is corrupt" and "we crashed after rotation but before
     // the rename" — in either case the backup is the newest readable snapshot.
     return {
-      outcome: { health: 'recovered', from: 'backup', records: backup.records, quarantined: backup.quarantined },
+      outcome: {
+        health: 'recovered', from: 'backup', records: backup.records,
+        quarantined: backup.quarantined, topologyRevs: backup.topologyRevs,
+      },
       idempotency: backup.idempotency,
       primaryIsKnownGood: false,
       log: {
@@ -430,7 +557,7 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
     // First boot. Not a fault: there is no evidence to preserve, so persistence
     // stays enabled and the first commit creates the file.
     return {
-      outcome: { health: 'healthy', from: 'empty', records: [], quarantined: 0 },
+      outcome: { health: 'healthy', from: 'empty', records: [], quarantined: 0, topologyRevs: {} },
       idempotency: [],
       primaryIsKnownGood: false,
     }
@@ -445,6 +572,7 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
       from: 'none',
       records: [],
       quarantined: 0,
+      topologyRevs: {},
       fault: { primary: primary.problem, backup: backup.problem },
     },
     idempotency: [],
@@ -472,10 +600,14 @@ export class SurfaceSidecar {
   private readonly paths: SurfaceSidecarPaths
   private readonly hooks: SidecarHooks | undefined
   private readonly io: SidecarIo
+  private readonly clock: () => number
   private readonly loadOutcome: SurfaceLoadOutcome
 
   private records = new Map<string, Surface>()
   private idempotency = new Map<string, IdempotencyEntry>()
+  /** The persisted monotonic topology counters. Held here rather than derived from
+   *  `records` because `drops` erase records — see `SidecarSnapshot.topologyRevs`. */
+  private topologyRevs = new Map<string, number>()
 
   /** The serialized form of what is on disk, for the no-op short-circuit. */
   private lastSerialized: string | null = null
@@ -504,6 +636,7 @@ export class SurfaceSidecar {
     this.paths = surfaceSidecarPaths(dir)
     this.hooks = opts.hooks
     this.io = opts.io ?? nodeSidecarIo
+    this.clock = opts.now ?? Date.now
 
     // Assert single-writer BEFORE touching the sidecar. Not a second lock: the
     // backend singleton already guards exactly this invariant (one backend per
@@ -561,6 +694,23 @@ export class SurfaceSidecar {
   }
 
   /**
+   * The receipt on file for a key, if one is still within the retention window.
+   *
+   * Exposed so a caller can decide REPLAY OR NOT before it validates anything.
+   * The alternative — discovering the replay only once the transaction reaches
+   * this module — means a retry of a compare-and-swap operation is refused by the
+   * caller's own revision check first (its `expectedRev` describes the world
+   * before its own first attempt), and a retry whose target was purged meanwhile
+   * is refused as not-found. Both are the retry being punished for having
+   * succeeded.
+   */
+  lookupIdempotency(key: string): SurfaceIdempotencyReceipt | undefined {
+    const entry = this.idempotency.get(key)
+    if (!entry) return undefined
+    return isFresh(entry, this.clock()) ? entry : undefined
+  }
+
+  /**
    * Run one transaction: validate a candidate, make it durable, install it, and
    * only then let the caller emit and acknowledge.
    *
@@ -593,15 +743,20 @@ export class SurfaceSidecar {
     // short-circuit cannot mistake "we have never written" for "the file already
     // says this".
     if (h.outcome.from === 'primary' || h.outcome.from === 'backup') {
-      this.install(h.outcome.records, h.idempotency)
+      this.install(h.outcome.records, h.idempotency, h.outcome.topologyRevs)
     }
     this.primaryIsKnownGood = h.primaryIsKnownGood
     return h.outcome
   }
 
-  private install(records: Surface[], idempotency: IdempotencyEntry[]): void {
+  private install(
+    records: Surface[],
+    idempotency: IdempotencyEntry[],
+    topologyRevs: Record<string, number>,
+  ): void {
     this.records = new Map(records.map(r => [r.id, r]))
     this.idempotency = new Map(idempotency.map(e => [e.key, e]))
+    this.topologyRevs = new Map(Object.entries(topologyRevs))
     // Recomputed from the record maps rather than kept as the bytes we read: a
     // quarantined record or a legacy key order would make the file's bytes differ
     // from what we would write for identical state, and the no-op short-circuit
@@ -614,6 +769,7 @@ export class SurfaceSidecar {
       version: SURFACE_SIDECAR_SCHEMA_VERSION,
       records: [...this.records.values()],
       idempotency: [...this.idempotency.values()],
+      topologyRevs: Object.fromEntries(this.topologyRevs),
     }
   }
 
@@ -626,15 +782,40 @@ export class SurfaceSidecar {
     // that has already moved past it. The whole point of the receipt is that the
     // caller lost the response, not the race.
     if (tx.idempotencyKey) {
-      const prior = this.idempotency.get(tx.idempotencyKey)
+      const prior = this.lookupIdempotency(tx.idempotencyKey)
       if (prior) {
+        // A key identifies a retry of ONE request. A hit whose fingerprint differs
+        // is a different request wearing the same key, and replaying it would
+        // report the first transaction's success for work the second one never
+        // did. Refused, naming what the key already belongs to.
+        if (prior.fingerprint !== tx.fingerprint) {
+          return {
+            committed: false,
+            reason: 'idempotency-key-reuse',
+            detail: prior.fingerprint ?? 'an earlier request',
+          }
+        }
         const records = prior.ids.map(id => this.records.get(id)).filter((r): r is Surface => !!r)
         return { committed: true, replayed: true, wrote: false, records, ...(prior.result !== undefined ? { result: prior.result } : {}) }
       }
     }
 
-    const puts = tx.puts ?? []
+    // The caller's own re-validation, inside the queue and before anything is
+    // touched. Nothing between here and the durable write can install a competing
+    // transaction — they are all behind this same chain — so what it asserts is
+    // still true when the bytes land. See `SurfaceTransaction.precommit`.
+    const rechecked = tx.precommit?.()
+    if (rechecked && !rechecked.ok) {
+      return { committed: false, reason: 'precommit-refused', detail: rechecked.reason }
+    }
+
+    const puts = (rechecked?.ok ? rechecked.puts : undefined) ?? tx.puts ?? []
     const drops = tx.drops ?? []
+    const revisions = { ...tx.topologyRevs, ...(rechecked?.ok ? rechecked.topologyRevs : undefined) }
+    // The receipt describes what was ACTUALLY committed, so re-validation may
+    // replace it too — otherwise a response would report the revision the caller
+    // proposed rather than the one this transaction allocated.
+    const result = (rechecked?.ok ? rechecked.result : undefined) ?? tx.result
 
     for (const r of puts) {
       if (!isUsableRecord(r)) {
@@ -673,20 +854,32 @@ export class SurfaceSidecar {
       next.set(r.id, r)
     }
 
+    const now = this.clock()
     const nextIdempotency = new Map(this.idempotency)
     if (tx.idempotencyKey) {
       nextIdempotency.set(tx.idempotencyKey, {
         key: tx.idempotencyKey,
-        at: Date.now(),
+        at: now,
         ids: puts.map(r => r.id),
-        ...(tx.result !== undefined ? { result: tx.result } : {}),
+        ...(tx.fingerprint !== undefined ? { fingerprint: tx.fingerprint } : {}),
+        ...(result !== undefined ? { result } : {}),
       })
+    }
+
+    // Monotonic merge, never assignment: the counters outlive the records they were
+    // allocated against (that is the point — a purge erases records), so a
+    // transaction may only ever raise one.
+    const nextTopologyRevs = new Map(this.topologyRevs)
+    for (const [spaceId, rev] of Object.entries(revisions)) {
+      if (typeof rev !== 'number' || !Number.isFinite(rev)) continue
+      if (rev > (nextTopologyRevs.get(spaceId) ?? 0)) nextTopologyRevs.set(spaceId, rev)
     }
 
     const candidate: SidecarSnapshot = {
       version: SURFACE_SIDECAR_SCHEMA_VERSION,
       records: [...next.values()],
-      idempotency: evict([...nextIdempotency.values()]),
+      idempotency: evict([...nextIdempotency.values()], now),
+      topologyRevs: Object.fromEntries(nextTopologyRevs),
     }
 
     let serialized: string
@@ -717,7 +910,7 @@ export class SurfaceSidecar {
     // a recovery the on-disk primary is corrupt, so an "identical" candidate still
     // has to be written to repair it.
     if (this.primaryIsKnownGood && serialized === this.lastSerialized) {
-      return { committed: true, replayed: false, wrote: false, records: written, ...(tx.result !== undefined ? { result: tx.result } : {}) }
+      return { committed: true, replayed: false, wrote: false, records: written, ...(result !== undefined ? { result } : {}) }
     }
 
     try {
@@ -732,6 +925,7 @@ export class SurfaceSidecar {
 
     this.records = next
     this.idempotency = new Map(candidate.idempotency.map(e => [e.key, e]))
+    this.topologyRevs = nextTopologyRevs
     this.lastSerialized = serialized
     this.primaryIsKnownGood = true
 
@@ -739,7 +933,7 @@ export class SurfaceSidecar {
     // the caller's; the transaction has committed and a restart will reload it.
     tx.onDurable?.(written)
 
-    return { committed: true, replayed: false, wrote: true, records: written, ...(tx.result !== undefined ? { result: tx.result } : {}) }
+    return { committed: true, replayed: false, wrote: true, records: written, ...(result !== undefined ? { result } : {}) }
   }
 
   /**
@@ -831,16 +1025,29 @@ function readSnapshotFromString(raw: string): ReadResult {
       return { ok: false, problem: { path: '<candidate>', kind: 'malformed', detail: 'records is not an array' } }
     }
     const records = parsed.records.filter(isUsableRecord)
-    return { ok: true, records, idempotency: [], quarantined: parsed.records.length - records.length }
+    return {
+      ok: true, records, idempotency: [], topologyRevs: {},
+      quarantined: parsed.records.length - records.length,
+    }
   } catch (e) {
     return { ok: false, problem: { path: '<candidate>', kind: 'unparsable', detail: (e as Error).message } }
   }
 }
 
-/** Keep the newest receipts. Oldest-first eviction, because a receipt matters only
- *  for the seconds between a lost response and its retry. */
-function evict(entries: IdempotencyEntry[]): IdempotencyEntry[] {
-  if (entries.length <= MAX_IDEMPOTENCY_ENTRIES) return entries
-  return [...entries].sort((a, b) => a.at - b.at).slice(entries.length - MAX_IDEMPOTENCY_ENTRIES)
+/** Whether a receipt is still inside the retention window. An entry with no usable
+ *  stamp (a hand-edited snapshot is a ratified property of this file) is treated
+ *  as expired rather than as immortal. */
+export function isFresh(entry: { at: number }, now: number): boolean {
+  if (typeof entry.at !== 'number' || !Number.isFinite(entry.at)) return false
+  return now - entry.at <= IDEMPOTENCY_RETENTION_MS
+}
+
+/** Evict by AGE, with the count only as a ceiling. See
+ *  {@link IDEMPOTENCY_RETENTION_MS} for why that ordering is the fix rather than a
+ *  tuning preference. */
+function evict(entries: IdempotencyEntry[], now: number): IdempotencyEntry[] {
+  const fresh = entries.filter(e => isFresh(e, now))
+  if (fresh.length <= MAX_IDEMPOTENCY_ENTRIES) return fresh
+  return [...fresh].sort((a, b) => a.at - b.at).slice(fresh.length - MAX_IDEMPOTENCY_ENTRIES)
 }
 

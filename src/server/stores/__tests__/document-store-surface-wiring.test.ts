@@ -218,7 +218,7 @@ describe('two stores, two snapshots', () => {
       expect(sidecarFile.records.map(r => r.id)).toEqual(['sf-1'])
       expect(sidecarFile.records[0]!.content.headline).toBe('canonical edit')
       // And the sidecar carries none of the core document's entities.
-      expect(Object.keys(sidecarFile)).toEqual(['version', 'records', 'idempotency'])
+      expect(Object.keys(sidecarFile)).toEqual(['version', 'records', 'idempotency', 'topologyRevs'])
     })
   })
 })

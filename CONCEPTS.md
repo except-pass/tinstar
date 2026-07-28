@@ -47,6 +47,9 @@ A run's standing statement of what the session is for: one short piece of user-w
 ### Surface
 A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
 
+### Dismissed vs deleted
+Two different endings, deliberately kept apart. **Dismissed** is a discussion outcome on an addressable point: the question was raised and the user decided it needs nothing further. The surface stays exactly where it is and remains visible. **Deleted** is structural: the surface and its descendants move into the recovery store, out of the workspace, and can be restored to their former home. A dismissed surface is still there and settled; a deleted one is gone but recoverable. Only **purge** erases, and only a deleted surface can be purged.
+
 ### Container surface
 A surface that holds other surfaces. "Container" describes the surface's current structural role, not a separate entity or interaction model: it keeps the same title, content, prompt thread, presence, freshness, provenance, and minimize/hide/delete behavior as any other surface. A container may also carry its own authored summary or diagram. Each child surface has one home container, so recursive composition forms a tree rather than a multi-parent graph.
 

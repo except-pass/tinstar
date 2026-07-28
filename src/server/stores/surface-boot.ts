@@ -127,7 +127,11 @@ export function bootSurfaces(docStore: DocumentStore, opts: SurfaceBootOptions):
 
   const status: SurfaceHealthStatus = { health: outcome.health }
   docStore.setSurfaceHealth(status)
-  docStore.loadSurfaces(outcome.records)
+  // The persisted topology counters ride along with the records. They are no longer
+  // derivable from them — `purge` erases records, so `max(homeRev)` is only a floor
+  // now (see the KTD5 amendment). A pre-U3 snapshot carries none and the store falls
+  // back to that floor, which is exactly what it used to do.
+  docStore.loadSurfaces(outcome.records, outcome.topologyRevs)
   docStore.enableSurfacePersistence(sidecar)
 
   const { puts, report } = migrateLegacySlate({

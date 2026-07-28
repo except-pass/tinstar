@@ -21,7 +21,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { OBJECTIVE_ORDER, OBJECTIVE_POINT_ID } from '../../domain/types'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point, Surface, SurfaceHealthStatus } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point, Surface, SurfaceHealthStatus, SurfaceHome } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -29,9 +29,31 @@ import { migrateSnapEdges } from '../../domain/constellationGraph'
 import { type PinSet, removePinsForNode, type Reply } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 import { SlateStore, type PointInput } from './slate'
-import { SurfaceStore, type SurfaceBatch } from './surfaces'
-import type { SurfaceSidecar, SurfaceCommitResult } from './surface-persistence'
+import {
+  SurfaceStore,
+  type SurfaceBatch,
+  type SurfaceDeleteOpts,
+  type SurfaceInit,
+  type SurfacePlanResult,
+  type SurfaceRejection,
+  type SurfaceTopologyOpts,
+  type SurfaceTopologyPlan,
+} from './surfaces'
+import type {
+  SurfaceSidecar,
+  SurfaceCommitResult,
+  SurfaceIdempotencyReceipt,
+  JsonValue,
+} from './surface-persistence'
+import { isFresh } from './surface-persistence'
 import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
+
+/** Matches `MAX_IDEMPOTENCY_ENTRIES` in the Surface sidecar, so the durable and
+ *  the memory-only receipt paths forget at the same point rather than at two
+ *  different ones. A CEILING, not the policy: both paths expire by AGE
+ *  (`IDEMPOTENCY_RETENTION_MS`) and use the count only to keep a pathological
+ *  client from making the table unbounded. */
+const MAX_MEMO_RECEIPTS = 2048
 
 /**
  * One entry on the `changes` stream.
@@ -293,6 +315,9 @@ export class DocumentStore {
   private surfaceWriteTail: Promise<unknown> = Promise.resolve()
 
   private surfaceStatus: SurfaceHealthStatus = { health: 'healthy' }
+
+  /** Idempotency receipts for the no-sidecar path. See {@link memoized}. */
+  private surfaceMemoReceipts = new Map<string, SurfaceIdempotencyReceipt>()
 
   private persistPath: string | null = null
   private persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -1160,8 +1185,8 @@ export class DocumentStore {
 
   /** Hydrate canonical records from a snapshot. Emits nothing — hydration is not
    *  a mutation and there is no client yet to tell. */
-  loadSurfaces(records: Surface[]): void {
-    this.surfaces.load(records)
+  loadSurfaces(records: Surface[], topologyRevs?: Record<string, number>): void {
+    this.surfaces.load(records, topologyRevs)
   }
 
   getSurface(id: string): Surface | undefined {
@@ -1178,6 +1203,171 @@ export class DocumentStore {
 
   getSurfaceTopologyRev(spaceId: string): number {
     return this.surfaces.getTopologyRev(spaceId)
+  }
+
+  // Tree reads, delegated so the mutation service never needs a handle on the
+  // store itself. That is the point of routing them through here: a caller
+  // holding `SurfaceStore` directly could invoke a topology mutator, which
+  // installs and emits in one step, and skip the durable commit entirely.
+
+  getSurfaceChildren(id: string): Surface[] {
+    return this.surfaces.getChildren(id)
+  }
+
+  getSurfaceDescendants(id: string): Surface[] {
+    return this.surfaces.getDescendants(id)
+  }
+
+  getSurfaceAncestors(id: string): Surface[] {
+    return this.surfaces.getAncestors(id)
+  }
+
+  getSurfaceRoots(spaceId: string): Surface[] {
+    return this.surfaces.getRoots(spaceId)
+  }
+
+  /** The roots of every deleted subtree in the space (plan KTD15). */
+  getSurfaceRecoveryRoots(spaceId: string): Surface[] {
+    return this.surfaces.getRecoveryRoots(spaceId)
+  }
+
+  /** The recovery-store root governing a Surface, when it is deleted. */
+  surfaceRecoveryRootFor(id: string): Surface | undefined {
+    return this.surfaces.recoveryRootFor(id)
+  }
+
+  /** Would a content candidate be installed, and if not, why? The mutation service
+   *  asks BEFORE committing so a candidate the store would refuse never becomes
+   *  durable — see {@link installDurableContent} for what that used to cost. */
+  checkSurfaceUpsert(next: Surface): SurfaceRejection | undefined {
+    return this.surfaces.checkUpsert(next)
+  }
+
+  // --- Planned topology mutation (plan KTD7) ---
+  //
+  // Planning and applying are separate calls, and the mutation service puts a
+  // durable commit between them. Exposing a fused `group()` here would make the
+  // KTD7 ordering unenforceable: by the time a failed write returned, the batch
+  // would already be on the wire.
+
+  planSurfaceCreate(init: SurfaceInit, opts?: SurfaceTopologyOpts): SurfacePlanResult {
+    return this.surfaces.planCreate(init, opts)
+  }
+
+  planSurfaceReparent(ids: string[], home: SurfaceHome, opts?: SurfaceTopologyOpts): SurfacePlanResult {
+    return this.surfaces.planReparent(ids, home, opts)
+  }
+
+  planSurfaceGroup(
+    childIds: string[],
+    parent: Omit<SurfaceInit, 'spaceId' | 'home' | 'id'> & { id?: string },
+    opts?: SurfaceTopologyOpts,
+  ): SurfacePlanResult {
+    return this.surfaces.planGroup(childIds, parent, opts)
+  }
+
+  planSurfaceDelete(id: string, opts?: SurfaceDeleteOpts): SurfacePlanResult {
+    return this.surfaces.planDelete(id, opts)
+  }
+
+  planSurfaceRestore(id: string, opts?: SurfaceTopologyOpts): SurfacePlanResult {
+    return this.surfaces.planRestore(id, opts)
+  }
+
+  planSurfacePurge(id: string, opts?: SurfaceDeleteOpts): SurfacePlanResult {
+    return this.surfaces.planPurge(id, opts)
+  }
+
+  /**
+   * Make a planned topology change durable, then install it and emit its one
+   * batch — the KTD7 order, enforced by the sidecar's `onDurable` rather than by
+   * this method remembering to do things in sequence.
+   *
+   * With no sidecar attached the plan is applied in memory only, the same honest
+   * degradation {@link commitSurfaceContent} makes: a store that was never given a
+   * durable home cannot pretend to have one, and `TINSTAR_NO_SESSIONS` and the
+   * unit suites depend on working without a filesystem.
+   *
+   * THE PLAN IS RE-VALIDATED IMMEDIATELY BEFORE IT IS WRITTEN, from inside the
+   * sidecar's transaction queue, and the plan that gets installed is the one that
+   * re-validation recomputed — see {@link SurfaceTopologyPlan.revalidate} for why
+   * the re-check is exhaustive by construction and where the topology revision is
+   * allocated.
+   *
+   * THE RESIDUAL WINDOW, STATED HONESTLY. This does not close the gap to zero; it
+   * shrinks it from "the whole durable write, queued behind every other one" —
+   * U1's measurement puts that at p95 259ms at ~10 MiB, multiplied by the queue
+   * depth — down to the interval between the re-validation returning and
+   * `onDurable` installing. Inside that interval no OTHER Surface transaction can
+   * touch live state: they are all serialized behind this same queue, and both the
+   * re-check and the install run inside it. What remains is the handful of
+   * `await`s in the sidecar's atomic write (four hook points, no-ops in
+   * production, each yielding one microtask turn) during which a NON-transactional
+   * writer could still move live state — the lifecycle cascade
+   * (`clearSpace`/`clear`) and the single-writer boot and migration paths, which
+   * do not go through a plan at all. That is microseconds of exposure to three
+   * callers, not milliseconds of exposure to every concurrent user and agent. It
+   * is not closed, and closing it would mean either moving planning into the queue
+   * (rejected: it serializes every mutation in a space behind a file write) or
+   * putting the cascade behind the same queue (a larger change than U3, and the
+   * cascade runs when the owning run or space no longer exists at all). The
+   * author's decision is to shrink and document rather than to claim closure.
+   */
+  async commitSurfacePlan(
+    plan: SurfaceTopologyPlan,
+    opts: {
+      idempotencyKey?: string
+      /** See {@link SurfaceTransaction.fingerprint} — what this key is a retry of. */
+      fingerprint?: string
+      result?: (effective: SurfaceTopologyPlan) => JsonValue
+    } = {},
+  ): Promise<SurfaceCommitResult> {
+    const sidecar = this.surfaceSidecar
+    // What re-validation recomputed, and therefore what gets installed. The
+    // original plan is only ever a proposal from here on — which is why the
+    // caller's receipt is a FUNCTION of the plan rather than a value: a response
+    // that named the revision the caller proposed instead of the one the commit
+    // allocated would hand back a token the space is not at.
+    let effective = plan
+    const precommit = () => {
+      const fresh = plan.revalidate()
+      if (!fresh.applied) return { ok: false as const, reason: fresh.reason }
+      effective = fresh.plan
+      return {
+        ok: true as const,
+        puts: fresh.plan.records,
+        topologyRevs: { [fresh.plan.spaceId]: fresh.plan.topologyRev },
+        ...(opts.result ? { result: opts.result(fresh.plan) } : {}),
+      }
+    }
+    if (!sidecar) {
+      const rechecked = precommit()
+      if (!rechecked.ok) {
+        return { committed: false, reason: 'precommit-refused', detail: rechecked.reason }
+      }
+      return this.memoized(
+        opts.idempotencyKey,
+        opts.fingerprint,
+        effective.records.map(r => r.id),
+        rechecked.result,
+        () => this.surfaces.applyPlan(effective),
+      )
+    }
+    // Drops are filtered to what the sidecar actually holds, for the same reason
+    // the cascade filters them: one `drop` naming an unpersisted record rejects
+    // the WHOLE transaction, which would leave every other purged record durable
+    // and resurrect the lot on the next boot.
+    const durable = new Set(sidecar.durableRecords().map(r => r.id))
+    const drops = plan.purged.filter(id => durable.has(id))
+    return sidecar.commit({
+      ...(plan.records.length > 0 ? { puts: plan.records } : {}),
+      ...(drops.length > 0 ? { drops } : {}),
+      expectedRevs: plan.expectedRevs,
+      ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
+      precommit,
+      onDurable: () => { this.surfaces.applyPlan(effective) },
+    })
   }
 
   /** The canonical store's health, as the client sees it on every snapshot. */
@@ -1211,22 +1401,155 @@ export class DocumentStore {
    */
   async commitSurfaceContent(
     next: Surface,
-    opts: { idempotencyKey?: string } = {},
+    opts: { idempotencyKey?: string; fingerprint?: string; result?: JsonValue } = {},
   ): Promise<SurfaceCommitResult> {
     const prior = this.surfaces.getSurface(next.id)
     if (!prior) return { committed: false, reason: 'unknown-record', detail: `no canonical Surface ${next.id}` }
+    // The content path's re-validation, and the same discipline the topology path
+    // gets: re-assert the predicates from inside the queue, using the store's own
+    // routine rather than a second copy of it. `checkUpsert` IS what
+    // `upsertSurface` decides with, so the two cannot answer differently — which
+    // is what makes the `onDurable` install below unable to silently refuse.
+    // Liveness is checked separately because a record's own revision does not move
+    // when an ANCESTOR is deleted, so the durable compare-and-swap cannot see it.
+    const precommit = () => {
+      const reason = this.surfaces.checkUpsert(next)
+        ?? (this.surfaces.recoveryRootFor(next.id) ? 'deleted' as const : undefined)
+      return reason ? { ok: false as const, reason } : { ok: true as const }
+    }
     if (!this.surfaceSidecar) {
-      const applied = this.surfaces.upsertSurface(next)
-      return applied
-        ? { committed: true, replayed: false, wrote: false, records: [next] }
-        : { committed: false, reason: 'stale-revision', detail: `${next.id}: in-memory upsert refused` }
+      const rechecked = precommit()
+      if (!rechecked.ok) {
+        return { committed: false, reason: 'precommit-refused', detail: rechecked.reason }
+      }
+      return this.memoized(opts.idempotencyKey, opts.fingerprint, [next.id], opts.result, () => {
+        const applied = this.surfaces.upsertSurface(next)
+        return applied ? [next] : null
+      }, `${next.id}: in-memory upsert refused`)
     }
     return this.surfaceSidecar.commit({
       puts: [next],
       expectedRevs: { [next.id]: prior.rev },
       ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
-      onDurable: () => { this.surfaces.upsertSurface(next) },
+      ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
+      ...(opts.result !== undefined ? { result: opts.result } : {}),
+      precommit,
+      onDurable: () => this.installDurableContent(next),
     })
+  }
+
+  /**
+   * Install a content record the sidecar has already made durable.
+   *
+   * The refusal is NOT discarded, and that is the whole point of this method
+   * existing. `upsertSurface` equality-short-circuits on a candidate that differs
+   * only in `rev`/`amendedAt` — a correct storm guard — so dropping its `false`
+   * left the durable revision one ahead of the live one. Every later write to that
+   * record then failed its durable compare-and-swap, and the documented recovery
+   * ("re-read and retry") re-read the STALE copy and retried forever. The Surface
+   * still rendered; it was simply never writable again, until a restart reloaded
+   * from the copy that had moved.
+   *
+   * So a refusal here is a corrupted invariant rather than a no-op. The record is
+   * already on disk and disk is the authority, so memory and every connected client
+   * are made to agree with it FIRST — leaving the divergence in place would be the
+   * bug again — and only then does this raise, so the failure is loud instead of
+   * silent. With the pre-commit re-validation above it should be unreachable; if it
+   * is ever reached, something moved live state from outside the transaction queue
+   * and the stack trace is the only way anyone will find out which.
+   */
+  private installDurableContent(next: Surface): void {
+    if (this.surfaces.upsertSurface(next)) return
+    const reason = this.surfaces.checkUpsert(next) ?? 'unknown'
+    this.surfaces.reconcileDurable(next)
+    throw new Error(
+      `[surfaces] durable/in-memory divergence on ${next.id}: the sidecar committed rev ${next.rev} but the ` +
+      `in-memory store refused it (${reason}). Memory has been reconciled to the durable record; this is a ` +
+      'corrupted invariant, not a no-op.',
+    )
+  }
+
+  /**
+   * Idempotency for the NO-SIDECAR path.
+   *
+   * Without this, retry safety would silently depend on whether persistence
+   * happened to be enabled: the sidecar keeps a receipt, so a retried commit
+   * replays, but the in-memory path would have appended the same thread message
+   * twice and reported success both times. "A duplicate idempotency key does not
+   * duplicate a thread message" is a property of the API, not of a config flag,
+   * so the memory-only store keeps its own receipts.
+   *
+   * They are NOT durable, and that is the honest degradation rather than a gap: a
+   * store with no durable home cannot survive a restart at all, so a receipt that
+   * outlived one would be describing records that did not.
+   */
+  private memoized(
+    idempotencyKey: string | undefined,
+    fingerprint: string | undefined,
+    ids: string[],
+    result: JsonValue | undefined,
+    apply: () => Surface[] | null,
+    refusal = 'in-memory mutation refused',
+  ): SurfaceCommitResult {
+    if (idempotencyKey) {
+      const prior = this.lookupSurfaceReceipt(idempotencyKey)
+      if (prior) {
+        // Same rule as the durable path: a key identifies a retry of ONE request,
+        // so a hit with a different fingerprint is refused rather than replayed.
+        // Handing back the first call's receipt would report success for work the
+        // second call never did — and on a `purge`, for an erase that never ran.
+        if (prior.fingerprint !== fingerprint) {
+          return { committed: false, reason: 'idempotency-key-reuse', detail: prior.fingerprint ?? 'an earlier request' }
+        }
+        const records = prior.ids.map(id => this.surfaces.getSurface(id)).filter((s): s is Surface => !!s)
+        return {
+          committed: true, replayed: true, wrote: false, records,
+          ...(prior.result !== undefined ? { result: prior.result } : {}),
+        }
+      }
+    }
+    const records = apply()
+    if (!records) return { committed: false, reason: 'stale-revision', detail: refusal }
+    if (idempotencyKey) {
+      this.surfaceMemoReceipts.set(idempotencyKey, {
+        key: idempotencyKey,
+        at: Date.now(),
+        ids,
+        ...(fingerprint !== undefined ? { fingerprint } : {}),
+        ...(result !== undefined ? { result } : {}),
+      })
+      // Insertion-ordered eviction, matching the sidecar's CEILING. Expiry is by
+      // age (see {@link lookupSurfaceReceipt}); this only bounds the map.
+      while (this.surfaceMemoReceipts.size > MAX_MEMO_RECEIPTS) {
+        const oldest = this.surfaceMemoReceipts.keys().next().value
+        if (oldest === undefined) break
+        this.surfaceMemoReceipts.delete(oldest)
+      }
+    }
+    return {
+      committed: true, replayed: false, wrote: false, records,
+      ...(result !== undefined ? { result } : {}),
+    }
+  }
+
+  /**
+   * The receipt on file for an idempotency key, from whichever half is holding
+   * receipts — the sidecar when persistence is attached, the memo table when it is
+   * not.
+   *
+   * The service consults this BEFORE it validates anything, which is what makes a
+   * retry of a compare-and-swap operation replay instead of colliding with its own
+   * first attempt: the caller's `expectedRev` describes the world before that
+   * attempt, so a retry that reaches the revision check is refused for having
+   * succeeded. Same for a retry whose target was purged in the meantime — the
+   * receipt is on file, and answering `not-found` would be a lie about the
+   * transaction the caller is asking about.
+   */
+  lookupSurfaceReceipt(key: string): SurfaceIdempotencyReceipt | undefined {
+    if (this.surfaceSidecar) return this.surfaceSidecar.lookupIdempotency(key)
+    const entry = this.surfaceMemoReceipts.get(key)
+    if (!entry) return undefined
+    return isFresh(entry, Date.now()) ? entry : undefined
   }
 
   /** Await any fire-and-forget sidecar writes (the lifecycle cascade). */

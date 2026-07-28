@@ -98,6 +98,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
+import { handleSurfaceRoutes } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 
@@ -2060,6 +2061,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // Cap the serialized A2UI content so a runaway component tree can't bloat the
   // persisted snapshot (the render-side degrade also bounds depth/node count).
   const NOTICE_CONTENT_MAX = 32 * 1024
+
+  // ── Canonical Surfaces (recursive collaborative surfaces, U3) ────────────
+  //
+  // Delegated whole, because the primitive set is fifteen endpoints and appending
+  // it here would make an already 5,600-line file unreviewable. The module is a
+  // thin adapter over `SurfaceService`: all validation, whitelisting, and
+  // conflict handling live in the service so the CLI and the browser cannot
+  // disagree about what a request means.
+  if (url.split('?')[0]?.startsWith('/api/surfaces')) {
+    if (await handleSurfaceRoutes(ctx, req, res, method, url, corsHeaders)) return true
+  }
 
   // POST /api/notices — an agent posts a notice for its run
   if (method === 'POST' && url === '/api/notices') {

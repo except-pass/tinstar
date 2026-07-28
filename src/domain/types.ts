@@ -667,10 +667,19 @@ export interface Point {
  *  Run Workspace membership is deliberately NOT a third case: it is a
  *  compatibility PRESENTATION carried by {@link SurfaceCompatAlias}, so promoting
  *  a run-scoped Surface onto the Canvas is an ordinary home change and never
- *  produces a second writable copy (KTD3/R28). */
+ *  produces a second writable copy (KTD3/R28).
+ *
+ *  The third case, `recovery`, is what makes deletion reversible (plan KTD15).
+ *  A deleted subtree is MOVED here inside the same atomic transaction that would
+ *  otherwise have destroyed it, so it leaves its parent's child list without ever
+ *  leaving the record set — which is why delete and its undo are ordinary
+ *  revision-checked topology mutations rather than a separate mechanism. Only
+ *  `delete` may put a Surface here and only `restore` may take one out; an
+ *  ordinary reparent that named it would be a delete with no bookkeeping. */
 export type SurfaceHome =
   | { kind: 'canvas'; spaceId: string }
   | { kind: 'surface'; surfaceId: string }
+  | { kind: 'recovery'; spaceId: string }
 
 /** Who or what acts on a Surface (plan KTD6). One trusted local human in this
  *  release, but the identity seam is real: a stable browser actor id namespaces
@@ -794,6 +803,34 @@ export interface SurfaceCompatAlias {
   visible: boolean
 }
 
+/** Bookkeeping stamped on the ROOT of a deleted subtree (plan KTD15).
+ *
+ *  Only the root carries it, and only the root's `home` changes. Its descendants
+ *  keep pointing at their own parents, so the subtree stays intact and "is this
+ *  deleted" is answered by walking up to a `recovery` home. That is what makes
+ *  nested deletion behave: deleting a child and then its parent produces two
+ *  independent recovery roots, and restoring the parent restores exactly what it
+ *  still held rather than resurrecting the child someone deleted separately. */
+export interface SurfaceDeletion {
+  /** Epoch ms of the delete. */
+  at: number
+  /** Who deleted it. Absent only for a delete performed with no actor context. */
+  by?: SurfacePrincipalRef
+  /** Where `restore` puts it back. Held on the record rather than derived,
+   *  because the whole point is that it survives the parent being deleted too. */
+  formerHome: SurfaceHome
+  /** How the subtree was disposed. `reparent-children` means the immediate
+   *  children were promoted to `formerHome` before the root moved, so a restore
+   *  brings back a leaf rather than silently re-adopting them. */
+  disposition: SurfaceDeleteDisposition
+}
+
+/** What happens to a non-empty parent's children when it is deleted (R6/AE6).
+ *  There is no default: a caller deleting a parent with descendants must say
+ *  which one it means, so a confirmation dialog can never remove more than the
+ *  human agreed to. */
+export type SurfaceDeleteDisposition = 'reparent-children' | 'delete-subtree'
+
 /** The canonical work artifact (plan KTD1). One recursive primitive: leaves and
  *  parents share this record, these affordances, and this lifecycle.
  *
@@ -836,6 +873,10 @@ export interface Surface {
    *  per-run root Surface carries the standard model but is excluded from ordinary
    *  Canvas projection so migration does not dump a root card onto the canvas. */
   compatibilityOnly?: boolean
+  /** Present exactly on the ROOT of a deleted subtree, whose `home` is
+   *  `recovery` (KTD15). Absent everywhere else, including on the descendants
+   *  that moved with it. */
+  deleted?: SurfaceDeletion
   /** Per-record revision. Monotonic, host-assigned, and compared by every
    *  content write (KTD7) — never accepted from a mutable request field. */
   rev: number
@@ -880,6 +921,141 @@ export interface SurfaceHealthStatus {
   frozenAt?: string
   /** One sentence naming what was wrong with each snapshot file, safe to render. */
   detail?: string
+}
+
+// --- Agent/UI parity contract (recursive collaborative surfaces, U3) ---
+//
+// Everything below is what the mutation service RETURNS. It lives in
+// `domain/types.ts` rather than beside the service because the plan's
+// Agent-Native Action Parity table is a contract with two consumers that must
+// not drift: "Return canonical revisions, effective capabilities, provenance,
+// and freshness so agents and UI consume the same contract." A shape only the
+// server could name would let the Canvas and the CLI describe the same Surface
+// differently, which is exactly the divergence U3 exists to prevent.
+
+/** What this actor may do to this Surface RIGHT NOW, evaluated against its
+ *  current state rather than a static permission table.
+ *
+ *  Every flag is accompanied by a reason when it is false (see `blocked`), and
+ *  that pairing is the point: an agent that is told `updateContent: false` with
+ *  no reason has to guess, and guessing at a content-authority boundary is how a
+ *  file-authored Surface gets clobbered. Note what is NOT here — there is no
+ *  approval or proposal capability, because under the ratified Key Decision
+ *  ("Recoverable action over gated action") agents act directly and safety comes
+ *  from the recovery store. */
+export interface SurfaceCapabilities {
+  /** Which authority may currently replace `content`. */
+  contentAuthority: SurfaceContentAuthority
+  /** True when a direct content write can be committed — either the record is
+   *  `canonical-direct`, or its source adapter is registered and can carry the
+   *  edit back to the source (KTD4). */
+  updateContent: boolean
+  appendThread: boolean
+  /** Topology. All three are true for any live Surface: agents may arrange and
+   *  delete ANY Surface, not only their own (plan U3: "arrangement carries no
+   *  ownership gate"). They go false for a deleted record, which must be restored
+   *  before it can be moved. */
+  group: boolean
+  reparent: boolean
+  delete: boolean
+  /** Inverse: true only inside the recovery store. */
+  restore: boolean
+  purge: boolean
+  /** True when a refresh request will be accepted at all. */
+  refresh: boolean
+  /** True when the Surface declares a self-contained recipe, so the host can
+   *  rebuild it without a human. False means a refresh request is a NUDGE to
+   *  whoever owns it (R13's "absent means refresh degrades to a bare nudge") —
+   *  a distinct question from whether the request is accepted, and collapsing the
+   *  two into one flag would make it lie in one direction or the other. */
+  refreshRecipe: boolean
+  /** Why each false flag is false. Keyed by capability name. */
+  blocked?: Partial<Record<
+    'updateContent' | 'appendThread' | 'group' | 'reparent' | 'delete' | 'restore' | 'purge' | 'refresh',
+    string
+  >>
+}
+
+/** A Surface as it appears in someone ELSE's context — an ancestor breadcrumb, a
+ *  child rollup row. Deliberately not the whole record: a parent context that
+ *  inlined every descendant's A2UI body would grow without bound at depth, which
+ *  is the "recursive content hangs the client" risk in the plan's risk table.
+ *
+ *  `accessible: false` is the redaction case. The parity table bounds descendant
+ *  context "by effective worktree access", so a child in a worktree the caller is
+ *  not authorized for is REPORTED (its existence and position are structural, and
+ *  hiding it would make counts lie) with its authored content withheld. */
+export interface SurfaceSummary {
+  id: string
+  headline: string
+  accessible: boolean
+  childCount: number
+  status: PointStatus
+  freshness: SurfaceFreshness
+  author: PointAuthor
+  compatibilityOnly?: boolean
+  worktreeId?: string
+  /** Present only when `accessible` is false: which authority boundary withheld
+   *  the content. */
+  withheld?: string
+}
+
+/** How a contributor's identity resolves to something a human can actually open
+ *  (R11/F5). Four outcomes, and the fourth is honest rather than empty. */
+export type SurfaceContributorResolution =
+  /** A live managed session — `TerminalPrimitive`/ttyd is offered. */
+  | 'live-session'
+  /** Retired, but a Graveyard transcript exists — read-only drill-down. */
+  | 'graveyard'
+  /** A local process or file source. Evidence only; there is no terminal and the
+   *  UI must not offer a dead one. */
+  | 'process-evidence'
+  /** Named on the record but nothing backs it any more. */
+  | 'unavailable'
+
+export interface SurfaceContributor {
+  principal: SurfacePrincipalRef
+  /** Why this principal is attached: it owns the Surface, it authored the
+   *  content, it is the run/session the Surface was produced in, or it is the
+   *  external source the content is reconciled from. */
+  role: 'owner' | 'session' | 'run' | 'source'
+  resolution: SurfaceContributorResolution
+  /** True only for `live-session`. Carried explicitly so a client renders the
+   *  terminal affordance from one field instead of re-deriving the rule. */
+  terminal: boolean
+  /** What the host can show when there is no terminal: source locator, worktree,
+   *  run, and the observation watermark the content reflects. */
+  evidence?: {
+    source?: string
+    worktreeId?: string
+    runId?: string
+    sessionId?: string
+    watermark?: string
+  }
+}
+
+/** Everything an agent needs to act on one Surface without reading the store —
+ *  the "Read tree and context" row of the parity table. */
+export interface SurfaceContext {
+  surface: Surface
+  capabilities: SurfaceCapabilities
+  spaceId: string
+  /** The space topology revision this context was read at. A caller passes it
+   *  back as `expectedTopologyRev` to make its next mutation compare-and-swap. */
+  topologyRev: number
+  /** Root-first, so rendering it as a breadcrumb needs no reversal. */
+  ancestors: SurfaceSummary[]
+  /** Immediate children only (KTD8): the workspace scope, not the whole subtree. */
+  children: SurfaceSummary[]
+  /** Total descendants at every depth — the number a delete confirmation needs
+   *  and the one a preview badge shows. */
+  descendantCount: number
+  contributors: SurfaceContributor[]
+  /** The tail of the thread, newest last, capped. The full thread is on the
+   *  record; this is what a bounded prompt context carries. */
+  recentThread: Reply[]
+  /** Present only for a Surface inside the recovery store. */
+  deleted?: SurfaceDeletion
 }
 
 /** Urgency of a widget's current attention request.
