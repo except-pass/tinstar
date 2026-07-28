@@ -91,6 +91,8 @@ export type SurfaceOperation =
   | 'update-content'
   | 'transfer-content-authority'
   | 'append-thread'
+  /** The EXPLICIT half of thread status: resolve, reopen, dismiss (U2). */
+  | 'set-thread-disposition'
   | 'group'
   | 'reparent'
   | 'ungroup'
@@ -1023,9 +1025,22 @@ export class SurfaceService {
     if (prior.contentAuthority === to) {
       return { ok: false, error: { code: 'conflict', reason: 'no-change', message: `content authority is already ${to}`, current: [prior] } }
     }
+    // Taking authority does not by itself make the actor the AUTHOR — a user may
+    // freeze an agent's content without claiming to have written it, and flipping the
+    // byline for them would put the agent's words under the user's name. So the
+    // authorship claim is opt-in and separate. The Objective's takeover uses it: the
+    // headline it writes really is the user's, and rendering it as the agent's was
+    // the failure the legacy `claim` flag existed to prevent.
+    if (raw.claimAuthorship !== undefined && typeof raw.claimAuthorship !== 'boolean') {
+      return invalid('claimAuthorship must be a boolean')
+    }
+    if (raw.claimAuthorship === true && to !== 'canonical-direct') {
+      return invalid('claimAuthorship applies only when taking canonical-direct authority')
+    }
     const next: Surface = {
       ...prior,
       contentAuthority: to,
+      ...(raw.claimAuthorship === true ? { author: authorFor(ctx.actor) } : {}),
       rev: prior.rev + 1,
       amendedAt: ctx.at ?? Date.now(),
     }
@@ -1234,6 +1249,46 @@ export class SurfaceService {
     return this.commitPlan('create', plan, ctx, [input.id])
   }
 
+  /**
+   * Mint a USER-authored Surface at a run's compatibility alias (KTD3).
+   *
+   * Separate from {@link create} because two host-derived things differ and neither
+   * may come from a request body: the Surface id (derived from the run incarnation
+   * and the local id, so it converges with whatever the boot migration would derive
+   * for the same point) and the alias's `localId` (the legacy point id, which
+   * `create` has no way to express — it aliases a Surface under its own id).
+   *
+   * Authority is `canonical-direct` and there is no source binding: this record IS
+   * the content, which is what makes it immune to a later file epoch claiming the
+   * same local id (that reports divergence instead — KTD4).
+   */
+  async createRunPoint(
+    input: {
+      id: string
+      spaceId: string
+      home: SurfaceHome
+      runId: string
+      localId: string
+      content: SurfaceContent
+      createdAt?: number
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const now = ctx.at ?? Date.now()
+    const plan = this.docStore.planSurfaceCreate({
+      id: input.id,
+      spaceId: input.spaceId,
+      home: input.home,
+      content: input.content,
+      contentAuthority: 'canonical-direct',
+      author: authorFor(ctx.actor),
+      provenance: { runId: input.runId },
+      aliases: [{ bucket: { kind: 'run', runId: input.runId }, localId: input.localId, visible: true }],
+      ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
+    }, { at: now })
+    return this.commitPlan('create', plan, ctx, [input.id, ...homeIds(input.home)])
+  }
+
   /** A successful no-op, shaped exactly like a mutation so a caller need not branch.
    *  `replayed` is deliberately NOT set: nothing was replayed, and nothing was
    *  written either — the revisions it reports are simply the current ones. */
@@ -1300,6 +1355,57 @@ export class SurfaceService {
       amendedAt: now,
     }
     return this.commitContent('append-thread', prior, next, ctx, flight.fingerprint)
+  }
+
+  /**
+   * Resolve, reopen, or dismiss a Surface's discussion.
+   *
+   * The EXPLICIT half of thread status. `open`/`discussing`/`waiting` are derived
+   * from the replies; `resolved` and `dismissed` are decisions someone made, which
+   * is why they are stamps on the record rather than a function of the messages —
+   * and why a later source re-observation cannot undo one. The Slate never
+   * auto-resolves a point, and this operation is the only thing that resolves one.
+   *
+   * `reopen` clears both stamps and lets the derivation take over again.
+   */
+  async setThreadDisposition(
+    id: string, body: unknown, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('set-thread-disposition', id, body, ctx)
+    if (flight.done) return flight.done
+    const raw = asObject(body)
+    if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on set-thread-disposition`)
+    const action = raw.action
+    if (action !== 'resolve' && action !== 'reopen' && action !== 'dismiss') {
+      return invalid("action must be 'resolve', 'reopen', or 'dismiss'")
+    }
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'setting its thread disposition')
+    if (guard) return guard
+    if (raw.expectedRev !== undefined) {
+      if (typeof raw.expectedRev !== 'number') return invalid('expectedRev must be a number')
+      if (raw.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    }
+
+    const now = ctx.at ?? Date.now()
+    // Rebuilt rather than spread-with-undefined: an `undefined` property survives in
+    // memory and disappears across JSON, so a reopened record and its reload would
+    // not be the same object.
+    const thread = {
+      replies: prior.thread.replies,
+      ...(action === 'resolve' ? { resolvedAt: now } : {}),
+      ...(action === 'dismiss' ? { dismissedAt: now } : {}),
+    }
+    const next: Surface = {
+      ...prior,
+      thread: { ...thread, status: derivePointStatus(thread) },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('set-thread-disposition', prior, next, ctx, flight.fingerprint)
   }
 
   /**

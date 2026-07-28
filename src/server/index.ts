@@ -530,7 +530,6 @@ export function initBackend(): RouteContext {
       // transaction queue), and the service itself holds no per-call state.
       const slateService = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
       slateWatcher = new SlateWatcher({
-        docStore,
         listLiveRuns: () => {
           const runs: { runId: string; workdir: string }[] = []
           for (const run of docStore.getAllRuns()) {

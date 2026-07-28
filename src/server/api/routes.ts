@@ -63,8 +63,12 @@ import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import { deleteSlateFiles } from '../sessions/slate-clean'
+import { RunSlateBridge } from '../surfaces/run-slate-bridge'
+import { SurfaceService } from '../surfaces/surface-service'
+import { slateSourceAdapters } from '../surfaces/slate-source'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
+import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
@@ -3316,15 +3320,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const SLATE_HEADLINE_MAX = 200
   const SLATE_CONTENT_MAX = 32 * 1024
 
-  // Append a reply to a point's thread, composing REOPEN-ON-REPLY: a reply landing
-  // on a resolved/dismissed point reopens it first (plan lifecycle diagram), so a
-  // terminal point re-enters the conversation instead of swallowing the message.
-  const appendSlateReply = (runId: string, pid: string, reply: Reply): Point | undefined => {
-    const prior = ctx.docStore.getSlatePoint(runId, pid)
-    if (!prior || prior.runId !== runId) return undefined
-    if (prior.resolvedAt != null || prior.dismissedAt != null) ctx.docStore.reopenSlatePoint(runId, pid)
-    ctx.docStore.addSlateReply(runId, pid, reply)
-    return ctx.docStore.getSlatePoint(runId, pid)
+  // Every run-scoped Slate write goes through the compatibility alias to the ONE
+  // canonical Surface it addresses (plan KTD3/U2). Built per request because the
+  // service and the bridge hold no per-call state; the durable ordering that does
+  // matter is enforced by the sidecar's transaction queue, not by object identity.
+  const slateBridge = (): RunSlateBridge =>
+    new RunSlateBridge(ctx.docStore, new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() }))
+
+  /** The acting principal for a run-scoped Slate write. The trusted-local human in
+   *  this release (KTD6); an agent- or process-attributed reply carries its own. */
+  const slateActor = (author: PointAuthor = 'user'): SurfacePrincipalRef =>
+    author === 'user' ? { kind: 'human', id: 'run-workspace' }
+      : author === 'process' ? { kind: 'process', id: 'run-workspace' }
+        : { kind: 'session', id: 'run-workspace' }
+
+  // Append a reply to a point's thread. REOPEN-ON-REPLY lives inside the bridge.
+  const appendSlateReply = async (runId: string, pid: string, reply: Reply): Promise<Point | undefined> => {
+    const result = await slateBridge().appendReply(runId, pid, reply.text, slateActor(reply.author))
+    return result.point
   }
 
   // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.
@@ -3387,7 +3400,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ...(content ? { content } : {}),
         ...(anchor ? { anchor } : {}),
       }
-      const point = ctx.docStore.addUserSlatePoint(runId, input)
+      const point = (await slateBridge().upsertUserPoint(runId, input, slateActor('user'))).point
       // EVENTUAL, not interrupt (dogfood decision): adding a point MUTATES the store and
       // does NOT deliver a prompt. "Add a point" means "get to this eventually", not "do
       // it now" — the agent picks it up next time it reads its open points, instead of
@@ -3421,7 +3434,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!Array.isArray(order) || order.some((v: unknown) => typeof v !== 'string' || v.length === 0)) {
         fail(res, 'INVALID_PARAMS', 'order must be an array of non-empty point ids'); return
       }
-      ctx.docStore.reorderSlatePoints(runId, order as string[])
+      // SIBLING REORDER IS DEFERRED (author ruling on this plan): `order` is set at
+      // creation and no mutation changes it, so there is nothing to write here. The
+      // response below reports the run's ACTUAL order, so a client that optimistically
+      // reordered sees the server decline rather than a silent success.
+      void order
       // No delivery: a reorder is a view arrangement, not an injection (same posture
       // as the lifecycle routes). The new sequence rides the SSE `run` delta.
       ok(res, { order: ctx.docStore.getSlatePointsForRun(runId).map(p => p.id) })
@@ -3475,15 +3492,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // It is an AMEND, not a delete-and-re-add: the point may already carry a thread
       // the user replied on, and the Slate's standing promise is that the same identity
       // keeps what has accumulated on it.
-      const objective = ctx.docStore.addUserSlatePoint(runId, {
-        id: OBJECTIVE_POINT_ID,
-        author: 'user',
-        headline: text,
-      }, { claim: true })
-      // Identity, not deep-equality: the store hands back the prior object itself when
-      // nothing changed. An Apply that changed no text is not a re-alignment, so it
-      // must not re-nudge an agent mid-turn.
-      const changed = objective !== prior
+      const objective = (await slateBridge().upsertUserPoint(
+        runId, { id: OBJECTIVE_POINT_ID, headline: text }, slateActor('user'), { claim: true },
+      )).point
+      // Compared by HEADLINE now, not by object identity. The bridge re-reads the
+      // canonical record after every call, so it never hands back the same object
+      // twice and an identity check would report every Apply as a change — including
+      // one that changed no text, which must not re-nudge an agent mid-turn.
+      const changed = objective?.headline !== prior?.headline
       const delivered = changed
         ? await deliverSlatePrompt(ctx, runId, slateObjectivePromptText(text, serverBase()))
         : false
@@ -3501,7 +3517,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/objective'.length))
     if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
-    const cleared = ctx.docStore.deleteSlatePoint(runId, OBJECTIVE_POINT_ID)
+    const cleared = await slateBridge().deletePoint(runId, OBJECTIVE_POINT_ID, slateActor('user'))
     ok(res, { cleared })
     return true
   }
@@ -3533,7 +3549,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // clean — its store points are still cleared below.
     const workdir = getSession(ctx.sessionConfig?.dirs.sessions ?? '', runId)?.workspace?.path
     const files = workdir ? await deleteSlateFiles(workdir) : 0
-    const points = ctx.docStore.clearSlateForRun(runId)
+    const points = await slateBridge().clean(runId, slateActor('user'))
     ok(res, { files, points })
     return true
   }
@@ -3594,7 +3610,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (chosenLabels.length > 0) parts.push(`Chose: ${chosenLabels.join(', ')}`)
       if (answerText) parts.push(answerText)
       const reply: Reply = { id: shortId('slate-answer'), author: 'user', text: parts.join(' — '), createdAt: Date.now() }
-      const updated = appendSlateReply(runId, pid, reply)
+      const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       const delivered = await deliverSlatePrompt(ctx, runId,
@@ -3636,7 +3652,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!trimmed) { fail(res, 'INVALID_PARAMS', 'text must be non-empty'); return }
 
       const reply: Reply = { id: shortId('slate-reply'), author, text: trimmed, createdAt: Date.now() }
-      const updated = appendSlateReply(runId, pid, reply)
+      const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       // Only a USER reply delivers — the anti-loop guard (R15).
@@ -3660,10 +3676,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const action = segs[4] as 'resolve' | 'reopen' | 'dismiss'
     const existing = ctx.docStore.getSlatePoint(runId, pid)
     if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
-    if (action === 'resolve') ctx.docStore.resolveSlatePoint(runId, pid)
-    else if (action === 'reopen') ctx.docStore.reopenSlatePoint(runId, pid)
-    else ctx.docStore.dismissSlatePoint(runId, pid)
-    ok(res, { point: ctx.docStore.getSlatePoint(runId, pid) })
+    void slateBridge().setDisposition(runId, pid, action, slateActor('user')).then(result => {
+      ok(res, { point: result.point })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'lifecycle change failed'))
     return true
   }
 

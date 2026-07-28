@@ -1064,6 +1064,7 @@ describe('parity coverage', () => {
       'update-content': 'updateContent',
       'transfer-content-authority': 'transferContentAuthority',
       'append-thread': 'appendThread',
+      'set-thread-disposition': 'setThreadDisposition',
       'group': 'group',
       'reparent': 'reparent',
       'ungroup': 'ungroup',

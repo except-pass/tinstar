@@ -36,6 +36,12 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
+import { seedRunSlate } from '../../stores/__tests__/seedRunSlate'
+import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
+import { SurfaceService } from '../../surfaces/surface-service'
+
+/** The A2UI body the seeded surfaces carry — one Text node, valid per the catalog. */
+const TEXT = { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] } as never
 import type { Point, Run } from '../../../domain/types'
 
 interface Harness {
@@ -215,9 +221,7 @@ describe('POST /api/runs/:id/slate/points', () => {
     // The watcher re-projects the run's file surfaces, which do NOT include the
     // user point (the file never knew about it). Without the source:'user' retract
     // exemption this would nuke the user's point.
-    srv.docStore.applyRunSlateProjection(RUN, [
-      { id: 'file-pt', author: 'agent', headline: 'from a file', content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] } },
-    ])
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'file-pt', headline: 'from a file', body: TEXT }])
 
     expect(srv.docStore.getSlatePoint(RUN, pid)).toBeDefined()       // user point survived
     expect(srv.docStore.getSlatePoint(RUN, 'file-pt')).toBeDefined() // file point present
@@ -266,7 +270,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     const res = await answer(srv, pid, { choices: ['opt-a', 'opt-ZZZ'] })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
-    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toEqual([]) // canonical thread is always an array
   }))
 
   it('rejects oversized free text with 413, nothing persisted', withServer(async srv => {
@@ -274,7 +278,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     const pid = await createPoint(srv, { content: answerableContent() })
     const res = await answer(srv, pid, { text: 'x'.repeat(4001) })
     expect(res.status).toBe(413)
-    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toEqual([]) // canonical thread is always an array
   }))
 
   it('rejects an empty answer (no choice, no text) with INVALID_PARAMS', withServer(async srv => {
@@ -373,7 +377,7 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect((await reply(srv, pid, { author: 'nobody', text: 'x' })).status).toBe(400)
     expect((await reply(srv, pid, { text: '   ' })).status).toBe(400)
     expect((await reply(srv, pid, { author: 'user', text: 'x'.repeat(4001) })).status).toBe(413)
-    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toEqual([]) // canonical thread is always an array
   }))
 
   it('404s for an unknown point', withServer(async srv => {
@@ -430,18 +434,14 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   // Seed a FILE-projected surface: `refresh` is file-owned, so it arrives via the
   // watcher projection, NOT the user-point POST route (which never carries a recipe).
-  function seedSurface(srv: Harness, over: Record<string, unknown> = {}): string {
-    srv.docStore.applyRunSlateProjection(RUN, [{
-      id: 'srf-1', author: 'agent', headline: 'a surface',
-      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
-      ...over,
-    }])
+  async function seedSurface(srv: Harness, over: { recipe?: string } = {}): Promise<string> {
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-1', headline: 'a surface', body: TEXT, ...over }])
     return 'srf-1'
   }
 
   it('with a recipe delivers the recipe VERBATIM and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurface(srv, { refresh: 'Re-run the blind PR eval and rewrite the file' })
+    const pid = await seedSurface(srv, { recipe: 'Re-run the blind PR eval and rewrite the file' })
     getSession.mockReturnValue({ name: RUN }) // reachable
     sendPrompt.mockClear()
 
@@ -455,12 +455,12 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
     const prompt = sendPrompt.mock.calls[0]![2] as string
     expect(prompt).toContain('Re-run the blind PR eval and rewrite the file') // recipe verbatim
     // Persist-nothing: refresh is a nudge — the point gains no thread / no mutation.
-    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toEqual([]) // canonical thread is always an array
   }))
 
   it('without a recipe delivers the bare regenerate-nudge', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurface(srv) // no refresh recipe
+    const pid = await seedSurface(srv) // no refresh recipe
     getSession.mockReturnValue({ name: RUN })
     sendPrompt.mockClear()
 
@@ -474,19 +474,19 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   it('an unreachable session returns delivered:false + 200 and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurface(srv, { refresh: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: 'recipe' })
     getSession.mockReturnValue(null) // session gone
 
     const res = await refresh(srv, pid)
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toEqual([]) // canonical thread is always an array
   }))
 
   it('rejects a cross-run pid (point.runId !== URL runId) with 404, nothing delivered', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurface(srv, { refresh: 'recipe' }) // belongs to RUN
+    const pid = await seedSurface(srv, { recipe: 'recipe' }) // belongs to RUN
     getSession.mockReturnValue({ name: RUN })
     // POST under a DIFFERENT run id — the cross-run guard must reject it.
     const res = await srv.fetch(`/api/runs/OTHER-run/slate/surfaces/${pid}/refresh`, { method: 'POST' })
@@ -516,7 +516,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
   // NOT eat it — it returns the refresh envelope).
   it('is matched by the anchored regex — a generic handler does not eat it', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurface(srv, { refresh: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: 'recipe' })
     getSession.mockReturnValue({ name: RUN })
     const res = await refresh(srv, pid)
     expect(res.status).toBe(200)
@@ -613,18 +613,17 @@ describe('POST /api/runs/:id/slate/compose', () => {
 })
 
 describe('refresh/compose — code-spawned author branch (feat: multi-agent Slate)', () => {
-  function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): string {
-    srv.docStore.applyRunSlateProjection(RUN, [{
-      id, author: 'agent', headline: 'a surface',
-      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
-      refresh: 'Re-run the eval of PR #7 and rewrite this surface',
+  async function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): Promise<string> {
+    await seedRunSlate(srv.docStore, RUN, [{
+      id, headline: 'a surface', body: TEXT,
+      recipe: 'Re-run the eval of PR #7 and rewrite this surface',
     }])
     return id
   }
 
   it('a surface WITH a recipe spawns an author — no main-agent nudge', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurfaceWithRecipe(srv)
+    const pid = await seedSurfaceWithRecipe(srv)
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
     getSession.mockReturnValue({ name: RUN }) // would be reachable — the author path skips it
     const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
@@ -639,7 +638,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
 
   it('a recipe surface falls back to the main agent when the spawn declines', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = seedSurfaceWithRecipe(srv)
+    const pid = await seedSurfaceWithRecipe(srv)
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: false }) // disabled / no workdir / spawn error
     getSession.mockReturnValue({ name: RUN })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
@@ -651,10 +650,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
 
   it('a surface WITHOUT a recipe never spawns an author (session-derived stays main-agent)', withServer(async srv => {
     seedRun(srv.docStore)
-    srv.docStore.applyRunSlateProjection(RUN, [{
-      id: 'srf-norecipe', author: 'agent', headline: 'no recipe',
-      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
-    }])
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-norecipe', headline: 'no recipe', body: TEXT }])
     getSession.mockReturnValue({ name: RUN })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/srf-norecipe/refresh`, { method: 'POST' })
     expect(res.status).toBe(200)
@@ -686,7 +682,12 @@ describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
   const putOrder = (srv: Harness, order: unknown) =>
     srv.fetch(`/api/runs/${RUN}/slate/points/order`, { method: 'PUT', body: JSON.stringify({ order }) })
 
-  it('reorders the run\'s points and re-projects run.slate', withServer(async srv => {
+  // SIBLING REORDER IS DEFERRED by the author's ruling on the recursive-surfaces
+  // plan: `order` is set at creation and no mutation changes it. The route still
+  // validates its body and still answers 200, but it reports the run's ACTUAL order —
+  // so a client that optimistically reordered sees the server decline rather than a
+  // silent success it can never reconcile.
+  it('declines to reorder and reports the unchanged order', withServer(async srv => {
     seedRun(srv.docStore)
     const [a, b, c] = await seedPoints(srv, 3)
     expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([a, b, c])
@@ -695,12 +696,10 @@ describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as { ok: boolean; data: { order: string[] } }
     expect(body.ok).toBe(true)
-    expect(body.data.order).toEqual([c, a, b])
+    expect(body.data.order).toEqual([a, b, c])
 
-    // The store AND the render projection agree — the projection leg is the one
-    // that fails silently if `order: p.order ?? p.createdAt` is ever backed out.
-    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([c, a, b])
-    expect(srv.docStore.getRun(RUN)!.slate!.map(s => s.id)).toEqual([c, a, b])
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([a, b, c])
+    expect(srv.docStore.getRun(RUN)!.slate!.map(s => s.id)).toEqual([a, b, c])
   }))
 
   it('never delivers a prompt — a reorder is an arrangement, not an injection', withServer(async srv => {
@@ -737,16 +736,12 @@ describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
     expect(res.status).toBe(400)
   }))
 
-  it('ignores unknown ids and leaves unlisted points where they were', withServer(async srv => {
-    // Deterministic even when all three land in the same millisecond: the store
-    // deconflicts against the WHOLE run, so an unlisted point sharing a slot with the
-    // reordered ones is nudged out of the tie rather than sorting into the middle of
-    // them by id. (See the "cannot let an unlisted point slide in" store test.)
+  it('leaves every point where it was, listed or not', withServer(async srv => {
     seedRun(srv.docStore)
     const [a, b, c] = await seedPoints(srv, 3)
     const res = await putOrder(srv, [b, 'ghost', a]) // c is not mentioned at all
     expect(res.status).toBe(200)
-    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([b, a, c])
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([a, b, c])
   }))
 
   // THE ROUTE-ORDERING GUARD: like the answer route, this is a sub-resource under
@@ -835,7 +830,7 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     // Seed the trap the way a pre-guard worktree would have: through the file channel.
     // Seed with an EXPLICIT `now` so "was it amended or re-added?" is provable: a
     // delete-and-re-add stamps Date.now(), which is ~1.7e12 away from this.
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }], 1000)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'objective', headline: 'agent-authored goal' }], 1000)
     const before = srv.docStore.getSlatePoint(RUN, 'objective')!
     expect(before.source).toBe('file')
     expect(before.author).toBe('agent')
@@ -865,10 +860,9 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
   it('the takeover PRESERVES the prior point’s thread', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN })
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
-    srv.docStore.addSlateReply(RUN, 'objective', {
-      id: 'r1', author: 'user', text: 'why this goal?', createdAt: 1,
-    })
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
+    await new RunSlateBridge(srv.docStore, new SurfaceService(srv.docStore))
+      .appendReply(RUN, 'objective', 'why this goal?', { kind: 'human', id: 'actor-1' })
     expect(srv.docStore.getSlatePoint(RUN, 'objective')!.replies).toHaveLength(1)
 
     await putObjective(srv, 'the user’s real goal')
@@ -996,7 +990,7 @@ describe('DELETE /api/runs/:id/slate', () => {
   it('clears the store points and deletes the surface files', withServer(async srv => {
     seedRun(srv.docStore)
     const workdir = seedWorktree(srv.root, ['goal.json', 'steps.json'])
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }, { id: 'q2', headline: 'b' }], 100)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'q1', headline: 'a' }, { id: 'q2', headline: 'b' }], 100)
 
     const res = await clean(srv)
     expect(res.status).toBe(200)
@@ -1013,7 +1007,7 @@ describe('DELETE /api/runs/:id/slate', () => {
     seedRun(srv.docStore)
     seedWorktree(srv.root, ['goal.json'])
     await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: JSON.stringify({ text: 'the goal' }) })
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'q1', headline: 'a' }], 100)
 
     await clean(srv)
 
@@ -1024,7 +1018,7 @@ describe('DELETE /api/runs/:id/slate', () => {
   it('is idempotent — a second clean is a 200 with zero counts', withServer(async srv => {
     seedRun(srv.docStore)
     seedWorktree(srv.root, ['goal.json'])
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'q1', headline: 'a' }], 100)
 
     await clean(srv)
     const res = await clean(srv)
@@ -1037,7 +1031,7 @@ describe('DELETE /api/runs/:id/slate', () => {
     // its points must still go — otherwise the button is dead for that run.
     seedRun(srv.docStore)
     getSession.mockReturnValue(null)
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'q1', headline: 'a' }], 100)
 
     const res = await clean(srv)
     expect((await res.json() as { data: { files: number; points: number } }).data).toEqual({ files: 0, points: 1 })
@@ -1047,7 +1041,7 @@ describe('DELETE /api/runs/:id/slate', () => {
   it('NEVER delivers a prompt — clearing is not an injection', withServer(async srv => {
     seedRun(srv.docStore)
     seedWorktree(srv.root, ['goal.json'])
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+    await seedRunSlate(srv.docStore, RUN, [{ id: 'q1', headline: 'a' }], 100)
 
     await clean(srv)
 

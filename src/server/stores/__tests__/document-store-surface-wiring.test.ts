@@ -136,7 +136,7 @@ describe('the persist-exempt emit', () => {
   // exemption ever widened to cover ordinary Slate writes, this fails — which is
   // the point, because the legacy bridge is still the write path until U2 and its
   // only durable home is `docstore.json`.
-  it('leaves the legacy Slate bridge on the persistence path', () => {
+  it('leaves ordinary core-document writes on the persistence path', () => {
     vi.useFakeTimers()
     try {
       const dir = mkdtempSync(join(tmpdir(), 'surface-exempt-legacy-'))
@@ -147,11 +147,11 @@ describe('the persist-exempt emit', () => {
         store.upsertRun('r1', makeRun())
         store.flush()
 
-        store.applyRunSlateProjection('r1', [{ id: 'p1', headline: 'still persisted?', author: 'agent' }])
+        store.upsertRun('r2', makeRun({ id: 'r2', sessionId: 'r2' }))
         expect(vi.getTimerCount()).toBe(1)
         store.flush()
-        const raw = JSON.parse(readFileSync(file, 'utf-8')) as { slatePoints?: unknown[] }
-        expect(raw.slatePoints).toHaveLength(1)
+        const raw = JSON.parse(readFileSync(file, 'utf-8')) as { runs?: unknown[] }
+        expect(raw.runs).toHaveLength(2)
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
@@ -203,7 +203,11 @@ describe('two stores, two snapshots', () => {
       // Unrelated core-document work, all the way to disk, while the Surface
       // transaction is mid-write.
       store.upsertRun('r2', makeRun({ id: 'r2', sessionId: 'r2' }))
-      store.applyRunSlateProjection('r1', [{ id: 'p1', headline: 'legacy point', author: 'agent' }])
+      store.loadSlatePoints([{
+        id: 'p1', runId: 'r1', author: 'agent', source: 'file', headline: 'legacy point',
+        status: 'open', replies: [], createdAt: 1, amendedAt: 1,
+      }])
+      store.upsertRun('r1', makeRun({ rawLogs: 'nudge' }))
       store.flush()
 
       release!()
@@ -297,7 +301,11 @@ describe('a faulted load', () => {
       store.upsertSpace(SPACE, { id: SPACE, name: 'A', createdAt: '2026-07-13T00:00:00.000Z' })
       store.activeSpaceId = SPACE
       store.upsertRun('r1', makeRun())
-      store.applyRunSlateProjection('r1', [{ id: 'p1', headline: 'the frozen copy', author: 'agent' }])
+      store.loadSlatePoints([{
+        id: 'p1', runId: 'r1', author: 'agent', source: 'file', headline: 'the frozen copy',
+        status: 'open', replies: [], createdAt: 1, amendedAt: 1,
+      }])
+      store.upsertRun('r1', makeRun({ rawLogs: 'nudge' }))
       store.flush()
 
       const boot = bootSurfaces(store, { dir })
@@ -315,9 +323,13 @@ describe('a faulted load', () => {
       expect(store.getAllSurfaces()).toEqual([])
       expect(store.snapshot().surfaces).toEqual([])
 
-      // The legacy Slate is still rendered — it is the user's only copy, and
-      // hiding it would be worse than showing it behind the marker.
-      expect(store.getRun('r1')!.slate!.map(s => s.headline)).toEqual(['the frozen copy'])
+      // The legacy points are still THERE, unmigrated and unrendered. After U2 the
+      // rendered Slate derives from canonical records, and a faulted store has none —
+      // which is the honest degradation: an empty Slate behind an explicit marker
+      // naming when the legacy copy was frozen, rather than stale content presented
+      // as current. The user's only copy is preserved on disk, not shown as live.
+      expect(store.getAllSlatePoints().map(p => p.headline)).toEqual(['the frozen copy'])
+      expect(store.getRun('r1')!.slate).toBeUndefined()
 
       // Nothing may be written to a faulted store. The sidecar was never attached,
       // so a canonical mutation cannot reach it, and both files are byte untouched.
@@ -334,7 +346,10 @@ describe('a faulted load', () => {
       store.upsertSpace(SPACE, { id: SPACE, name: 'A', createdAt: '2026-07-13T00:00:00.000Z' })
       store.activeSpaceId = SPACE
       store.upsertRun('r1', makeRun())
-      store.applyRunSlateProjection('r1', [{ id: 'p1', headline: 'a real point', author: 'agent' }])
+      store.loadSlatePoints([{
+        id: 'p1', runId: 'r1', author: 'agent', source: 'file', headline: 'a real point',
+        status: 'open', replies: [], createdAt: 1, amendedAt: 1,
+      }])
 
       const boot = bootSurfaces(store, { dir, now: 5_000 })
       const { report, commit } = await boot.migration

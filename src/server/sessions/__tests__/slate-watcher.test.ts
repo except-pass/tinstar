@@ -73,7 +73,6 @@ function makeHarness(runs?: LiveRun[]) {
   const setContext = (c: typeof context) => { context = c }
 
   const watcher = new SlateWatcher({
-    docStore: {},
     listLiveRuns: () => liveRuns,
     listBoundRuns: () => boundRuns,
     runContext: () => context,

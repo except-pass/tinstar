@@ -20,15 +20,15 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { OBJECTIVE_ORDER, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point, Surface, SurfaceHealthStatus, SurfaceHome } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
 import { migrateSnapEdges } from '../../domain/constellationGraph'
-import { type PinSet, removePinsForNode, type Reply } from '../../domain/pinSet'
+import { type PinSet, removePinsForNode } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
-import { SlateStore, type PointInput } from './slate'
+import { SlateStore } from './slate'
+import { inRunSlate, pointFromCanonical, runAliasOf, slateSurfaceFromCanonical } from './run-slate-projection'
 import {
   SurfaceStore,
   type SurfaceBatch,
@@ -46,7 +46,6 @@ import type {
   JsonValue,
 } from './surface-persistence'
 import { isFresh } from './surface-persistence'
-import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
 
 /** Matches `MAX_IDEMPOTENCY_ENTRIES` in the Surface sidecar, so the durable and
  *  the memory-only receipt paths forget at the same point rather than at two
@@ -998,164 +997,85 @@ export class DocumentStore {
   }
 
   // --- Slate points (The Slate) ---
-  // Thin delegation to the composed SlateStore; the merge-by-id / status-derivation
-  // logic and the zero-change short-circuit live in stores/slate.ts.
-
-  /** Project a run's file-authored surfaces onto the store (merge by id, KTD1). */
-  applyRunSlateProjection(runId: string, inputs: PointInput[], now?: number): void {
-    this.slate.applyProjection(runId, inputs, now)
-    this.projectRunToSlate(runId)
-  }
-
-  /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
-   *  render projection. A user point survives a subsequent file re-projection (the
-   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point.
-   *
-   *  `claim` (S2 — the reserved Objective id) makes an amend TAKE OVER a point that
-   *  arrived through the file channel: source and author both become the user's, in
-   *  one mutation, while the thread and lifecycle stamps survive. */
-  addUserSlatePoint(runId: string, input: PointInput, opts: { claim?: boolean } = {}): Point {
-    const point = this.slate.addUserPoint(runId, input, Date.now(), opts)
-    this.projectRunToSlate(runId)
-    return point
-  }
-
-  /** Delete ONE of a run's points (S2 — clearing the Objective), then rebuild the
-   *  render projection so the card drops the card. Returns false when there was
-   *  nothing to delete (and nothing was emitted). */
-  deleteSlatePoint(runId: string, pointId: string): boolean {
-    const deleted = this.slate.deletePoint(runId, pointId)
-    if (deleted) this.projectRunToSlate(runId)
-    return deleted
-  }
-
-  /** "Clean the Slate" — drop EVERY point of a run except the user's Objective,
-   *  then rebuild the projection once. Returns how many were dropped.
-   *
-   *  The Objective survives by design: it is the run's pinned goal, it already has
-   *  its own explicit clear (DELETE /slate/objective), and it sits outside the
-   *  surface machinery everywhere else (search, count, refresh-all, hide). Wiping
-   *  it as a side effect of clearing surface clutter would be an expensive
-   *  surprise.
-   *
-   *  This clears the STORE only. File-authored surfaces also need their files
-   *  deleted (see `deleteSlateFiles`) or the watcher's next poll re-projects them
-   *  straight back — the store is downstream of the files, not the source of
-   *  truth for them. The HTTP layer owns that ordering.
-   *
-   *  One projection at the END, not one per point: each `projectRunToSlate` emits
-   *  to the event bus, so per-point projection would fire N renders and make the
-   *  card visibly dissolve a row at a time instead of clearing at once. */
-  clearSlateForRun(runId: string): number {
-    const points = this.slate.getPointsForRun(runId)
-    let cleared = 0
-    for (const point of points) {
-      if (point.id === OBJECTIVE_POINT_ID) continue
-      if (this.slate.deletePoint(runId, point.id)) cleared++
-    }
-    if (cleared > 0) this.projectRunToSlate(runId)
-    return cleared
-  }
-
-  addSlateReply(runId: string, pointId: string, reply: Reply): void {
-    this.slate.addReply(runId, pointId, reply)
-    this.projectRunToSlate(runId)
-  }
-
-  resolveSlatePoint(runId: string, pointId: string, at?: number): void {
-    this.slate.resolve(runId, pointId, at)
-    this.projectRunToSlate(runId)
-  }
-
-  reopenSlatePoint(runId: string, pointId: string, at?: number): void {
-    this.slate.reopen(runId, pointId, at)
-    this.projectRunToSlate(runId)
-  }
-
-  dismissSlatePoint(runId: string, pointId: string, at?: number): void {
-    this.slate.dismiss(runId, pointId, at)
-    this.projectRunToSlate(runId)
-  }
-
-  /** Reorder a run's points (S6 U2), then rebuild the render projection so the new
-   *  sequence rides the SSE `run` delta like every other Slate mutation. */
-  reorderSlatePoints(runId: string, ids: string[]): void {
-    this.slate.reorderPoints(runId, ids)
-    this.projectRunToSlate(runId)
-  }
-
-  /** Server-side staleness backstop (plan R19): mark every process-authored point
-   *  whose file writer stopped updating N minutes ago as stalled, then re-project
-   *  the affected runs so the render channel (RunData.slate) reflects it. Driven by
-   *  the SlateWatcher's low-frequency sweep timer. */
-  markStalledSlatePoints(now?: number, thresholdMs?: number): void {
-    const affected = sweepStalledProcessPoints(this.slate, now, thresholdMs)
-    for (const runId of affected) this.projectRunToSlate(runId)
-  }
-
-  /** Bridge: rebuild a run's SlateSurface[] render projection from its store points
-   *  and publish it on RunData.slate — the single client render channel (U5 renders
-   *  run.slate). Called after every point mutation so the run card reflects points +
-   *  their threads/status without a separate client subscription to `slatePoint`.
-   *  setRunSlate's by-value short-circuit keeps an unchanged projection from emitting. */
-  private projectRunToSlate(runId: string): void {
-    this.setRunSlate(runId, this.deriveRunSlate(runId))
-  }
+  //
+  // The legacy `SlateStore` is composed here but is NO LONGER A WRITE PATH. U2 moved
+  // authoring to canonical Surfaces: the watcher reconciles files into them and the
+  // run-scoped routes mutate them through `RunSlateBridge`. What survives here is
+  // load, snapshot, and the lifecycle cascade — the legacy points remain in
+  // `docstore.json` as migration evidence (KTD5) and the boot migration adopts any
+  // that have no canonical counterpart yet.
+  //
+  // The write mutators that used to live here (`applyRunSlateProjection`,
+  // `addUserSlatePoint`, `addSlateReply`, resolve/reopen/dismiss, `reorderSlatePoints`,
+  // `clearSlateForRun`, `markStalledSlatePoints`) are GONE rather than deprecated.
+  // Keeping them would have left methods that write a store nothing renders — a
+  // caller would get a success, see no change anywhere, and have nothing to find.
 
   /**
    * THE `Run.slate` DERIVATION — the single place the Run Workspace projection is
-   * computed, whether the trigger is a legacy bridge mutation or a canonical
-   * Surface mutation.
+   * computed, whatever triggered it.
    *
-   * Its input is still the legacy `SlateStore`, and that is the whole reason U1 is
-   * invisible: "existing Run Workspace projections remain unchanged" is true BY
-   * CONSTRUCTION, not by a comparison someone has to keep re-running. U2 is the
-   * unit that swaps this function's input to canonical Surfaces through their
-   * compatibility aliases; until then the legacy bridge is still the write path,
-   * so deriving from canonical records here would render whatever the last boot's
-   * migration captured rather than what the agent just wrote.
+   * ITS INPUT IS CANONICAL SURFACES, addressed through the run's compatibility
+   * aliases (KTD3). That swap is what U2 is for: until it, the legacy `SlateStore`
+   * was still the write path, so deriving from canonical records would have
+   * rendered whatever the last boot's migration captured rather than what an agent
+   * had just written. Now the file reconciler and the run-scoped routes both write
+   * canonical records, and the legacy store is evidence rather than a source.
+   *
+   * Deleted Surfaces are excluded by `getSurfacesForRunAlias`, so a Surface in the
+   * recovery store keeps the alias that lets a restore put it back without
+   * appearing in the Slate meanwhile.
    */
   private deriveRunSlate(runId: string): SlateSurface[] {
-    return this.slate.getPointsForRun(runId).map(p => {
-      // The Objective (S2) is the reserved USER point — and only a user point: a file
-      // that somehow carried the reserved id renders as an ordinary surface rather
-      // than impersonating the user's goal (the watcher already drops it upstream).
-      const isObjective = p.source === 'user' && p.id === OBJECTIVE_POINT_ID
-      return {
-        id: p.id,
-        author: p.author,
-        kind: isObjective ? 'objective' : p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
-        // S6 U2: a user reorder writes the store-owned `order`; everything else falls
-        // back to creation time, which is what `order` has always been implicitly.
-        // The objective is FORCED to its pin sentinel (finite — see OBJECTIVE_ORDER)
-        // rather than storing one, so a reorder that swept it up can't strand it.
-        order: isObjective ? OBJECTIVE_ORDER : p.order ?? p.createdAt,
-        ...(p.content ? { body: p.content } : {}),
-        ...(p.refresh ? { refresh: p.refresh } : {}),
-        // S4 workbench set id — LOAD-BEARING: drop this spread and `group` never
-        // reaches the client, so a grouped set silently renders as ordinary rows.
-        // (setRunSlate's JSON.stringify compare picks the field up once it is IN
-        // the projected object, so no equality change is needed — only this line.)
-        ...(p.group ? { group: p.group } : {}),
-        headline: p.headline,
-        status: p.status,
-        ...(p.replies ? { thread: p.replies } : {}),
-        ...(p.anchor ? { anchor: p.anchor } : {}),
-        ...(p.stalledAt != null ? { stalledAt: p.stalledAt } : {}),
-        createdAt: p.createdAt,
-        amendedAt: p.amendedAt,
-      }
-    })
+    const out: SlateSurface[] = []
+    for (const s of this.surfaces.getSurfacesForRunAlias(runId)) {
+      const alias = runAliasOf(s, runId)
+      if (!inRunSlate(s, alias)) continue
+      out.push(slateSurfaceFromCanonical(s, alias.localId))
+    }
+    return out
+  }
+
+  /** The canonical Surface a run's legacy point id addresses (KTD3). The lookup
+   *  every run-scoped route delegates through. */
+  surfaceForRunAlias(runId: string, localId: string): Surface | undefined {
+    for (const s of this.surfaces.getSurfacesForRunAlias(runId)) {
+      const alias = runAliasOf(s, runId)
+      if (alias?.localId === localId) return s
+    }
+    return undefined
   }
 
   getSlatePoint(runId: string, id: string): Point | undefined {
-    return this.slate.getPoint(runId, id)
+    const surface = this.surfaceForRunAlias(runId, id)
+    if (!surface) return undefined
+    const alias = runAliasOf(surface, runId)
+    // Addressable but not PRESENTED: a hidden alias or the compatibility root is
+    // still reachable by id (a route that already knows the id may still read it)
+    // while staying out of the rendered list.
+    return alias ? pointFromCanonical(surface, runId, alias.localId) : undefined
   }
 
   getSlatePointsForRun(runId: string): Point[] {
-    return this.slate.getPointsForRun(runId)
+    const out: Point[] = []
+    for (const s of this.surfaces.getSurfacesForRunAlias(runId)) {
+      const alias = runAliasOf(s, runId)
+      if (!inRunSlate(s, alias)) continue
+      out.push(pointFromCanonical(s, runId, alias.localId))
+    }
+    return out
   }
 
+  /** Hydrate legacy Slate points. The persistence load path's own call, exposed so
+   *  evidence can be seeded without a snapshot file. NOT a mutator: it emits nothing
+   *  and reaches no projection, exactly like `loadSurfaces`. */
+  loadSlatePoints(points: Point[]): void {
+    this.slate.loadPoints(points)
+  }
+
+  /** The LEGACY point set, straight off the legacy store. Migration evidence and
+   *  the `docstore.json` snapshot only — deliberately NOT the projection above,
+   *  which is what the Run Workspace renders. */
   getAllSlatePoints(): Point[] {
     return this.slate.getAllPoints()
   }
@@ -1187,6 +1107,19 @@ export class DocumentStore {
    *  a mutation and there is no client yet to tell. */
   loadSurfaces(records: Surface[], topologyRevs?: Record<string, number>): void {
     this.surfaces.load(records, topologyRevs)
+    // `Run.slate` is DERIVED from these records, so hydrating them without
+    // recomputing it leaves the stored projection describing the previous state —
+    // and at boot that means empty. The SSE snapshot serves the stored field, so a
+    // client connecting before the first mutation would be told the run has no Slate
+    // at all. Scoped to the runs these records actually alias, so a hydrate of one
+    // space does not walk every run in the install.
+    const runIds = new Set<string>()
+    for (const record of records) {
+      for (const alias of record.aliases ?? []) {
+        if (alias.bucket.kind === 'run') runIds.add(alias.bucket.runId)
+      }
+    }
+    for (const runId of runIds) this.emitDerivedRunSlate(runId)
   }
 
   getSurface(id: string): Surface | undefined {
