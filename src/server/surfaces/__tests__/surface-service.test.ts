@@ -90,13 +90,23 @@ describe('create', () => {
     expect(view.capabilities.contentAuthority).toBe('canonical-direct')
   })
 
-  it('gives an agent and a human identical canonical records for the same request', async () => {
+  it('gives an agent and a human identical canonical records for the same request, bar attribution', async () => {
     const a = harness()
     const b = harness()
     const body = { spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'same' } }
     const fromHuman = unwrap(await a.svc.create(body, ctx({ actor: HUMAN })))
     const fromAgent = unwrap(await b.svc.create(body, ctx({ actor: AGENT })))
-    expect(fromAgent.surfaces[0]!.surface).toEqual(fromHuman.surfaces[0]!.surface)
+    const human = fromHuman.surfaces[0]!.surface
+    const agent = fromAgent.surfaces[0]!.surface
+    // `author` is the ONE field that must differ, and it is derived from the
+    // acting principal rather than taken from the body — see the create body's
+    // rejection test below. Everything else is identical: no ownership gate, no
+    // second-class agent record.
+    expect(human.author).toBe('user')
+    expect(agent.author).toBe('agent')
+    const { author: _h, ...humanRest } = human
+    const { author: _a, ...agentRest } = agent
+    expect(agentRest).toEqual(humanRest)
     expect(fromAgent.surfaces[0]!.capabilities).toEqual(fromHuman.surfaces[0]!.capabilities)
     expect(fromAgent.topologyRev).toBe(fromHuman.topologyRev)
   })
@@ -396,7 +406,17 @@ describe('reparent and ungroup', () => {
     // The ratified decision: arrangement carries NO ownership gate. A human
     // arranged this; an agent moves it; nothing asks permission.
     const h = harness()
-    await h.create('human work', { author: 'user', owner: { kind: 'human', id: 'actor-1' } })
+    // Authored BY the human — which is now stated by calling as the human, not by
+    // putting `author: 'user'` in a body anyone could send.
+    unwrap(await h.svc.create(
+      {
+        spaceId: SPACE,
+        home: { kind: 'canvas', spaceId: SPACE },
+        content: { headline: 'human work' },
+        owner: { kind: 'human', id: 'actor-1' },
+      },
+      ctx({ actor: HUMAN }),
+    ))
     await h.create('agent box')
     h.batches.length = 0
     const r = unwrap(await h.svc.reparent(

@@ -45,8 +45,14 @@ import type {
   SurfaceProvenance,
   SurfaceSourceBinding,
 } from '../../domain/types'
+import { createHash } from 'node:crypto'
 import type { DocumentStore } from '../stores/document-store'
-import type { JsonValue, SurfaceCommitResult } from '../stores/surface-persistence'
+import type {
+  JsonValue,
+  SurfaceCommitRejection,
+  SurfaceCommitResult,
+  SurfaceIdempotencyReceipt,
+} from '../stores/surface-persistence'
 import { derivePointStatus } from '../stores/slate'
 import type {
   SurfaceDeleteOpts,
@@ -80,17 +86,44 @@ export type SurfaceOperation =
   | 'restore'
   | 'purge'
 
+/**
+ * Every machine-readable reason this service can report, as a CLOSED union.
+ *
+ * Closed rather than `string` because both halves it composes are already closed
+ * — `SurfaceRejection` from the store, `SurfaceCommitRejection` from the sidecar —
+ * and typing the seam between them as an open string threw away the one thing a
+ * caller switching on `reason` needs: the guarantee that the compiler will tell it
+ * when a new case appears. The four entries below the two unions are the
+ * service's own, produced by checks that belong to neither store.
+ */
+export type SurfaceErrorReason =
+  | SurfaceRejection
+  | SurfaceCommitRejection
+  /** Content authority is the source binding and no adapter can carry the edit
+   *  back to it (KTD4). */
+  | 'content-authority'
+  /** A registered source adapter refused the write. */
+  | 'source-write-failed'
+  /** A refresh was requested for a Surface already queued for one. */
+  | 'already-queued'
+  /** A refresh was requested for a Surface already being refreshed. */
+  | 'already-refreshing'
+  /** `ungroup` was asked to dissolve a Surface that holds nothing. */
+  | 'not-a-group'
+
 /** How a request failed, in the shape a caller can act on.
  *
  *  `conflict` always carries `current` — the authoritative records for the ids the
  *  caller named — so "re-read and retry" costs no second round trip and a UI can
- *  restore the true state without asking for a snapshot. */
+ *  restore the true state without asking for a snapshot. That holds for the
+ *  TOPOLOGY conflicts too: a plan that never applied still names the ids it was
+ *  computed over, and `commitPlan` re-reads them. */
 export interface SurfaceServiceError {
   code: 'not-found' | 'invalid' | 'conflict' | 'faulted' | 'write-failed'
   message: string
   /** The store or sidecar's own machine-readable reason, when the failure came
    *  from one of them rather than from body validation. */
-  reason?: string
+  reason?: SurfaceErrorReason
   /** Current authoritative records for the affected ids. */
   current?: Surface[]
   /** The space's current topology revision, for a caller retrying a CAS. */
@@ -256,6 +289,51 @@ function isReceipt(v: unknown): v is SurfaceReceipt {
     && typeof r.topologyRev === 'number' && !!r.revs && typeof r.revs === 'object'
 }
 
+// --- Idempotency fingerprints ---------------------------------------------
+//
+// AN IDEMPOTENCY KEY IS NOT AN IDENTITY. It is a client's assertion that THIS
+// request is a retry of one it already sent. Keying the replay on the key alone
+// takes that assertion on trust, and the failure it produces is the worst kind:
+// a second, DIFFERENT request under a recycled key returns `ok: true,
+// replayed: true` carrying the FIRST call's records, having done nothing. On a
+// `purge` that is a success response for an irreversible operation that never ran,
+// and the caller's next act is to stop asking about it.
+//
+// So a receipt records WHAT the key was used for — operation, target, and a digest
+// of the request body — and a key hit whose fingerprint differs is a conflict that
+// names the operation the key already belongs to. It is never a replayed success.
+//
+// The digest, not the body: the receipt is a scalar envelope on purpose (see the
+// receipt note above), and storing request bodies in the file that is rewritten
+// whole on every commit is exactly the cost that decision exists to avoid.
+
+/** Canonical JSON — object keys sorted at every depth — so two structurally equal
+ *  bodies fingerprint identically regardless of the order a client serialized
+ *  them in. A retry that reorders its own JSON is still a retry. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`
+}
+
+/** `<op>:<target>:<digest>` — self-describing, so the refusal can name what the
+ *  key already belongs to without a second lookup, and short enough that 2,048 of
+ *  them are noise against the snapshot budget. */
+export function requestFingerprint(op: SurfaceOperation, target: string | undefined, body: unknown): string {
+  const digest = createHash('sha256').update(canonicalJson(body)).digest('hex').slice(0, 16)
+  return `${op}:${target ?? '-'}:${digest}`
+}
+
+/** The human half of a fingerprint, for an error message. */
+function fingerprintDescription(fingerprint: string): string {
+  const [op, target] = fingerprint.split(':')
+  if (!op) return 'an earlier request'
+  return target && target !== '-' ? `${op} on ${target}` : op
+}
+
 // --- Body validation -------------------------------------------------------
 
 /** Fields no request may ever set, on any operation. Identity and both revisions
@@ -264,7 +342,80 @@ function isReceipt(v: unknown): v is SurfaceReceipt {
  *  state, jobs, and `deleted` belong to the host and the refresh coordinator. */
 const FORBIDDEN_FIELDS = [
   'id', 'rev', 'homeRev', 'createdAt', 'amendedAt', 'deleted', 'freshness', 'thread', 'aliases', 'order',
+  // `author` is DERIVED from the acting principal on every operation that records
+  // one. Accepting it let any caller file its work under `author: 'user'` and have
+  // it render as something the human wrote — the one attribution nothing else in
+  // the system can check. `group` always derived it; now everything does.
+  'author',
 ] as const
+
+// --- Size caps -------------------------------------------------------------
+//
+// PORTED from the sibling entry points, not invented here: the Roundup notices
+// route and the Slate points route both cap a headline at 200 characters and a
+// serialized A2UI body at 32 KiB, twelve lines above the place `routes.ts`
+// delegates to this service — and then the delegation crossed into a write path
+// with no caps at all.
+//
+// The gap is measured, not theoretical: five creates carrying ~900 KB headlines,
+// each comfortably under the 1 MB HTTP body limit, park the sidecar on its 4.5 MiB
+// latency knee (p95 259ms at ~10 MiB, and the sidecar is rewritten WHOLE on every
+// commit, so every later mutation in the install pays for them).
+//
+// REJECTED, never truncated. A truncated headline is a record that does not say
+// what its author wrote, and silently: the caller reads back something it did not
+// send and has no way to tell that from its own bug.
+const HEADLINE_MAX = 200
+const CONTENT_MAX = 32 * 1024
+/** Recipes and thread messages are prose, not identifiers — bounded at the same
+ *  place a component tree is, so no single field can dominate the snapshot. */
+const TEXT_MAX = 32 * 1024
+/** An idempotency key is an opaque token a client chooses; it is persisted in
+ *  every receipt, so it is bounded like everything else that reaches the file. */
+const IDEMPOTENCY_KEY_MAX = 200
+
+/**
+ * Characters a principal or provenance id may contain.
+ *
+ * These ids are not decorative. `SurfaceHostProbe.isLiveSession` joins one into a
+ * path under the sessions directory and reads it, so `../../../etc/passwd` in a
+ * `owner.id` — a field any request body may set — is a filesystem read outside the
+ * intended root, and the id is PERSISTED, so it re-triggers on every later context
+ * read of that record. The charset is the one tmux session names already live in.
+ */
+const PRINCIPAL_ID = /^[A-Za-z0-9._@:+-]{1,128}$/
+
+/** True when an id is safe to hand to the host probe as a path segment. Rejects
+ *  separators, `..`, and anything outside the session-name charset. */
+export function isSafePrincipalId(id: string): boolean {
+  if (!PRINCIPAL_ID.test(id)) return false
+  return id !== '.' && id !== '..'
+}
+
+/** Everything a content PATCH may name. Enforced exhaustively — see
+ *  {@link SurfaceService.updateContent}. */
+const CONTENT_PATCH_FIELDS: readonly string[] =
+  ['headline', 'body', 'recipe', 'expectedRev', 'expectedWatermark']
+
+/**
+ * Who a mutation is attributed to, derived from WHO IS CALLING and never from the
+ * request body.
+ *
+ * `author` is the field a human reads to decide whether something is theirs. A
+ * body that could set it let any local process file its work as `user`, and
+ * nothing downstream can check that claim — `group()` already derived it, and this
+ * is that rule applied everywhere.
+ */
+function authorFor(actor: SurfacePrincipalRef): PointAuthor {
+  if (actor.kind === 'human') return 'user'
+  if (actor.kind === 'process') return 'process'
+  return 'agent'
+}
+
+/** The ids a home names, for a conflict's `current`. The Canvas names none. */
+function homeIds(home: SurfaceHome): string[] {
+  return home.kind === 'surface' ? [home.surfaceId] : []
+}
 
 function asObject(body: unknown): Record<string, unknown> | null {
   // `JSON.parse('null')`, `'42'`, and `'[]'` all parse. Property reads on those
@@ -308,14 +459,28 @@ function parseHome(value: unknown): SurfaceHome | string {
   return "home.kind must be 'canvas' or 'surface'"
 }
 
+/** The size checks, shared by `create`/`group` and the content PATCH so the two
+ *  doors cannot admit different sizes. Returns the refusal message, or null. */
+function oversize(field: string, value: string | undefined, max: number): string | null {
+  if (value === undefined) return null
+  return value.length > max ? `${field} exceeds ${max} characters` : null
+}
+
 function parseContent(value: unknown, required: boolean): SurfaceContent | string | undefined {
   const raw = asObject(value)
   if (!raw) return required ? 'content must be an object' : undefined
   if (typeof raw.headline !== 'string' || !raw.headline.trim()) {
     return 'content.headline must be a non-empty string'
   }
+  const tooLong = oversize('content.headline', raw.headline, HEADLINE_MAX)
+  if (tooLong) return tooLong
   let body: A2uiContent | undefined
   if (raw.body !== undefined && raw.body !== null) {
+    // Measured on the SERIALIZED form, which is what reaches the file — a
+    // component tree's cost is its bytes, not its node count.
+    if (JSON.stringify(raw.body).length > CONTENT_MAX) {
+      return `content.body exceeds ${CONTENT_MAX} bytes`
+    }
     const parsed = parseA2uiContent(raw.body)
     if (!parsed) return 'content.body is not valid A2UI for the bounded component catalog'
     body = parsed
@@ -323,6 +488,8 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
   if (raw.recipe !== undefined && raw.recipe !== null && typeof raw.recipe !== 'string') {
     return 'content.recipe must be a string'
   }
+  const recipeTooLong = oversize('content.recipe', typeof raw.recipe === 'string' ? raw.recipe : undefined, TEXT_MAX)
+  if (recipeTooLong) return recipeTooLong
   return {
     headline: raw.headline.trim(),
     ...(body ? { body } : {}),
@@ -348,6 +515,14 @@ function parseProvenance(value: unknown): SurfaceProvenance | string | undefined
     const v = raw[key]
     if (v === undefined || v === null) continue
     if (typeof v !== 'string') return `provenance.${key} must be a string`
+    // `runId` and `sessionId` become principal ids in `resolveContributors`, which
+    // hands them to the host probe as path segments. Checked at the boundary, and
+    // again at the probe — a record persisted before this check must not be able
+    // to re-trigger the traversal on every later context read.
+    if ((key === 'runId' || key === 'sessionId') && !isSafePrincipalId(v)) {
+      return `provenance.${key} is not a valid session identifier`
+    }
+    if (v.length > 512) return `provenance.${key} exceeds 512 characters`
     out[key] = v
   }
   return out
@@ -361,6 +536,12 @@ function parsePrincipal(value: unknown, field: string): SurfacePrincipalRef | st
     return `${field}.kind must be one of ${kinds.join(', ')}`
   }
   if (typeof raw.id !== 'string' || !raw.id) return `${field}.id must be a non-empty string`
+  if (!isSafePrincipalId(raw.id)) {
+    return `${field}.id must match [A-Za-z0-9._@:+-] and may not contain path separators`
+  }
+  if (raw.label !== undefined && typeof raw.label === 'string' && raw.label.length > HEADLINE_MAX) {
+    return `${field}.label exceeds ${HEADLINE_MAX} characters`
+  }
   return {
     kind: raw.kind as SurfacePrincipalRef['kind'],
     id: raw.id,
@@ -373,6 +554,10 @@ function parseSource(value: unknown): SurfaceSourceBinding | string | undefined 
   if (!raw) return undefined
   if (typeof raw.adapter !== 'string' || !raw.adapter) return 'source.adapter must be a non-empty string'
   if (typeof raw.locator !== 'string' || !raw.locator) return 'source.locator must be a non-empty string'
+  const tooLong = oversize('source.adapter', raw.adapter, HEADLINE_MAX)
+    ?? oversize('source.locator', raw.locator, 1024)
+    ?? oversize('source.watermark', typeof raw.watermark === 'string' ? raw.watermark : undefined, HEADLINE_MAX)
+  if (tooLong) return tooLong
   if (raw.generation !== undefined) {
     // The observation generation is HOST-owned and monotonic (KTD10). Accepting a
     // caller's number would let a stale author claim to have observed a newer
@@ -453,6 +638,91 @@ export class SurfaceService {
     return { ok: true, data: { id, contributors: resolveContributors(surface, this.probe) } }
   }
 
+  // --- Idempotency pre-flight ---
+
+  /**
+   * What every mutation does BEFORE it touches the store.
+   *
+   * The ordering here is the fix, not the lookup. The replay check used to live at
+   * the bottom of the stack, inside the durable transaction, which meant a retry
+   * had to survive this service's existence, liveness and compare-and-swap checks
+   * to reach it — and it cannot:
+   *
+   *   · `update-content` and `transfer-content-authority` REQUIRE `expectedRev`,
+   *     and a retry carries the revision it read before its FIRST attempt. That
+   *     attempt succeeded and bumped the revision, so the retry is refused as
+   *     stale. The one thing an idempotency key exists to make safe was the one
+   *     thing it could not make safe, and the shipped skill documents
+   *     compare-and-swap and `--idempotency-key` as independently combinable.
+   *   · A retry whose target was purged in the meantime is refused as `not-found`,
+   *     though the receipt for the transaction it is asking about is on file.
+   *
+   * Consulting the receipt first answers both from the record of what happened,
+   * which is what the caller is actually asking for. The durable layer keeps its
+   * own identical check as the backstop for the narrow race where two retries
+   * arrive together.
+   */
+  private preflight(
+    op: SurfaceOperation, target: string | undefined, body: unknown, ctx: SurfaceCallContext,
+  ): { done: SurfaceResult<SurfaceMutation> } | { done?: undefined; fingerprint?: string } {
+    const key = ctx.idempotencyKey
+    if (!key) return {}
+    if (key.length > IDEMPOTENCY_KEY_MAX) {
+      return { done: invalid(`Idempotency-Key exceeds ${IDEMPOTENCY_KEY_MAX} characters`) }
+    }
+    const fingerprint = requestFingerprint(op, target, body)
+    const receipt = this.docStore.lookupSurfaceReceipt(key)
+    if (!receipt) return { fingerprint }
+    if (receipt.fingerprint !== fingerprint) {
+      return { done: this.keyReuse(key, receipt) }
+    }
+    // A receipt whose payload this build cannot read is treated as ABSENT rather
+    // than as a replay: fabricating a success from an unreadable envelope is worse
+    // than re-running through the durable layer, which holds the same receipt and
+    // will short-circuit there.
+    if (!isReceipt(receipt.result)) return { fingerprint }
+    return { done: this.fromReceipt(op, receipt.result) }
+  }
+
+  private keyReuse(key: string, receipt: SurfaceIdempotencyReceipt): { ok: false; error: SurfaceServiceError } {
+    const owner = receipt.fingerprint ? fingerprintDescription(receipt.fingerprint) : 'an earlier request'
+    return {
+      ok: false,
+      error: {
+        code: 'conflict',
+        reason: 'idempotency-key-reuse',
+        message:
+          `Idempotency-Key "${key}" already belongs to ${owner}. A key identifies one request, not a caller — ` +
+          'reusing it across two different operations would report the first one\'s success for work the second ' +
+          'never did. Use a fresh key.',
+        current: receipt.ids.map(id => this.docStore.getSurface(id)).filter((s): s is Surface => !!s),
+      },
+    }
+  }
+
+  /** Rebuild a mutation response from a persisted receipt, at the records' CURRENT
+   *  revisions — the same reconstruction {@link fromCommit} does on a replay, and
+   *  for the same reason (see the receipt note above). */
+  private fromReceipt(op: SurfaceOperation, receipt: SurfaceReceipt): SurfaceResult<SurfaceMutation> {
+    const surfaces = Object.keys(receipt.revs)
+      .map(id => this.docStore.getSurface(id))
+      .filter((s): s is Surface => !!s)
+      .map(s => this.view(s))
+    return {
+      ok: true,
+      data: {
+        op,
+        spaceId: receipt.spaceId,
+        baseTopologyRev: receipt.baseTopologyRev,
+        topologyRev: receipt.topologyRev,
+        spaceTopologyRev: this.docStore.getSurfaceTopologyRev(receipt.spaceId),
+        surfaces,
+        ...(receipt.purged ? { purged: receipt.purged } : {}),
+        replayed: true,
+      },
+    }
+  }
+
   // --- Create ---
 
   /**
@@ -467,6 +737,8 @@ export class SurfaceService {
    * a Surface with no source run.
    */
   async create(body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('create', undefined, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
     const forbidden = forbiddenField(raw)
@@ -493,9 +765,9 @@ export class SurfaceService {
     if (raw.contentAuthority === 'source-binding' && !source) {
       return invalid('contentAuthority source-binding requires a source binding')
     }
-    if (raw.author !== undefined && !['user', 'agent', 'process'].includes(String(raw.author))) {
-      return invalid("author must be 'user', 'agent' or 'process'")
-    }
+
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
 
     const id = this.mintId()
     const runId = provenance?.runId
@@ -509,14 +781,14 @@ export class SurfaceService {
       home,
       content,
       ...(raw.contentAuthority ? { contentAuthority: raw.contentAuthority as SurfaceContentAuthority } : {}),
-      ...(raw.author ? { author: raw.author as PointAuthor } : {}),
+      author: authorFor(ctx.actor),
       ...(source ? { source } : {}),
       ...(provenance && Object.keys(provenance).length > 0 ? { provenance } : {}),
       ...(owner ? { owner } : {}),
       aliases: [alias],
       ...(raw.compatibilityOnly === true ? { compatibilityOnly: true } : {}),
-    }, this.topologyOpts(raw, ctx))
-    return this.commitPlan('create', plan, ctx)
+    }, opts)
+    return this.commitPlan('create', plan, ctx, [id, ...homeIds(home)], flight.fingerprint)
   }
 
   // --- Content ---
@@ -529,8 +801,16 @@ export class SurfaceService {
    * than having it quietly ignored. `null` clears `body` or `recipe`; omitting
    * them keeps what is there, which is the distinction a PATCH has to make and a
    * PUT cannot.
+   *
+   * The whitelist is ENFORCED, exhaustively, which it was not: every field outside
+   * the set below used to be dropped in silence, so a caller that believed it had
+   * moved content authority, changed the owner, or rewritten provenance in the same
+   * PATCH got a 200 and none of it. Naming the field back is the whole difference
+   * between a caller that retries correctly and one that never finds out.
    */
   async updateContent(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('update-content', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
     const forbidden = forbiddenField(raw)
@@ -539,6 +819,13 @@ export class SurfaceService {
       return invalid('home is topology and changes only through reparent, group, or ungroup')
     }
     if (raw.spaceId !== undefined) return invalid('spaceId is immutable')
+    const unknown = Object.keys(raw).find(k => !CONTENT_PATCH_FIELDS.includes(k))
+    if (unknown) {
+      return invalid(
+        `${unknown} is not authored content and is not settable through a content PATCH ` +
+        `(this endpoint takes ${CONTENT_PATCH_FIELDS.join(', ')})`,
+      )
+    }
 
     const prior = this.docStore.getSurface(id)
     if (!prior) return notFound(id)
@@ -553,9 +840,12 @@ export class SurfaceService {
     if (headline !== undefined && (typeof headline !== 'string' || !headline.trim())) {
       return invalid('headline must be a non-empty string')
     }
+    const headlineTooLong = oversize('headline', typeof headline === 'string' ? headline : undefined, HEADLINE_MAX)
+    if (headlineTooLong) return invalid(headlineTooLong)
     let nextBody: A2uiContent | undefined = prior.content.body
     if (raw.body === null) nextBody = undefined
     else if (raw.body !== undefined) {
+      if (JSON.stringify(raw.body).length > CONTENT_MAX) return invalid(`body exceeds ${CONTENT_MAX} bytes`)
       const parsed = parseA2uiContent(raw.body)
       if (!parsed) return invalid('body is not valid A2UI for the bounded component catalog')
       nextBody = parsed
@@ -564,6 +854,8 @@ export class SurfaceService {
     if (raw.recipe === null) recipe = undefined
     else if (raw.recipe !== undefined) {
       if (typeof raw.recipe !== 'string') return invalid('recipe must be a string or null')
+      const recipeTooLong = oversize('recipe', raw.recipe, TEXT_MAX)
+      if (recipeTooLong) return invalid(recipeTooLong)
       recipe = raw.recipe || undefined
     }
 
@@ -617,7 +909,7 @@ export class SurfaceService {
       rev: prior.rev + 1,
       amendedAt: now,
     }
-    return this.commitContent('update-content', prior, next, ctx)
+    return this.commitContent('update-content', prior, next, ctx, flight.fingerprint)
   }
 
   /**
@@ -630,8 +922,12 @@ export class SurfaceService {
   async transferContentAuthority(
     id: string, body: unknown, ctx: SurfaceCallContext,
   ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('transfer-content-authority', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on transfer-content-authority`)
     const to = raw.to
     if (to !== 'source-binding' && to !== 'canonical-direct') {
       return invalid("to must be 'source-binding' or 'canonical-direct'")
@@ -654,7 +950,7 @@ export class SurfaceService {
       rev: prior.rev + 1,
       amendedAt: ctx.at ?? Date.now(),
     }
-    return this.commitContent('transfer-content-authority', prior, next, ctx)
+    return this.commitContent('transfer-content-authority', prior, next, ctx, flight.fingerprint)
   }
 
   /** Append one message to a Surface's thread. Persist-first: the message is
@@ -662,12 +958,15 @@ export class SurfaceService {
    *  best-effort rather than lossy (Canonical Field Authority: "Thread and
    *  discussion status … Persist first, then dispatch best-effort"). */
   async appendThread(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('append-thread', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on append-thread`)
     if (typeof raw.text !== 'string' || !raw.text.trim()) return invalid('text must be a non-empty string')
-    if (raw.author !== undefined && !['user', 'agent', 'process'].includes(String(raw.author))) {
-      return invalid("author must be 'user', 'agent' or 'process'")
-    }
+    const tooLong = oversize('text', raw.text, TEXT_MAX)
+    if (tooLong) return invalid(tooLong)
     const prior = this.docStore.getSurface(id)
     if (!prior) return notFound(id)
     const guard = this.guardLive(prior, 'append-thread')
@@ -678,10 +977,12 @@ export class SurfaceService {
     }
 
     const now = ctx.at ?? Date.now()
-    // Derived from the actor when the caller does not say. A human actor posting
-    // through the browser is a `user` reply; a managed session is an `agent` one.
-    const author = (raw.author as Reply['author'] | undefined)
-      ?? (ctx.actor.kind === 'human' ? 'user' : ctx.actor.kind === 'process' ? 'process' : 'agent')
+    // Derived from the actor, ALWAYS. A human actor posting through the browser is
+    // a `user` reply; a managed session is an `agent` one. It used to be
+    // overridable from the body, which meant an agent could post a thread message
+    // that renders as something the human said — and a reply is exactly where that
+    // matters, because the thread is the record of a conversation.
+    const author: Reply['author'] = authorFor(ctx.actor)
     const reply: Reply = {
       id: `${id}-r${prior.thread.replies.length + 1}-${now.toString(36)}`,
       author,
@@ -698,7 +999,7 @@ export class SurfaceService {
       rev: prior.rev + 1,
       amendedAt: now,
     }
-    return this.commitContent('append-thread', prior, next, ctx)
+    return this.commitContent('append-thread', prior, next, ctx, flight.fingerprint)
   }
 
   /**
@@ -712,7 +1013,11 @@ export class SurfaceService {
    * that is in flight.
    */
   async refreshRequest(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('refresh-request', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body) ?? {}
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on refresh-request`)
     const prior = this.docStore.getSurface(id)
     if (!prior) return notFound(id)
     const guard = this.guardLive(prior, 'refresh-request')
@@ -726,7 +1031,7 @@ export class SurfaceService {
         ok: false,
         error: {
           code: 'conflict',
-          reason: `already-${prior.freshness.phase}`,
+          reason: prior.freshness.phase === 'queued' ? 'already-queued' : 'already-refreshing',
           message: `Surface ${id} is already ${prior.freshness.phase}; one refresh runs per Surface`,
           current: [prior],
         },
@@ -741,14 +1046,18 @@ export class SurfaceService {
       rev: prior.rev + 1,
       amendedAt: ctx.at ?? Date.now(),
     }
-    return this.commitContent('refresh-request', prior, next, ctx)
+    return this.commitContent('refresh-request', prior, next, ctx, flight.fingerprint)
   }
 
   // --- Topology ---
 
   async group(body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('group', undefined, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on group`)
     const childIds = parseIdList(raw.childIds, 'childIds')
     if (typeof childIds === 'string') return invalid(childIds)
     if (childIds.length === 0) return invalid('childIds must name at least one Surface')
@@ -757,26 +1066,35 @@ export class SurfaceService {
     if (!content) return invalid('content is required — the new parent needs a headline')
     const owner = parsePrincipal(raw.owner, 'owner')
     if (typeof owner === 'string') return invalid(owner)
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
 
+    const parentId = this.mintId()
     const plan = this.docStore.planSurfaceGroup(childIds, {
-      id: this.mintId(),
+      id: parentId,
       content,
       ...(owner ? { owner } : {}),
-      author: ctx.actor.kind === 'human' ? 'user' : 'agent',
-    }, this.topologyOpts(raw, ctx))
-    return this.commitPlan('group', plan, ctx)
+      author: authorFor(ctx.actor),
+    }, opts)
+    return this.commitPlan('group', plan, ctx, [parentId, ...childIds], flight.fingerprint)
   }
 
   async reparent(body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('reparent', undefined, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body)
     if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on reparent`)
     const ids = parseIdList(raw.ids, 'ids')
     if (typeof ids === 'string') return invalid(ids)
     if (ids.length === 0) return invalid('ids must name at least one Surface')
     const home = parseHome(raw.home)
     if (typeof home === 'string') return invalid(home)
-    const plan = this.docStore.planSurfaceReparent(ids, home, this.topologyOpts(raw, ctx))
-    return this.commitPlan('reparent', plan, ctx)
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
+    const plan = this.docStore.planSurfaceReparent(ids, home, opts)
+    return this.commitPlan('reparent', plan, ctx, [...ids, ...homeIds(home)], flight.fingerprint)
   }
 
   /**
@@ -788,21 +1106,48 @@ export class SurfaceService {
    * must be one transaction with the same cycle, revision, and descendant checks.
    * Moving children out while KEEPING the box is a different intent and is spelled
    * `reparent`.
+   *
+   * A CHILDLESS Surface is refused rather than dissolved. Sharing `delete`'s
+   * machinery means an ungroup of a leaf is a perfectly valid delete — it moved the
+   * Surface into the recovery store and reported `op: ungroup`, so a caller
+   * tidying its tree could take a Surface out of circulation while being told a
+   * box had been opened. There is no box; say so.
    */
   async ungroup(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('ungroup', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body) ?? {}
-    if (!this.docStore.getSurface(id)) return notFound(id)
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on ungroup`)
+    const target = this.docStore.getSurface(id)
+    if (!target) return notFound(id)
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
+    if (this.docStore.getSurfaceChildren(id).length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'not-a-group',
+          message:
+            `Surface ${id} holds no children, so there is nothing to dissolve. Ungrouping it would move it into ` +
+            'the recovery store — if that is what you meant, call delete.',
+          current: [target],
+          topologyRev: this.docStore.getSurfaceTopologyRev(target.spaceId),
+        },
+      }
+    }
     // Ungroup means "dissolve THIS box", so the descendant set is read here rather
     // than demanded from the caller: unlike a delete, no descendant is removed —
     // the immediate children move up and everything below them rides along.
     const descendants = this.docStore.getSurfaceDescendants(id).map(s => s.id)
     const plan = this.docStore.planSurfaceDelete(id, {
-      ...this.topologyOpts(raw, ctx),
+      ...opts,
       descendants,
       disposition: 'reparent-children',
       by: ctx.actor,
     })
-    return this.commitPlan('ungroup', plan, ctx)
+    return this.commitPlan('ungroup', plan, ctx, [id, ...descendants], flight.fingerprint)
   }
 
   // --- Recoverable deletion (KTD15) ---
@@ -817,7 +1162,11 @@ export class SurfaceService {
    * before a child arrived must not take that child with it.
    */
   async delete(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('delete', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body) ?? {}
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on delete`)
     if (raw.disposition !== undefined
       && raw.disposition !== 'reparent-children' && raw.disposition !== 'delete-subtree') {
       return invalid("disposition must be 'reparent-children' or 'delete-subtree'")
@@ -831,8 +1180,10 @@ export class SurfaceService {
     const target = this.docStore.getSurface(id)
     if (!target) return notFound(id)
 
+    const topology = this.topologyOpts(raw, ctx)
+    if (typeof topology === 'string') return invalid(topology)
     const opts: SurfaceDeleteOpts = {
-      ...this.topologyOpts(raw, ctx),
+      ...topology,
       ...(descendants ? { descendants } : {}),
       ...(raw.disposition ? { disposition: raw.disposition as SurfaceDeleteDisposition } : {}),
       by: ctx.actor,
@@ -848,17 +1199,23 @@ export class SurfaceService {
         "and a disposition of 'reparent-children' or 'delete-subtree'",
       )
     }
-    return this.commitPlan('delete', plan, ctx)
+    return this.commitPlan('delete', plan, ctx, [id, ...(descendants ?? [])], flight.fingerprint)
   }
 
   /** Put a deleted subtree back. A former home that is gone does not fail the
    *  restore — see `SurfaceStore.planRestore`; the Surface lands on the Canvas
    *  with the workspace-recovery alias rather than becoming unreachable. */
   async restore(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('restore', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body) ?? {}
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on restore`)
     if (!this.docStore.getSurface(id)) return notFound(id)
-    const plan = this.docStore.planSurfaceRestore(id, this.topologyOpts(raw, ctx))
-    return this.commitPlan('restore', plan, ctx)
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
+    const plan = this.docStore.planSurfaceRestore(id, opts)
+    return this.commitPlan('restore', plan, ctx, [id], flight.fingerprint)
   }
 
   /**
@@ -874,7 +1231,11 @@ export class SurfaceService {
    * be able to exceed the blast radius the caller named.
    */
   async purge(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('purge', id, body, ctx)
+    if (flight.done) return flight.done
     const raw = asObject(body) ?? {}
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on purge`)
     const target = this.docStore.getSurface(id)
     if (!target) return notFound(id)
     let descendants: string[] | undefined
@@ -883,8 +1244,10 @@ export class SurfaceService {
       if (typeof parsed === 'string') return invalid(parsed)
       descendants = parsed
     }
+    const opts = this.topologyOpts(raw, ctx)
+    if (typeof opts === 'string') return invalid(opts)
     const plan = this.docStore.planSurfacePurge(id, {
-      ...this.topologyOpts(raw, ctx),
+      ...opts,
       ...(descendants ? { descendants } : {}),
     })
     if (!plan.applied && plan.reason === 'descendant-mismatch') {
@@ -894,7 +1257,7 @@ export class SurfaceService {
         '— a purge ERASES every one of them, and there is no undo',
       )
     }
-    return this.commitPlan('purge', plan, ctx)
+    return this.commitPlan('purge', plan, ctx, [id, ...(descendants ?? [])], flight.fingerprint)
   }
 
   // --- Internals ---
@@ -927,12 +1290,38 @@ export class SurfaceService {
     }
   }
 
-  /** Pull the compare-and-swap inputs a caller may state on any topology body. */
-  private topologyOpts(raw: Record<string, unknown>, ctx: SurfaceCallContext): SurfaceTopologyOpts {
-    const expectedRevs = asObject(raw.expectedRevs)
+  /**
+   * Pull the compare-and-swap inputs a caller may state on any topology body.
+   * Returns the refusal message instead of the options when the body is wrong.
+   *
+   * `expectedRevs` used to be the one field in this file that skipped the
+   * whitelisting everything else gets: an is-it-an-object check and then a cast.
+   * That let `{"expectedRevs": {"sf-1": "3"}}` through, where the string `"3"`
+   * compares unequal to every real revision forever — a compare-and-swap that can
+   * never be satisfied, reported as an ordinary stale-revision conflict, so the
+   * caller re-reads, retries with the same body, and loops.
+   */
+  private topologyOpts(raw: Record<string, unknown>, ctx: SurfaceCallContext): SurfaceTopologyOpts | string {
+    if (raw.expectedTopologyRev !== undefined) {
+      if (typeof raw.expectedTopologyRev !== 'number' || !Number.isFinite(raw.expectedTopologyRev)) {
+        return 'expectedTopologyRev must be a finite number'
+      }
+    }
+    let expectedRevs: Record<string, number> | undefined
+    if (raw.expectedRevs !== undefined) {
+      const parsed = asObject(raw.expectedRevs)
+      if (!parsed) return 'expectedRevs must be an object of Surface id -> revision'
+      expectedRevs = {}
+      for (const [id, rev] of Object.entries(parsed)) {
+        if (typeof rev !== 'number' || !Number.isFinite(rev)) {
+          return `expectedRevs.${id} must be a finite number`
+        }
+        expectedRevs[id] = rev
+      }
+    }
     return {
       ...(typeof raw.expectedTopologyRev === 'number' ? { expectedTopologyRev: raw.expectedTopologyRev } : {}),
-      ...(expectedRevs ? { expectedRevs: expectedRevs as Record<string, number> } : {}),
+      ...(expectedRevs ? { expectedRevs } : {}),
       ...(ctx.at != null ? { at: ctx.at } : {}),
     }
   }
@@ -958,7 +1347,7 @@ export class SurfaceService {
     }
   }
 
-  private conflictOn(current: Surface[], reason: SurfaceRejection | string): { ok: false; error: SurfaceServiceError } {
+  private conflictOn(current: Surface[], reason: SurfaceErrorReason): { ok: false; error: SurfaceServiceError } {
     const spaceId = current[0]?.spaceId
     return {
       ok: false,
@@ -990,7 +1379,7 @@ export class SurfaceService {
    * caller would record a revision the record never reached.
    */
   private async commitContent(
-    op: SurfaceOperation, prior: Surface, next: Surface, ctx: SurfaceCallContext,
+    op: SurfaceOperation, prior: Surface, next: Surface, ctx: SurfaceCallContext, fingerprint?: string,
   ): Promise<SurfaceResult<SurfaceMutation>> {
     if (this.docStore.checkSurfaceUpsert(next) === 'no-change') {
       return {
@@ -1010,14 +1399,31 @@ export class SurfaceService {
     }
     const commit = await this.docStore.commitSurfaceContent(next, {
       ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
       result: receiptJson(receipt),
     })
     return this.fromCommit(op, commit, receipt, [prior])
   }
 
-  /** One durable topology transaction, in the KTD7 order. */
+  /**
+   * One durable topology transaction, in the KTD7 order.
+   *
+   * `targets` is the ids the caller named — the Surfaces it is about to move, the
+   * home it is moving them to, the descendants it listed. It exists so that a
+   * REFUSED plan can still carry `current`, which the type four lines above states
+   * as an invariant ("`conflict` always carries `current`") and which every
+   * topology operation used to break: `create`, `group`, `reparent`, `ungroup`,
+   * `restore`, `purge` and most of `delete` returned a bare `reason`, so the
+   * "re-read and retry with no second round trip" design held only on the content
+   * path, and a UI recovering from a topology conflict had to go back for a
+   * snapshot it was promised it would not need.
+   */
   private async commitPlan(
-    op: SurfaceOperation, plan: SurfacePlanResult, ctx: SurfaceCallContext,
+    op: SurfaceOperation,
+    plan: SurfacePlanResult,
+    ctx: SurfaceCallContext,
+    targets: string[],
+    fingerprint?: string,
   ): Promise<SurfaceResult<SurfaceMutation>> {
     if (!plan.applied) {
       return {
@@ -1026,6 +1432,7 @@ export class SurfaceService {
           code: plan.reason === 'unknown-surface' || plan.reason === 'unknown-home' ? 'not-found' : 'conflict',
           reason: plan.reason,
           message: rejectionMessage(plan.reason),
+          current: this.currentFor(targets),
           topologyRev: plan.topologyRev,
         },
       }
@@ -1046,9 +1453,24 @@ export class SurfaceService {
     const proposed = receiptFor(plan.plan)
     const commit = await this.docStore.commitSurfacePlan(plan.plan, {
       ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
       result: effective => receiptJson(receiptFor(effective)),
     })
     return this.fromCommit(op, commit, proposed, plan.plan.records)
+  }
+
+  /** Authoritative records for a set of named ids, deduplicated and skipping ids
+   *  that resolve to nothing. What `current` is on every conflict. */
+  private currentFor(ids: string[]): Surface[] {
+    const seen = new Set<string>()
+    const out: Surface[] = []
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const surface = this.docStore.getSurface(id)
+      if (surface) out.push(surface)
+    }
+    return out
   }
 
   /**

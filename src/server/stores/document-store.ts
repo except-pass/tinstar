@@ -39,13 +39,21 @@ import {
   type SurfaceTopologyOpts,
   type SurfaceTopologyPlan,
 } from './surfaces'
-import type { SurfaceSidecar, SurfaceCommitResult, JsonValue } from './surface-persistence'
+import type {
+  SurfaceSidecar,
+  SurfaceCommitResult,
+  SurfaceIdempotencyReceipt,
+  JsonValue,
+} from './surface-persistence'
+import { isFresh } from './surface-persistence'
 import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
 
 /** Matches `MAX_IDEMPOTENCY_ENTRIES` in the Surface sidecar, so the durable and
  *  the memory-only receipt paths forget at the same point rather than at two
- *  different ones. */
-const MAX_MEMO_RECEIPTS = 256
+ *  different ones. A CEILING, not the policy: both paths expire by AGE
+ *  (`IDEMPOTENCY_RETENTION_MS`) and use the count only to keep a pathological
+ *  client from making the table unbounded. */
+const MAX_MEMO_RECEIPTS = 2048
 
 /**
  * One entry on the `changes` stream.
@@ -309,7 +317,7 @@ export class DocumentStore {
   private surfaceStatus: SurfaceHealthStatus = { health: 'healthy' }
 
   /** Idempotency receipts for the no-sidecar path. See {@link memoized}. */
-  private surfaceMemoReceipts = new Map<string, { ids: string[]; result?: JsonValue }>()
+  private surfaceMemoReceipts = new Map<string, SurfaceIdempotencyReceipt>()
 
   private persistPath: string | null = null
   private persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -1307,7 +1315,12 @@ export class DocumentStore {
    */
   async commitSurfacePlan(
     plan: SurfaceTopologyPlan,
-    opts: { idempotencyKey?: string; result?: (effective: SurfaceTopologyPlan) => JsonValue } = {},
+    opts: {
+      idempotencyKey?: string
+      /** See {@link SurfaceTransaction.fingerprint} — what this key is a retry of. */
+      fingerprint?: string
+      result?: (effective: SurfaceTopologyPlan) => JsonValue
+    } = {},
   ): Promise<SurfaceCommitResult> {
     const sidecar = this.surfaceSidecar
     // What re-validation recomputed, and therefore what gets installed. The
@@ -1334,6 +1347,7 @@ export class DocumentStore {
       }
       return this.memoized(
         opts.idempotencyKey,
+        opts.fingerprint,
         effective.records.map(r => r.id),
         rechecked.result,
         () => this.surfaces.applyPlan(effective),
@@ -1350,6 +1364,7 @@ export class DocumentStore {
       ...(drops.length > 0 ? { drops } : {}),
       expectedRevs: plan.expectedRevs,
       ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
       precommit,
       onDurable: () => { this.surfaces.applyPlan(effective) },
     })
@@ -1386,7 +1401,7 @@ export class DocumentStore {
    */
   async commitSurfaceContent(
     next: Surface,
-    opts: { idempotencyKey?: string; result?: JsonValue } = {},
+    opts: { idempotencyKey?: string; fingerprint?: string; result?: JsonValue } = {},
   ): Promise<SurfaceCommitResult> {
     const prior = this.surfaces.getSurface(next.id)
     if (!prior) return { committed: false, reason: 'unknown-record', detail: `no canonical Surface ${next.id}` }
@@ -1407,7 +1422,7 @@ export class DocumentStore {
       if (!rechecked.ok) {
         return { committed: false, reason: 'precommit-refused', detail: rechecked.reason }
       }
-      return this.memoized(opts.idempotencyKey, [next.id], opts.result, () => {
+      return this.memoized(opts.idempotencyKey, opts.fingerprint, [next.id], opts.result, () => {
         const applied = this.surfaces.upsertSurface(next)
         return applied ? [next] : null
       }, `${next.id}: in-memory upsert refused`)
@@ -1416,6 +1431,7 @@ export class DocumentStore {
       puts: [next],
       expectedRevs: { [next.id]: prior.rev },
       ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
       ...(opts.result !== undefined ? { result: opts.result } : {}),
       precommit,
       onDurable: () => this.installDurableContent(next),
@@ -1469,14 +1485,22 @@ export class DocumentStore {
    */
   private memoized(
     idempotencyKey: string | undefined,
+    fingerprint: string | undefined,
     ids: string[],
     result: JsonValue | undefined,
     apply: () => Surface[] | null,
     refusal = 'in-memory mutation refused',
   ): SurfaceCommitResult {
     if (idempotencyKey) {
-      const prior = this.surfaceMemoReceipts.get(idempotencyKey)
+      const prior = this.lookupSurfaceReceipt(idempotencyKey)
       if (prior) {
+        // Same rule as the durable path: a key identifies a retry of ONE request,
+        // so a hit with a different fingerprint is refused rather than replayed.
+        // Handing back the first call's receipt would report success for work the
+        // second call never did — and on a `purge`, for an erase that never ran.
+        if (prior.fingerprint !== fingerprint) {
+          return { committed: false, reason: 'idempotency-key-reuse', detail: prior.fingerprint ?? 'an earlier request' }
+        }
         const records = prior.ids.map(id => this.surfaces.getSurface(id)).filter((s): s is Surface => !!s)
         return {
           committed: true, replayed: true, wrote: false, records,
@@ -1487,9 +1511,15 @@ export class DocumentStore {
     const records = apply()
     if (!records) return { committed: false, reason: 'stale-revision', detail: refusal }
     if (idempotencyKey) {
-      this.surfaceMemoReceipts.set(idempotencyKey, { ids, ...(result !== undefined ? { result } : {}) })
-      // Insertion-ordered eviction, matching the sidecar's cap so the two paths
-      // forget at the same point rather than at two different ones.
+      this.surfaceMemoReceipts.set(idempotencyKey, {
+        key: idempotencyKey,
+        at: Date.now(),
+        ids,
+        ...(fingerprint !== undefined ? { fingerprint } : {}),
+        ...(result !== undefined ? { result } : {}),
+      })
+      // Insertion-ordered eviction, matching the sidecar's CEILING. Expiry is by
+      // age (see {@link lookupSurfaceReceipt}); this only bounds the map.
       while (this.surfaceMemoReceipts.size > MAX_MEMO_RECEIPTS) {
         const oldest = this.surfaceMemoReceipts.keys().next().value
         if (oldest === undefined) break
@@ -1500,6 +1530,26 @@ export class DocumentStore {
       committed: true, replayed: false, wrote: false, records,
       ...(result !== undefined ? { result } : {}),
     }
+  }
+
+  /**
+   * The receipt on file for an idempotency key, from whichever half is holding
+   * receipts — the sidecar when persistence is attached, the memo table when it is
+   * not.
+   *
+   * The service consults this BEFORE it validates anything, which is what makes a
+   * retry of a compare-and-swap operation replay instead of colliding with its own
+   * first attempt: the caller's `expectedRev` describes the world before that
+   * attempt, so a retry that reaches the revision check is refused for having
+   * succeeded. Same for a retry whose target was purged in the meantime — the
+   * receipt is on file, and answering `not-found` would be a lie about the
+   * transaction the caller is asking about.
+   */
+  lookupSurfaceReceipt(key: string): SurfaceIdempotencyReceipt | undefined {
+    if (this.surfaceSidecar) return this.surfaceSidecar.lookupIdempotency(key)
+    const entry = this.surfaceMemoReceipts.get(key)
+    if (!entry) return undefined
+    return isFresh(entry, Date.now()) ? entry : undefined
   }
 
   /** Await any fire-and-forget sidecar writes (the lifecycle cascade). */

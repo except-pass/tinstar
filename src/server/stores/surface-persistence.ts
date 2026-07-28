@@ -63,11 +63,27 @@ import { backendSingletonOwner } from '../infra/lock'
  *  downgrade quietly drops the fields it did not know about. */
 export const SURFACE_SIDECAR_SCHEMA_VERSION = 1
 
-/** How many idempotency receipts survive in the snapshot. Bounded because KTD5
- *  requires the sidecar to stay bounded and a receipt is only useful for the
- *  window between a lost response and its retry — measured in seconds, not days.
- *  Oldest are evicted first. */
-const MAX_IDEMPOTENCY_ENTRIES = 256
+/**
+ * How long a receipt survives, and the count that backstops it.
+ *
+ * RETENTION IS BY AGE, and the count is only a ceiling. That ordering is the
+ * whole point. A receipt is useful for the window between a lost response and its
+ * retry — a window measured in TIME — so a table trimmed by COUNT revokes the
+ * no-duplicate guarantee exactly when it is most needed: a burst of 256 unrelated
+ * mutations evicts a receipt that is four seconds old, and the retry behind it is
+ * then a fresh transaction that appends the same thread message a second time,
+ * reports success, and leaves no trace that it double-applied.
+ *
+ * The count that would make an age policy expensive does not exist at this size.
+ * A receipt is a scalar envelope measured at ~353 B (see the receipt note in
+ * `surface-service.ts`), so the ceiling below is ~700 KiB against the sidecar's
+ * measured 4.5 MiB latency knee — and reaching it needs 2,048 DISTINCT keys
+ * inside the retention window, which is orders of magnitude past any real retry
+ * burst. Minutes of retention is free; the count is there so a pathological
+ * client cannot make the file unbounded.
+ */
+export const IDEMPOTENCY_RETENTION_MS = 10 * 60_000
+const MAX_IDEMPOTENCY_ENTRIES = 2048
 
 /** Anything `JSON.stringify` round-trips unchanged. The caller's idempotency
  *  result is opaque to this module — it is whatever that caller needs to hand back
@@ -217,6 +233,10 @@ export interface SurfaceSidecarOptions {
   hooks?: SidecarHooks
   /** Defaults to {@link nodeSidecarIo}. */
   io?: SidecarIo
+  /** Epoch-ms source for receipt stamping and age eviction. Injectable for the
+   *  same reason the two fsyncs are: retention is now measured in TIME, and a
+   *  test that has to sleep for ten minutes to assert it is a test nobody runs. */
+  now?: () => number
 }
 
 /** Why a transaction was refused. Returned rather than thrown for the same reason
@@ -233,6 +253,11 @@ export type SurfaceCommitRejection =
   /** A record failed the shape guard, or the candidate did not survive a
    *  serialize/parse round trip. Caught BEFORE any file is touched. */
   | 'invalid-record'
+  /** The idempotency key is on file for a DIFFERENT request. `detail` carries the
+   *  fingerprint the key already belongs to. Never a replayed success: a reused
+   *  key on a `purge` would otherwise report an irreversible operation as having
+   *  succeeded when it never ran. */
+  | 'idempotency-key-reuse'
   /** The caller's own {@link SurfaceTransaction.precommit} re-validation refused,
    *  from inside the queue and before any file was touched. `detail` carries the
    *  caller's reason verbatim — this module deliberately does not interpret it. */
@@ -280,6 +305,18 @@ export interface SurfaceTransaction {
    *  persisted `result` and re-applies NOTHING (KTD7's "crash after SSE but before
    *  response"). */
   idempotencyKey?: string
+  /**
+   * What this key is a retry OF — operation, target, and a digest of the request.
+   *
+   * A key alone does not identify a transaction; it identifies a CALLER'S INTENT
+   * to retry one. Keying the replay on the header alone means a client that reuses
+   * a key across two different requests gets the first one's receipt back with
+   * `committed: true`, having applied nothing — and on a `purge` that is a success
+   * response for an irreversible operation that never ran. So a key hit whose
+   * fingerprint differs is refused as {@link SurfaceCommitRejection}
+   * `idempotency-key-reuse` rather than replayed.
+   */
+  fingerprint?: string
   /** Persisted alongside the records IN THE SAME snapshot write, so a receipt can
    *  never exist for a transaction whose records did not land, or vice versa. */
   result?: JsonValue
@@ -343,15 +380,26 @@ interface SidecarSnapshot {
   topologyRevs?: Record<string, number>
 }
 
-interface IdempotencyEntry {
+/** A persisted receipt, as a caller may inspect it BEFORE deciding to plan
+ *  anything. Exported so the service can consult the table ahead of its own
+ *  existence, liveness and compare-and-swap pre-checks — a retry that reaches
+ *  those checks gets a spurious conflict (or a not-found, if its target was
+ *  purged meanwhile) instead of the replay it is entitled to. */
+export interface SurfaceIdempotencyReceipt {
   key: string
-  /** Epoch ms of the commit, used only for eviction order. */
+  /** Epoch ms of the commit. Used for eviction AND for replay eligibility — see
+   *  {@link IDEMPOTENCY_RETENTION_MS}. */
   at: number
   /** Ids the transaction wrote, so a replay can say WHAT it applied without
    *  duplicating whole records into the receipt. */
   ids: string[]
+  /** See {@link SurfaceTransaction.fingerprint}. Absent on a receipt written by an
+   *  older build; treated as "unknown intent", which never matches. */
+  fingerprint?: string
   result?: JsonValue
 }
+
+type IdempotencyEntry = SurfaceIdempotencyReceipt
 
 /** The guard every persisted record must pass. Deliberately structural and
  *  minimal: it checks the fields the store INDEXES by (`SurfaceStore.load` skips
@@ -552,6 +600,7 @@ export class SurfaceSidecar {
   private readonly paths: SurfaceSidecarPaths
   private readonly hooks: SidecarHooks | undefined
   private readonly io: SidecarIo
+  private readonly clock: () => number
   private readonly loadOutcome: SurfaceLoadOutcome
 
   private records = new Map<string, Surface>()
@@ -587,6 +636,7 @@ export class SurfaceSidecar {
     this.paths = surfaceSidecarPaths(dir)
     this.hooks = opts.hooks
     this.io = opts.io ?? nodeSidecarIo
+    this.clock = opts.now ?? Date.now
 
     // Assert single-writer BEFORE touching the sidecar. Not a second lock: the
     // backend singleton already guards exactly this invariant (one backend per
@@ -641,6 +691,23 @@ export class SurfaceSidecar {
   /** The last durably committed record set. */
   durableRecords(): Surface[] {
     return [...this.records.values()]
+  }
+
+  /**
+   * The receipt on file for a key, if one is still within the retention window.
+   *
+   * Exposed so a caller can decide REPLAY OR NOT before it validates anything.
+   * The alternative — discovering the replay only once the transaction reaches
+   * this module — means a retry of a compare-and-swap operation is refused by the
+   * caller's own revision check first (its `expectedRev` describes the world
+   * before its own first attempt), and a retry whose target was purged meanwhile
+   * is refused as not-found. Both are the retry being punished for having
+   * succeeded.
+   */
+  lookupIdempotency(key: string): SurfaceIdempotencyReceipt | undefined {
+    const entry = this.idempotency.get(key)
+    if (!entry) return undefined
+    return isFresh(entry, this.clock()) ? entry : undefined
   }
 
   /**
@@ -715,8 +782,19 @@ export class SurfaceSidecar {
     // that has already moved past it. The whole point of the receipt is that the
     // caller lost the response, not the race.
     if (tx.idempotencyKey) {
-      const prior = this.idempotency.get(tx.idempotencyKey)
+      const prior = this.lookupIdempotency(tx.idempotencyKey)
       if (prior) {
+        // A key identifies a retry of ONE request. A hit whose fingerprint differs
+        // is a different request wearing the same key, and replaying it would
+        // report the first transaction's success for work the second one never
+        // did. Refused, naming what the key already belongs to.
+        if (prior.fingerprint !== tx.fingerprint) {
+          return {
+            committed: false,
+            reason: 'idempotency-key-reuse',
+            detail: prior.fingerprint ?? 'an earlier request',
+          }
+        }
         const records = prior.ids.map(id => this.records.get(id)).filter((r): r is Surface => !!r)
         return { committed: true, replayed: true, wrote: false, records, ...(prior.result !== undefined ? { result: prior.result } : {}) }
       }
@@ -776,12 +854,14 @@ export class SurfaceSidecar {
       next.set(r.id, r)
     }
 
+    const now = this.clock()
     const nextIdempotency = new Map(this.idempotency)
     if (tx.idempotencyKey) {
       nextIdempotency.set(tx.idempotencyKey, {
         key: tx.idempotencyKey,
-        at: Date.now(),
+        at: now,
         ids: puts.map(r => r.id),
+        ...(tx.fingerprint !== undefined ? { fingerprint: tx.fingerprint } : {}),
         ...(result !== undefined ? { result } : {}),
       })
     }
@@ -798,7 +878,7 @@ export class SurfaceSidecar {
     const candidate: SidecarSnapshot = {
       version: SURFACE_SIDECAR_SCHEMA_VERSION,
       records: [...next.values()],
-      idempotency: evict([...nextIdempotency.values()]),
+      idempotency: evict([...nextIdempotency.values()], now),
       topologyRevs: Object.fromEntries(nextTopologyRevs),
     }
 
@@ -954,10 +1034,20 @@ function readSnapshotFromString(raw: string): ReadResult {
   }
 }
 
-/** Keep the newest receipts. Oldest-first eviction, because a receipt matters only
- *  for the seconds between a lost response and its retry. */
-function evict(entries: IdempotencyEntry[]): IdempotencyEntry[] {
-  if (entries.length <= MAX_IDEMPOTENCY_ENTRIES) return entries
-  return [...entries].sort((a, b) => a.at - b.at).slice(entries.length - MAX_IDEMPOTENCY_ENTRIES)
+/** Whether a receipt is still inside the retention window. An entry with no usable
+ *  stamp (a hand-edited snapshot is a ratified property of this file) is treated
+ *  as expired rather than as immortal. */
+export function isFresh(entry: { at: number }, now: number): boolean {
+  if (typeof entry.at !== 'number' || !Number.isFinite(entry.at)) return false
+  return now - entry.at <= IDEMPOTENCY_RETENTION_MS
+}
+
+/** Evict by AGE, with the count only as a ceiling. See
+ *  {@link IDEMPOTENCY_RETENTION_MS} for why that ordering is the fix rather than a
+ *  tuning preference. */
+function evict(entries: IdempotencyEntry[], now: number): IdempotencyEntry[] {
+  const fresh = entries.filter(e => isFresh(e, now))
+  if (fresh.length <= MAX_IDEMPOTENCY_ENTRIES) return fresh
+  return [...fresh].sort((a, b) => a.at - b.at).slice(fresh.length - MAX_IDEMPOTENCY_ENTRIES)
 }
 
