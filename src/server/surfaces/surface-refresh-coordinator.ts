@@ -23,8 +23,11 @@
 //
 // Server-only and React-free.
 
-import type { Surface, SurfaceContent, SurfacePrincipalRef, SurfaceStaleReason } from '../../domain/types'
+import type {
+  Surface, SurfaceContent, SurfacePrincipalRef, SurfaceRefreshDeclaration, SurfaceStaleReason,
+} from '../../domain/types'
 import { log } from '../logger'
+import { serializeByKey } from '../sessions/backends/serializeByKey'
 import type { SurfaceCallContext, SurfaceService } from './surface-service'
 import {
   ACTIVE_JOB_STATES,
@@ -36,6 +39,7 @@ import {
   deriveDueAt,
   effectiveDeclaration,
   matchTrigger,
+  MIN_INTERVAL_MS,
   type SurfaceTriggerEvent,
 } from './surface-trigger-matcher'
 
@@ -137,8 +141,50 @@ function emptyReport(): RefreshPassReport {
   }
 }
 
+/** The one serialization key every public entry point runs under. See
+ *  {@link SurfaceRefreshCoordinator.entry}. */
+const ENTRY_KEY = 'refresh-coordinator'
+
+/** The verification interval in force, floored the same way `deriveDueAt` floors
+ *  it — so a retry cooldown can never be shorter than the shortest interval an
+ *  author is allowed to ask for. */
+function intervalFor(decl: SurfaceRefreshDeclaration, defaultIntervalMs: number): number {
+  return Math.max(MIN_INTERVAL_MS, decl.intervalMs ?? defaultIntervalMs)
+}
+
 export class SurfaceRefreshCoordinator {
   constructor(private readonly deps: RefreshCoordinatorDeps) {}
+
+  /** In-flight tail for {@link entry}. Instance-scoped: two coordinators (a test
+   *  builds several) must not queue behind each other. */
+  private readonly chain = new Map<string, Promise<unknown>>()
+
+  /**
+   * Run one public entry point, never overlapping another.
+   *
+   * WHY THIS IS NOT OPTIONAL. `scheduleFor` is a read-modify-write split by two
+   * awaits: it reads `jobs.active(surfaceId)`, awaits `enqueueRefresh`, then awaits
+   * its way to `jobs.put`. Two callers interleaving inside that window BOTH see no
+   * active job and BOTH create one, and the durable table's own "exactly one active
+   * job per Surface" invariant is gone. The host makes that interleaving the normal
+   * case: `index.ts` fires `void refreshCoordinator.note(...)` from the 15s git poll
+   * and never awaits it, while the sweep timer is guarded only against another
+   * SWEEP.
+   *
+   * What that cost before this: the loser of the race sits `queued` forever. It can
+   * never `begin` — `beginRefresh` requires phase `queued`, which the winner has
+   * already left — and nothing ages a queued job out, so the Surface holds an active
+   * job that will never run, and every later trigger coalesces onto it instead of
+   * scheduling work. The Surface becomes un-refreshable for the process lifetime,
+   * and the manual refresh button hits the same wall.
+   *
+   * The queue is the whole fix, and it is cheap: `note` is a few commits, and a
+   * sweep already holds the only interesting work. Callers still observe their own
+   * result and their own rejection.
+   */
+  private entry<T>(task: () => Promise<T>): Promise<T> {
+    return serializeByKey(this.chain, ENTRY_KEY, task)
+  }
 
   private ctx(at: number): SurfaceCallContext {
     return { actor: COORDINATOR_PRINCIPAL, at }
@@ -161,6 +207,10 @@ export class SurfaceRefreshCoordinator {
    * one queued job" means at the durable layer.
    */
   async note(event: SurfaceTriggerEvent): Promise<RefreshPassReport> {
+    return this.entry(() => this.noteNow(event))
+  }
+
+  private async noteNow(event: SurfaceTriggerEvent): Promise<RefreshPassReport> {
     const report = emptyReport()
     const at = event.at || this.deps.now()
     for (const match of matchTrigger(event, this.deps.surfaces())) {
@@ -194,6 +244,10 @@ export class SurfaceRefreshCoordinator {
    * available whenever automatic refresh cannot complete").
    */
   async requestFor(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
+    return this.entry(() => this.requestForNow(surfaceId))
+  }
+
+  private async requestForNow(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
     const surface = this.surface(surfaceId)
     if (!surface) return undefined
     const report = emptyReport()
@@ -313,6 +367,10 @@ export class SurfaceRefreshCoordinator {
    * sweep later.
    */
   async sweep(): Promise<RefreshPassReport> {
+    return this.entry(() => this.sweepNow())
+  }
+
+  private async sweepNow(): Promise<RefreshPassReport> {
     const report = emptyReport()
     await this.applyDeadlines(report)
     await this.harvest(report)
@@ -365,6 +423,19 @@ export class SurfaceRefreshCoordinator {
       if (!after) continue
       report.marked.push(after.id)
       if (decl.policy !== 'automatic') continue
+      // A DEADLINE THAT CANNOT MOVE MUST NOT RETRY AT SWEEP CADENCE. `dueAt` is
+      // derived from the last SUCCESSFUL verification on purpose (a failing loop may
+      // not silence its own overdue badge), so a Surface whose recipe is broken
+      // stays permanently past a deadline that never advances. Without this, every
+      // sweep would schedule another job for it — a real background agent in the
+      // user's worktree every few seconds, forever, for a recipe that cannot work.
+      //
+      // One interval of quiet after a failure, and no longer: the badge is
+      // untouched, the reason is untouched, and the retry still happens — it just
+      // happens on the cadence the Surface asked to be verified on rather than on
+      // the cadence the host happens to sweep at.
+      const failedAt = after.freshness.failure?.at
+      if (failedAt !== undefined && now < failedAt + intervalFor(decl, cfg.defaultIntervalMs)) continue
       await this.scheduleFor(after, after.freshness.staleReason, report)
     }
   }
@@ -505,6 +576,28 @@ export class SurfaceRefreshCoordinator {
         // Someone else's live lease. Two workers must not complete one job.
         continue
       }
+      // A QUEUED JOB THAT NO LONGER OWNS ITS SURFACE IS DEAD, and must be told so
+      // rather than retried forever. `enqueueRefresh` stamped `freshness.jobId` with
+      // this job's id when it was created, so a Surface naming a DIFFERENT job (or
+      // none) has been taken over — by a racing scheduler, a second backend, or a
+      // failure that cleared the stamp. Such a job can never `begin`: `beginRefresh`
+      // requires phase `queued`, which will not recur while another job holds the
+      // Surface, and nothing else ages a queued job out. Left alone it stays active
+      // forever, and `scheduleFor` coalesces every later trigger onto it instead of
+      // scheduling work that could actually run — so the Surface stops refreshing
+      // entirely, manual button included.
+      //
+      // Deliberately NOT a blanket age-out on `queued`: a job held back by the
+      // concurrency cap is queued for exactly the right reason and may sit there for
+      // as long as the fleet is full. Ownership is the precise test.
+      if (surface.freshness.jobId !== job.id) {
+        await this.finishJob(
+          job, 'cancelled',
+          `another refresh (${surface.freshness.jobId ?? 'none'}) took this Surface over before this one started`,
+          report,
+        )
+        continue
+      }
       const blocked = this.authorizationProblem(surface)
       if (blocked) {
         this.deps.jobs.update(job.id, {
@@ -632,6 +725,10 @@ export class SurfaceRefreshCoordinator {
    * sweep dispatches them exactly as it would have.
    */
   async recover(): Promise<RefreshPassReport> {
+    return this.entry(() => this.recoverNow())
+  }
+
+  private async recoverNow(): Promise<RefreshPassReport> {
     const report = emptyReport()
     for (const job of this.deps.jobs.list()) {
       if (!ACTIVE_JOB_STATES.includes(job.state)) continue

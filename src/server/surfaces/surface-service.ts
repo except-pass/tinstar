@@ -1501,10 +1501,21 @@ export class SurfaceService {
    * Record that a typed trigger says this Surface may no longer reflect its
    * sources, and advance the host observation generation.
    *
-   * IDEMPOTENT ON THE REASON KEY. An event whose key already sits on the record
-   * commits NOTHING — no revision, no generation, no SSE. That is what makes the
-   * poll floor free: it re-reports the same Git SHA every few seconds, and every
-   * repeat collapses onto the one it already recorded.
+   * IDEMPOTENT ON THE REASON KEY, PER TRIGGER KIND. An event whose key matches the
+   * last one recorded for ITS OWN KIND commits NOTHING — no revision, no
+   * generation, no SSE. That is what makes the poll floor free: it re-reports the
+   * same Git SHA every few seconds, and every repeat collapses onto the one it
+   * already recorded.
+   *
+   * PER KIND, and that is the whole correctness of it. This used to compare against
+   * `staleReason.key` — a single slot holding whichever trigger fired last. With the
+   * host defaults (`git-revision` + `periodic`) BOTH are live, so each overwrote the
+   * other's key and then read the other's back as new. On a completely IDLE repo
+   * that ping-ponged forever: a revision and a generation burned every few seconds,
+   * every in-flight refresh superseded by the churn its own supersession caused, so
+   * `verifiedAt` never advanced, so `overdue` never cleared, and each cycle launched
+   * a real background agent in the user's worktree. Measured at twelve whole-sidecar
+   * rewrites a minute with `HEAD` never moving.
    *
    * A Surface already `queued` or `refreshing` KEEPS that phase. Demoting it to
    * `possibly-stale` would lose the fact that work is in flight; the generation
@@ -1518,7 +1529,7 @@ export class SurfaceService {
     if (!prior) return notFound(id)
     const guard = this.guardLive(prior, 'marking it possibly stale')
     if (guard) return guard
-    if (prior.freshness.staleReason?.key === reason.key) {
+    if (prior.freshness.lastReasonKeys?.[reason.kind] === reason.key) {
       return this.unchanged('mark-possibly-stale', prior)
     }
 
@@ -1533,6 +1544,7 @@ export class SurfaceService {
           ? prior.freshness.phase
           : 'possibly-stale',
         staleReason: { ...reason, generation },
+        lastReasonKeys: { ...prior.freshness.lastReasonKeys, [reason.kind]: reason.key },
       },
       rev: prior.rev + 1,
       amendedAt: now,
@@ -1742,6 +1754,15 @@ export class SurfaceService {
         phase: 'current',
         overdue: false,
         ...(prior.freshness.dueAt !== undefined ? { dueAt: prior.freshness.dueAt } : {}),
+        // `lastReasonKeys` is the ONE thing here a success does not answer, and it
+        // has to survive: it records which observations have already been counted,
+        // and this refresh was computed against exactly those. Dropping it let the
+        // very next poll of the unchanged Git SHA re-stale a Surface that had just
+        // been verified against that SHA — a fresh background agent every fifteen
+        // seconds on a repo where nothing happened.
+        ...(prior.freshness.lastReasonKeys
+          ? { lastReasonKeys: prior.freshness.lastReasonKeys }
+          : {}),
         observedGeneration: hostGeneration,
         verifiedAt: now,
       },

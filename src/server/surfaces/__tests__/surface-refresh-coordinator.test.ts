@@ -225,6 +225,106 @@ describe('triggers → possibly stale', () => {
     expect(h.jobFor('sf-1')!.startGeneration).toBe(2)
   })
 
+  it('two live triggers do not invalidate each other, so an IDLE repo goes quiet', async () => {
+    // The livelock. Both host-default triggers are in force, and the two clocks that
+    // raise them alternate: the 5s sweep raises `periodic`, the 15s git poll raises
+    // `git-revision`. Against ONE staleReason slot each overwrote the other's key and
+    // then read it back as new — so a repo where nothing whatsoever happened burned a
+    // revision and a generation every few seconds, forever.
+    const h = harness()
+    await h.seed({
+      content: { headline: 'Coverage', recipe: 'Re-run coverage.' },
+      freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 1_000 },
+    })
+    h.clock.now = 2_000_000
+
+    // Settle: let the first genuine observations land and the first refresh finish.
+    for (let i = 0; i < 4; i++) {
+      h.clock.now += 5_000
+      await h.coord.sweep()
+      const running = h.jobs.list().find(j => j.state === 'running')
+      if (running) h.staged.set(running.stagingPath, workerJson({ note: 'no change' }))
+      h.clock.now += 5_000
+      await h.coord.note(gitEvent({ evidence: 'sha-STEADY', at: h.clock.now }))
+    }
+    h.clock.now += 5_000
+    await h.coord.sweep()
+
+    // Now HEAD still has not moved and no deadline has passed. Nothing may be
+    // written, and nothing may be launched.
+    const settledRev = h.get('sf-1').rev
+    const settledGeneration = h.get('sf-1').source!.generation
+    const launchesSoFar = h.launches.length
+    for (let i = 0; i < 6; i++) {
+      h.clock.now += 5_000
+      await h.coord.sweep()
+      h.clock.now += 5_000
+      await h.coord.note(gitEvent({ evidence: 'sha-STEADY', at: h.clock.now }))
+    }
+    expect(h.get('sf-1').rev).toBe(settledRev)
+    expect(h.get('sf-1').source!.generation).toBe(settledGeneration)
+    expect(h.launches.length).toBe(launchesSoFar)
+  })
+
+  it('a verified Surface is not re-staled by the very evidence it was verified against', async () => {
+    // The other half of the same defect: a successful barrier clears `staleReason`,
+    // so with the dedupe living there the NEXT poll of an unchanged SHA read as new.
+    // The memory has to survive the refresh that consumed it.
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent({ evidence: 'sha-1' }))
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
+    h.clock.now = 30_000
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.phase).toBe('current')
+
+    const rev = h.get('sf-1').rev
+    h.clock.now = 45_000
+    const report = await h.coord.note(gitEvent({ evidence: 'sha-1', at: 45_000 }))
+    expect(report.marked).toEqual([])
+    expect(report.queued).toEqual([])
+    expect(h.get('sf-1').rev).toBe(rev)
+    expect(h.get('sf-1').freshness.phase).toBe('current')
+  })
+
+  it('a failed refresh retries on the verification interval, not on the sweep', async () => {
+    // `dueAt` is derived from the last SUCCESSFUL verification so a failing loop
+    // cannot silence its own overdue badge — which means a broken recipe sits
+    // permanently past a deadline that never advances. Without a cooldown that is a
+    // real background agent launched in the user's worktree every sweep, forever.
+    const h = harness()
+    await h.seed({
+      content: {
+        headline: 'Coverage', recipe: 'Re-run coverage.',
+        refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
+      },
+    })
+    h.clock.now = 70_000
+    await h.coord.sweep()
+    const first = h.jobFor('sf-1')!
+    h.staged.set(first.stagingPath, workerJson({ error: 'the coverage tool is not installed' }))
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
+    const launchesAfterFailure = h.launches.length
+
+    // Six more sweeps inside the interval launch nothing.
+    for (let i = 0; i < 6; i++) {
+      h.clock.now += 5_000
+      await h.coord.sweep()
+    }
+    expect(h.launches.length).toBe(launchesAfterFailure)
+    // The badge is untouched — the Surface is still visibly failed and overdue.
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
+    expect(h.get('sf-1').freshness.overdue).toBe(true)
+
+    // Past the interval, it tries again.
+    h.clock.now += 60_000
+    await h.coord.sweep()
+    expect(h.launches.length).toBe(launchesAfterFailure + 1)
+  })
+
   it('the three policies produce distinct visible outcomes', async () => {
     for (const [decl, expected] of [
       [AUTOMATIC, { phase: 'queued', jobs: 1 }],
@@ -332,6 +432,96 @@ describe('dispatch', () => {
     expect(report.failed[0]?.reason).toMatch(/no port available/)
     expect(h.get('sf-1').freshness.phase).toBe('failed')
     expect(h.get('sf-1').freshness.failure?.message).toMatch(/no port available/)
+  })
+
+  /** An overdue Surface carrying NO author declaration, so it runs on the host
+   *  defaults the real fleet runs on: policy `automatic`, triggers `git-revision` +
+   *  `periodic`. Both are live, which is what lets the sweep and the git poll each
+   *  schedule for the same Surface. */
+  async function overdueOnDefaults(h: Harness): Promise<void> {
+    await h.seed({
+      content: { headline: 'Coverage', recipe: 'Re-run coverage.' },
+      freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 1_000 },
+    })
+    h.clock.now = 2_000_000 // long past verifiedAt + defaultIntervalMs
+  }
+
+  it('a note() interleaving with a sweep() cannot create two jobs for one Surface', async () => {
+    // The host's real shape: `index.ts` fires `void refreshCoordinator.note(...)`
+    // from the 15s git poll and never awaits it, and the sweep timer guards only
+    // against another SWEEP. `scheduleFor` reads `jobs.active()`, then awaits twice
+    // before `jobs.put`, so two callers inside that window both see no active job
+    // and both create one.
+    const h = harness()
+    await overdueOnDefaults(h)
+    await Promise.all([
+      h.coord.sweep(),
+      h.coord.note(gitEvent({ evidence: 'sha-1', at: h.clock.now })),
+    ])
+    // ONE job was ever CREATED — not "one survived". The ownership guard in
+    // `dispatch` cancels a duplicate on the next pass, which repairs the damage but
+    // does not prevent it: the second job still claimed a table slot, and the
+    // Surface still spent a window owned by a job that could never run. The
+    // serializer is what stops it existing.
+    expect(h.jobs.list()).toHaveLength(1)
+    expect(h.jobs.active('sf-1')).toBeDefined()
+  })
+
+  it('a Surface does not become un-refreshable after a racing schedule', async () => {
+    // The CONSEQUENCE, which is what makes the race a P0 rather than an untidiness:
+    // the losing job can never begin (`beginRefresh` needs phase `queued`, which
+    // does not recur), nothing ages a queued job out, and `scheduleFor` coalesces
+    // every later trigger onto it — so the Surface stops refreshing for the process
+    // lifetime, manual button included.
+    const h = harness()
+    await overdueOnDefaults(h)
+    await Promise.all([
+      h.coord.sweep(),
+      h.coord.note(gitEvent({ evidence: 'sha-1', at: h.clock.now })),
+    ])
+    // Let whatever is in flight finish.
+    for (let i = 0; i < 2; i++) {
+      const running = h.jobs.list().find(j => j.state === 'running')
+      if (running) h.staged.set(running.stagingPath, workerJson({ note: 'no change' }))
+      h.clock.now += 5_000
+      await h.coord.sweep()
+    }
+
+    // Now four more commits land. Each must schedule, dispatch, and complete.
+    for (let i = 2; i < 6; i++) {
+      h.clock.now += 15_000
+      await h.coord.note(gitEvent({ evidence: `sha-${i}`, at: h.clock.now }))
+      await h.coord.sweep()
+      const job = h.jobs.active('sf-1')
+      expect(job?.state).toBe('running')
+      h.staged.set(job!.stagingPath, workerJson({ note: 'no change' }))
+      h.clock.now += 5_000
+      await h.coord.sweep()
+      expect(h.get('sf-1').freshness.phase).toBe('current')
+    }
+    expect(h.jobs.list().filter(j => j.state === 'queued')).toEqual([])
+  })
+
+  it('cancels a queued job whose Surface another job has taken over', async () => {
+    // The guard that makes the deadlock unreachable even without the serializer —
+    // a second backend, or a hand-edited sidecar, can still hand a queued job a
+    // Surface it no longer owns.
+    const h = harness({ autonomousWorkers: false })
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const job = h.jobFor('sf-1')!
+    expect(job.state).toBe('queued')
+
+    // Somebody else takes the Surface.
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-elsewhere' }, ctx(21_000))
+    expect(h.get('sf-1').freshness.jobId).toBe('job-elsewhere')
+
+    h.clock.now = 22_000
+    const report = await h.coord.sweep()
+    expect(h.jobs.get(job.id)!.state).toBe('cancelled')
+    expect(report.failed[0]?.reason).toMatch(/took this Surface over/)
+    // And nothing is left owning it, so the next trigger can schedule real work.
+    expect(h.jobs.active('sf-1')).toBeUndefined()
   })
 
   it('two sweeps cannot both take one queued job', async () => {

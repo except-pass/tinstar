@@ -873,6 +873,27 @@ export interface SurfaceFreshness {
    *  so the reason a refresh is happening survives into the UI, and cleared only
    *  by a successful verification barrier. */
   staleReason?: SurfaceStaleReason
+  /** The last dedupe key recorded PER TRIGGER KIND — the memory that makes
+   *  "repeated equivalent events commit nothing" actually true.
+   *
+   *  `staleReason` alone cannot do it: it is ONE slot, so two live triggers
+   *  overwrite each other's key and each then reads the other's as "new". With the
+   *  host defaults (`git-revision` + `periodic`) that is the ordinary case, and it
+   *  ping-ponged forever on an IDLE repo — a revision and a generation burned every
+   *  few seconds, every refresh superseded by the churn its own supersession caused,
+   *  so `verifiedAt` never advanced, so `overdue` never cleared, and every cycle
+   *  launched a real background agent in the user's worktree.
+   *
+   *  Keyed by kind rather than kept as a ring of recent keys on purpose: the
+   *  vocabulary is closed and small (bounded by construction, no eviction policy),
+   *  and a key is only ever compared against the LAST one of its own kind — so
+   *  returning to an earlier Git SHA is correctly seen as a move, which a
+   *  remembers-everything set would have swallowed.
+   *
+   *  Deliberately NOT cleared by a successful barrier. Clearing it is what let the
+   *  very next poll of an unchanged SHA re-stale a Surface that had just been
+   *  verified against exactly that SHA. */
+  lastReasonKeys?: Partial<Record<SurfaceTriggerKind, string>>
   /** Why the last refresh attempt did not produce a verified result. Present in
    *  `failed`, and deliberately RETAINED into a subsequent `queued`/`refreshing`
    *  so a retry does not erase the explanation before the retry has earned it. */
