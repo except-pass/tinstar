@@ -163,4 +163,118 @@ describe('registered on the service', () => {
       .toBe(slateEntryWatermark({ headline: 'One blocker', author: 'agent' }))
     rmSync(dir, { recursive: true, force: true })
   })
+
+  it('a completed REFRESH leaves the file still holding its recipe and policy', async () => {
+    // The file is the author's own `.tinstar/slate/*.json`, and `SlateFileAdapter`
+    // treats an absent recipe as an instruction to DROP it. So a barrier that wrote
+    // the worker's content wholesale did not merely forget the recipe on the record
+    // — it deleted it from the user's source file, leaving a Surface nothing could
+    // ever rebuild and an edit to their file they never made.
+    const dir = mkdtempSync(join(tmpdir(), 'slate-src-'))
+    const slate = join(dir, '.tinstar', 'slate')
+    mkdirSync(slate, { recursive: true })
+    const policy = { policy: 'automatic', triggers: ['git-revision'] }
+    writeFileSync(join(slate, 'a.json'), JSON.stringify([{
+      id: 'cov', headline: 'Coverage', refresh: 'Re-run coverage.', refreshPolicy: policy,
+    }]))
+
+    const docStore = new DocumentStore()
+    const svc = new SurfaceService(docStore, {
+      newId: () => 'sf-1',
+      sourceAdapters: { [SLATE_FILE_ADAPTER]: new SlateFileAdapter() },
+    })
+    // Seeded onto the record rather than built through `create`, because
+    // `parseContent` does not carry `refreshPolicy` — an API-created Surface cannot
+    // declare one at all. File-authored Surfaces (the ones this is about) get theirs
+    // from `observeSource`, which builds content itself.
+    docStore.loadSurfaces([{
+      id: 'sf-1',
+      spaceId: 'spc-a',
+      home: { kind: 'canvas', spaceId: 'spc-a' },
+      content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: policy as never },
+      contentAuthority: 'source-binding',
+      author: 'agent',
+      source: {
+        adapter: SLATE_FILE_ADAPTER,
+        locator: slateFileLocator('a.json', 'cov'),
+        worktree: dir,
+        generation: 1,
+        watermark: slateEntryWatermark({
+          headline: 'Coverage', recipe: 'Re-run coverage.',
+          refreshPolicy: policy as never, author: 'agent',
+        }),
+        state: 'present',
+      },
+      thread: { replies: [], status: 'open' },
+      freshness: { phase: 'possibly-stale', overdue: false, observedGeneration: 1 },
+      rev: 1, homeRev: 1, createdAt: 1_000, amendedAt: 1_000,
+    }])
+    await svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx(2_000))
+    await svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: docStore.getSurface('sf-1')!.rev }, ctx(2_100))
+
+    // Exactly what `parseStagedResult` can emit for a worker: a headline, no more.
+    const done = await svc.completeRefresh('sf-1', {
+      jobId: 'job-1',
+      expectedRev: docStore.getSurface('sf-1')!.rev,
+      observedGeneration: docStore.getSurface('sf-1')!.source!.generation,
+      content: { headline: 'Coverage 92%' },
+    }, ctx(3_000))
+    expect(done.ok).toBe(true)
+
+    const entry = (JSON.parse(readFileSync(join(slate, 'a.json'), 'utf8')) as Record<string, unknown>[])[0]!
+    expect(entry.headline).toBe('Coverage 92%')
+    expect(entry.refresh).toBe('Re-run coverage.')
+    expect(entry.refreshPolicy).toEqual(policy)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('a refresh whose source entry moved underneath it is SUPERSEDED, not committed', async () => {
+    // The adapter's watermark check is "what makes a lost update visible rather
+    // than silent" — and `completeRefresh` was not passing `expectedWatermark`, so
+    // it never ran. A stale refusal is a supersession (one successor against what
+    // the file says now), not a failure.
+    const dir = mkdtempSync(join(tmpdir(), 'slate-src-'))
+    const slate = join(dir, '.tinstar', 'slate')
+    mkdirSync(slate, { recursive: true })
+    writeFileSync(join(slate, 'a.json'), JSON.stringify([{ id: 'cov', headline: 'Coverage' }]))
+
+    const docStore = new DocumentStore()
+    const svc = new SurfaceService(docStore, {
+      newId: () => 'sf-1',
+      sourceAdapters: { [SLATE_FILE_ADAPTER]: new SlateFileAdapter() },
+    })
+    await svc.create({
+      spaceId: 'spc-a',
+      home: { kind: 'canvas', spaceId: 'spc-a' },
+      content: { headline: 'Coverage' },
+      contentAuthority: 'source-binding',
+      source: {
+        adapter: SLATE_FILE_ADAPTER,
+        locator: slateFileLocator('a.json', 'cov'),
+        worktree: dir,
+        watermark: slateEntryWatermark({ headline: 'Coverage', author: 'agent' }),
+      },
+    }, ctx())
+    await svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx(2_000))
+    await svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: docStore.getSurface('sf-1')!.rev }, ctx(2_100))
+
+    // The author edits the file while the worker runs. The host has not re-read it,
+    // so the binding still carries the OLD watermark.
+    writeFileSync(join(slate, 'a.json'), JSON.stringify([{ id: 'cov', headline: 'Coverage — I rewrote this' }]))
+
+    const done = await svc.completeRefresh('sf-1', {
+      jobId: 'job-1',
+      expectedRev: docStore.getSurface('sf-1')!.rev,
+      observedGeneration: docStore.getSurface('sf-1')!.source!.generation,
+      content: { headline: 'Coverage 92%' },
+    }, ctx(3_000))
+
+    expect(done.ok).toBe(false)
+    expect(!done.ok && done.error.reason).toBe('superseded')
+    // The author's edit is untouched, and the Surface is pending rather than failed.
+    const entry = (JSON.parse(readFileSync(join(slate, 'a.json'), 'utf8')) as Record<string, unknown>[])[0]!
+    expect(entry.headline).toBe('Coverage — I rewrote this')
+    expect(docStore.getSurface('sf-1')!.freshness.phase).toBe('possibly-stale')
+    rmSync(dir, { recursive: true, force: true })
+  })
 })

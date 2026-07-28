@@ -241,7 +241,15 @@ export interface SurfaceSourceAdapter {
     surface: Surface
     content: SurfaceContent
     expectedWatermark?: string
-  }): Promise<{ ok: true; watermark: string } | { ok: false; message: string }>
+  }): Promise<
+    | { ok: true; watermark: string }
+    /** `stale` distinguishes "somebody else moved this entry" from "the write could
+     *  not happen at all" — a distinction the refresh barrier needs and cannot
+     *  recover from a message. A stale refusal is a SUPERSESSION and earns a
+     *  successor; an unwritable file is a FAILURE and must not, or a permanently
+     *  broken write would spawn a worker per sweep forever. */
+    | { ok: false; stale?: true; message: string }
+  >
 }
 
 /**
@@ -1825,8 +1833,32 @@ export class SurfaceService {
             },
           }
         }
-        const written = await adapter.write({ surface: prior, content })
+        // THE WATERMARK IS PASSED, so the adapter's own guard actually runs. It was
+        // omitted here, which made `SlateFileAdapter` skip the check whose comment
+        // says it "is what makes a lost update visible rather than silent" — so a
+        // refresh result overwrote a file entry an author had edited since the host
+        // last read it, and nothing anywhere said so. `prior.source.watermark` is
+        // the host's most recent observation of that entry, which is exactly the
+        // baseline the CAS wants.
+        const written = await adapter.write({
+          surface: prior,
+          content,
+          ...(prior.source.watermark !== undefined ? { expectedWatermark: prior.source.watermark } : {}),
+        })
         if (!written.ok) {
+          // A STALE refusal means the entry moved under us, which is the same claim
+          // the generation and the content digest make: this result describes a world
+          // that no longer exists. Superseded, so ONE successor is scheduled against
+          // what the file says now. Anything else — an unreadable file, a locator
+          // that resolves nowhere, a read-only filesystem — is a genuine failure and
+          // must stay one: mapping it to supersession would spawn a worker per sweep
+          // forever against a write that can never land.
+          if (written.stale) {
+            return supersede(
+              `Surface ${id}'s source entry changed while this refresh was running (${written.message}); ` +
+              'the result cannot claim current',
+            )
+          }
           return { ok: false, error: { code: 'conflict', reason: 'source-write-failed', message: written.message, current: [prior] } }
         }
         source = { ...prior.source, watermark: written.watermark }

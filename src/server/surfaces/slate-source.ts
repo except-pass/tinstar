@@ -190,7 +190,7 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     surface: { source?: { locator: string; worktree?: string } }
     content: SurfaceContent
     expectedWatermark?: string
-  }): Promise<{ ok: true; watermark: string } | { ok: false; message: string }> {
+  }): Promise<{ ok: true; watermark: string } | { ok: false; stale?: true; message: string }> {
     const binding = input.surface.source
     const parsed = binding ? parseSlateFileLocator(binding.locator) : null
     if (!binding || !parsed) {
@@ -223,7 +223,13 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     const current = authoredFieldsOf(entries[index])
     if (!current) return { ok: false, message: `entry ${parsed.localId} in ${parsed.file} is not a usable surface entry` }
     if (input.expectedWatermark !== undefined && slateEntryWatermark(current) !== input.expectedWatermark) {
-      return { ok: false, message: `entry ${parsed.localId} in ${parsed.file} changed since it was read; re-read and retry` }
+      // STALE, not broken. The caller can retry against the newer entry; a refresh
+      // result is superseded and gets a successor rather than failing the Surface.
+      return {
+        ok: false,
+        stale: true,
+        message: `entry ${parsed.localId} in ${parsed.file} changed since it was read; re-read and retry`,
+      }
     }
 
     // Every field the file carries that is NOT authored content is preserved by
