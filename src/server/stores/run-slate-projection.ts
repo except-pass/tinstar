@@ -189,6 +189,10 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
     order: objective ? OBJECTIVE_ORDER : s.order ?? s.createdAt,
     ...(body ? { body } : {}),
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
+    // The author's CLAIM about the work, beside the status rather than in it. The
+    // panel needs both: `discussing` says the agent spoke last, and only the proposal
+    // can say whether that was an answer awaiting a ruling or work already shipped.
+    ...(s.content.proposal ? { proposal: s.content.proposal } : {}),
     headline: s.content.headline,
     status: s.thread.status,
     ...(s.thread.replies.length > 0 ? { thread: s.thread.replies } : {}),
@@ -236,6 +240,7 @@ export function pointFromCanonical(s: Surface, runId: string, localId: string): 
     headline: s.content.headline,
     ...(body ? { content: body } : {}),
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
+    ...(s.content.proposal ? { proposal: s.content.proposal } : {}),
     ...(s.order != null ? { order: s.order } : {}),
     status: s.thread.status,
     replies: s.thread.replies,
@@ -243,5 +248,6 @@ export function pointFromCanonical(s: Surface, runId: string, localId: string): 
     amendedAt: s.amendedAt,
     ...(s.thread.resolvedAt != null ? { resolvedAt: s.thread.resolvedAt } : {}),
     ...(s.thread.dismissedAt != null ? { dismissedAt: s.thread.dismissedAt } : {}),
+    ...(s.thread.supersededAt != null ? { supersededAt: s.thread.supersededAt } : {}),
   }
 }

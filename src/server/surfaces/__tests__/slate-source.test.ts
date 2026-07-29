@@ -137,6 +137,20 @@ describe('watermarks', () => {
     expect((await readEntries(dir))[0]!.watermark).toBe(before)
     rmSync(dir, { recursive: true, force: true })
   })
+
+  it('covers the author CLAIM by meaning but never by its host timestamp', () => {
+    // `proposal.at` is host-stamped on every read. Hashing it would move the
+    // watermark on every epoch forever — a revision per surface per tick, on a file
+    // nobody edited. Hashing its MEANING is required, or an author who changes only
+    // their claim gets an unchanged watermark and the host commits nothing.
+    const base = { headline: 'D6', author: 'agent' as const }
+    const working = slateEntryWatermark({ ...base, proposal: { state: 'working', at: 1 } })
+    expect(slateEntryWatermark({ ...base, proposal: { state: 'working', at: 999_999 } })).toBe(working)
+    expect(slateEntryWatermark({ ...base, proposal: { state: 'resolved', at: 1 } })).not.toBe(working)
+    expect(slateEntryWatermark({ ...base, proposal: { state: 'working', detail: 'half a day', at: 1 } }))
+      .not.toBe(working)
+    expect(slateEntryWatermark(base)).not.toBe(working)
+  })
 })
 
 describe('claims across a full file round trip (U1)', () => {
@@ -347,6 +361,45 @@ describe('the egress adapter', () => {
     })
     expect(r.ok).toBe(false)
     expect(!r.ok && r.message).toMatch(/not bound to a Slate source file/)
+  })
+
+  it('carries the author claim back into the file WITHOUT the host stamp', async () => {
+    seed([{ id: 'blockers', headline: 'Two blockers' }])
+    const r = await new SlateFileAdapter().write({
+      surface: bound() as never,
+      content: { headline: 'D6', proposal: { state: 'resolved', detail: 'shipped in #163', at: 7_777 } },
+    })
+    expect(r.ok).toBe(true)
+    // No `at`. It is the host's observation of when it READ the claim; writing it
+    // back would put a host value under the author's byline and leave the file and
+    // the record disagreeing about a field neither of them owns.
+    expect((read() as Record<string, unknown>[])[0]!.proposal)
+      .toEqual({ state: 'resolved', detail: 'shipped in #163' })
+  })
+
+  it('clears the claim when the content no longer carries one', async () => {
+    seed([{ id: 'blockers', headline: 'Two blockers', proposal: { state: 'working' } }])
+    const r = await new SlateFileAdapter().write({ surface: bound() as never, content: { headline: 'D6' } })
+    expect(r.ok).toBe(true)
+    expect((read() as Record<string, unknown>[])[0]!.proposal).toBeUndefined()
+  })
+
+  // The compare-and-swap hashes the CURRENT file entry through `authoredFieldsOf`,
+  // so that function has to see every field ingress sees. A field missing from it
+  // makes the two sides hash differently, and then every write to an entry carrying
+  // that field is refused as stale against a watermark nothing can ever produce.
+  it('reproduces the ingress watermark for an entry that carries a proposal', async () => {
+    seed([{ id: 'blockers', headline: 'Two blockers', proposal: { state: 'working', detail: 'half a day' } }])
+    const entry = (await readEntries(dir))[0]!
+    const r = await new SlateFileAdapter().write({
+      surface: bound() as never,
+      content: { ...entry.content, headline: 'One blocker' },
+      expectedWatermark: entry.watermark,
+    })
+    expect(r.ok).toBe(true)
+    // And what it persisted is what the NEXT ingress read computes, so the epoch
+    // after this write sees an unchanged entry rather than a phantom author edit.
+    expect(r.ok && r.watermark).toBe((await readEntries(dir))[0]!.watermark)
   })
 })
 

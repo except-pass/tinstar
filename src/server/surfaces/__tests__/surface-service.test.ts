@@ -1571,3 +1571,108 @@ describe('parity coverage', () => {
     }
   })
 })
+
+describe('the author proposes, the user disposes (status honesty)', () => {
+  // THE INVARIANT UNDER TEST. Status derives from who spoke last so the Slate can
+  // never auto-resolve — the CMT-1302 failure. A proposal has to make the card
+  // honest about "already shipped" vs "awaiting your ruling" WITHOUT reopening that
+  // door, so these tests exist to prove the door stays shut.
+
+  it('a proposal is stored as content and moves the status NOT AT ALL', async () => {
+    const h = harness()
+    const s = await h.create('Decision 6', {
+      content: { headline: 'Decision 6', proposal: { state: 'resolved', detail: 'shipped in #163' } },
+    })
+    expect(s.content.proposal?.state).toBe('resolved')
+    expect(s.content.proposal?.detail).toBe('shipped in #163')
+    // The whole point: an author claiming "done" did not resolve anything.
+    expect(s.thread.status).toBe('open')
+    expect(s.thread.resolvedAt).toBeUndefined()
+  })
+
+  it('refuses a state outside the vocabulary rather than storing it', async () => {
+    const h = harness()
+    const s = await h.create('x', { content: { headline: 'x', proposal: { state: 'dismissed' } } })
+    // `dismissed` is the USER's verdict and an author may not propose it.
+    expect(s.content.proposal).toBeUndefined()
+  })
+
+  it('supersede is its own exit — not resolve, not dismiss', async () => {
+    const h = harness()
+    const s = await h.create('Decision 6')
+    const done = unwrap(await h.svc.setThreadDisposition(s.id, { action: 'supersede' }, ctx({ at: 2_000 })))
+    const after = done.surfaces[0]!.surface
+    expect(after.thread.status).toBe('superseded')
+    expect(after.thread.supersededAt).toBe(2_000)
+    expect(after.thread.resolvedAt).toBeUndefined()
+    expect(after.thread.dismissedAt).toBeUndefined()
+  })
+
+  it('reopen clears the supersede stamp and hands the status back to the derivation', async () => {
+    const h = harness()
+    const s = await h.create('Decision 6')
+    await h.svc.setThreadDisposition(s.id, { action: 'supersede' }, ctx({ at: 2_000 }))
+    const back = unwrap(await h.svc.setThreadDisposition(s.id, { action: 'reopen' }, ctx({ at: 3_000 })))
+    const after = back.surfaces[0]!.surface
+    expect(after.thread.supersededAt).toBeUndefined()
+    expect(after.thread.status).toBe('open')
+  })
+
+  it('rejects an action outside the four', async () => {
+    const h = harness()
+    const s = await h.create('x')
+    expect(err(await h.svc.setThreadDisposition(s.id, { action: 'shelve' }, ctx())).code).toBe('invalid')
+  })
+
+  it('accepts refreshPolicy and proposal over HTTP, which agent parity requires', async () => {
+    // Both were silently DROPPED by the content parser: an agent could set them by
+    // writing a `.tinstar/slate` file and not through the API U3 calls parity.
+    const h = harness()
+    const s = await h.create('x', {
+      content: {
+        headline: 'x',
+        refreshPolicy: { policy: 'mark-stale', triggers: ['git-revision'], sources: ['src/api/**'] },
+        proposal: { state: 'working', detail: 'half a day' },
+      },
+    })
+    expect(s.content.refreshPolicy?.sources).toEqual(['src/api/**'])
+    expect(s.content.proposal?.state).toBe('working')
+  })
+
+  // The two carry-forward sites, which #168 deferred. A proposal is authored
+  // alongside the headline, so both hazards are the ones already documented for
+  // `recipe` and `claims`: the content record is written back into the author's own
+  // `.tinstar/slate/*.json` by the egress adapter, so a builder that omits the field
+  // does not merely forget it — it DELETES the author's claim from their own file.
+  it('preserves the proposal through a headline-only content patch', async () => {
+    const h = harness()
+    await h.create('shipped', {
+      content: { headline: 'shipped', proposal: { state: 'working', detail: 'half a day' } },
+    })
+    const patched = unwrap(await h.svc.updateContent('sf-1', { headline: 'renamed', expectedRev: 1 }, ctx()))
+    // This endpoint takes a whitelist, so omitting `proposal` means "unchanged".
+    expect(patched.surfaces[0]!.surface.content.proposal?.state).toBe('working')
+    expect(patched.surfaces[0]!.surface.content.proposal?.detail).toBe('half a day')
+    expect(patched.surfaces[0]!.surface.content.headline).toBe('renamed')
+  })
+
+  it('preserves the proposal through a successful rebuild', async () => {
+    const h = harness()
+    await h.create('shipped', {
+      content: { headline: 'shipped', recipe: 'rebuild me', proposal: { state: 'working', detail: 'half a day' } },
+    })
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at: 2_000 }))
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: h.docStore.getSurface('sf-1')!.rev }, ctx({ at: 2_100 }))
+    // A worker restates the OUTPUT only — `parseStagedResult` cannot express a
+    // proposal — so the barrier has to carry the author's claim itself.
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1',
+      expectedRev: h.docStore.getSurface('sf-1')!.rev,
+      observedGeneration: 0,
+      content: { headline: 'rebuilt' },
+    }, ctx({ at: 3_000 })))
+    expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
+    expect(done.surfaces[0]!.surface.content.proposal?.state).toBe('working')
+    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+  })
+})

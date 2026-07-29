@@ -129,6 +129,27 @@ describe('SlateWatcher', () => {
     expect(epoch.entries[0]!.watermark).toMatch(/^sha256:/)
   })
 
+  it('reads the author proposal off a file entry, host-stamping its time (fix 4)', async () => {
+    // The file→canonical ingress leg. An unusable claim leaves the surface WITHOUT
+    // one rather than dropping the entry — same drop-don't-fail posture as every
+    // other optional field.
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'good', headline: 'D6', proposal: { state: 'working', detail: 'half a day' } },
+      { id: 'bogus', headline: 'D7', proposal: { state: 'shipped' } },
+      { id: 'none', headline: 'D8' },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const byId = new Map(harness.last().entries.map(e => [e.localId, e]))
+    expect(byId.get('good')!.content.proposal).toMatchObject({ state: 'working', detail: 'half a day' })
+    // Host-stamped, never author-supplied: a card renders an elapsed time from this.
+    expect(typeof byId.get('good')!.content.proposal!.at).toBe('number')
+    expect(byId.get('bogus')!.content.proposal).toBeUndefined()
+    expect(byId.get('bogus')!.content.headline).toBe('D7')   // the entry still projects
+    expect(byId.get('none')!.content.proposal).toBeUndefined()
+  })
+
   it('synthesizes the SAME local id the legacy projection did for an id-less entry', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'no id here', content: validContent }])
 

@@ -57,6 +57,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
 | `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
 | `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
+| `proposal` | `{ state, detail? }` | No | **What you claim about the work** — `working`, `blocked`, `resolved`, or `superseded`, plus one short line. A hint the card renders beside the status; it never *becomes* the status. See "Say what you know about the work" below. |
 | `group` | string (non-empty) | No | **Workbench set id.** Give two or more question entries the *same* `group` and they render side-by-side, one per column, instead of as stacked rows (below). A non-string/empty value is silently dropped (the point renders as an ordinary row) — it never drops the entry. |
 | `createdAt` | finite number (epoch millis) | No | Sort/ordering hint. |
 
@@ -437,6 +438,33 @@ Note there is **no `refresh` recipe**. A landing does not make this card false �
 ```
 
 A commit never touches this card. Its own interval does.
+
+## Say what you know about the work (`proposal`)
+
+A point's **status** is derived from who spoke last: no replies → `open`, you replied last → `discussing`, the user replied last → `waiting`. That derivation is deliberate and load-bearing — it is what stops the Slate ever resolving a question the user never ruled on.
+
+But it leaves the card unable to tell two very different situations apart. You answered and are waiting on a ruling: `discussing`. You answered, did the work, and shipped it: also `discussing`. The card looks identical. The observed workaround was rewriting the headline to shout `RESOLVED` — which renders, and is theatre, because nothing downstream knows anything changed.
+
+`proposal` is how you say it properly:
+
+```jsonc
+{ "proposal": { "state": "working", "detail": "not started, half a day, one open judgement call on the alarm window" } }
+```
+
+| `state` | What the card shows | What it does |
+|---|---|---|
+| `working` | `WORKING — <your line>` | Nothing. Someone is on it, and the line says where it stands. |
+| `blocked` | `BLOCKED — <your line>` | Nothing. You cannot proceed, and the line says why. |
+| `resolved` | `AGENT SAYS: DONE ✓` (a button) | Offers the user a one-click resolve. |
+| `superseded` | `AGENT SAYS: MOOT ✓` (a button) | Offers the user a one-click supersede. |
+
+**You propose; the user disposes.** A `resolved` or `superseded` proposal is an *offer*, not a status change. The status only moves when the user clicks. Nothing you can write in a file moves a status — that is the invariant, and this field is designed around it, not through it.
+
+**`superseded` is not `dismissed`.** Dismissal is the user's verdict: *I'm not doing this.* Superseded means the question stopped being the right question — the premise dissolved, the prevention ticket turned out to be already filed and closed. That is a discovery *you* made, and filing it under the user's verdict would misattribute it. Propose `superseded` when the answer is neither yes nor no because the question no longer applies.
+
+**`detail` is one short line and deliberately not an ETA.** Write what you actually know — how far along, what the open judgement call is, what you are waiting on. Do not invent a completion time; you will be wrong, and a wrong ETA on a card is worse than no ETA. Keep it under ~200 characters; the card truncates, and the thread is where prose belongs.
+
+**Restate it whenever you rewrite the file.** `proposal` is file-owned like `refresh` and `group`: a projection that omits it clears it. That is the right default — an agent who rewrites a card and says nothing about progress is no longer claiming progress — but it means a body update that forgets the field silently drops your "shipped" claim.
 
 ## Related
 

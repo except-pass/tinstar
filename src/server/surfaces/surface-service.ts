@@ -64,6 +64,7 @@ import type {
   SurfaceIdempotencyReceipt,
 } from '../stores/surface-persistence'
 import { derivePointStatus } from '../stores/slate'
+import { parseProposal, parseRefreshDeclaration } from './surface-trigger-matcher'
 import type {
   SurfaceDeleteOpts,
   SurfacePlanResult,
@@ -725,11 +726,20 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
     if (typeof parsed === 'string') return parsed
     claims = parsed
   }
+  // BOTH OF THESE GO THROUGH THE SAME PARSERS THE FILE PATH USES, and they were
+  // both missing — an agent could write `refreshPolicy` and `proposal` into a
+  // `.tinstar/slate` file and have them honoured, but the HTTP surface that U3 calls
+  // agent parity silently dropped them. Parsed rather than passed through so a
+  // request cannot store a trigger or a state the file path would have rejected.
+  const refreshPolicy = parseRefreshDeclaration(raw.refreshPolicy)
+  const proposal = parseProposal(raw.proposal, Date.now())
   return {
     headline: raw.headline.trim(),
     ...(body ? { body } : {}),
     ...(typeof raw.recipe === 'string' && raw.recipe ? { recipe: raw.recipe } : {}),
     ...(claims !== undefined ? { claims } : {}),
+    ...(refreshPolicy ? { refreshPolicy } : {}),
+    ...(proposal ? { proposal } : {}),
   }
 }
 
@@ -1177,6 +1187,12 @@ export class SurfaceService {
       // it here would make every headline edit silently delete the Surface's
       // triggers and put it back on the host defaults.
       ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+      // Carried for the identical reason, and it is not in CONTENT_PATCH_FIELDS
+      // either: the author's claim is authored alongside the headline, so a headline
+      // edit that dropped it would delete the claim from the record and — through
+      // the egress adapter — from the author's own file, which is the exact failure
+      // the recipe comment above records.
+      ...(prior.content.proposal ? { proposal: prior.content.proposal } : {}),
       // LAST, matching the key order every other content builder uses (the source
       // entry, and the refresh barrier below). The store's storm guard compares
       // records with `JSON.stringify`, so two builders that emit the same fields in
@@ -1626,12 +1642,21 @@ export class SurfaceService {
    * Resolve, reopen, or dismiss a Surface's discussion.
    *
    * The EXPLICIT half of thread status. `open`/`discussing`/`waiting` are derived
-   * from the replies; `resolved` and `dismissed` are decisions someone made, which
-   * is why they are stamps on the record rather than a function of the messages —
-   * and why a later source re-observation cannot undo one. The Slate never
+   * from the replies; `resolved`, `dismissed` and `superseded` are decisions someone
+   * made, which is why they are stamps on the record rather than a function of the
+   * messages — and why a later source re-observation cannot undo one. The Slate never
    * auto-resolves a point, and this operation is the only thing that resolves one.
    *
-   * `reopen` clears both stamps and lets the derivation take over again.
+   * `supersede` is the third exit and NOT a synonym for the other two: the question
+   * stopped being the right question. A decision whose premise dissolved was neither
+   * answered nor waved away, and folding it into `dismiss` would file the author's
+   * discovery under the user's verdict.
+   *
+   * AN AGENT MAY PROPOSE ANY OF THESE AND SET NONE OF THEM. `content.proposal` is
+   * where an author's claim lives; this route is a USER action, and keeping the two
+   * apart is exactly what stops the Slate auto-resolving through a new door.
+   *
+   * `reopen` clears every stamp and lets the derivation take over again.
    */
   async setThreadDisposition(
     id: string, body: unknown, ctx: SurfaceCallContext,
@@ -1643,8 +1668,8 @@ export class SurfaceService {
     const forbidden = forbiddenField(raw)
     if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on set-thread-disposition`)
     const action = raw.action
-    if (action !== 'resolve' && action !== 'reopen' && action !== 'dismiss') {
-      return invalid("action must be 'resolve', 'reopen', or 'dismiss'")
+    if (action !== 'resolve' && action !== 'reopen' && action !== 'dismiss' && action !== 'supersede') {
+      return invalid("action must be 'resolve', 'reopen', 'dismiss', or 'supersede'")
     }
     const prior = this.docStore.getSurface(id)
     if (!prior) return notFound(id)
@@ -1663,6 +1688,7 @@ export class SurfaceService {
       replies: prior.thread.replies,
       ...(action === 'resolve' ? { resolvedAt: now } : {}),
       ...(action === 'dismiss' ? { dismissedAt: now } : {}),
+      ...(action === 'supersede' ? { supersededAt: now } : {}),
     }
     const next: Surface = {
       ...prior,
@@ -2018,6 +2044,11 @@ export class SurfaceService {
           ? { recipe: input.content.recipe ?? prior.content.recipe }
           : {}),
         ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+        // And the same again for the author's claim: `parseStagedResult` cannot
+        // express a proposal, so assigning `input.content` wholesale would have a
+        // successful rebuild silently retract "working"/"shipped" from the card and
+        // from the author's file.
+        ...(prior.content.proposal ? { proposal: prior.content.proposal } : {}),
         // The same hazard for the same reason (U1): a rebuild that dropped the
         // claims would leave a Surface that had just been rebuilt with nothing left
         // saying what would prove it wrong — and would delete them from the author's

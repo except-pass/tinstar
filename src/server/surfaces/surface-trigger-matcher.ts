@@ -20,6 +20,7 @@ import type {
   SurfaceClaim,
   SurfaceClaimLocus,
   SurfaceRefreshDeclaration,
+  SurfaceProposal,
   SurfaceRefreshPolicy,
   SurfaceStaleReason,
   SurfaceTriggerKind,
@@ -391,6 +392,38 @@ export function parseRefreshDeclaration(raw: unknown): SurfaceRefreshDeclaration
     ...(intervalMs !== undefined ? { intervalMs } : {}),
     ...(sources ? { sources } : {}),
     ...(signals ? { signals } : {}),
+  }
+}
+
+/** Longest author claim line the host will render. One line on a card; past this it
+ *  stops being a claim and starts being a body. */
+const MAX_PROPOSAL_DETAIL = 200
+
+const PROPOSAL_STATES: readonly SurfaceProposal['state'][] = ['working', 'blocked', 'resolved', 'superseded']
+
+/**
+ * Parse an author's proposal out of an untrusted file entry, or nothing.
+ *
+ * DROPS rather than refuses, like every other optional field: a proposal the host
+ * cannot read leaves the Surface with none, which renders exactly as it does today,
+ * instead of dropping the whole entry over a hint.
+ *
+ * `at` is stamped by the HOST and never read from the file. An author-supplied
+ * timestamp is what a card would render an elapsed time from ("working, 4h"), and a
+ * value the author controls is one they can — accidentally or otherwise — use to
+ * make a stale claim look fresh. The claim's age is the host's observation, not the
+ * author's assertion.
+ */
+export function parseProposal(raw: unknown, at: number): SurfaceProposal | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const state = typeof obj.state === 'string' ? obj.state.trim() as SurfaceProposal['state'] : undefined
+  if (!state || !PROPOSAL_STATES.includes(state)) return undefined
+  const detail = typeof obj.detail === 'string' ? obj.detail.replace(/\s+/g, ' ').trim() : ''
+  return {
+    state,
+    ...(detail ? { detail: detail.slice(0, MAX_PROPOSAL_DETAIL) } : {}),
+    at,
   }
 }
 
