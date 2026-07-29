@@ -9,11 +9,13 @@
 // port claim, and real compensation. Only tmux itself is substituted, because a
 // test that started a tmux server would be testing tmux.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
+  changedPaths, isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult, refreshDispatchPrompt,
+  retireRefreshWorker,
 } from '../refresh-wiring'
 import { findPort, releasePort } from '../../sessions/backends/tmux'
 import { launchRefreshWorker, refreshBriefText, type RefreshWorkerHost } from '../../sessions/surfaceAuthor'
@@ -64,6 +66,61 @@ describe('parseStagedResult', () => {
   it('refuses a body with no headline rather than half-applying it', () => {
     expect(parseStagedResult(JSON.stringify({ content: { root: 'r', components: [] } })).error)
       .toMatch(/content but no headline/)
+  })
+})
+
+describe('changedPaths', () => {
+  // A REAL repository and a real `git diff`, because the thing this has to get
+  // right is the shape git actually emits — and every previous mistake on this
+  // feature was made by reasoning about a command instead of running it.
+  let repo: string
+  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
+  const commit = (message: string) => { git('add', '-A'); git('commit', '-q', '-m', message); return git('rev-parse', 'HEAD').trim() }
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'u6-diff-'))
+    git('init', '-q', '-b', 'main')
+    git('config', 'user.email', 'test@example.com')
+    git('config', 'user.name', 'Test')
+    mkdirSync(join(repo, 'scripts'), { recursive: true })
+    writeFileSync(join(repo, 'README.md'), 'a\n')
+    writeFileSync(join(repo, 'scripts', 'detect.sh'), '#!/bin/sh\n')
+  })
+  afterEach(() => { rmSync(repo, { recursive: true, force: true }) })
+
+  it('names the repo-relative paths a commit touched', async () => {
+    const before = commit('one')
+    writeFileSync(join(repo, 'scripts', 'detect.sh'), '#!/bin/sh\necho\n')
+    const after = commit('two')
+    expect(await changedPaths(repo, before, after)).toEqual(['scripts/detect.sh'])
+  })
+
+  it('returns NULL — not an empty list — when it cannot work the diff out', async () => {
+    // Null is "unknown" and every matcher reads it as "match anything". An empty
+    // array would read as "nothing changed", which is the silent-staleness failure:
+    // a Surface that quietly stops refreshing looks exactly like one that never
+    // needed to.
+    const head = commit('one')
+    expect(await changedPaths(repo, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', head)).toBeNull()
+    expect(await changedPaths(repo, '', head)).toBeNull()
+    expect(await changedPaths(repo, head, head)).toBeNull()
+  })
+
+  it('gives up rather than truncating past the cap', async () => {
+    const before = commit('one')
+    for (let i = 0; i < 5; i++) writeFileSync(join(repo, `f${i}.txt`), 'x')
+    const after = commit('many')
+    expect(await changedPaths(repo, before, after, 3)).toBeNull()
+    expect(await changedPaths(repo, before, after, 10)).toHaveLength(5)
+  })
+
+  it('keeps a path containing a newline in one piece', async () => {
+    // `-z` rather than a split on newlines. A filename may legally contain one, and
+    // half a path attributed to another Surface is a wrong refresh decision.
+    const before = commit('one')
+    writeFileSync(join(repo, 'we\nird.txt'), 'x')
+    const after = commit('odd')
+    expect(await changedPaths(repo, before, after)).toEqual(['we\nird.txt'])
   })
 })
 
