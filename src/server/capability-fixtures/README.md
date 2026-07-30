@@ -80,6 +80,8 @@ change — a fixture edited alone silently weakens the characterization.
 Keep every present, parseable envelope timestamp in append order. Keep each
 `task_started` epoch within two seconds before its envelope, and keep abort
 duration within one second of the start/completion delta.
+`rollout-malformed-tail` intentionally has no parseable `task_started`: its
+non-JSON line stands in for that record.
 
 ## Not covered
 

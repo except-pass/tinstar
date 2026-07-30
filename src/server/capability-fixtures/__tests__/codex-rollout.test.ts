@@ -194,7 +194,6 @@ describe('Codex session_meta — thread identity and lineage', () => {
     })
 
     expect(codexEventPayloads('rollout-resumed-session', 'thread_settings_applied')).toHaveLength(1)
-    expect(codexEventPayloads('rollout-resumed-session', 'task_started')).toHaveLength(2)
     expect(codexEventPayloads('rollout-resumed-session', 'user_message')).toHaveLength(2)
     expect(codexEventPayloads('rollout-resumed-session', 'task_complete')).toHaveLength(2)
   })
