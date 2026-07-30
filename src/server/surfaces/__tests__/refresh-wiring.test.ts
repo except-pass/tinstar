@@ -194,6 +194,27 @@ describe('refreshDispatchPrompt', () => {
     expect(refreshDispatchPrompt(surface, '/p')).toContain('.tinstar/slate')
     expect(refreshDispatchPrompt(surface, '/p')).toMatch(/NOT into \.tinstar\/slate/)
   })
+
+  it('carries a claim-move reason as one line, values and all (plan U4)', () => {
+    // A claim id comes from an agent-authored file and a claim VALUE comes from a
+    // witness reading the world, and both land in this prompt through
+    // `staleReason.detail`. The mutator that writes that sentence flattens them for
+    // the same reason the recipe is flattened here.
+    const moved = {
+      content: { headline: 'Roadmap' },
+      freshness: {
+        phase: 'possibly-stale' as const, overdue: false,
+        staleReason: {
+          kind: 'git-revision' as const, key: 'claim-moved sf-1 u4=pending',
+          detail: 'a claim it makes no longer holds: u4 was landed, now pending',
+          generation: 2, at: 1,
+        },
+      },
+    } as unknown as Surface
+    const prompt = refreshDispatchPrompt(moved, '/p')
+    expect(prompt).toContain('a claim it makes no longer holds: u4 was landed, now pending')
+    expect(prompt.split('\n').filter(l => l.includes('no longer holds'))).toHaveLength(1)
+  })
 })
 
 describe('refreshBriefText', () => {

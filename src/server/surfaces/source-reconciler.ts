@@ -22,11 +22,10 @@
 //
 // Server-only (rides the server esbuild bundle) and React-free.
 
-import type { Surface, SurfaceClaim, SurfaceCompatAlias, SurfaceHome } from '../../domain/types'
+import type { Surface, SurfaceCompatAlias, SurfaceHome } from '../../domain/types'
 import { deriveLegacySurfaceId } from '../stores/surfaces'
 import { parseSlateFileLocator, slateFileLocator, SLATE_FILE_ADAPTER, type SlateSourceEntry } from './slate-source'
-import { claimsNeverObserved, type SurfaceCallContext, type SurfaceService, type WitnessObservationInput } from './surface-service'
-import type { WitnessOutcome } from './witness-registry'
+import type { SurfaceCallContext, SurfaceService } from './surface-service'
 
 /** One run's complete watched directory, after validation. */
 export interface SlateSourceEpoch {
@@ -51,28 +50,19 @@ export interface SlateSourceEpoch {
   unreadable: string[]
 }
 
-/**
- * The one effect this module is allowed to have on the world beyond the store
- * (plan U3, R8).
- *
- * INJECTED RATHER THAN IMPORTED, and that is the whole reason this seam is an
- * interface. `runWitness` reaches a subprocess (`git fetch`) and the network, and
- * this module is called from the watcher's debounced epoch handler — importing the
- * runner here would put a spawn and an HTTP round trip inside the file-watch path
- * where every test of reconciliation would then need a network.
- *
- * OPTIONAL, so every existing caller and every existing test keeps today's
- * behaviour: no seeder, no seeding, nothing runs.
- *
- * See the note on {@link reconcileSlateEpoch} for why seeding is bounded to claims
- * the host has NEVER looked at, and why the layer is arguable.
- */
-export interface SlateSeedDeps {
-  /** Run one claim's witness and report what it saw. Never rejects — the registry's
-   *  `runWitness` already guarantees that, and a rejection here would take down an
-   *  epoch that has nothing to do with this claim. */
-  runWitness: (input: { surface: Surface; claim: SurfaceClaim; worktree: string }) => Promise<WitnessOutcome>
-}
+// NO WITNESS RUNS HERE, and U3's optional seeding seam that once did was removed in
+// U4 rather than kept as a second scheduler (plan U3's own note: "if the seam turns
+// out to stall the watcher, the right move is to drop the seeder and lean entirely on
+// that predicate"). Two reasons it went:
+//
+//   · This function is awaited by the watcher's DEBOUNCED epoch handler, which runs
+//     on the poll floor for every watched run. A witness is a subprocess or a network
+//     round trip, so a slow first look delayed the file-watch epoch containing it —
+//     the file→record path stalling behind `git fetch`.
+//   · R8 ("a claim's first observed value is recorded before any deadline elapses")
+//     is met without it: the coordinator treats a claim with no stored value as
+//     immediately due, so the first look happens on the next five-second sweep rather
+//     than an interval later. One scheduler decides when a witness runs.
 
 export interface SlateSourceEpochOutcome {
   /** Bindings observed present this epoch. */
@@ -89,11 +79,6 @@ export interface SlateSourceEpochOutcome {
   duplicates: string[]
   /** Anything the mutation service refused, with its reason. */
   refusals: { localId: string; reason: string }[]
-  /** Claims this epoch looked at for the FIRST time, as `<localId>#<claimId>`.
-   *  Reported rather than counted so a seeding run is legible: seeding is bounded to
-   *  once per claim per lifetime, so a non-empty list on a steady-state epoch is a
-   *  bug rather than a workload. */
-  seeded: string[]
 }
 
 /**
@@ -133,34 +118,16 @@ export function boundSlateRuns(surfaces: readonly Surface[]): { runId: string; w
  * source file cannot retract a Surface owned by another file" true by construction
  * — a refusal on one binding neither blocks nor rolls back any other.
  *
- * SEEDING (plan U3, R8), when a {@link SlateSeedDeps} is supplied. A claim's first
- * observed value has to be recorded when the claim is FIRST SEEN, before any
- * deadline elapses — otherwise a card that has never been checked is
- * indistinguishable, at the record, from one that was checked a moment ago and held.
- * This is the path that sees a claim first, so this is where the first look happens.
- *
- * Bounded to claims with NO stored observation at all, which makes it once per claim
- * per lifetime: the steady-state epoch — which runs on the poll floor, every few
- * seconds, for every watched run — finds nothing to do and writes nothing.
- *
- * THE LAYER IS ARGUABLE and worth restating rather than burying. A witness is a
- * subprocess or a network round trip, and this function is awaited by the watcher's
- * debounced handler, so a slow seed delays the epoch that contains it. It is bounded
- * (once per claim, and each run carries the registry's own timeout), and the
- * alternative — leaving the first look to the deadline sweep — needs the sweep to
- * treat an unvalued claim as immediately due, which {@link claimsWithoutStoredValue}
- * exists to let it do. If the seam turns out to stall the watcher in practice, the
- * right move is to drop the seeder and lean entirely on that predicate, not to make
- * this fire-and-forget.
+ * NOTHING THAT LEAVES THE PROCESS RUNS HERE. See the note above the outcome type for
+ * why the claim-seeding seam that briefly did was removed.
  */
 export async function reconcileSlateEpoch(
   svc: SurfaceService,
   epoch: SlateSourceEpoch,
   ctx: SurfaceCallContext,
-  seed?: SlateSeedDeps,
 ): Promise<SlateSourceEpochOutcome> {
   const out: SlateSourceEpochOutcome = {
-    observed: 0, created: 0, updated: 0, missing: 0, duplicates: [], refusals: [], seeded: [],
+    observed: 0, created: 0, updated: 0, missing: 0, duplicates: [], refusals: [],
   }
   const at = epoch.at
 
@@ -223,14 +190,6 @@ export async function reconcileSlateEpoch(
     out.observed++
     if (!before.ok) out.created++
     else if (result.data.surfaces[0]?.surface.rev !== before.data.surface.rev) out.updated++
-
-    if (seed) {
-      // Re-read rather than reusing `result`: the observation above may have been a
-      // no-op short-circuit, in which case its record is the prior one, and the
-      // claims the author just added would not be on it.
-      const current = svc.get(id)
-      if (current.ok) await seedClaims(svc, seed, current.data.surface, entry.localId, epoch.worktree, ctx, at, out)
-    }
   }
 
   // The negative half of the epoch: bindings this reconciler owns for this run that
@@ -253,37 +212,4 @@ export async function reconcileSlateEpoch(
   }
 
   return out
-}
-
-/**
- * Take the FIRST look at every claim on one Surface the host has never looked at.
- *
- * All of a Surface's new claims commit in ONE call, so a two-claim card seeded from
- * scratch costs one revision rather than two — and so a Surface whose claims all
- * match on the first look is stamped witnessed straight away instead of sitting in a
- * half-observed state until the next sweep.
- */
-async function seedClaims(
-  svc: SurfaceService,
-  seed: SlateSeedDeps,
-  surface: Surface,
-  localId: string,
-  worktree: string,
-  ctx: SurfaceCallContext,
-  at: number,
-  out: SlateSourceEpochOutcome,
-): Promise<void> {
-  const fresh = claimsNeverObserved(surface)
-  if (!fresh.length) return
-
-  const observations: WitnessObservationInput[] = []
-  for (const claim of fresh) {
-    observations.push({ claimId: claim.id, outcome: await seed.runWitness({ surface, claim, worktree }) })
-    out.seeded.push(`${localId}#${claim.id}`)
-  }
-
-  const recorded = await svc.recordWitnessResult(surface.id, { observations }, { ...ctx, at })
-  // A refusal here must not cost the epoch anything it already did. The content is
-  // reconciled and durable; the seed is an extra the next sweep can retry.
-  if (!recorded.ok) out.refusals.push({ localId, reason: recorded.error.reason ?? recorded.error.code })
 }

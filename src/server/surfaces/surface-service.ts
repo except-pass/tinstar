@@ -36,6 +36,8 @@ import type {
   SurfaceCapabilities,
   SurfaceClaim,
   SurfaceClaimObservation,
+  SurfaceClaimRebuild,
+  SurfaceClaimValue,
   SurfaceCompatAlias,
   SurfaceContent,
   SurfaceContentAuthority,
@@ -50,7 +52,9 @@ import type {
   SurfaceStaleReason,
 } from '../../domain/types'
 import { createHash } from 'node:crypto'
-import { claimsObserveTriggerKind, MAX_SURFACE_CLAIMS, parseSurfaceClaim } from './surface-trigger-matcher'
+import {
+  CLAIM_LOCUS_TRIGGER_KINDS, claimsObserveTriggerKind, MAX_SURFACE_CLAIMS, parseSurfaceClaim,
+} from './surface-trigger-matcher'
 import { witnessMatches, type WitnessOutcome } from './witness-registry'
 import type { DocumentStore } from '../stores/document-store'
 import type {
@@ -576,27 +580,52 @@ function sameObservation(a: SurfaceClaimObservation, b: SurfaceClaimObservation)
     && a.problem?.detail === b.problem?.detail
 }
 
-/** Declared claims the host has never LOOKED at. What the reconcile path seeds, and
- *  bounded to once per claim per lifetime — a claim that was looked at and came back
- *  unresolved is not re-seeded here, because the seeding path runs on the poll floor
- *  and re-running a failing network witness every few seconds is the storm this
- *  whole split exists to avoid. The deadline path retries it. */
-export function claimsNeverObserved(surface: Surface): SurfaceClaim[] {
-  const stored = surface.freshness.claimObservations
-  return (surface.content.claims ?? []).filter(c => !stored?.[c.id])
-}
-
 /** Declared claims with no stored value — never looked at, or looked at and never
  *  answered. R8's "a claim's first observed value is recorded before any deadline
  *  elapses" is what this is for: a claim in this list is due NOW rather than a full
  *  interval from now, so a fresh card is never left asserting anything on the
- *  strength of a check that has not happened. */
+ *  strength of a check that has not happened. The refresh coordinator's witness
+ *  collector is the caller, and it is the ONLY thing that decides when a witness
+ *  runs (plan U4). */
 export function claimsWithoutStoredValue(surface: Surface): SurfaceClaim[] {
   const stored = surface.freshness.claimObservations
   return (surface.content.claims ?? []).filter(c => {
     const was = stored?.[c.id]
     return !was || !('value' in was)
   })
+}
+
+/** The trigger kind a claim move is recorded UNDER: the primary kind of the locus
+ *  the moved claim observes, so the reason names where the movement was seen rather
+ *  than inventing a kind outside the closed vocabulary. Falls back to `periodic`,
+ *  which every locus observes. */
+function claimMoveKind(
+  declared: readonly SurfaceClaim[], moves: SurfaceClaimRebuild['moves'],
+): SurfaceStaleReason['kind'] {
+  const first = moves[0] ? declared.find(c => c.id === moves[0]!.claimId) : undefined
+  return (first && CLAIM_LOCUS_TRIGGER_KINDS[first.locus]?.[0]) ?? 'periodic'
+}
+
+/** One sentence naming what moved, for the badge, the audit entry, and the prompt a
+ *  rebuild is dispatched with.
+ *
+ *  COLLAPSED TO ONE LINE AND BOUNDED, because every part of it is author-controlled:
+ *  claim ids come from an agent-authored file and values come from a witness reading
+ *  the world. `refreshDispatchPrompt` embeds this string in a prompt delivered to a
+ *  live session, and a multi-line "SYSTEM: …" value would otherwise plant a directive
+ *  past the standing guardrail — the same reason every other Slate prompt builder
+ *  runs its inputs through a one-liner. */
+function claimMoveDetail(moves: SurfaceClaimRebuild['moves']): string {
+  const one = (m: SurfaceClaimRebuild['moves'][number]): string =>
+    `${flatText(m.claimId, 80)} was ${flatText(String(m.from), 80)}, now ${flatText(String(m.to), 80)}`
+  const head = moves.slice(0, 3).map(one).join('; ')
+  const rest = moves.length > 3 ? ` (and ${moves.length - 3} more)` : ''
+  return `a claim it makes no longer holds: ${head}${rest}`
+}
+
+function flatText(s: string, max: number): string {
+  const one = s.replace(/\s+/g, ' ').trim()
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
 
 function asObject(body: unknown): Record<string, unknown> | null {
@@ -2022,6 +2051,19 @@ export class SurfaceService {
         ...(prior.freshness.lastReasonKeys
           ? { lastReasonKeys: prior.freshness.lastReasonKeys }
           : {}),
+        // THE WITNESS STATE SURVIVES A REBUILD, and `claimRebuild` is the one part of
+        // it that does not (plan U4). The rebuild is what the moved value was FOR, so
+        // the debt is paid here and nowhere else — while the observations themselves
+        // are still the host's best knowledge of the world and `witnessedAt` is still
+        // the last time every claim held. Dropping them (which rebuilding freshness
+        // from scratch did) cost two things that both look like bugs from outside: a
+        // just-rebuilt card reported no witness age at all, and its claims went back
+        // to never-observed, so the next pass could only re-seed them and the pass
+        // after that was the earliest anything could be witnessed again.
+        ...(prior.freshness.witnessedAt !== undefined ? { witnessedAt: prior.freshness.witnessedAt } : {}),
+        ...(prior.freshness.claimObservations
+          ? { claimObservations: prior.freshness.claimObservations }
+          : {}),
         observedGeneration: hostGeneration,
         verifiedAt: now,
       },
@@ -2149,6 +2191,7 @@ export class SurfaceService {
     const now = ctx.at ?? Date.now()
     const stored = prior.freshness.claimObservations
     const observations: Record<string, SurfaceClaimObservation> = {}
+    const moves: SurfaceClaimRebuild['moves'] = []
     let observedEvery = true
     let matchedEvery = true
 
@@ -2170,13 +2213,57 @@ export class SurfaceService {
       // `witnessMatches` is U2's and is the SINGLE place a three-valued outcome
       // becomes a yes or a no. Re-deriving it here is how `unresolved` would quietly
       // start counting as a match against a stored absence (KTD8).
-      if (!witnessMatches(was?.value, seen.outcome)) matchedEvery = false
+      if (!witnessMatches(was?.value, seen.outcome)) {
+        matchedEvery = false
+        // A MOVE IS A CONTRADICTION, NOT A FIRST LOOK. Three different things fail
+        // `witnessMatches` and only one of them is news: an unresolved outcome (nobody
+        // could look), a completed lookup with NOTHING STORED to disagree with (the
+        // first look — which is why a witnessed Surface always takes two runs), and a
+        // completed lookup that contradicts a value the host held. Counting the first
+        // look as a move would queue a rebuild for every claim the moment it was
+        // authored, which is a background agent per new card.
+        if (seen.outcome.status === 'value' && was && 'value' in was) {
+          moves.push({ claimId: claim.id, from: was.value as SurfaceClaimValue, to: seen.outcome.value })
+        }
+      }
       observations[claim.id] = observationFrom(was, seen.outcome, now)
     }
 
     const freshness: SurfaceFreshness = { ...prior.freshness }
     if (Object.keys(observations).length) freshness.claimObservations = observations
     else delete freshness.claimObservations
+
+    // A MOVED VALUE, IN THE SAME COMMIT AS THE VALUE THAT MOVED (R11/R12/R17). The
+    // delta, the stale mark, and the durable rebuild-pending marker are one write
+    // because splitting them loses rebuilds: a host that stored the new value and
+    // then died would, on its next look, compare the world against the value it had
+    // just adopted, agree with itself, and stamp the Surface witnessed. The debt has
+    // to become durable at the same instant the evidence for it does.
+    //
+    // NOTHING IS QUEUED HERE. Whether a rebuild is possible at all is a question
+    // about the recipe and the worktree that the coordinator owns (R12), and this
+    // method is called from the deadline sweep, the trigger path, and — in tests —
+    // directly. A mutator that dispatched work would put a background agent behind
+    // three callers that did not ask for one.
+    if (moves.length) {
+      freshness.claimRebuild = { moves, at: now }
+      // `queued` and `refreshing` are kept for the same reason `markPossiblyStale`
+      // keeps them: work in flight is a fact this observation does not answer.
+      if (freshness.phase !== 'queued' && freshness.phase !== 'refreshing') {
+        freshness.phase = 'possibly-stale'
+      }
+      freshness.staleReason = {
+        kind: claimMoveKind(declared, moves),
+        key: `claim-moved ${id} ${moves.map(m => `${m.claimId}=${String(m.to)}`).join(' ')}`.slice(0, 400),
+        detail: claimMoveDetail(moves),
+        // NOT ADVANCED. The generation orders HOST OBSERVATIONS OF THE SOURCE, and
+        // the source did not move — the world the source describes did. Advancing it
+        // would supersede an in-flight rebuild that is computing against exactly the
+        // source revision this Surface still stands at.
+        generation: prior.source?.generation ?? 0,
+        at: now,
+      }
+    }
 
     // R10 in full: EVERY declared claim observed in THIS run, and every one matched.
     // A partial run — one trigger's locus, say — records what it saw and stamps
@@ -2186,15 +2273,23 @@ export class SurfaceService {
       // A successful verification is the one thing allowed to clear the overdue
       // badge (R18), and this is one.
       freshness.overdue = false
-      if (freshness.staleReason && claimsObserveTriggerKind(declared, freshness.staleReason.kind)) {
-        delete freshness.staleReason
+      // A MOVE NOTHING HAS REBUILT YET IS NOT ANSWERED BY A LATER AGREEMENT, and this
+      // guard is the whole reason the marker is a field rather than an inference. Once
+      // the moved value is stored, every subsequent look agrees with it — so without
+      // this, the pass one interval later would retire the badge for a change no
+      // rebuild ever consumed, and a recipe-less Surface (R12: it never gets one)
+      // would settle back to `current` while its card still showed the old value.
+      if (!freshness.claimRebuild) {
+        if (freshness.staleReason && claimsObserveTriggerKind(declared, freshness.staleReason.kind)) {
+          delete freshness.staleReason
+        }
+        // ONLY once the reason is actually gone. A Surface holding a `human-intent`
+        // reason this pass could not answer is still possibly-stale, and committing it
+        // `current` with the reason still attached would put two contradictory
+        // statements on one record — which is exactly how a badge starts disagreeing
+        // with the sentence under it.
+        if (freshness.phase === 'possibly-stale' && !freshness.staleReason) freshness.phase = 'current'
       }
-      // ONLY once the reason is actually gone. A Surface holding a `human-intent`
-      // reason this pass could not answer is still possibly-stale, and committing it
-      // `current` with the reason still attached would put two contradictory
-      // statements on one record — which is exactly how a badge starts disagreeing
-      // with the sentence under it.
-      if (freshness.phase === 'possibly-stale' && !freshness.staleReason) freshness.phase = 'current'
     }
 
     const next: Surface = { ...prior, freshness, rev: prior.rev + 1, amendedAt: now }

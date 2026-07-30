@@ -587,6 +587,70 @@ describe('witness results (plan U3, R8/R10/R11/R19)', () => {
     expect(h.surface().freshness.witnessedAt).toBe(5_000)
   })
 
+  it('records a moved value, its delta, and the rebuild debt in ONE commit (plan U4)', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    const rev = h.surface().rev
+
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 4_000))
+    const f = h.surface().freshness
+    // ONE revision, not two. Splitting the new value from the debt it creates is how
+    // a rebuild is lost: a host that stored `pending` and then died would compare the
+    // world against `pending` on its next look, agree with itself, and stamp the card
+    // witnessed with nothing owed.
+    expect(h.surface().rev).toBe(rev + 1)
+    expect(f.claimObservations).toEqual({ u3: { value: 'pending', at: 4_000 } })
+    expect(f.claimRebuild).toEqual({ moves: [{ claimId: 'u3', from: 'landed', to: 'pending' }], at: 4_000 })
+    expect(f.phase).toBe('possibly-stale')
+    expect(f.staleReason).toMatchObject({
+      kind: 'git-revision',
+      detail: 'a claim it makes no longer holds: u3 was landed, now pending',
+    })
+    // R11 wants both values reported BEFORE any rebuild runs, and this mutator queues
+    // nothing — three different callers reach it and none of them asked for an agent.
+    expect(f.witnessedAt).toBe(3_000)
+  })
+
+  it('does not treat a FIRST look as a move', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 2_000))
+    // Nothing was stored to contradict. Counting this as a move would queue a rebuild
+    // for every claim the moment its author wrote it.
+    expect(h.surface().freshness).not.toHaveProperty('claimRebuild')
+    expect(h.surface().freshness.phase).not.toBe('possibly-stale')
+  })
+
+  it('does not treat an unresolved outcome as a move', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    unwrap(await h.record([{ claimId: 'u3', outcome: unresolved('host unreachable') }], 4_000))
+    // Nobody could look, so nothing was contradicted. A rebuild queued here would be
+    // an agent woken by an outage.
+    expect(h.surface().freshness).not.toHaveProperty('claimRebuild')
+  })
+
+  it('keeps a rebuild debt through every later pass that agrees with the new value', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 4_000))
+
+    // From here the world and the record agree, so every look matches. Without the
+    // marker the pass below would retire the badge for a change no rebuild consumed —
+    // and a recipe-less Surface, which never gets one, would settle back to `current`
+    // while its card still showed the old value.
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 5_000))
+    const f = h.surface().freshness
+    expect(f.claimRebuild!.moves).toEqual([{ claimId: 'u3', from: 'landed', to: 'pending' }])
+    expect(f.phase).toBe('possibly-stale')
+    expect(f.staleReason).toBeDefined()
+    // The host DID look and was not contradicted, and that much is still recorded.
+    expect(f.witnessedAt).toBe(5_000)
+  })
+
   it('refuses to stamp a Surface that declares no claims', async () => {
     const h = harness()
     await h.create('silent')

@@ -932,6 +932,47 @@ export interface SurfaceFreshness {
    * rather than a full interval from now.
    */
   claimObservations?: Record<string, SurfaceClaimObservation>
+  /**
+   * A claim value the host watched MOVE, for which no rebuild has landed yet
+   * (R11/R12/R17, plan U4).
+   *
+   * THE DURABLE HALF OF "a moved value queues a rebuild". The delta and this marker
+   * are written by the SAME commit that stores the new observation, and that
+   * atomicity is the whole point: a host that recorded the new value and then died
+   * before queueing the job would, on the next look, compare the world against the
+   * value it had just adopted, find them equal, stamp the Surface witnessed, and lose
+   * the rebuild forever. With the marker on the record, the sweep that follows the
+   * restart still finds a debt to pay.
+   *
+   * Present on a recipe-LESS Surface too, and permanently so, which is deliberate:
+   * R12 says such a Surface records the delta and goes stale without a rebuild being
+   * queued for it, and this is what makes that fact renderable rather than only
+   * implied by a stale badge nobody can explain.
+   *
+   * Cleared by a successful rebuild barrier (`completeRefresh`) and by nothing else.
+   */
+  claimRebuild?: SurfaceClaimRebuild
+}
+
+/**
+ * One or more claim values that moved in a single revalidation (R11, plan U4).
+ *
+ * BOTH VALUES ARE CARRIED, not just the new one. `claimObservations` only ever holds
+ * the current observation, so without this the card could say a claim moved and not
+ * what it moved FROM — and "the roadmap said this unit was pending" is the half of
+ * the sentence a reader needs.
+ */
+export interface SurfaceClaimRebuild {
+  /** Every claim whose stored value a completed lookup contradicted, in claim-id
+   *  order. A FIRST observation is not a move: there was no stored value to
+   *  contradict, so nothing is recorded here for it. */
+  moves: {
+    claimId: string
+    from: SurfaceClaimValue
+    to: SurfaceClaimValue
+  }[]
+  /** Epoch ms the move was observed. */
+  at: number
 }
 
 /**

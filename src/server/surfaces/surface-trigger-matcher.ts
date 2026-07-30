@@ -75,6 +75,26 @@ export function claimsObserveTriggerKind(
   return !!claims?.some(c => CLAIM_LOCUS_TRIGGER_KINDS[c.locus]?.includes(kind))
 }
 
+/**
+ * Every trigger kind this Surface's claims EARN it (R14, plan U4).
+ *
+ * The inverse read of the same table {@link claimsObserveTriggerKind} uses, and the
+ * reason `effectiveDeclaration` unions rather than defaults: a claim declares that
+ * something in the world could falsify this Surface, and a Surface that says so and
+ * then listens for nothing is a Surface nothing can ever doubt. That is exactly the
+ * hole this plan opened with — a recipe-less Surface got an empty trigger list, so no
+ * deadline, so `overdue` could never rise and its phase stayed `current` forever.
+ */
+export function claimTriggerKinds(claims: readonly SurfaceClaim[] | undefined): SurfaceTriggerKind[] {
+  const out: SurfaceTriggerKind[] = []
+  for (const claim of claims ?? []) {
+    for (const kind of CLAIM_LOCUS_TRIGGER_KINDS[claim.locus] ?? []) {
+      if (!out.includes(kind)) out.push(kind)
+    }
+  }
+  return out
+}
+
 /** Bounds on what an author may declare, so a hostile or runaway file cannot make
  *  the matcher walk a large list on every event. */
 const MAX_DECLARED = 32
@@ -325,16 +345,29 @@ export function parseSurfaceClaims(raw: unknown): SurfaceClaim[] | undefined {
  *     observation of a Surface's OWN source is the content ARRIVING, and
  *     `observeSource` already marks that current. Treating it as a stale signal
  *     would make every save queue a refresh that immediately superseded itself.
+ *
+ * AND THE ONE ADDITION (R14, plan U4): whatever the author asked for, the kinds this
+ * Surface's CLAIMS imply are unioned on top. Unioned rather than used as another
+ * default, because an author who writes `triggers: ["git-revision"]` next to an
+ * infra-locus claim has not said "and never check that claim" — they have said which
+ * announcement they care about. Without the union such a Surface earns no deadline
+ * and its claim is never revalidated at all.
+ *
+ * The union is what makes the cheap check REACHABLE. It does not make it expensive:
+ * the coordinator answers a trigger on a claim-bearing Surface with a witness pass
+ * instead of a job (KTD3), so the extra kinds buy detection, not dispatch.
  */
 export function effectiveDeclaration(surface: Surface): SurfaceRefreshDeclaration {
   const declared = surface.content.refreshPolicy
   const hasRecipe = !!surface.content.recipe
   const policy = declared?.policy ?? (hasRecipe ? 'automatic' : 'mark-stale')
-  const triggers = declared?.triggers?.length
+  const base = declared?.triggers?.length
     ? declared.triggers
     : hasRecipe && surface.source?.worktree
       ? (['git-revision', 'periodic'] as SurfaceTriggerKind[])
       : []
+  const earned = claimTriggerKinds(surface.content.claims).filter(k => !base.includes(k))
+  const triggers = earned.length ? [...base, ...earned] : base
   return {
     policy,
     triggers,
@@ -486,16 +519,33 @@ export function coalesceGeneration(a: number | undefined, b: number | undefined)
  * manual scheduling policies". A manual Surface is one nothing may refresh without
  * being asked — it is not one nobody is allowed to notice has gone unverified.
  * Policy decides who acts; the deadline decides what is true.
+ *
+ * WHICH TIMESTAMP THE DEADLINE COUNTS FROM IS THE WHOLE OF KTD7 (plan U4). For a
+ * claim-bearing Surface it is `witnessedAt` — the last time every claim was checked
+ * and held — and NOT `verifiedAt`, which `observeSource` rewrites on creation and on
+ * every file save whose watermark moved. Counting from `verifiedAt` would let an
+ * author saving the file push the host's claim-check deadline out, indefinitely and
+ * invisibly, which is precisely the failure KTD7 exists to prevent: the more actively
+ * a card is edited, the less often anything would check whether it is still true.
  */
 export function deriveDueAt(
   surface: Surface, decl: SurfaceRefreshDeclaration, defaultIntervalMs: number,
 ): number | undefined {
+  // DECLARING A CLAIM EARNS A DEADLINE (R14), whatever the loci imply. Redundant
+  // today with the `periodic` kind `effectiveDeclaration` unions on for the same
+  // reason, and kept anyway: this function takes the declaration as a PARAMETER, so a
+  // caller holding a raw author declaration (or a future default that stops unioning)
+  // would otherwise silently return `undefined` for a Surface that says out loud what
+  // would prove it wrong.
+  const witnessed = !!surface.content.claims?.length
   // An explicit interval is a request for a deadline on its own. Otherwise only a
   // declared `periodic` trigger asks for one — a Surface that listens solely to Git
   // has no opinion about elapsed time and should not grow an amber badge for it.
-  const wants = decl.intervalMs !== undefined || decl.triggers.includes('periodic')
+  const wants = witnessed || decl.intervalMs !== undefined || decl.triggers.includes('periodic')
   if (!wants) return undefined
   const interval = Math.max(MIN_INTERVAL_MS, decl.intervalMs ?? defaultIntervalMs)
-  const base = surface.freshness.verifiedAt ?? surface.createdAt
+  const base = witnessed
+    ? surface.freshness.witnessedAt ?? surface.createdAt
+    : surface.freshness.verifiedAt ?? surface.createdAt
   return base + interval
 }

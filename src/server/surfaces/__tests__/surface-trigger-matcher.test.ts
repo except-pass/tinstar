@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import type { Surface, SurfaceRefreshDeclaration } from '../../../domain/types'
 import {
   claimsObserveTriggerKind,
+  claimTriggerKinds,
   CLAIM_LOCUS_TRIGGER_KINDS,
   coalesceGeneration,
   deriveDueAt,
@@ -106,6 +107,37 @@ describe('effectiveDeclaration', () => {
     }))
     expect(d.policy).toBe('manual')
     expect(d.triggers).toEqual(['human-intent'])
+  })
+
+  it('UNIONS the kinds a Surface\'s claims earn onto whatever the author asked for', () => {
+    // R14, and unioned rather than defaulted for a reason: an author who names
+    // `git-revision` beside an infra-locus claim has said which announcement they
+    // care about, not "and never check that claim". Without the union such a Surface
+    // earns no deadline and its claim is never revalidated at all.
+    const d = effectiveDeclaration(surface({
+      content: {
+        headline: 'Roadmap', recipe: 'x',
+        refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] },
+        claims: [{ id: 'up', witness: 'http-status', locus: 'infra' }],
+      },
+    }))
+    expect(d.triggers).toEqual(['git-revision', 'periodic'])
+  })
+
+  it('gives a recipe-LESS claim-bearing Surface the kinds its loci imply', () => {
+    const d = effectiveDeclaration(surface({
+      content: { headline: 'Roadmap', claims: [{ id: 'u4', witness: 'unit-landed', locus: 'repo' }] },
+    }))
+    // Still `mark-stale` — no recipe means no rebuild anything could run — but no
+    // longer unfalsifiable.
+    expect(d.policy).toBe('mark-stale')
+    expect(d.triggers).toEqual(['git-revision', 'periodic'])
+  })
+
+  it('adds nothing for a Surface that declares no claims', () => {
+    expect(claimTriggerKinds(undefined)).toEqual([])
+    expect(claimTriggerKinds([])).toEqual([])
+    expect(effectiveDeclaration(surface()).triggers).toEqual(['git-revision', 'periodic'])
   })
 })
 
@@ -247,6 +279,44 @@ describe('deriveDueAt', () => {
       },
     })
     expect(deriveDueAt(s, effectiveDeclaration(s), 1_000)).toBe(1_000 + 20 * 60_000)
+  })
+
+  it('DECLARING CLAIMS earns a deadline, whatever the declaration says (R14)', () => {
+    // Deliberately handed a declaration with no `periodic` and no interval — the
+    // shape `effectiveDeclaration` no longer produces for a claim-bearing Surface,
+    // and exactly the shape a caller holding a raw author declaration does. Returning
+    // undefined here is how a card that says out loud what would prove it wrong goes
+    // back to being un-doubtable.
+    const s = surface({
+      content: { headline: 'Roadmap', claims: [{ id: 'u4', witness: 'unit-landed', locus: 'repo' }] },
+      freshness: { phase: 'current', overdue: false, verifiedAt: 5_000, witnessedAt: 8_000 },
+    })
+    const bare: SurfaceRefreshDeclaration = { policy: 'mark-stale', triggers: ['git-revision'] }
+    expect(deriveDueAt(s, bare, 10 * 60_000)).toBe(8_000 + 10 * 60_000)
+  })
+
+  it('counts a claim-bearing Surface from witnessedAt, never from verifiedAt (KTD7)', () => {
+    const base = {
+      headline: 'Roadmap', recipe: 'x',
+      claims: [{ id: 'u4', witness: 'unit-landed', locus: 'repo' as const }],
+    }
+    const saved = surface({
+      content: base,
+      // What a file save leaves behind: `observeSource` writes `verifiedAt` on every
+      // save whose watermark moved, and `witnessedAt` never. Counting from the former
+      // would let an author push the host's claim-check deadline out indefinitely just
+      // by editing the card — the more attention it gets, the less it is checked.
+      freshness: { phase: 'current', overdue: false, verifiedAt: 900_000, witnessedAt: 8_000 },
+    })
+    expect(deriveDueAt(saved, effectiveDeclaration(saved), 10 * 60_000)).toBe(8_000 + 10 * 60_000)
+
+    const never = surface({
+      content: base,
+      freshness: { phase: 'current', overdue: false, verifiedAt: 900_000 },
+    })
+    // Never witnessed falls back to creation, so a card nobody has ever checked is
+    // due rather than parked behind whenever its file last moved.
+    expect(deriveDueAt(never, effectiveDeclaration(never), 10 * 60_000)).toBe(100 + 10 * 60_000)
   })
 })
 

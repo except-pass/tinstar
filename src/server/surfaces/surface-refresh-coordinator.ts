@@ -24,17 +24,24 @@
 // Server-only and React-free.
 
 import type {
-  Surface, SurfaceContent, SurfacePrincipalRef, SurfaceRefreshDeclaration, SurfaceStaleReason,
+  Surface, SurfaceClaim, SurfaceContent, SurfacePrincipalRef, SurfaceRefreshDeclaration, SurfaceStaleReason,
 } from '../../domain/types'
 import { log } from '../logger'
 import { serializeByKey } from '../sessions/backends/serializeByKey'
-import { surfaceContentDigest, type SurfaceCallContext, type SurfaceService } from './surface-service'
+import {
+  claimsWithoutStoredValue,
+  surfaceContentDigest,
+  type SurfaceCallContext,
+  type SurfaceService,
+  type WitnessObservationInput,
+} from './surface-service'
 import {
   ACTIVE_JOB_STATES,
   type SurfaceRefreshJob,
   type SurfaceRefreshJobStore,
 } from './surface-refresh-jobs'
 import {
+  claimsObserveTriggerKind,
   coalesceGeneration,
   deriveDueAt,
   effectiveDeclaration,
@@ -42,6 +49,7 @@ import {
   MIN_INTERVAL_MS,
   type SurfaceTriggerEvent,
 } from './surface-trigger-matcher'
+import type { WitnessOutcome } from './witness-registry'
 
 /** A worker's staged output, after the caller has validated it. */
 export interface StagedRefreshResult {
@@ -113,6 +121,37 @@ export interface RefreshCoordinatorDeps {
   observeSources: (surface: Surface) => Promise<void>
   /** Build the self-contained instruction a worker or owner receives. */
   buildPrompt: (input: { surface: Surface; job: SurfaceRefreshJob; stagingPath: string }) => string
+  /** Run ONE claim's witness and report what it saw (plan U4, R9).
+   *
+   *  Injected for the same reason `launchWorker` and `observeSources` are: it reaches
+   *  a subprocess (`git fetch`) and the network, and the state machine that decides
+   *  WHEN to check a claim has to be testable without either.
+   *
+   *  Must never reject — `runWitness` in the registry already guarantees that, and it
+   *  matters here because a rejection would take down a pass that is looking at other
+   *  Surfaces too. REQUIRED rather than optional: an optional effect dep is one a
+   *  wiring can forget, and the symptom of forgetting this one is a fleet of cards
+   *  that quietly never check themselves — the exact failure this plan exists to end,
+   *  reintroduced as a missing key. */
+  runWitness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome>
+}
+
+/** One Surface's claims, snapshotted at collect so the run outside the lock and the
+ *  commit back inside it are talking about the same declaration. */
+interface WitnessTask {
+  surfaceId: string
+  claims: SurfaceClaim[]
+  /** Claim id → a stable rendering of its declaration, compared again at commit. */
+  fingerprints: Record<string, string>
+}
+
+/** What has to be identical for a witness result to still be an answer about this
+ *  claim. The id alone is not enough: an author who edits `params.url` has changed the
+ *  question, and storing the old URL's status code against the new one would report a
+ *  value that moved when nothing in the world did. `params` is already key-sorted by
+ *  the parser, so this is stable against a formatter reordering the file. */
+function claimFingerprint(claim: SurfaceClaim): string {
+  return JSON.stringify([claim.witness, claim.locus, claim.params ?? null])
 }
 
 /** The principal the coordinator itself acts as (KTD6: host jobs get their own). */
@@ -145,18 +184,80 @@ export interface RefreshPassReport {
   superseded: string[]
   /** Jobs that failed, with the reason. */
   failed: { jobId: string; reason: string }[]
+  /** Surfaces whose every claim was checked and held this pass — the cheap outcome,
+   *  and the one the whole split exists to make common. No job, no session, no agent. */
+  witnessed: string[]
+  /** Claims whose stored value a completed lookup contradicted. */
+  moved: { surfaceId: string; claimId: string }[]
+  /** Claims whose witness ran and produced no value — nobody could look, or the claim
+   *  itself is broken (KTD8). Reported because a Surface that never leaves this list
+   *  is a Surface nothing is actually checking. */
+  unresolved: { surfaceId: string; claimId: string }[]
 }
 
 function emptyReport(): RefreshPassReport {
   return {
     marked: [], queued: [], coalesced: [], dispatched: [], heldByCap: [],
     blocked: [], completed: [], superseded: [], failed: [],
+    witnessed: [], moved: [], unresolved: [],
   }
 }
 
 /** The one serialization key every public entry point runs under. See
  *  {@link SurfaceRefreshCoordinator.entry}. */
 const ENTRY_KEY = 'refresh-coordinator'
+
+/**
+ * How many claim-bearing Surfaces one witness pass may look at (KTD3).
+ *
+ * SIZED AGAINST THE SLOWEST KIND, not against the number of Surfaces. `unit-landed`
+ * budgets 30s for a `git fetch` on a link the host does not control; at
+ * {@link WITNESS_CONCURRENCY} of 4 a full pass is therefore two batches, bounded at a
+ * minute of wall clock — and it holds no lock for any of it. A backlog of a hundred
+ * Surfaces drains in thirteen passes, about a minute at the five-second sweep, which
+ * is well inside the shortest verification interval an author may ask for
+ * ({@link MIN_INTERVAL_MS}). Bigger buys nothing: the steady state is that almost
+ * nothing is due.
+ *
+ * Deliberately NOT `maxConcurrentWorkers`, which the plan's open question offers as
+ * the one-fewer-knob alternative. That number bounds managed sessions and the ttyd
+ * ports they claim; this one bounds subprocesses and HTTP requests. Sharing them
+ * would mean tightening the fleet cap silently throttled detection, and detection is
+ * the half that is supposed to be generous.
+ */
+export const WITNESS_BUDGET_PER_PASS = 8
+
+/** How many witnesses run at once inside a pass. Four, matching the shipped
+ *  `maxConcurrentWorkers` default, so a sweep can never have more outstanding
+ *  subprocesses than the fleet it is supposed to be cheaper than. */
+export const WITNESS_CONCURRENCY = 4
+
+/** The shortest gap between two looks at the same Surface, whatever else says it is
+ *  due. Its job is to stop hammering, not to replace the deadline: the interval is
+ *  what governs a healthy Surface's cadence, and this is what stops a trigger storm
+ *  (or a Surface that can never be stamped, because a claim will not resolve) turning
+ *  into a `git fetch` every five seconds. */
+export const WITNESS_MIN_GAP_MS = MIN_INTERVAL_MS
+
+/**
+ * How many OWNER deliveries one dispatch pass may make (KTD9, R16).
+ *
+ * ITS OWN COUNTER, and the two obvious alternatives are both wrong.
+ * `runningWorkerCount()` counts only `dispatch.kind === 'worker'` and every one of
+ * the 175 jobs in the live table dispatched as `owner`, so moving the existing cap
+ * check above the owner branch would gate against a constant zero. And counting owner
+ * deliveries in the worker cap re-creates the documented starvation regression on
+ * {@link SurfaceRefreshJobStore.runningWorkerCount}, where an owner delivery held a
+ * fleet slot on every sweep after the one that dispatched it.
+ *
+ * PER PASS RATHER THAN CONCURRENT, because an owner delivery is a prompt — it is
+ * finished the moment it lands, and there is nothing to still be holding. What was
+ * unbounded was the burst: a commit fires every Surface bound to that worktree, and
+ * ten Surfaces became ten prompts into one working session. Three per pass at the
+ * five-second sweep drains that in four sweeps, without anybody's conversation being
+ * buried.
+ */
+export const OWNER_DELIVERIES_PER_PASS = 3
 
 /** The verification interval in force, floored the same way `deriveDueAt` floors
  *  it — so a retry cooldown can never be shorter than the shortest interval an
@@ -171,6 +272,21 @@ export class SurfaceRefreshCoordinator {
   /** In-flight tail for {@link entry}. Instance-scoped: two coordinators (a test
    *  builds several) must not queue behind each other. */
   private readonly chain = new Map<string, Promise<unknown>>()
+
+  /** The most recent witness pass. Retained after it settles so a caller that starts
+   *  a pass and then joins it gets THAT pass's report rather than an empty one. */
+  private pass: Promise<RefreshPassReport> = Promise.resolve(emptyReport())
+
+  /** True while a witness pass is between its collect and its last commit. One pass
+   *  at a time, which is what bounds the number of outstanding subprocesses to
+   *  {@link WITNESS_BUDGET_PER_PASS} across the whole process rather than per sweep. */
+  private passing = false
+
+  /** Surface id → the earliest instant it may be looked at again. In memory on
+   *  purpose: it is a rate limit, not a fact about the world, and the cost of losing
+   *  it in a restart is one extra look per Surface. Putting it on the record would
+   *  mean a durable write every time the host DECIDED NOT to do something. */
+  private readonly nextLookAt = new Map<string, number>()
 
   /**
    * Run one public entry point, never overlapping another.
@@ -220,7 +336,14 @@ export class SurfaceRefreshCoordinator {
    * one queued job" means at the durable layer.
    */
   async note(event: SurfaceTriggerEvent): Promise<RefreshPassReport> {
-    return this.entry(() => this.noteNow(event))
+    const report = await this.entry(() => this.noteNow(event))
+    // THE SAME STEP BOTH ENTRY POINTS REACH (KTD3). A commit reaches `markPossiblyStale`
+    // and then `scheduleFor` without ever touching the deadline pass — 115 of 175
+    // measured jobs took that route — so a revalidation wired only to `applyDeadlines`
+    // would leave the cheap check unreachable from the trigger that produces most of
+    // the work. Started, not awaited: see {@link witnessPass}.
+    this.startWitnessPass()
+    return report
   }
 
   private async noteNow(event: SurfaceTriggerEvent): Promise<RefreshPassReport> {
@@ -241,6 +364,18 @@ export class SurfaceRefreshCoordinator {
       // `mark-stale` policy stops HERE. That is its entire visible difference from
       // `automatic`: the badge and the reason appear, and no job is ever created.
       if (match.policy !== 'automatic') continue
+      // THE CHEAP CHECK GETS FIRST REFUSAL (R13). A Surface whose claims observe this
+      // trigger's kind is not scheduled for a rebuild on the strength of the trigger
+      // alone: the witness pass this call starts will ask whether anything the Surface
+      // asserts actually moved, and a job is queued only if something did. That is the
+      // whole split — 110 of 121 completed refreshes changed nothing, and each of them
+      // was a background agent in the user's worktree.
+      //
+      // The Surface is left MARKED, which is what makes this safe to leave to a later
+      // pass: `collectDueWitnesses` treats a possibly-stale Surface holding a reason
+      // its claims observe as due, so a trigger that arrives while a pass is already
+      // running is picked up by the next one rather than dropped.
+      if (claimsObserveTriggerKind(after.content.claims, match.reason.kind)) continue
       await this.scheduleFor(after, after.freshness.staleReason, report)
     }
     return report
@@ -372,20 +507,31 @@ export class SurfaceRefreshCoordinator {
   // --- The sweep -----------------------------------------------------------
 
   /**
-   * One periodic pass: deadlines, then harvest, then dispatch.
+   * One periodic pass: deadlines, then rebuild debts, then harvest, then dispatch.
    *
    * ORDER IS LOAD-BEARING. Deadlines first, so a Surface that just went overdue is
    * visible even if everything after it is capped out. Harvest before dispatch, so
    * a slot freed by a finishing worker is reusable in the same pass rather than one
-   * sweep later.
+   * sweep later. The rebuild drain sits with the deadlines because it is the other
+   * thing that CREATES work, and putting it after harvest would make a debt recorded
+   * this pass wait an extra sweep for its dispatch.
+   *
+   * RETURNS BEFORE ITS WITNESSES DO, and that is the point of the whole unit. Every
+   * entry point here serializes on one key, so a `git fetch` awaited inside this call
+   * would stall harvest, dispatch, and the manual refresh button behind network
+   * latency — and would destroy the property that makes the every-Surface walk free.
+   * The pass this starts holds no lock; join it with {@link witnessPass}.
    */
   async sweep(): Promise<RefreshPassReport> {
-    return this.entry(() => this.sweepNow())
+    const report = await this.entry(() => this.sweepNow())
+    this.startWitnessPass()
+    return report
   }
 
   private async sweepNow(): Promise<RefreshPassReport> {
     const report = emptyReport()
     await this.applyDeadlines(report)
+    await this.drainRebuilds(report)
     await this.harvest(report)
     await this.dispatch(report)
     return report
@@ -436,6 +582,14 @@ export class SurfaceRefreshCoordinator {
       if (!after) continue
       report.marked.push(after.id)
       if (decl.policy !== 'automatic') continue
+      // A CLAIM-BEARING SURFACE ANSWERS ITS OWN DEADLINE (R13/R14). Its claims all
+      // observe `periodic` — elapsed time can invalidate any observation whatever —
+      // so the deadline that just passed is exactly the question a witness pass
+      // answers, and answering it with a background agent instead would be paying
+      // repair prices for detection. `collectDueWitnesses` picks this Surface up on
+      // the pass the caller starts after the lock is released; only a value that
+      // actually moved reaches `scheduleFor`, through `drainRebuilds`.
+      if (surface.content.claims?.length) continue
       // A DEADLINE THAT CANNOT MOVE MUST NOT RETRY AT SWEEP CADENCE. `dueAt` is
       // derived from the last SUCCESSFUL verification on purpose (a failing loop may
       // not silence its own overdue badge), so a Surface whose recipe is broken
@@ -451,6 +605,249 @@ export class SurfaceRefreshCoordinator {
       if (failedAt !== undefined && now < failedAt + intervalFor(decl, cfg.defaultIntervalMs)) continue
       await this.scheduleFor(after, after.freshness.staleReason, report)
     }
+  }
+
+  // --- The claim check -----------------------------------------------------
+
+  /**
+   * Queue the rebuild a moved claim value earned, for every Surface still carrying
+   * that debt (R11/R12/R17).
+   *
+   * THE MARKER IS DRAINED HERE AND NOWHERE ELSE, which makes the restart case the
+   * ORDINARY case rather than a rarely-exercised recovery path: the commit that
+   * records a moved value queues nothing, so every rebuild this feature produces —
+   * including the ones no crash was involved in — comes out of this loop. A path
+   * taken only after a restart is a path that is broken after a restart.
+   *
+   * "EXACTLY ONE" is structural rather than counted: `jobs.active` holds at most one
+   * job per Surface, so a Surface that already has one is skipped, and the marker
+   * survives until `completeRefresh` retires it.
+   *
+   * THE RECIPE-LESS ARM IS LEFT INTACT DELIBERATELY (R12). `launchWorker` answers a
+   * recipe-less Surface with "this Surface declares no refresh recipe", and
+   * `authorizationProblem` turns that into a blocked job — so a rebuild dispatched
+   * here with no instruction would land the Surface in `failed` and retry on every
+   * deadline forever. Such a Surface keeps its delta and its stale badge and queues
+   * nothing, which is the honest end of that road.
+   */
+  private async drainRebuilds(report: RefreshPassReport): Promise<void> {
+    const now = this.deps.now()
+    const cfg = this.deps.config()
+    for (const surface of this.deps.surfaces()) {
+      if (!surface.freshness.claimRebuild) continue
+      if (surface.deleted || surface.home.kind === 'recovery' || surface.compatibilityOnly) continue
+      if (!surface.content.recipe) continue
+      if (this.deps.jobs.active(surface.id)) continue
+      const decl = effectiveDeclaration(surface)
+      if (decl.policy !== 'automatic') continue
+      // The same cooldown `applyDeadlines` applies for the same reason: a Surface
+      // whose rebuild is broken must retry on the cadence it asked to be verified on,
+      // not on the cadence the host happens to sweep at.
+      const failedAt = surface.freshness.failure?.at
+      if (failedAt !== undefined && now < failedAt + intervalFor(decl, cfg.defaultIntervalMs)) continue
+      await this.scheduleFor(surface, surface.freshness.staleReason, report)
+    }
+  }
+
+  /**
+   * Join the witness pass in flight, or the most recent one.
+   *
+   * WHY THIS IS A SEPARATE AWAIT and not just the tail of `sweep()`. The host's sweep
+   * timer guards against overlap with a `sweeping` flag, so a `sweep()` that awaited
+   * its own witnesses would stall the NEXT sweep's deadlines and dispatch behind a
+   * `git fetch` — the lock would be free and the loop would be blocked anyway. Kept
+   * out of the returned report for the same reason: the report describes what the
+   * locked pass did, and a pass that has not finished cannot honestly be in it.
+   *
+   * Tests and shutdown are the callers. Production fires and forgets, which is safe
+   * because every commit the pass makes goes through the same serialized entry point
+   * as everything else.
+   */
+  witnessPass(): Promise<RefreshPassReport> {
+    return this.pass
+  }
+
+  /** Start a pass unless one is already running. One at a time is what bounds the
+   *  process to {@link WITNESS_BUDGET_PER_PASS} outstanding witnesses however many
+   *  sweeps and triggers arrive while it runs. */
+  private startWitnessPass(): void {
+    if (this.passing) return
+    this.passing = true
+    this.pass = this.runWitnessPass()
+      // NOBODY AWAITS THIS IN PRODUCTION — `index.ts` starts the sweep with `void` —
+      // so a rejection escaping here would be an unhandled rejection on the process
+      // rather than a failed refresh. Swallowed into an empty report, logged, and the
+      // next sweep tries again: a pass that could not run has cost nothing durable.
+      .catch(err => {
+        log.warn('refresh', `witness pass failed: ${(err as Error).message}`)
+        return emptyReport()
+      })
+      .finally(() => { this.passing = false })
+  }
+
+  /**
+   * COLLECT inside the lock, RUN outside it, COMMIT one Surface at a time (KTD3).
+   *
+   * The only slow step is the middle one, and it holds nothing. Collect is a read of
+   * the Surface list; each commit is one mutator call that re-checks what it is
+   * committing against.
+   */
+  private async runWitnessPass(): Promise<RefreshPassReport> {
+    const report = emptyReport()
+    const tasks = await this.entry(async () => this.collectDueWitnesses())
+    if (!tasks.length) return report
+
+    // Bounded fan-out over one shared cursor: workers pull the next task rather than
+    // being handed a pre-sliced share, so one Surface whose `git fetch` hangs to its
+    // timeout does not idle the other three lanes.
+    let cursor = 0
+    const lanes = Array.from({ length: Math.min(WITNESS_CONCURRENCY, tasks.length) }, async () => {
+      for (;;) {
+        const task = tasks[cursor++]
+        if (!task) return
+        const results = await this.runClaims(task)
+        await this.commitWitness(task, results, report)
+      }
+    })
+    await Promise.all(lanes)
+    return report
+  }
+
+  /**
+   * Which Surfaces are due a look, and which claims to run for each.
+   *
+   * THREE WAYS TO BE DUE, in the order they matter:
+   *
+   *   · A claim with NO STORED VALUE (R8). Due immediately rather than an interval
+   *     from now — a card asserting something the host has never checked is exactly
+   *     the state this plan exists to end, and it is the whole reason U3's optional
+   *     seeding seam in the reconciler could be deleted: the first look happens on
+   *     the next sweep rather than inside the file-watcher's debounced epoch.
+   *   · A TRIGGER the claims observe, still sitting on the record as the stale reason
+   *     that put the Surface in `possibly-stale`. Reading it off the record rather
+   *     than passing it down from `noteNow` is what makes a trigger that arrives
+   *     while a pass is running survive to the next one.
+   *   · The DEADLINE, counted from `witnessedAt` — the last time every claim held —
+   *     and never from `verifiedAt`, which an author's file save moves (KTD7).
+   */
+  private collectDueWitnesses(): WitnessTask[] {
+    const now = this.deps.now()
+    const cfg = this.deps.config()
+    const out: WitnessTask[] = []
+    for (const surface of this.deps.surfaces()) {
+      if (out.length >= WITNESS_BUDGET_PER_PASS) break
+      if (surface.deleted || surface.home.kind === 'recovery' || surface.compatibilityOnly) continue
+      const claims = surface.content.claims
+      if (!claims?.length) continue
+      // A rebuild already owns this Surface. Re-observing the world it is being
+      // rebuilt against would at best duplicate what the barrier re-observes anyway,
+      // and at worst record a move against content nobody has written yet.
+      if (this.deps.jobs.active(surface.id)) continue
+      const next = this.nextLookAt.get(surface.id)
+      if (next !== undefined && now < next) continue
+      if (!this.witnessDue(surface, now, cfg)) continue
+      out.push({
+        surfaceId: surface.id,
+        claims: claims.map(c => ({ ...c })),
+        // Identity, not equality: the author may edit the declaration while the
+        // witnesses run, and a result computed from the OLD parameters must not be
+        // stored against the new claim. Compared again at commit.
+        fingerprints: Object.fromEntries(claims.map(c => [c.id, claimFingerprint(c)])),
+      })
+    }
+    return out
+  }
+
+  private witnessDue(surface: Surface, now: number, cfg: RefreshCoordinatorConfig): boolean {
+    if (claimsWithoutStoredValue(surface).length > 0) return true
+    const reason = surface.freshness.staleReason
+    if (
+      surface.freshness.phase === 'possibly-stale'
+      && reason && claimsObserveTriggerKind(surface.content.claims, reason.kind)
+    ) return true
+    const witnessedAt = surface.freshness.witnessedAt
+    if (witnessedAt === undefined) return true
+    return now >= witnessedAt + intervalFor(effectiveDeclaration(surface), cfg.defaultIntervalMs)
+  }
+
+  /** Run every claim on one Surface, outside the lock. Sequential within a Surface:
+   *  its claims are few, and a card's own witnesses competing with each other buys
+   *  nothing while making the fan-out bound above meaningless. */
+  private async runClaims(task: WitnessTask): Promise<WitnessObservationInput[]> {
+    const surface = this.surface(task.surfaceId)
+    if (!surface) return []
+    const out: WitnessObservationInput[] = []
+    for (const claim of task.claims) {
+      let outcome: WitnessOutcome
+      try {
+        outcome = await this.deps.runWitness({ surface, claim })
+      } catch (err) {
+        // The registry's runner never rejects. A wiring that does must not take down
+        // the pass — and must not be recorded as a value either.
+        outcome = { status: 'unresolved', detail: `the witness runner threw: ${(err as Error).message}` }
+      }
+      out.push({ claimId: claim.id, outcome })
+    }
+    return out
+  }
+
+  /**
+   * Commit one Surface's results, under the lock, after re-checking what they are
+   * about.
+   *
+   * TWO THINGS ARE RE-CHECKED and both have a failure they prevent. The Surface may
+   * have been DELETED while its witnesses ran, and a mutator called on it would
+   * either fail noisily or resurrect state on a record nobody expects to move. And
+   * its claims may have been EDITED, in which case an outcome computed from the old
+   * parameters is an answer to a question nobody is asking any more — storing it
+   * would let a claim's value change without the world changing at all.
+   */
+  private async commitWitness(
+    task: WitnessTask, results: readonly WitnessObservationInput[], report: RefreshPassReport,
+  ): Promise<void> {
+    if (!results.length) return
+    await this.entry(async () => {
+      const now = this.deps.now()
+      const surface = this.surface(task.surfaceId)
+      if (!surface || surface.deleted) return
+      const live = surface.content.claims ?? []
+      const observations = results.filter(r => {
+        const claim = live.find(c => c.id === r.claimId)
+        return !!claim && claimFingerprint(claim) === task.fingerprints[r.claimId]
+      })
+      if (!observations.length) return
+
+      const recorded = await this.deps.service.recordWitnessResult(
+        surface.id, { observations }, this.ctx(now),
+      )
+      if (!recorded.ok) {
+        log.info('refresh', `could not record a witness result for ${surface.id}: ${recorded.error.message}`)
+        return
+      }
+      const after = this.surface(surface.id)
+      if (!after) return
+
+      const problems = observations.filter(o => o.outcome.status !== 'value')
+      for (const problem of problems) {
+        report.unresolved.push({ surfaceId: surface.id, claimId: problem.claimId })
+      }
+      const rebuild = after.freshness.claimRebuild
+      const movedNow = rebuild?.at === now ? rebuild.moves : []
+      for (const move of movedNow) report.moved.push({ surfaceId: surface.id, claimId: move.claimId })
+      if (after.freshness.witnessedAt === now && !movedNow.length) report.witnessed.push(surface.id)
+
+      // WHEN THIS SURFACE MAY BE LOOKED AT AGAIN. A pass that produced no verification
+      // leaves the Surface due by every test above — `witnessedAt` did not move — so
+      // without a cooldown a claim nobody can resolve would be a `git fetch` on every
+      // five-second sweep, forever. One verification interval of quiet after a problem
+      // or a move is the same rule `applyDeadlines` already applies to a failed
+      // rebuild; a first look (which can never match, so can never stamp) gets only
+      // the minimum gap, or a newly authored card would wait a full interval for the
+      // second look that is allowed to verify it.
+      const interval = intervalFor(effectiveDeclaration(after), this.deps.config().defaultIntervalMs)
+      const quiet = problems.length || movedNow.length ? interval : WITNESS_MIN_GAP_MS
+      this.nextLookAt.set(surface.id, now + quiet)
+    })
   }
 
   /**
@@ -589,6 +986,10 @@ export class SurfaceRefreshCoordinator {
     // counting by state alone made an owner delivery consume a cap slot on every
     // sweep after the one that dispatched it, silently starving the background fleet.
     let running = this.deps.jobs.runningWorkerCount()
+    // And the OTHER half of that, which the narrowing left unbounded (KTD9, R16). See
+    // `OWNER_DELIVERIES_PER_PASS`: this counter is per pass and separate on purpose,
+    // and `runningWorkerCount` stays worker-only.
+    let ownerDeliveries = 0
     for (const job of queued) {
       const now = this.deps.now()
       const surface = this.surface(job.surfaceId)
@@ -638,12 +1039,23 @@ export class SurfaceRefreshCoordinator {
       const prompt = this.deps.buildPrompt({ surface, job, stagingPath: job.stagingPath })
 
       // AN AVAILABLE OWNER RECEIVES WORK DIRECTLY (KTD11). This costs no port and
-      // no session, so it is NOT counted against the cap — the cap bounds the
-      // background fleet, which is what competes for ports.
+      // no session, so it is NOT counted against the WORKER cap — that cap bounds the
+      // background fleet, which is what competes for ports. It is counted against its
+      // own budget, because what it does cost is a prompt in somebody's live
+      // conversation, and ten Surfaces bound to one worktree became ten prompts into
+      // one working session on a single commit.
       const owner = surface.owner?.kind === 'session' ? surface.owner.id : job.runId
       if (owner && this.deps.isLiveSession(owner)) {
+        if (ownerDeliveries >= OWNER_DELIVERIES_PER_PASS) {
+          // Held, not failed and not transferred to a worker: the owner is alive and
+          // is still the right recipient, the queue is durable, and the next sweep is
+          // five seconds away.
+          report.heldByCap.push(job.id)
+          continue
+        }
         const began = await this.begin(job, surface)
         if (!began) continue
+        ownerDeliveries++
         const delivered = await this.deps.deliverToOwner({ sessionName: owner, prompt, job })
         this.deps.jobs.update(job.id, {
           dispatch: { kind: 'owner', target: owner, at: now },
