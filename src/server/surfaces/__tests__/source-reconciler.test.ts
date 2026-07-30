@@ -9,9 +9,10 @@ import { DocumentStore } from '../../stores/document-store'
 import { deriveLegacySurfaceId, deriveRunIncarnation } from '../../stores/surfaces'
 import { deriveLegacyRunRootId, LEGACY_SLATE_ADAPTER, legacyPointLocator } from '../../stores/surface-migration'
 import { SurfaceService, type SurfaceCallContext } from '../surface-service'
-import { reconcileSlateEpoch, type SlateSourceEpoch } from '../source-reconciler'
+import { reconcileSlateEpoch, type SlateSeedDeps, type SlateSourceEpoch } from '../source-reconciler'
 import { slateEntryWatermark, slateFileLocator, SLATE_FILE_ADAPTER, type SlateSourceEntry } from '../slate-source'
 import type { Surface, SurfacePrincipalRef } from '../../../domain/types'
+import type { WitnessOutcome } from '../witness-registry'
 
 const SPACE = 'spc-a'
 const RUN = 'run-a'
@@ -50,7 +51,7 @@ function epoch(entries: SlateSourceEntry[], over: Partial<SlateSourceEpoch> = {}
   }
 }
 
-function harness() {
+function harness(seed?: SlateSeedDeps) {
   const docStore = new DocumentStore()
   const svc = new SurfaceService(docStore)
   return {
@@ -58,7 +59,7 @@ function harness() {
     svc,
     // The epoch carries the clock (it is when the directory was READ), so the
     // override has to land on both halves or the assertions read the default.
-    run: (e: SlateSourceEpoch, at = e.at) => reconcileSlateEpoch(svc, { ...e, at }, ctx(at)),
+    run: (e: SlateSourceEpoch, at = e.at) => reconcileSlateEpoch(svc, { ...e, at }, ctx(at), seed),
     surface: (localId: string): Surface | undefined =>
       docStore.getSurface(deriveLegacySurfaceId(INCARNATION, localId)),
   }
@@ -124,6 +125,121 @@ describe('the happy path', () => {
     expect(after.thread.replies).toHaveLength(1)
     expect(after.thread.replies[0]!.text).toBe('which two?')
     expect(after.home).toEqual({ kind: 'surface', surfaceId: ROOT })
+  })
+})
+
+describe('seeding a claim\'s first value (plan U3, R8)', () => {
+  const repo = { id: 'u3', witness: 'unit-landed', params: { plan: 'docs/plans/p.md', unit: 'U3' }, locus: 'repo' as const }
+  const infra = { id: 'up', witness: 'http-status', params: { url: 'https://x.test/' }, locus: 'infra' as const }
+
+  /** A witness runner that answers from a table and counts what it was asked. */
+  function runner(answers: Record<string, WitnessOutcome>) {
+    const asked: string[] = []
+    const deps: SlateSeedDeps = {
+      runWitness: async ({ claim }) => {
+        asked.push(claim.id)
+        return answers[claim.id] ?? { status: 'unresolved', detail: 'no answer configured' }
+      },
+    }
+    return { deps, asked }
+  }
+
+  /** An entry whose watermark actually covers its claims, the way the watcher's does. */
+  function claimed(localId: string, headline: string, claims: unknown[]): SlateSourceEntry {
+    return {
+      localId,
+      file: 'a.json',
+      content: { headline, claims: claims as never },
+      author: 'agent',
+      watermark: slateEntryWatermark({ headline, claims: claims as never, author: 'agent' }),
+    }
+  }
+
+  it('gives a newly authored claim a stored value in the epoch that first sees it', async () => {
+    const w = runner({ u3: { status: 'value', value: 'landed' }, up: { status: 'value', value: 200 } })
+    const h = harness(w.deps)
+    const out = await h.run(epoch([claimed('road', 'Roadmap', [repo, infra])]))
+
+    // R8's point: the first look happens when the claim is first SEEN, not a full
+    // verification interval later — otherwise a card that has never been checked is
+    // indistinguishable at the record from one checked a moment ago that held.
+    expect(out.seeded).toEqual(['road#u3', 'road#up'])
+    expect(h.surface('road')!.freshness.claimObservations).toEqual({
+      u3: { value: 'landed', at: 1_000 },
+      up: { value: 200, at: 1_000 },
+    })
+  })
+
+  it('does not report the Surface witnessed on the strength of its own first look', async () => {
+    const w = runner({ u3: { status: 'value', value: 'landed' } })
+    const h = harness(w.deps)
+    await h.run(epoch([claimed('road', 'Roadmap', [repo])]))
+    // A value the host invented one millisecond ago has agreed with nothing. The
+    // stamp needs a second look, which the deadline sweep provides.
+    expect(h.surface('road')!.freshness).not.toHaveProperty('witnessedAt')
+  })
+
+  it('looks once per claim per lifetime, so the poll floor stays free', async () => {
+    const w = runner({ u3: { status: 'value', value: 'landed' } })
+    const h = harness(w.deps)
+    await h.run(epoch([claimed('road', 'Roadmap', [repo])]))
+    const rev = h.surface('road')!.rev
+
+    // This function is awaited by the watcher's debounced handler and runs every few
+    // seconds for every watched run. A witness is a subprocess or a network round
+    // trip, so "once ever" is what makes putting it here affordable at all.
+    for (const at of [2_000, 3_000, 4_000]) {
+      const out = await h.run(epoch([claimed('road', 'Roadmap', [repo])]), at)
+      expect(out.seeded).toEqual([])
+    }
+    expect(w.asked).toEqual(['u3'])
+    expect(h.surface('road')!.rev).toBe(rev)
+  })
+
+  it('seeds a claim the author adds later, without re-looking at the old ones', async () => {
+    const w = runner({ u3: { status: 'value', value: 'landed' }, up: { status: 'value', value: 200 } })
+    const h = harness(w.deps)
+    await h.run(epoch([claimed('road', 'Roadmap', [repo])]))
+    const out = await h.run(epoch([claimed('road', 'Roadmap', [repo, infra])]), 2_000)
+
+    expect(out.seeded).toEqual(['road#up'])
+    expect(w.asked).toEqual(['u3', 'up'])
+    expect(h.surface('road')!.freshness.claimObservations).toEqual({
+      u3: { value: 'landed', at: 1_000 },
+      up: { value: 200, at: 2_000 },
+    })
+  })
+
+  it('stores no value for a claim nobody could check, and does not retry it here', async () => {
+    const w = runner({ u3: { status: 'unresolved', detail: 'could not fetch origin/main' } })
+    const h = harness(w.deps)
+    await h.run(epoch([claimed('road', 'Roadmap', [repo])]))
+    await h.run(epoch([claimed('road', 'Roadmap', [repo])]), 2_000)
+
+    // Retrying a failing NETWORK witness on the poll floor is precisely the storm
+    // this split exists to avoid; the deadline sweep owns the retry.
+    expect(w.asked).toEqual(['u3'])
+    expect(h.surface('road')!.freshness.claimObservations).toEqual({
+      u3: { problem: { status: 'unresolved', detail: 'could not fetch origin/main' }, at: 1_000 },
+    })
+  })
+
+  it('runs no witness at all when no seeder is injected', async () => {
+    const h = harness()
+    const out = await h.run(epoch([claimed('road', 'Roadmap', [repo])]))
+    // The seam is optional so every existing caller — and `seedRunSlate` — keeps
+    // today's behaviour: no seeder, no effect, no network in a reconciliation test.
+    expect(out.seeded).toEqual([])
+    expect(h.surface('road')!.freshness).not.toHaveProperty('claimObservations')
+  })
+
+  it('does not let a seed failure cost the epoch its reconciliation', async () => {
+    const w = runner({ u3: { status: 'value', value: 'landed' } })
+    const h = harness({ runWitness: async i => { await w.deps.runWitness(i); throw new Error('never') } })
+    // A claimless entry alongside a claim-bearing one: the seeder is asked for
+    // nothing on the first, so the epoch's own work is untouched either way.
+    const out = await h.run(epoch([entry('blockers', 'Two blockers')]))
+    expect(out).toMatchObject({ observed: 1, created: 1, seeded: [] })
   })
 })
 

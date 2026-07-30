@@ -43,6 +43,38 @@ const POLICIES: readonly SurfaceRefreshPolicy[] = ['automatic', 'mark-stale', 'm
  *  reads this. */
 export const CLAIM_LOCI: readonly SurfaceClaimLocus[] = ['repo', 'infra']
 
+/**
+ * Which trigger kinds a claim at each locus can be invalidated BY (R5, plan U3/U5).
+ *
+ * `periodic` is on BOTH deliberately. A locus says where the observation is made,
+ * not what announces it, and elapsed time can invalidate any observation whatever —
+ * which is exactly the deadline R14 says declaring claims earns. Leaving it off
+ * `infra` would give an infra-only Surface no trigger at all and no way for a
+ * passing revalidation to answer the deadline that produced it.
+ *
+ * Nothing announces infra movement except time passing, so `infra` gets only that.
+ * `repo` additionally gets `git-revision`, which is what a commit on the bound
+ * worktree arrives as.
+ *
+ * Read by two callers with opposite jobs, which is why it is one table: U5 narrows
+ * INBOUND triggers with it (a commit reaches no infra-only Surface), and U3's
+ * witness barrier narrows what a pass may CLEAR with it (a `human-intent` or
+ * `semantic-signal` reason is not something a claim witness answers).
+ */
+export const CLAIM_LOCUS_TRIGGER_KINDS: Readonly<Record<SurfaceClaimLocus, readonly SurfaceTriggerKind[]>> = {
+  repo: ['git-revision', 'periodic'],
+  infra: ['periodic'],
+}
+
+/** True when some claim on this Surface observes a locus that `kind` can invalidate.
+ *  False for a Surface declaring no claims — it observes nothing, so a witness pass
+ *  on it may clear nothing and an inbound trigger is narrowed by nothing. */
+export function claimsObserveTriggerKind(
+  claims: readonly SurfaceClaim[] | undefined, kind: SurfaceTriggerKind,
+): boolean {
+  return !!claims?.some(c => CLAIM_LOCUS_TRIGGER_KINDS[c.locus]?.includes(kind))
+}
+
 /** Bounds on what an author may declare, so a hostile or runaway file cannot make
  *  the matcher walk a large list on every event. */
 const MAX_DECLARED = 32

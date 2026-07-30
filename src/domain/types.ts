@@ -902,6 +902,36 @@ export interface SurfaceFreshness {
    *  the job record is separate bookkeeping and the barrier never trusts it over
    *  the record's own revision and generation. */
   jobId?: string
+  /**
+   * Epoch ms of the last revalidation in which EVERY declared claim was observed
+   * and every one of them matched (R10/R19, plan U3).
+   *
+   * ITS OWN FIELD, not `verifiedAt` (KTD7). `observeSource` writes `verifiedAt` on
+   * creation and on every file save where the watermark moved, so that field already
+   * means "content last arrived or was rebuilt". Reusing it would make an author's
+   * file save reset the host's claim-check deadline, and would make the
+   * never-witnessed state unreachable — every Surface is stamped at birth.
+   *
+   * Absent means NEVER WITNESSED, which is a real and renderable state: a Surface
+   * whose file was saved a moment ago but whose claims nobody has checked shows no
+   * witness age at all (R19).
+   */
+  witnessedAt?: number
+  /**
+   * What the host last observed for each claim, keyed by {@link SurfaceClaim.id}
+   * (R8/R9, plan U3).
+   *
+   * HOST-OWNED AND HERE RATHER THAN ON `SurfaceContent` (KTD2). The declaration is
+   * author meaning and sits in the source watermark basis; the observed value is a
+   * host write, and a host write inside that basis moves the watermark every time
+   * the host looks — a revision and a rebuild per Surface per sweep, forever.
+   * `slate-source.test.ts` pins that property from the authored side.
+   *
+   * An entry exists only once the host has actually looked. A declared claim with no
+   * entry is what "not seeded yet" IS, and it is what makes a claim due immediately
+   * rather than a full interval from now.
+   */
+  claimObservations?: Record<string, SurfaceClaimObservation>
 }
 
 /**
@@ -954,6 +984,49 @@ export interface SurfaceClaim {
   params?: Record<string, string | number | boolean>
   /** Which trigger kinds can invalidate it (R5). */
   locus: SurfaceClaimLocus
+}
+
+/** What a witness may report having seen (plan U2/U3). Narrow on purpose: a claim's
+ *  value is COMPARED FOR EQUALITY against a stored one and rendered on a card, so a
+ *  structured result would need a comparator and a renderer nobody has written.
+ *  `null` is a genuine absence reported by a lookup that COMPLETED (R7) — the only
+ *  absence allowed to match. Structurally identical to `WitnessValue` in
+ *  `src/server/surfaces/witness-registry.ts`, which is the server-side name for the
+ *  same thing; this one exists because the record is domain state and the domain may
+ *  not import the server. */
+export type SurfaceClaimValue = string | number | boolean | null
+
+/**
+ * The host's last observation of ONE claim (R8/R9, plan U3).
+ *
+ * EVERY FIELD HERE IS SEMANTIC, and that is a deliberate design constraint rather
+ * than an accident. Observation state lands inside the projected-slate comparison,
+ * and the store's storm guard is whole-record equality — so a field that moves every
+ * time the host LOOKS (rather than every time something CHANGES) would make each
+ * sweep a persist-and-SSE storm across every Surface. There is therefore no
+ * "when we last looked" field: {@link at} records when this observation last MOVED,
+ * and the fact that the host looked again and saw the same thing is recorded once,
+ * at the Surface level, as {@link SurfaceFreshness.witnessedAt}.
+ */
+export interface SurfaceClaimObservation {
+  /** What a COMPLETED lookup last returned. Absent while the claim has only ever
+   *  been unresolved — and an absent value never matches anything, which is what
+   *  stops a witness that has been broken since birth from agreeing with itself. */
+  value?: SurfaceClaimValue
+  /** Present when the LAST attempt did not produce a value (KTD8). Kept ALONGSIDE
+   *  `value` rather than replacing it: a fetch that failed says nothing about
+   *  whether the world moved, so erasing the last known value would turn a
+   *  transient outage into a fabricated change. */
+  problem?: {
+    /** `unresolved` — nobody could look. `failed` — the claim or the witness is
+     *  broken and somebody has to edit it. Neither ever counts as a match. */
+    status: 'unresolved' | 'failed'
+    /** One sentence, safe to render. */
+    detail: string
+  }
+  /** Epoch ms this observation last MOVED. See the note above on why this is not
+   *  "when the host last looked". */
+  at: number
 }
 
 /** A Surface's authored content — the part an authority may replace (KTD4). */

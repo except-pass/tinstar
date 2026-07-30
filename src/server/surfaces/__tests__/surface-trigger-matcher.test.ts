@@ -2,6 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import type { Surface, SurfaceRefreshDeclaration } from '../../../domain/types'
 import {
+  claimsObserveTriggerKind,
+  CLAIM_LOCUS_TRIGGER_KINDS,
   coalesceGeneration,
   deriveDueAt,
   effectiveDeclaration,
@@ -245,5 +247,43 @@ describe('deriveDueAt', () => {
       },
     })
     expect(deriveDueAt(s, effectiveDeclaration(s), 1_000)).toBe(1_000 + 20 * 60_000)
+  })
+})
+
+describe('claim loci and the trigger kinds they observe (plan U3/U5, R5)', () => {
+  const repo = { id: 'u3', witness: 'unit-landed', locus: 'repo' as const }
+  const infra = { id: 'up', witness: 'http-status', locus: 'infra' as const }
+
+  it('gives every locus `periodic`, because elapsed time invalidates any observation', () => {
+    // R14 says declaring claims earns a verification deadline REGARDLESS of which
+    // trigger kinds the loci imply. Leaving `periodic` off `infra` would leave an
+    // infra-only Surface with no trigger at all, and no way for a passing
+    // revalidation to answer the deadline that produced it.
+    for (const kinds of Object.values(CLAIM_LOCUS_TRIGGER_KINDS)) {
+      expect(kinds).toContain('periodic')
+    }
+  })
+
+  it('reaches a repo claim from a commit and an infra claim from nothing but time', () => {
+    expect(claimsObserveTriggerKind([repo], 'git-revision')).toBe(true)
+    expect(claimsObserveTriggerKind([infra], 'git-revision')).toBe(false)
+    expect(claimsObserveTriggerKind([repo, infra], 'git-revision')).toBe(true)
+    expect(claimsObserveTriggerKind([repo, infra], 'periodic')).toBe(true)
+  })
+
+  it('observes nothing a claim witness cannot speak to', () => {
+    // The narrowing that keeps a witness pass from clearing a stale reason it did
+    // not answer: a human pressing the button, or an agent publishing a signal, is
+    // not something a `git fetch` or an HTTP status can settle.
+    for (const kind of ['human-intent', 'semantic-signal', 'process-exit', 'session-lifecycle', 'source-content'] as const) {
+      expect(claimsObserveTriggerKind([repo, infra], kind)).toBe(false)
+    }
+  })
+
+  it('observes nothing at all for a Surface that declares no claims', () => {
+    // Both empty states, and absent. A Surface that claims nothing narrows nothing
+    // inbound and may clear nothing outbound.
+    expect(claimsObserveTriggerKind(undefined, 'periodic')).toBe(false)
+    expect(claimsObserveTriggerKind([], 'periodic')).toBe(false)
   })
 })
