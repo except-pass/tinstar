@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { scrubTmuxSessionEnv } from '../tmux'
+import { exactTmuxPaneTarget, exactTmuxSessionTarget, scrubTmuxSessionEnv } from '../tmux'
 import { guestEnv } from '../../guestEnv'
 
 const execFileAsync = promisify(execFile)
@@ -206,5 +206,32 @@ describe('guest env boundary (real tmux)', () => {
     const text = readFileSync(out, 'utf-8')
     expect(text).not.toMatch(/^NODE_ENV=/m)
     expect(text).toMatch(/^PATH=/m)
+  }, 60_000)
+})
+
+describe('exact target grammar (real tmux)', () => {
+  it.skipIf(!tmuxAvailable)('does not resolve a missing parent to its prefixed child', async () => {
+    const parent = 'target-parent'
+    const child = `${parent}-child`
+    const tmux = await startPollutedServer(child)
+
+    const bareLookup = await tmux('list-panes', '-t', parent, '-F', '#{session_name}')
+    expect(bareLookup.stdout.trim()).toBe(child)
+
+    await expect(tmux('has-session', '-t', exactTmuxSessionTarget(parent))).rejects.toThrow()
+    await expect(tmux('list-panes', '-t', exactTmuxPaneTarget(parent), '-F', '#{session_name}')).rejects.toThrow()
+    await expect(tmux('kill-session', '-t', exactTmuxSessionTarget(parent))).rejects.toThrow()
+    await expect(tmux('has-session', '-t', exactTmuxSessionTarget(child))).resolves.toBeDefined()
+  }, 60_000)
+
+  it.skipIf(!tmuxAvailable)('accepts exact pane targets for every lifecycle command form', async () => {
+    const session = 'target-live'
+    const tmux = await startPollutedServer(session)
+    const target = exactTmuxPaneTarget(session)
+
+    await expect(tmux('set', '-t', target, 'status', 'off')).resolves.toBeDefined()
+    await expect(tmux('capture-pane', '-t', target, '-p')).resolves.toBeDefined()
+    await expect(tmux('display-message', '-p', '-t', target, '#{pane_id}')).resolves.toBeDefined()
+    await expect(tmux('send-keys', '-t', target, 'C-l')).resolves.toBeDefined()
   }, 60_000)
 })

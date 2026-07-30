@@ -3,8 +3,8 @@ import { ttydPidsToReclaim, ttydPidsForSession, tmuxTargetFromArgs, orphanTtydPi
 
 describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
   it('parses the exact form startTtyd spawns', () => {
-    // `ttyd -W -p <port> -t titleFixed=Tinstar -t theme={…} bash -c "tmux attach -t <name>"`
-    const args = 'ttyd -W -p 8681 -t titleFixed=Tinstar -t theme={"background":"#000000"} bash -c tmux attach -t tinstar-foo'
+    // `ttyd -W -p <port> -t titleFixed=Tinstar -t theme={…} bash -c "tmux attach -t =<name>"`
+    const args = 'ttyd -W -p 8681 -t titleFixed=Tinstar -t theme={"background":"#000000"} bash -c tmux attach -t =tinstar-foo'
     expect(tmuxTargetFromArgs(args)).toBe('tinstar-foo')
   })
   it('does not mistake ttyd\'s own -t option flags for the session token', () => {
@@ -14,6 +14,9 @@ describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
   it('tolerates the attach-session alias and global flags (e.g. -L socket)', () => {
     expect(tmuxTargetFromArgs('bash -c tmux attach-session -t sess-a')).toBe('sess-a')
     expect(tmuxTargetFromArgs('bash -c tmux -L mysock attach -t sess-b')).toBe('sess-b')
+  })
+  it('preserves a raw canonical name that itself begins with equals', () => {
+    expect(tmuxTargetFromArgs('bash -c tmux attach -t ==sess-a')).toBe('=sess-a')
   })
   it('returns null when there is no tmux attach in the args', () => {
     expect(tmuxTargetFromArgs('ttyd -p 8681 bash -c htop')).toBeNull()

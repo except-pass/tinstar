@@ -19,14 +19,17 @@ import { createSession, getSession, updateSession, type Session, type SessionSta
 // tree per test: pane pid 100 → agent pid 200 → children controlled by
 // `hasChildren`. Callbacks fire synchronously so the whole chain completes
 // within the checkProcessTree call.
-const proc = vi.hoisted(() => ({ hasChildren: false, calls: 0 }))
+const proc = vi.hoisted(() => ({ hasChildren: false, calls: 0, tmuxArgs: [] as string[] }))
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
   return {
     ...actual,
     execFile: (cmd: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
       proc.calls++
-      if (cmd === 'tmux') return cb(null, '100\n', '')
+      if (cmd === 'tmux') {
+        proc.tmuxArgs = args
+        return cb(null, '100\n', '')
+      }
       if (cmd === 'pgrep' && args[1] === '100') return cb(null, '200\n', '')
       if (cmd === 'pgrep' && args[1] === '200') {
         return proc.hasChildren ? cb(null, '300\n', '') : cb(new Error('no children'), '', '')
@@ -82,6 +85,7 @@ beforeEach(() => {
   watcher = new StatusWatcher({ sessionsDir, onStatusChanged })
   proc.hasChildren = false
   proc.calls = 0
+  proc.tmuxArgs = []
 })
 
 afterEach(() => {
@@ -89,6 +93,13 @@ afterEach(() => {
 })
 
 describe('StatusWatcher blocked signal — override added', () => {
+  it('looks up the exact tmux session so a prefixed hand cannot keep a missing parent live', () => {
+    const session = makeSession('s0', 'idle')
+    internals(watcher).checkProcessTree(session)
+
+    expect(proc.tmuxArgs).toEqual(['list-panes', '-t', '=tinstar-s0:', '-F', '#{pane_pid}'])
+  })
+
   it('silent-failure path 1: block beginning while already idle notifies with blocked: true', () => {
     const session = makeSession('s1', 'idle')
     const w = internals(watcher)
