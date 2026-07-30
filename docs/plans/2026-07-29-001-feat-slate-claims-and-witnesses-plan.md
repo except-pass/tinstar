@@ -240,8 +240,8 @@ holds no lock.
   timeout. Outcomes are three-valued per KTD8.
 
   The unit-landed kind needs a link that does not exist today: merged squash commits carry the unit
-  tag and the PR number in the subject, but nothing names the plan document, and eighteen plan
-  documents each number units `U1..Un`. Add a `Plan: docs/plans/<file>#U<n>` commit trailer to the
+  tag and the PR number in the subject, but nothing names the plan document, and sixteen of the
+  twenty-two plan documents number their units `U1..Un`. Add a `Plan: docs/plans/<file>#U<n>` commit trailer to the
   contributing guide, and ship a small backfill map for the units already merged. The witness reads
   the trailer, falling back to the backfill map, and reports `unresolved` rather than "not landed"
   when it can resolve neither.
