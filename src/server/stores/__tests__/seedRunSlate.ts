@@ -16,7 +16,7 @@ import { SurfaceService } from '../../surfaces/surface-service'
 import { reconcileSlateEpoch } from '../../surfaces/source-reconciler'
 import { slateEntryWatermark, type SlateSourceEntry } from '../../surfaces/slate-source'
 import { resolveRunSurfaceContext } from '../../surfaces/run-context'
-import type { A2uiContent, PointAuthor, SurfacePrincipalRef } from '../../../domain/types'
+import type { A2uiContent, PointAuthor, SurfaceClaim, SurfacePrincipalRef } from '../../../domain/types'
 
 const WATCHER: SurfacePrincipalRef = { kind: 'job', id: 'slate-watcher' }
 
@@ -26,6 +26,10 @@ export interface SeedEntry {
   headline: string
   body?: A2uiContent
   recipe?: string
+  /** What the entry declares would prove it wrong (U1). Tri-state, exactly as the
+   *  file contract is: omit for "the author never said", pass `[]` for "the author
+   *  checked and found nothing witnessable". Both project `unwitnessed` (U7). */
+  claims?: SurfaceClaim[]
   author?: PointAuthor
   file?: string
 }
@@ -65,6 +69,9 @@ function toEntry(seed: SeedEntry): SlateSourceEntry {
     headline: seed.headline,
     ...(seed.body ? { body: seed.body } : {}),
     ...(seed.recipe ? { recipe: seed.recipe } : {}),
+    // Presence, not truthiness: `[]` is a declaration the author made and must reach
+    // the record as itself rather than collapsing into absent.
+    ...(seed.claims !== undefined ? { claims: seed.claims } : {}),
   }
   return {
     localId: seed.id,

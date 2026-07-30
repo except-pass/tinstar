@@ -572,6 +572,24 @@ export interface SlateSurface {
    *  queued / refreshing / failed / overdue without waiting for the recursive
    *  Canvas. Absent for a surface with no canonical record behind it. */
   freshness?: SurfaceFreshness
+  /**
+   * This surface declares nothing that could prove it wrong (R18, plan U7).
+   *
+   * DERIVED AT PROJECTION, NOT STORED (KTD1). Origin R12 says `unwitnessed` gates no
+   * controls and changes no scheduling, so it is a reading of
+   * {@link SurfaceContent.claims} rather than a sixth {@link SurfaceFreshnessPhase} —
+   * a sixth phase would touch every phase comparison in the freshness service and the
+   * refresh coordinator for a fact nothing there queries.
+   *
+   * BOTH EMPTY STATES PROJECT TRUE (KTD4). Absent claims (the author never said) and
+   * `claims: []` (the author checked and found nothing witnessable) differ only as an
+   * authoring signal; neither gives the host anything to check, so neither may render
+   * as verified.
+   *
+   * Set only when true, and never on the Objective — the user's own prose has no
+   * source to be checked against, exactly as {@link freshness} is withheld from it.
+   */
+  unwitnessed?: boolean
   createdAt: number
   amendedAt: number
 }

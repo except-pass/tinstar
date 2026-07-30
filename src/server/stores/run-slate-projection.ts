@@ -62,6 +62,25 @@ export function isObjectiveSurface(s: Surface, localId: string): boolean {
   return localId === OBJECTIVE_POINT_ID && s.contentAuthority === 'canonical-direct' && s.author === 'user'
 }
 
+/**
+ * Does this Surface declare nothing that could prove it wrong (R18, plan U7)?
+ *
+ * THE TRI-STATE COLLAPSES HERE AND ONLY HERE (KTD4). `claims` absent means the author
+ * never said; `claims: []` means the author checked and found nothing witnessable.
+ * The two are kept apart all the way through the file round trip because the egress
+ * adapter writes the field back into the author's own file — but they are the same
+ * fact to a reader, because neither leaves the host anything it could check.
+ *
+ * DERIVED, NEVER STORED (KTD1). Adding a sixth `SurfaceFreshnessPhase` for this would
+ * put a value into a union the service and the coordinator switch on exhaustively, to
+ * carry a fact neither of them asks about — R18 is explicit that `unwitnessed` gates
+ * no controls and changes no scheduling. The cost is that it is not a stored fact and
+ * so cannot be queried server-side; nothing wants to.
+ */
+export function isUnwitnessed(s: Surface): boolean {
+  return !s.content.claims || s.content.claims.length === 0
+}
+
 /** One canonical Surface as the client-facing `Run.slate` entry it aliases. */
 export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSurface {
   const objective = isObjectiveSurface(s, localId)
@@ -83,7 +102,14 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
     // The Objective is excluded: it is the user's own prose with no source to be
     // stale against, and an amber "unverified" on a goal the user just typed would
     // be nonsense.
-    ...(objective ? {} : { freshness: s.freshness }),
+    //
+    // `unwitnessed` rides in the SAME exclusion, and for the same reason (U7). It is
+    // true of the Objective — the user's goal declares no claims — but "nothing to
+    // check" printed under a sentence the user typed thirty seconds ago is the same
+    // nonsense one field over. Emitted only when true, so a witnessed surface adds no
+    // key: `Run.slate` is compared by `JSON.stringify` in the document store's storm
+    // guard, and every constant key costs bytes on every comparison of every run.
+    ...(objective ? {} : { freshness: s.freshness, ...(isUnwitnessed(s) ? { unwitnessed: true } : {}) }),
     createdAt: s.createdAt,
     amendedAt: s.amendedAt,
   }

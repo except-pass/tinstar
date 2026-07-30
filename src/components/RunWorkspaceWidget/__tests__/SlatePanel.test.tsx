@@ -1069,3 +1069,148 @@ describe('SlatePanel claim refusals', () => {
     expect(marker.getAttribute('title')).toContain('unit-lands')
   })
 })
+
+// The witness stamp on the CARD shell (plan U7, R18/R19) — expanded and collapsed.
+// The open-point row half lives in OpenPointsSurface.test.tsx, and is the half that
+// covers most real surfaces; both shells have to agree.
+describe('SlatePanel witness stamp', () => {
+  const NOW = 1_000_000_000_000
+  const HOUR = 60 * 60_000
+  const witnessed = (at: number) => ({ freshness: { phase: 'current' as const, overdue: false, witnessedAt: at } })
+
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+  })
+
+  // The panel owns its own clock (`useNow`) and takes no `now` prop, which is the
+  // whole point of the ticking test below — so a test that needs the age to be an
+  // exact string has to pin the system clock rather than inject one.
+  function atNow<T>(body: () => T): T {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      return body()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  // AE4, on the expanded card. `amendedAt` is four hours back and the witness is a
+  // minute back; the old wiring would print the four hours.
+  it('the expanded card reads the witness time, not the record\'s last-written time', () => {
+    atNow(() => {
+      render(
+        <SlatePanel
+          runId="run-1"
+          surfaces={[surface('s1', 'body', { amendedAt: NOW - 4 * HOUR, ...witnessed(NOW - 60_000) })]}
+        />,
+      )
+      const stamp = screen.getByTestId('surface-age')
+      expect(stamp.dataset.witness).toBe('witnessed')
+      expect(stamp.textContent).toBe('checked 1m ago')
+    })
+  })
+
+  it('the COLLAPSED card reads the same field — the third call site', () => {
+    atNow(() => {
+      render(
+        <SlatePanel
+          runId="run-1"
+          surfaces={[surface('s1', 'body', { headline: 'A surface', amendedAt: NOW - 4 * HOUR, ...witnessed(NOW - 60_000) })]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('minimize-surface-s1'))
+      expect(screen.getByTestId('slate-surface-s1').getAttribute('data-minimized')).toBe('true')
+      const stamp = screen.getByTestId('surface-age')
+      expect(stamp.dataset.witness).toBe('witnessed')
+      expect(stamp.textContent).toBe('checked 1m ago')
+    })
+  })
+
+  it('shows no age for a card saved a moment ago but never witnessed', () => {
+    atNow(() => {
+      render(
+        <SlatePanel
+          runId="run-1"
+          surfaces={[surface('s1', 'body', { amendedAt: NOW - 1_000, freshness: { phase: 'current', overdue: false } })]}
+        />,
+      )
+      const stamp = screen.getByTestId('surface-age')
+      expect(stamp.dataset.witness).toBe('never')
+      expect(stamp.textContent).not.toMatch(/ago|just now/)
+    })
+  })
+
+  it('a claimless card says so and keeps its controls', () => {
+    render(
+      <SlatePanel
+        runId="run-1"
+        surfaces={[surface('s1', 'body', { unwitnessed: true, freshness: { phase: 'current', overdue: false } })]}
+      />,
+    )
+    expect(screen.getByTestId('surface-age').dataset.witness).toBe('unwitnessed')
+    expect((screen.getByTestId('refresh-surface-s1') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByTestId('minimize-surface-s1')).toBeTruthy()
+    expect(screen.getByTestId('hide-surface-s1')).toBeTruthy()
+  })
+
+  it('shows an unresolved claim on the card, distinctly from a witnessed one', () => {
+    render(
+      <SlatePanel
+        runId="run-1"
+        surfaces={[
+          surface('ok', 'fine', witnessed(NOW - 60_000)),
+          surface('broken', 'also fine', {
+            freshness: {
+              phase: 'current', overdue: false, witnessedAt: NOW - 60_000,
+              claimObservations: { c1: { at: 1, problem: { status: 'unresolved', detail: 'could not reach the remote' } } },
+            },
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('claim-problems-broken').textContent).toContain('could not reach the remote')
+    expect(screen.queryByTestId('claim-problems-ok')).toBeNull()
+  })
+})
+
+// Scenario 8, and the reason the helper is pure while the interval is not.
+//
+// `SurfaceAge` takes `now` as a parameter, which is correct and testable — but a
+// component that only ever re-renders when the server sends something will sit on a
+// card nobody has touched and never cross its own stale horizon. The label freezes at
+// whatever it said when the panel last re-rendered, and a test that PINS `now` passes
+// happily the whole time. So the ticking clock lives here, in the caller, and this is
+// the test that would notice if `useNow()` were replaced by a captured `Date.now()`.
+describe('SlatePanel drives its own clock (the stamp advances with no new props)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+  })
+
+  it('advances the witness stamp on its own, with nothing arriving from the server', () => {
+    vi.useFakeTimers()
+    try {
+      const NOW = 1_000_000_000_000
+      vi.setSystemTime(NOW)
+      // No `now` prop: the panel must supply its own, and keep supplying a fresh one.
+      render(
+        <SlatePanel
+          runId="run-1"
+          surfaces={[surface('s1', 'body', {
+            amendedAt: NOW,
+            freshness: { phase: 'current', overdue: false, witnessedAt: NOW - 60_000 },
+          })]}
+        />,
+      )
+      expect(screen.getByTestId('surface-age').textContent).toBe('checked 1m ago')
+
+      // Two minutes of wall clock, zero re-renders from above.
+      act(() => { vi.advanceTimersByTime(2 * 60_000) })
+      expect(screen.getByTestId('surface-age').textContent).toBe('checked 3m ago')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
