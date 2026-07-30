@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { listSessions, setState, setConversationId, updateSession, type Session, type SessionState } from './session'
 import { readSessionStatusDetailAt, parseNewEntriesAt, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
+import { exactTmuxPaneTarget } from './backends/tmux'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
 import type { RecapEntry } from '../../types'
@@ -316,7 +317,7 @@ export class StatusWatcher {
       : `tinstar-${session.name}`
 
     // Get the PID of the process running in the tmux pane
-    execFile('tmux', ['list-panes', '-t', tmuxTarget, '-F', '#{pane_pid}'], (err, stdout) => {
+    execFile('tmux', ['list-panes', '-t', exactTmuxPaneTarget(tmuxTarget), '-F', '#{pane_pid}'], (err, stdout) => {
       if (err) {
         log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${err.message}`)
         this.idleStreak.delete(session.name)
