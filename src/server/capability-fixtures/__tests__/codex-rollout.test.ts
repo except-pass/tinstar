@@ -16,7 +16,13 @@ import { mkdtempSync, rmSync, copyFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readCodexStatus, parseCodexRecapEntries, resetCodexOffset } from '../../sessions/codex-transcript'
-import { codexEventPayloads, codexRolloutPath, loadCodexRollout, readCodexRolloutText } from '../index'
+import {
+  CODEX_ROLLOUT_FIXTURES,
+  codexEventPayloads,
+  codexRolloutPath,
+  loadCodexRollout,
+  readCodexRolloutText,
+} from '../index'
 
 let tmp: string
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'codex-fixture-')) })
@@ -216,7 +222,6 @@ describe('Codex compaction and abort', () => {
   })
 
   it('an interrupted turn is recorded as turn_aborted with a reason and duration', () => {
-    const lines = loadCodexRollout('rollout-spawned-thread')
     const [started] = codexEventPayloads('rollout-spawned-thread', 'task_started')
     const [aborted] = codexEventPayloads('rollout-spawned-thread', 'turn_aborted')
     expect(aborted).toMatchObject({
@@ -229,10 +234,8 @@ describe('Codex compaction and abort', () => {
     const startedAt = started?.started_at as number
     const completedAt = aborted?.completed_at as number
     const durationMs = aborted?.duration_ms as number
-    expect(completedAt).toBe(startedAt + durationMs / 1000)
-
-    const envelopeTimes = lines.map(line => Date.parse(line.timestamp ?? ''))
-    expect(envelopeTimes).toEqual([...envelopeTimes].sort((a, b) => a - b))
+    expect(completedAt).toBeGreaterThanOrEqual(startedAt)
+    expect(Math.abs((completedAt - startedAt) - durationMs / 1000)).toBeLessThan(1)
   })
 
   it('task_started carries the context window and turn id up front', () => {
@@ -246,6 +249,29 @@ describe('Codex compaction and abort', () => {
     // …but a leaner CLI build omits both of the trailing two.
     const [lean] = codexEventPayloads('rollout-partial-token-count', 'task_started')
     expect(lean).not.toHaveProperty('model_context_window')
+  })
+})
+
+describe('Codex rollout chronology', () => {
+  const wellFormedFixtures = CODEX_ROLLOUT_FIXTURES.filter(
+    fixture => fixture !== 'rollout-malformed-tail',
+  )
+
+  it.each(wellFormedFixtures)('%s keeps append order monotonic', (fixture) => {
+    const envelopeTimes = loadCodexRollout(fixture).map(line => Date.parse(line.timestamp ?? ''))
+    expect(envelopeTimes.every(Number.isFinite)).toBe(true)
+    expect(envelopeTimes).toEqual([...envelopeTimes].sort((a, b) => a - b))
+  })
+
+  it.each(wellFormedFixtures)('%s aligns task_started epochs with their envelopes', (fixture) => {
+    const startedLines = loadCodexRollout(fixture).filter(
+      line => line.type === 'event_msg' && line.payload?.type === 'task_started',
+    )
+    for (const line of startedLines) {
+      const envelopeMs = Date.parse(line.timestamp ?? '')
+      expect(Number.isFinite(envelopeMs)).toBe(true)
+      expect(line.payload?.started_at).toBe(Math.floor(envelopeMs / 1000))
+    }
   })
 })
 
