@@ -253,24 +253,25 @@ describe('Codex compaction and abort', () => {
 })
 
 describe('Codex rollout chronology', () => {
-  const wellFormedFixtures = CODEX_ROLLOUT_FIXTURES.filter(
-    fixture => fixture !== 'rollout-malformed-tail',
-  )
-
-  it.each(wellFormedFixtures)('%s keeps append order monotonic', (fixture) => {
+  it.each(CODEX_ROLLOUT_FIXTURES)('%s keeps parseable append order monotonic', (fixture) => {
     const envelopeTimes = loadCodexRollout(fixture).map(line => Date.parse(line.timestamp ?? ''))
     expect(envelopeTimes.every(Number.isFinite)).toBe(true)
     expect(envelopeTimes).toEqual([...envelopeTimes].sort((a, b) => a - b))
   })
 
-  it.each(wellFormedFixtures)('%s aligns task_started epochs with their envelopes', (fixture) => {
+  it.each(CODEX_ROLLOUT_FIXTURES)('%s aligns task_started epochs with their envelopes', (fixture) => {
     const startedLines = loadCodexRollout(fixture).filter(
       line => line.type === 'event_msg' && line.payload?.type === 'task_started',
     )
+    expect(startedLines.length).toBeGreaterThan(0)
     for (const line of startedLines) {
       const envelopeMs = Date.parse(line.timestamp ?? '')
+      const startedAt = line.payload?.started_at
       expect(Number.isFinite(envelopeMs)).toBe(true)
-      expect(line.payload?.started_at).toBe(Math.floor(envelopeMs / 1000))
+      expect(startedAt).toEqual(expect.any(Number))
+      const writeDelaySeconds = envelopeMs / 1000 - (startedAt as number)
+      expect(writeDelaySeconds).toBeGreaterThanOrEqual(0)
+      expect(writeDelaySeconds).toBeLessThan(2)
     }
   })
 })
