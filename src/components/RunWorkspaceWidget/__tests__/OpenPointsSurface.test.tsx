@@ -639,4 +639,56 @@ describe('OpenPointsSurface (U6)', () => {
       expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(true)
     })
   })
+  // --- Claim refusals (plan U6, R3) ----------------------------------------
+  //
+  // Every FILE-AUTHORED surface projects as an `open-point`, so this row is where a
+  // refused claim actually has to appear. A refusal rendered only on the card shell
+  // in SlatePanel would be unreachable for the surfaces that can produce one.
+  describe('a claim the host would not accept', () => {
+    const REFUSAL = 'claim "u1" (witness unit-lands): no such witness kind — this host implements unit-landed, http-status'
+
+    it('shows the refusal, naming the kind, beside the point\'s NEW content', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', {
+            headline: 'Roadmap — 3 of 8 landed',
+            freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL] },
+          })]}
+        />,
+      )
+      const note = screen.getByTestId('claim-refusals-p1')
+      expect(note.textContent).toContain('unit-lands')
+      expect(note.textContent).toMatch(/claim not accepted/i)
+      // KTD5: the claim is dropped, never the surface — so the newest headline is
+      // on screen, not the one from before the author's mistake.
+      expect(screen.getByText('Roadmap — 3 of 8 landed')).toBeTruthy()
+    })
+
+    it('counts them when more than one was refused', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', { freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL, 'claim "u2": params.plan must be a `docs/plans/<file>.md` path'] } })]}
+        />,
+      )
+      expect(screen.getByTestId('claim-refusals-p1').textContent).toMatch(/2 claims not accepted/i)
+    })
+
+    it('renders nothing for a surface with no refusals, and nothing on its siblings', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[
+            point('bad', { freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL] } }),
+            point('good', { freshness: { phase: 'current', overdue: false } }),
+            point('silent'),
+          ]}
+        />,
+      )
+      expect(screen.getByTestId('claim-refusals-bad')).toBeTruthy()
+      expect(screen.queryByTestId('claim-refusals-good')).toBeNull()
+      expect(screen.queryByTestId('claim-refusals-silent')).toBeNull()
+    })
+  })
 })

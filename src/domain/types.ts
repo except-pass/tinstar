@@ -952,6 +952,28 @@ export interface SurfaceFreshness {
    * Cleared by a successful rebuild barrier (`completeRefresh`) and by nothing else.
    */
   claimRebuild?: SurfaceClaimRebuild
+  /**
+   * Claims the host READ but would not accept, one sentence each (R3, plan U6).
+   *
+   * THE REFUSAL CHANNEL A FILE OTHERWISE HAS NONE OF. A claim that names a witness
+   * kind this host does not implement, or whose parameters do not fit the kind it
+   * names, is dropped so the Surface still projects (KTD5) — and without this field
+   * that drop is invisible: the card renders its new content and a mistyped claim
+   * looks exactly like a healthy one.
+   *
+   * HOST-OWNED, and here rather than on `SurfaceContent`, for KTD2's reason. The
+   * message is the host's verdict on an author's declaration, not part of the
+   * declaration, so it must sit outside the entry watermark basis — a verdict inside
+   * that basis would move the watermark, burn a revision, and queue a rebuild every
+   * time the host re-read the file.
+   *
+   * Present only while something is refused. Absent means every declared claim was
+   * accepted, which is why the clear path has to be explicit at every merge: an
+   * absent key is `JSON.stringify`'s answer for both "no refusals" and "field never
+   * sent", and a client that spread-merges would keep a fixed refusal on screen
+   * forever (see docs/solutions/integration-issues/sse-delta-drops-undefined-keys-*).
+   */
+  claimRefusals?: string[]
 }
 
 /**

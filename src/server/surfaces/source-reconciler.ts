@@ -77,7 +77,16 @@ export interface SlateSourceEpochOutcome {
    *  wins; the rest are refused. Reported so the drop is observable rather than a
    *  surface that silently never appears. */
   duplicates: string[]
-  /** Anything the mutation service refused, with its reason. */
+  /**
+   * Anything the MUTATION SERVICE refused, with its reason.
+   *
+   * NOT the channel a refused CLAIM travels on, and the difference has bitten a
+   * reader of the plan already. Every entry here comes from a `!result.ok` branch —
+   * `ensureRunRoot`, `observeSource`, `markSourceMissing` — and it means the record
+   * was not written. A claim-refused entry projects SUCCESSFULLY under KTD5, so it
+   * never takes one of those branches. Its refusal rides on the entry, through
+   * `observeSource`, onto the record's host-owned `freshness.claimRefusals` (U6).
+   */
   refusals: { localId: string; reason: string }[]
 }
 
@@ -180,6 +189,10 @@ export async function reconcileSlateEpoch(
       author: entry.author,
       content: entry.content,
       watermark: entry.watermark,
+      // Passed ALWAYS, including as an empty list, because this is the clear path
+      // too: an entry whose claims now parse cleanly has to take the old refusal off
+      // its card, and a field only sent when non-empty could never say so (plan U6).
+      claimRefusals: entry.claimRefusals ?? [],
       ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
     }, { ...ctx, at })
 

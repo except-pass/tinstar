@@ -13,6 +13,7 @@ import {
   MIN_INTERVAL_MS,
   normalizeTrigger,
   parseRefreshDeclaration,
+  parseSurfaceClaims,
   triggerDedupeKey,
   type SurfaceTriggerEvent,
 } from '../surface-trigger-matcher'
@@ -82,6 +83,83 @@ describe('parseRefreshDeclaration', () => {
     })
     expect(d?.sources).toEqual(['a', 'b'])
     expect(d?.signals).toEqual(['deploy-finished'])
+  })
+})
+
+// The parser's refusal channel (plan U1/U6, R1/R3). U2 shipped `validateClaim`
+// unwired on purpose — a claim dropped with nowhere to report it would delete a
+// mistyped witness kind out of the author's file on the next write-back, in silence
+// — so the registry gate and the refusals it produces arrive in the same unit.
+describe('parseSurfaceClaims and what it will not accept', () => {
+  const good = { id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }
+
+  it('says nothing about an absent declaration and nothing about a clean one', () => {
+    expect(parseSurfaceClaims(undefined)).toEqual({ refusals: [] })
+    expect(parseSurfaceClaims(null)).toEqual({ refusals: [] })
+    // `[]` is the author having checked and found nothing witnessable — a VALUE, and
+    // not a refusal of anything.
+    expect(parseSurfaceClaims([])).toEqual({ claims: [], refusals: [] })
+    expect(parseSurfaceClaims([good])).toEqual({ claims: [good], refusals: [] })
+  })
+
+  it('refuses a witness kind this host does not implement, and NAMES it', () => {
+    const out = parseSurfaceClaims([{ ...good, witness: 'unit-lands' }])
+    // The surface keeps projecting with the claim gone (KTD5) — the list is empty,
+    // not absent, and the record is never withheld.
+    expect(out.claims).toEqual([])
+    expect(out.refusals).toHaveLength(1)
+    expect(out.refusals[0]).toMatch(/unit-lands/)
+    expect(out.refusals[0]).toMatch(/no such witness kind — this host implements unit-landed, http-status/)
+  })
+
+  it('refuses parameters that do not fit the kind they name', () => {
+    const noPlan = parseSurfaceClaims([{ id: 'u1', witness: 'unit-landed', locus: 'repo', params: { unit: 'U1' } }])
+    expect(noPlan.claims).toEqual([])
+    expect(noPlan.refusals[0]).toMatch(/params\.plan must be a `docs\/plans\/<file>\.md` path/)
+
+    // A kind observing the wrong locus is the same class of mistake: the claim is
+    // well-formed and still cannot be checked by the kind it names.
+    const wrongLocus = parseSurfaceClaims([{ ...good, locus: 'infra' }])
+    expect(wrongLocus.claims).toEqual([])
+    expect(wrongLocus.refusals[0]).toMatch(/this kind observes repo, not infra/)
+
+    // And a hostile URL scheme, which is the check that keeps `http-status` off the
+    // local filesystem.
+    const badUrl = parseSurfaceClaims([{ id: 'up', witness: 'http-status', locus: 'infra', params: { url: 'file:///etc/passwd' } }])
+    expect(badUrl.claims).toEqual([])
+    expect(badUrl.refusals[0]).toMatch(/must be http or https/)
+  })
+
+  it('refuses one claim and keeps its siblings — the drop costs the claim, not the list', () => {
+    const infra = { id: 'up', witness: 'http-status', params: { url: 'https://example.test/' }, locus: 'infra' }
+    const out = parseSurfaceClaims([good, { ...good, id: 'u2', witness: 'nope' }, infra])
+    expect(out.claims).toEqual([good, infra])
+    expect(out.refusals).toHaveLength(1)
+  })
+
+  it('reports the drops that used to be silent: a duplicate id, a whole oversized list, a non-array', () => {
+    const dup = parseSurfaceClaims([good, { ...good, params: { plan: 'docs/plans/y.md', unit: 'U2' } }])
+    expect(dup.claims).toEqual([good])
+    expect(dup.refusals[0]).toMatch(/declared more than once/)
+
+    const many = Array.from({ length: 33 }, (_, i) => ({ ...good, id: `c${i}` }))
+    const over = parseSurfaceClaims(many)
+    // Refused WHOLE, never truncated — and now it says so.
+    expect(over.claims).toBeUndefined()
+    expect(over.refusals[0]).toMatch(/more than 32 claims/)
+
+    const wrongShape = parseSurfaceClaims('claims go here')
+    expect(wrongShape.claims).toBeUndefined()
+    expect(wrongShape.refusals[0]).toMatch(/must be an array/)
+  })
+
+  it('does not rewrite a claim the registry normalizes at run time', () => {
+    // `unit-landed`'s schema fills in a default ref and splits it into remote and
+    // branch. That normalization is for the RUNNER; letting it leak back into the
+    // parsed claim would rewrite the author's file with parameters they never wrote.
+    const out = parseSurfaceClaims([good])
+    expect(out.claims![0]).toEqual(good)
+    expect(out.claims![0]!.params).not.toHaveProperty('ref')
   })
 })
 

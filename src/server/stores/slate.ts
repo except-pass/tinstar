@@ -48,10 +48,15 @@ export interface PointInput {
    *  Rides the same file→store→bridge path as `refresh`. */
   refreshPolicy?: SurfaceRefreshDeclaration
   /** File-owned claims (plan U1/R1): what this surface says would prove it wrong.
-   *  Parsed through `parseSurfaceClaims`, which drops a malformed claim and refuses
-   *  an oversized list whole. THREE-STATE — absent and `[]` are different answers
-   *  and both reach the canonical record, so this is read with `!== undefined`
-   *  rather than truthiness everywhere it is carried. */
+   *  Parsed through `parseSurfaceClaims`, which drops a malformed claim (or one
+   *  naming a witness kind this host does not implement, U6) and refuses an
+   *  oversized list whole. THREE-STATE — absent and `[]` are different answers and
+   *  both reach the canonical record, so this is read with `!== undefined` rather
+   *  than truthiness everywhere it is carried.
+   *
+   *  ONLY THE ACCEPTED CLAIMS. What the parser refused is host knowledge and does
+   *  not belong on a type documented as "the file-owned subset of a Point"; it rides
+   *  the source entry instead, onto `SurfaceFreshness.claimRefusals`. */
   claims?: SurfaceClaim[]
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number

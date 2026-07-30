@@ -1019,3 +1019,53 @@ describe('SlatePanel — clean the slate', () => {
     expect(screen.getByTestId('slate-clean-confirm')).toBeTruthy()
   })
 })
+
+// A claim the host would not accept, on the CARD shell (plan U6, R3). The row half
+// of this lives in OpenPointsSurface.test.tsx — a file-authored surface projects as
+// an open-point, and both shells have to be able to say it.
+describe('SlatePanel claim refusals', () => {
+  const REFUSAL = 'claim "u1" (witness unit-lands): no such witness kind — this host implements unit-landed, http-status'
+  const refused = (over: string[] = [REFUSAL]) => ({
+    freshness: { phase: 'current' as const, overdue: false, claimRefusals: over },
+  })
+
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+  })
+
+  it('renders the refusal beside the surface\'s NEW body, naming the kind', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'Roadmap — 3 of 8 landed', refused())]} />)
+
+    expect(screen.getByTestId('claim-refusals-s1').textContent).toContain('unit-lands')
+    // KTD5 in one assertion: the bad claim is gone, the surface is not, and what it
+    // shows is the content the author just wrote — never the content from before.
+    expect(screen.getByText('Roadmap — 3 of 8 landed')).toBeTruthy()
+  })
+
+  it('says nothing at all for a surface whose claims were all accepted', () => {
+    render(
+      <SlatePanel
+        runId="run-1"
+        surfaces={[
+          surface('bad', 'bad body', refused()),
+          surface('good', 'good body', { freshness: { phase: 'current', overdue: false } }),
+          surface('silent', 'silent body'),
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('claim-refusals-bad')).toBeTruthy()
+    expect(screen.queryByTestId('claim-refusals-good')).toBeNull()
+    expect(screen.queryByTestId('claim-refusals-silent')).toBeNull()
+  })
+
+  it('keeps a marker on the collapsed card, so minimizing does not hide the mistake', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'the body', { headline: 'A surface', ...refused() })]} />)
+    fireEvent.click(screen.getByTestId('minimize-surface-s1'))
+
+    // The prose goes with the body; the flag and the sentence on its hover stay.
+    expect(screen.queryByTestId('claim-refusals-s1')).toBeNull()
+    const marker = screen.getByTestId('claim-refusals-marker-s1')
+    expect(marker.getAttribute('title')).toContain('unit-lands')
+  })
+})

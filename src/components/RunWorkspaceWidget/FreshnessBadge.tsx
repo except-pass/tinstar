@@ -100,3 +100,39 @@ export function FreshnessBadge({ freshness, className }: {
     </span>
   )
 }
+
+/**
+ * A claim the host read and would not accept (plan U6, R3).
+ *
+ * WHY THIS IS PROSE AND NOT A PILL. Every other signal on a Slate card is a state
+ * the host can fix on its own — a queued job runs, a stale surface refreshes. This
+ * one cannot: a mistyped witness kind stays mistyped until a person edits the file,
+ * and the only useful thing to render is the sentence that names it. A glyph would
+ * say "something is wrong here" to the one audience that already knows.
+ *
+ * Amber rather than rose. The surface is FINE — it is showing its newest content,
+ * with the bad claim simply absent (KTD5). What is broken is one statement it tried
+ * to make about the world, and rose is reserved for a refresh that actually failed.
+ */
+export function ClaimRefusalNote({ id, freshness }: {
+  id: string
+  freshness?: SurfaceFreshness
+}) {
+  const refusals = freshness?.claimRefusals
+  if (!refusals || refusals.length === 0) return null
+  return (
+    <div
+      data-testid={`claim-refusals-${id}`}
+      className="mt-2 rounded-sm border border-amber-400/25 bg-amber-400/5 px-2 py-1.5 font-sans text-[11px] leading-snug text-amber-200/90"
+    >
+      <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-amber-400/80">
+        {refusals.length === 1 ? 'claim not accepted' : `${refusals.length} claims not accepted`}
+      </div>
+      <ul className="mt-0.5 list-none">
+        {refusals.map((why) => (
+          <li key={why} className="text-ink-mid">{why}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}

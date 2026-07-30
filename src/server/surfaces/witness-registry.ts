@@ -397,9 +397,15 @@ export function witnessKinds(): readonly string[] {
  * PURE, and that is what lets `surface-trigger-matcher.ts` import it. Nothing here
  * spawns, fetches, reads a clock, or touches a filesystem.
  *
- * NOT called from `parseSurfaceClaim`, deliberately — see the note there. The layer
- * that OWNS a refusal channel calls this: U6 for the visible refusal on the card,
- * and {@link runWitness} below, which will not run a claim it would have refused.
+ * CALLED FROM `parseSurfaceClaim` as of U6, which is the unit that opened the
+ * refusal channel this check needs. U2 shipped it deliberately unwired: validating
+ * without somewhere to report the verdict would have made a mistyped witness kind
+ * delete itself out of the author's file on the next write-back, in silence. Both
+ * doors now get it from the parser — the HTTP door refuses the request, the file
+ * door drops the claim and puts the message on the card (KTD5).
+ *
+ * {@link runWitness} below calls it too, and still should: a record persisted before
+ * the parser gained this check can hold a claim no schema would accept today.
  */
 export function validateClaim(claim: SurfaceClaim): string | null {
   const where = `claim ${JSON.stringify(claim.id)} (witness ${claim.witness})`

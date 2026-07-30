@@ -44,7 +44,7 @@ import { SlateCleanButton } from './SlateCleanButton'
 import { SurfaceDegradedBanner } from './SurfaceDegradedBanner'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
-import { FreshnessBadge } from './FreshnessBadge'
+import { ClaimRefusalNote, FreshnessBadge } from './FreshnessBadge'
 import { useNow } from '../../hooks/useNow'
 import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
 import { surfaceHaystack } from './slateSearch'
@@ -783,6 +783,20 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                       ⚠
                     </span>
                   )}
+                  {/* Same argument as the ⚠ above, one field over: a collapsed card
+                      still has to say that one of its claims was refused, or
+                      minimizing a surface hides the only trace of the mistake. The
+                      sentences themselves are on the hover — a collapsed row has no
+                      space for prose, and expanding is one click. */}
+                  {(surface.freshness?.claimRefusals?.length ?? 0) > 0 && (
+                    <span
+                      data-testid={`claim-refusals-marker-${surface.id}`}
+                      title={surface.freshness!.claimRefusals!.join(' ')}
+                      className="shrink-0 text-[10px] leading-none text-amber-400/90"
+                    >
+                      ⚑
+                    </span>
+                  )}
                   <span
                     data-testid={`slate-minimized-title-${surface.id}`}
                     className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-ink-mid"
@@ -820,6 +834,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   <A2uiRenderer content={surface.body} />
                 </A2uiErrorBoundary>
               )}
+              {/* A claim this surface DECLARED that the host would not accept (U6).
+                  Above the footer, because it is about the content just rendered
+                  rather than about how fresh it is — and the content IS the new one:
+                  a refused claim costs that claim, never the surface (KTD5). */}
+              <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />
               {note}
               {footer}
             </div>

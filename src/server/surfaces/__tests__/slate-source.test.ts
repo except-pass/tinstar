@@ -96,7 +96,7 @@ describe('watermarks', () => {
   // wrong — so editing one has to move the evidence, or the reconciler sees an
   // unchanged watermark, commits nothing, and keeps checking the old statement.
   it('moves when a claim declaration is edited, in every part of it', () => {
-    const claim = { id: 'u1', witness: 'unit-landed', params: { unit: 'U1' }, locus: 'repo' } as const
+    const claim = { id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' } as const
     const base = slateEntryWatermark({ headline: 'h', claims: [claim], author: 'agent' })
 
     expect(slateEntryWatermark({ headline: 'h', claims: [{ ...claim, id: 'u2' }], author: 'agent' })).not.toBe(base)
@@ -123,7 +123,7 @@ describe('watermarks', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slate-src-'))
     const slate = join(dir, '.tinstar', 'slate')
     mkdirSync(slate, { recursive: true })
-    const claims = [{ id: 'u1', witness: 'unit-landed', params: { unit: 'U1' }, locus: 'repo' }]
+    const claims = [{ id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }]
     writeFileSync(join(slate, 'a.json'), JSON.stringify([{ id: 'r', headline: 'Roadmap', claims }]))
     const before = (await readEntries(dir))[0]!.watermark
 
@@ -208,6 +208,62 @@ describe('claims across a full file round trip (U1)', () => {
     for (const [i, entry] of reread.entries()) {
       expect(docStore.getSurface(`sf-${i + 1}`)!.source!.watermark).toBe(entry.watermark)
     }
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('a refused claim across a full file round trip (U6)', () => {
+  it('drops the claim from the record, keeps it in the author\'s file, and moves no evidence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slate-src-'))
+    const slate = join(dir, '.tinstar', 'slate')
+    mkdirSync(slate, { recursive: true })
+    const bad = { id: 'u1', witness: 'unit-lands', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }
+    const good = { id: 'up', witness: 'http-status', params: { url: 'https://example.test/' }, locus: 'infra' as const }
+    writeFileSync(join(slate, 'a.json'), JSON.stringify([{ id: 'road', headline: 'Roadmap', claims: [bad, good] }], null, 2))
+
+    // READ — the bad claim is gone from the entry and named in its refusals.
+    const entry = (await readEntries(dir))[0]!
+    expect(entry.content.claims).toEqual([good])
+    expect(entry.claimRefusals).toHaveLength(1)
+    expect(entry.claimRefusals![0]).toMatch(/unit-lands/)
+    // The refusal is host knowledge, so it is not evidence the author changed
+    // anything: the same file with the bad claim absent hashes the same way.
+    expect(entry.watermark).toBe(slateEntryWatermark({ headline: 'Roadmap', claims: [good], author: 'agent' }))
+
+    const docStore = new DocumentStore()
+    const svc = new SurfaceService(docStore, {
+      newId: () => 'sf-1',
+      sourceAdapters: { [SLATE_FILE_ADAPTER]: new SlateFileAdapter() },
+    })
+    expect(unwrapOk(await svc.create({
+      spaceId: 'spc-a',
+      home: { kind: 'canvas', spaceId: 'spc-a' },
+      content: entry.content,
+      contentAuthority: 'source-binding',
+      source: {
+        adapter: SLATE_FILE_ADAPTER,
+        locator: slateFileLocator('a.json', 'road'),
+        worktree: dir,
+        watermark: entry.watermark,
+      },
+    }, ctx()))).toBe(true)
+
+    // WRITE — an API edit carries the record's claims back into the file. The
+    // record never held the refused claim, so a plain write-back would delete it
+    // from the author's own file and the refusal would vanish with it.
+    expect(unwrapOk(await svc.updateContent(
+      'sf-1', { headline: 'Roadmap — edited', expectedRev: 1, expectedWatermark: entry.watermark }, ctx(2_000),
+    ))).toBe(true)
+
+    const written = (JSON.parse(readFileSync(join(slate, 'a.json'), 'utf8')) as Record<string, unknown>[])[0]!
+    expect(written.claims).toEqual([good, bad])
+
+    // RE-READ — the refusal is still derivable, and the watermark the egress side
+    // persisted is the one the ingress side computes from what it wrote.
+    const reread = (await readEntries(dir))[0]!
+    expect(reread.content.claims).toEqual([good])
+    expect(reread.claimRefusals).toHaveLength(1)
+    expect(docStore.getSurface('sf-1')!.source!.watermark).toBe(reread.watermark)
     rmSync(dir, { recursive: true, force: true })
   })
 })
@@ -341,7 +397,7 @@ describe('registered on the service', () => {
       content: { root: 'r', components: [{ component: 'Text', id: 'r', text: 'hi' }] },
       refresh: 'Re-derive it.',
       refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] },
-      claims: [{ id: 'u1', witness: 'unit-landed', params: { unit: 'U1' }, locus: 'repo' }],
+      claims: [{ id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }],
     }]))
     const entry = (await readEntries(dir))[0]!
 
@@ -389,7 +445,7 @@ describe('registered on the service', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slate-src-'))
     const slate = join(dir, '.tinstar', 'slate')
     mkdirSync(slate, { recursive: true })
-    const claims = [{ id: 'u1', witness: 'unit-landed', params: { unit: 'U1' }, locus: 'repo' }]
+    const claims = [{ id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }]
     writeFileSync(join(slate, 'a.json'), JSON.stringify([{
       id: 'road', headline: 'Roadmap', refresh: 'Re-derive the roadmap.', claims,
     }]))

@@ -25,7 +25,7 @@ import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
-import { FreshnessBadge } from './FreshnessBadge'
+import { ClaimRefusalNote, FreshnessBadge } from './FreshnessBadge'
 import { moveItem } from './reorderUtil'
 import { usePointAnswerForm } from './usePointAnswerForm'
 import { WorkbenchSurface, partitionWorkbenches } from './WorkbenchSurface'
@@ -411,6 +411,12 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             </div>
           )}
 
+          {/* A claim this row DECLARED and the host would not accept (U6). Below the
+              body rather than beside the pills: it is a sentence about the file, not
+              a state of the point, and every file-authored surface projects as an
+              open-point — so a refusal that only rendered on the card shell below
+              would never be seen at all. */}
+          <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />
           {unreachable && (
             <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 font-sans text-[11px] leading-snug text-ink-low">
               Sent — but that session isn’t reachable right now.

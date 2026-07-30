@@ -24,6 +24,17 @@ import type {
   SurfaceStaleReason,
   SurfaceTriggerKind,
 } from '../../domain/types'
+// The registry is a PURE lookup — it spawns nothing, fetches nothing, and reads no
+// clock — which is what lets this module import it without stopping being pure
+// itself. U2 shipped `validateClaim` deliberately unwired for one release: a claim
+// dropped here with no refusal channel would delete a mistyped witness kind out of
+// the author's own file on the next write-back, silently. U6 opens that channel, so
+// the check belongs in the parser now — and it has to be IN THE PARSER rather than
+// at either door, because the egress adapter recomputes the entry watermark through
+// this same function. A door that validated on its own would hash a different claims
+// list than the file door does, and every API edit of a source-bound Surface would
+// be refused as stale forever.
+import { validateClaim } from './witness-registry'
 
 /** Every kind the host implements. The parser accepts nothing outside it. */
 export const TRIGGER_KINDS: readonly SurfaceTriggerKind[] = [
@@ -285,11 +296,10 @@ export function parseRefreshDeclaration(raw: unknown): SurfaceRefreshDeclaration
  * posture every other content field on that endpoint already has. One parser, two
  * dispositions, so the two doors cannot drift on what a VALID claim is.
  *
- * `witness` is checked for shape only. The registry that decides whether a kind
- * exists, and whether these parameters fit it, is U2's — and it is deliberately not
- * imported here, so this module stays pure and a claim naming a not-yet-shipped kind
- * still survives a file round trip instead of being rewritten out of the author's
- * file by the host.
+ * SHAPE FIRST, THEN THE REGISTRY. The shape checks below run before
+ * {@link validateClaim} so a claim missing an id is told it has no id rather than
+ * being reported against a witness kind it never got to name. The registry check is
+ * last and is the only one that knows which kinds exist (U2/U6, R2/R3).
  */
 export function parseSurfaceClaim(raw: unknown): SurfaceClaim | string {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'a claim must be an object'
@@ -313,7 +323,17 @@ export function parseSurfaceClaim(raw: unknown): SurfaceClaim | string {
   const params = parseClaimParams(r.params)
   if (typeof params === 'string') return `claim ${JSON.stringify(id)}: ${params}`
 
-  return { id, witness, ...(params ? { params } : {}), locus }
+  const claim: SurfaceClaim = { id, witness, ...(params ? { params } : {}), locus }
+  // The closed-vocabulary gate. `validateClaim` reports the kind by name and lists
+  // the kinds this host does implement, which is the whole difference between a
+  // refusal an author can act on and a card that quietly never gets witnessed.
+  // It NEVER rewrites the claim — a kind whose schema normalizes its parameters
+  // (`unit-landed` fills in a default ref) does that at run time, on a copy, so what
+  // the author wrote is what round-trips back into their file.
+  const refused = validateClaim(claim)
+  if (refused) return refused
+
+  return claim
 }
 
 /** A claim's parameters, or a refusal message. `undefined` means the claim declared
@@ -350,8 +370,19 @@ function parseClaimParams(raw: unknown): Record<string, string | number | boolea
   return out
 }
 
+/** What the file door made of an author's `claims` declaration: what it accepted,
+ *  and what it would not accept and why. */
+export interface ParsedSurfaceClaims {
+  /** The surviving declaration, or `undefined` when the author declared none (or
+   *  declared a list the host refused whole). THREE-STATE — see below. */
+  claims?: SurfaceClaim[]
+  /** One sentence per refusal, in declaration order. Empty when nothing was
+   *  refused; never `undefined`, so a caller cannot forget to look. */
+  refusals: string[]
+}
+
 /**
- * Parse an author's `claims` declaration out of an untrusted file (R1, plan U1).
+ * Parse an author's `claims` declaration out of an untrusted file (R1, plan U1/U6).
  *
  * THREE-STATE, and the empty array survives. Absent means the author never said;
  * `[]` means the author checked and found nothing witnessable. They schedule and
@@ -361,27 +392,41 @@ function parseClaimParams(raw: unknown): Record<string, string | number | boolea
  *
  * DROPS rather than refuses, per claim, the same posture `parseRefreshDeclaration`
  * takes with an unknown trigger name: a mistyped witness kind costs that claim, not
- * the Surface. U6 gives the dropped claim a visible refusal on the card; until then
- * it is silent, which is exactly why U6 exists.
+ * the Surface (KTD5). WHAT MAKES THAT HONEST IS THE SECOND RETURN VALUE. A file has
+ * no error channel of its own, so every drop here is otherwise a card that renders
+ * its new content and simply never gets witnessed — indistinguishable from a healthy
+ * one. U6 carries `refusals` onto the record's host-owned freshness and onto the
+ * card. Returned together, rather than as a second function over the same input, so
+ * a caller cannot take the claims and leave the refusals behind.
  *
  * A list OVER THE CAP is refused WHOLE. Truncating to the cap would leave a Surface
  * declaring fewer claims than its author wrote, and a Surface reporting `witnessed`
  * against a prefix of its own declaration is a worse lie than one reporting
  * `unwitnessed` — which is what an absent list gets it.
  */
-export function parseSurfaceClaims(raw: unknown): SurfaceClaim[] | undefined {
-  if (!Array.isArray(raw)) return undefined
-  if (raw.length > MAX_SURFACE_CLAIMS) return undefined
+export function parseSurfaceClaims(raw: unknown): ParsedSurfaceClaims {
+  // Absent is the author never having said, and silence about silence is right.
+  if (raw === undefined || raw === null) return { refusals: [] }
+  if (!Array.isArray(raw)) {
+    return { refusals: ['claims must be an array of claim objects — the whole declaration was ignored'] }
+  }
+  if (raw.length > MAX_SURFACE_CLAIMS) {
+    return { refusals: [`claims declares more than ${MAX_SURFACE_CLAIMS} claims — the whole list was refused rather than truncated`] }
+  }
   const out: SurfaceClaim[] = []
+  const refusals: string[] = []
   for (const entry of raw) {
     const claim = parseSurfaceClaim(entry)
-    if (typeof claim === 'string') continue
+    if (typeof claim === 'string') { refusals.push(claim); continue }
     // First occurrence wins, matching the epoch's duplicate-entry-id rule. Two
     // claims under one id would make a component's reference ambiguous.
-    if (out.some(c => c.id === claim.id)) continue
+    if (out.some(c => c.id === claim.id)) {
+      refusals.push(`claim ${JSON.stringify(claim.id)} is declared more than once — the first one wins`)
+      continue
+    }
     out.push(claim)
   }
-  return out
+  return { claims: out, refusals }
 }
 
 /**

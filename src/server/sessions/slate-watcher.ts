@@ -153,7 +153,9 @@ function emptyRead(): SlateDirRead {
  * Surface. They still ride the id hash, because changing what an entry hashes to
  * would re-identify every existing id-less surface exactly once, for nothing.
  */
-function toSourceEntry(runId: string, file: string, input: PointInput): SlateSourceEntry {
+function toSourceEntry(
+  runId: string, file: string, input: PointInput, claimRefusals: string[] = [],
+): SlateSourceEntry {
   const author: PointAuthor = input.author ?? 'agent'
   const content = {
     headline: input.headline,
@@ -171,7 +173,26 @@ function toSourceEntry(runId: string, file: string, input: PointInput): SlateSou
     author,
     ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
     watermark: slateEntryWatermark({ ...content, author }),
+    // AFTER the watermark, and not inside it: what the host refused is host
+    // knowledge about the author's declaration, so it may not be evidence that the
+    // author changed anything. `slate-source.test.ts` pins that from the other side.
+    ...(claimRefusals.length > 0 ? { claimRefusals } : {}),
   }
+}
+
+/**
+ * What the claims parser refused on ONE raw file entry (plan U6, R3).
+ *
+ * Parsed a second time rather than threaded out of {@link toPointInput}, because
+ * `PointInput` is documented as "the file-owned subset of a Point" and a refusal is
+ * the opposite of file-owned — putting it there would carry the host's verdict down
+ * the legacy projection path as if the author had written it. The parse is pure and
+ * bounded by the claims cap, and both calls run the SAME function on the SAME value,
+ * so the two halves cannot disagree about which claims survived.
+ */
+function claimRefusalsOf(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  return parseSurfaceClaims((raw as Record<string, unknown>).claims).refusals
 }
 
 const DEFAULT_INTERVAL_MS = 3000
@@ -577,7 +598,11 @@ export class SlateWatcher {
         }
         const input = toPointInput(rawEntry, this.parseContent)
         if (input === null) { unusable(name); continue } // schema-invalid entry — drop it
-        entries.push(toSourceEntry(runId, name, input))
+        // NOT `unusable`: a refused claim costs that claim and never the surface
+        // (KTD5), so the entry projects its NEW content and carries the refusal with
+        // it. Marking the file unreadable here would retain the surface's PRIOR
+        // content instead — the exact conflation KTD5 warns about.
+        entries.push(toSourceEntry(runId, name, input, claimRefusalsOf(rawEntry)))
       }
     }
 
@@ -659,7 +684,9 @@ export function toPointInput(
   // unparseable claim costs that claim, an oversized list costs the whole list, and
   // neither costs the surface. `!== undefined` rather than truthiness — `[]` is a
   // three-state value here, not an empty one (see `parseSurfaceClaims`).
-  const claims = parseSurfaceClaims(r.claims)
+  // The refusals half is read by `claimRefusalsOf` at the call site, where the
+  // filename and the entry id are in hand; see the note there.
+  const { claims } = parseSurfaceClaims(r.claims)
   if (claims !== undefined) out.claims = claims
 
   // File-owned workbench set id (S4): points sharing a non-empty `group` render

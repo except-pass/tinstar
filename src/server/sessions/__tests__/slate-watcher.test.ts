@@ -467,7 +467,7 @@ describe('SlateWatcher', () => {
   })
 
   it('clears claims when a later write of the file omits them', async () => {
-    const claims = [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }]
+    const claims = [{ id: 'u1', witness: 'unit-landed', locus: 'repo', params: { plan: 'docs/plans/x.md', unit: 'U1' } }]
     writeSurfaces(harness.slateDir, 'a.json', [{ id: 'roadmap', headline: 'Roadmap', claims }])
     await harness.watcher.pollOnce()
     expect(harness.last().entries[0]!.content.claims).toHaveLength(1)
@@ -516,6 +516,68 @@ describe('SlateWatcher', () => {
     expect(entry.content.claims).toEqual([
       { id: 'ok', witness: 'http-status', params: { url: 'https://example.test' }, locus: 'infra' },
     ])
+  })
+
+  // --- Claim refusals (plan U6, R3) ----------------------------------------
+
+  it('carries the refusal for a mistyped witness kind onto the entry, with the surface intact', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{
+      id: 'roadmap',
+      headline: 'Roadmap — 3 of 8 landed',
+      claims: [
+        { id: 'u1', witness: 'unit-lands', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' },
+        { id: 'up', witness: 'http-status', params: { url: 'https://example.test/health' }, locus: 'infra' },
+      ],
+    }])
+
+    await harness.watcher.pollOnce()
+
+    const entry = harness.last().entries[0]!
+    // The NEW content, with the bad claim absent and its sibling kept (KTD5).
+    expect(entry.content.headline).toBe('Roadmap — 3 of 8 landed')
+    expect(entry.content.claims).toEqual([
+      { id: 'up', witness: 'http-status', params: { url: 'https://example.test/health' }, locus: 'infra' },
+    ])
+    expect(entry.claimRefusals).toHaveLength(1)
+    expect(entry.claimRefusals![0]).toMatch(/unit-lands/)
+    // NOT unreadable. That path retains an entry's LAST-VALID projection, which is
+    // the opposite of what a refused claim gets — the file is fine, one claim is not.
+    expect(harness.last().unreadable).toEqual([])
+  })
+
+  it('refuses a claim whose parameters do not fit its kind, and drops the refusal when they do', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{
+      id: 'roadmap', headline: 'Roadmap',
+      claims: [{ id: 'u1', witness: 'unit-landed', params: { unit: 'U1' }, locus: 'repo' }],
+    }])
+    await harness.watcher.pollOnce()
+    expect(harness.last().entries[0]!.claimRefusals![0]).toMatch(/params\.plan must be/)
+
+    writeSurfaces(harness.slateDir, 'a.json', [{
+      id: 'roadmap', headline: 'Roadmap',
+      claims: [{ id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }],
+    }])
+    await harness.watcher.pollOnce()
+
+    const fixed = harness.last().entries[0]!
+    // Absent, not empty: an entry with nothing refused carries no refusal key at all.
+    expect('claimRefusals' in fixed).toBe(false)
+    expect(fixed.content.claims).toHaveLength(1)
+  })
+
+  it('marks only the entry that declared the bad claim', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'bad', headline: 'Bad', claims: [{ id: 'c', witness: 'nope', locus: 'repo' }] },
+      { id: 'good', headline: 'Good', claims: [{ id: 'up', witness: 'http-status', params: { url: 'https://x.test/' }, locus: 'infra' }] },
+      { id: 'silent', headline: 'Silent' },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const [bad, good, silent] = harness.last().entries
+    expect(bad!.claimRefusals).toHaveLength(1)
+    expect('claimRefusals' in good!).toBe(false)
+    expect('claimRefusals' in silent!).toBe(false)
   })
 
   it('treats a missing slate dir as no error (ENOENT is normal)', async () => {

@@ -292,6 +292,21 @@ export interface SurfaceSourceObservation {
   /** Evidence for THIS observation. Compared for equality against the binding's
    *  stored watermark to decide whether anything actually moved. */
   watermark: string
+  /**
+   * Claims the source declared that the host would not accept (R3, plan U6).
+   *
+   * WRITTEN INDEPENDENTLY OF THE WATERMARK, and that is the point of it being here
+   * rather than derived from `content`. Two successive versions of an entry can drop
+   * DIFFERENT bad claims and hash identically — a mistyped `unit-lands` corrected to
+   * a mistyped `unit-landd` leaves the accepted list empty both times — so a refusal
+   * gated on `evidenceMoved` would keep naming the kind the author has already
+   * stopped writing.
+   *
+   * An empty array is the CLEAR: it is what a now-clean entry sends, and it takes an
+   * old refusal off the record. Absent means the caller has nothing to say about
+   * claims at all and whatever is on the record stays.
+   */
+  claimRefusals?: string[]
   order?: number
   createdAt?: number
 }
@@ -1303,6 +1318,7 @@ export class SurfaceService {
    */
   async observeSource(obs: SurfaceSourceObservation, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
     const now = ctx.at ?? Date.now()
+    const refused = obs.claimRefusals && obs.claimRefusals.length > 0 ? obs.claimRefusals : undefined
     const prior = this.docStore.getSurface(obs.id)
     if (!prior) {
       const plan = this.docStore.planSurfaceCreate({
@@ -1324,7 +1340,10 @@ export class SurfaceService {
         ...(obs.order != null ? { order: obs.order } : {}),
         ...(obs.createdAt != null ? { createdAt: obs.createdAt } : {}),
         aliases: [obs.alias],
-        freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: now },
+        freshness: {
+          phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: now,
+          ...(refused ? { claimRefusals: refused } : {}),
+        },
       }, { at: now })
       return this.commitPlan('observe-source', plan, ctx, [obs.id, ...homeIds(obs.home)])
     }
@@ -1368,20 +1387,41 @@ export class SurfaceService {
       ...(!authoritative && evidenceMoved ? { divergedWatermark: obs.watermark } : {}),
     }
 
+    // The refusal the record should carry after this observation (plan U6, R3).
+    //
+    // Only under SOURCE-BINDING authority. Once the record owns its content the
+    // file's claims are not in force — and they cannot be refused anyway, since the
+    // API door rejects a bad claim outright rather than storing one — so a refusal
+    // surviving the transfer would point at a declaration the card is not rendering.
+    //
+    // An ABSENT `claimRefusals` is "no opinion": a caller that says nothing about
+    // claims leaves whatever is on the record. An EMPTY ARRAY is the clear.
+    const claimRefusals = !authoritative
+      ? undefined
+      : obs.claimRefusals === undefined ? prior.freshness.claimRefusals : refused
+    const freshness: SurfaceFreshness = {
+      // Spread FIRST so every key keeps the position it already had. The store's
+      // no-change guard is `JSON.stringify` equality, which compares key order, and
+      // an undefined-valued key is dropped by `JSON.stringify` entirely — so an
+      // unchanged clear still compares equal and burns no revision on the poll floor.
+      ...prior.freshness,
+      ...(authoritative && evidenceMoved
+        ? { phase: 'current' as const, observedGeneration: binding.generation, verifiedAt: now }
+        : {}),
+      claimRefusals,
+    }
+
     const next: Surface = {
       ...prior,
       ...(authoritative ? { content: obs.content, author: obs.author } : {}),
       source: binding,
-      ...(authoritative && evidenceMoved
-        ? {
-          freshness: {
-            ...prior.freshness,
-            phase: 'current',
-            observedGeneration: binding.generation,
-            verifiedAt: now,
-          },
-        }
-        : {}),
+      // Written on EVERY observation, not only when the watermark moved. Two entries
+      // that drop different bad claims hash identically (the accepted list is empty
+      // either way), so a refusal gated on `evidenceMoved` would keep naming a
+      // witness kind the author has already corrected. The gate stays on the two
+      // fields that mean "new content arrived" — `observedGeneration` and
+      // `verifiedAt` — which is what keeps this a host write the watermark cannot see.
+      freshness,
       rev: prior.rev + 1,
       amendedAt: now,
     }

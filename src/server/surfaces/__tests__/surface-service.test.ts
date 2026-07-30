@@ -301,14 +301,29 @@ describe('claims (plan U1, R1)', () => {
       [{ witness: 'unit-landed', locus: 'repo' }, /needs a non-empty id/],
       [{ id: 'u1', witness: 'unit-landed', locus: 'repo', params: { nested: { a: 1 } } }, /must be a string, number, or boolean/],
       ['not an object', /a claim must be an object/],
+      // The registry gate (U2's `validateClaim`, wired into the parser by U6). This
+      // door REFUSES where the file door drops — same check, opposite disposition —
+      // and the message has to name the kind, or a typo leaves the author with
+      // nothing to look up.
+      [{ id: 'u1', witness: 'unit-lands', locus: 'repo', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        /no such witness kind — this host implements unit-landed, http-status/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }, /params\.plan must be a `docs\/plans\/<file>\.md` path/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'infra', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        /this kind observes repo, not infra/],
     ]
     for (const [bad, expected] of cases) {
       const r = await h.svc.updateContent('sf-1', { claims: [bad], expectedRev: 1 }, ctx())
       expect(err(r).code).toBe('invalid')
       expect(err(r).message).toMatch(expected)
     }
+    // Both claims are individually VALID here, deliberately: the registry gate above
+    // runs per claim and would otherwise refuse the first one before the duplicate
+    // check was ever reached, and this case exists to prove the duplicate check.
     const dup = await h.svc.updateContent('sf-1', {
-      claims: [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }, { id: 'u1', witness: 'http-status', locus: 'infra' }],
+      claims: [
+        { id: 'u1', witness: 'unit-landed', locus: 'repo', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        { id: 'u1', witness: 'http-status', locus: 'infra', params: { url: 'https://x.test/' } },
+      ],
       expectedRev: 1,
     }, ctx())
     expect(err(dup).message).toMatch(/declares "u1" twice/)
@@ -335,8 +350,15 @@ describe('claims (plan U1, R1)', () => {
 
   it('sorts params so reordering keys is not an edit', async () => {
     const h = harness()
-    const a = await h.create('a', { content: { headline: 'a', claims: [{ id: 'c', witness: 'w', locus: 'repo', params: { z: 1, a: 2 } }] } })
-    const b = await h.create('b', { content: { headline: 'b', claims: [{ id: 'c', witness: 'w', locus: 'repo', params: { a: 2, z: 1 } }] } })
+    // A REAL witness kind with its required parameters present, plus two spare keys
+    // whose order is what this asserts. `witness: 'w'` used to do here, and U6's
+    // registry gate refuses it — a claim naming a kind this host does not implement
+    // no longer reaches the record through this door at all.
+    const params = { z: 1, a: 2, plan: 'docs/plans/x.md', unit: 'U1' }
+    const a = await h.create('a', { content: { headline: 'a', claims: [{ id: 'c', witness: 'unit-landed', locus: 'repo', params }] } })
+    const b = await h.create('b', {
+      content: { headline: 'b', claims: [{ id: 'c', witness: 'unit-landed', locus: 'repo', params: { unit: 'U1', plan: 'docs/plans/x.md', a: 2, z: 1 } }] },
+    })
     // Digests over content are what the refresh barrier compares, and the entry
     // watermark hashes the same structure — a key reorder must not read as a move.
     expect(JSON.stringify(a.content.claims)).toBe(JSON.stringify(b.content.claims))
