@@ -34,6 +34,7 @@ import type {
   PointAuthor,
   Surface,
   SurfaceCapabilities,
+  SurfaceClaim,
   SurfaceCompatAlias,
   SurfaceContent,
   SurfaceContentAuthority,
@@ -48,6 +49,7 @@ import type {
   SurfaceStaleReason,
 } from '../../domain/types'
 import { createHash } from 'node:crypto'
+import { MAX_SURFACE_CLAIMS, parseSurfaceClaim } from './surface-trigger-matcher'
 import type { DocumentStore } from '../stores/document-store'
 import type {
   JsonValue,
@@ -494,7 +496,7 @@ export function isSafePrincipalId(id: string): boolean {
 /** Everything a content PATCH may name. Enforced exhaustively — see
  *  {@link SurfaceService.updateContent}. */
 const CONTENT_PATCH_FIELDS: readonly string[] =
-  ['headline', 'body', 'recipe', 'expectedRev', 'expectedWatermark']
+  ['headline', 'body', 'recipe', 'claims', 'expectedRev', 'expectedWatermark']
 
 /**
  * Who a mutation is attributed to, derived from WHO IS CALLING and never from the
@@ -598,11 +600,50 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
   }
   const recipeTooLong = oversize('content.recipe', typeof raw.recipe === 'string' ? raw.recipe : undefined, TEXT_MAX)
   if (recipeTooLong) return recipeTooLong
+  // Claims are settable here so an agent can author through this door what it can
+  // author through a file (plan U1/R1). `[]` is kept as `[]`: the author checked and
+  // found nothing witnessable, which is a different answer from never having said.
+  let claims: SurfaceClaim[] | undefined
+  if (raw.claims !== undefined && raw.claims !== null) {
+    const parsed = parseClaimsField(raw.claims, 'content.claims')
+    if (typeof parsed === 'string') return parsed
+    claims = parsed
+  }
   return {
     headline: raw.headline.trim(),
     ...(body ? { body } : {}),
     ...(typeof raw.recipe === 'string' && raw.recipe ? { recipe: raw.recipe } : {}),
+    ...(claims !== undefined ? { claims } : {}),
   }
+}
+
+/**
+ * A claims declaration from a REQUEST, or the refusal message.
+ *
+ * REFUSES where the file door drops (plan U1/KTD5), and the difference is the error
+ * channel rather than a difference of opinion about what a valid claim is — both
+ * doors call the same `parseSurfaceClaim`. A file has nowhere to report a mistyped
+ * witness kind, so it drops the claim and keeps the surface; this endpoint already
+ * names every field it will not accept back to the caller, and a claim silently
+ * missing from a 200 response is the failure that whitelist enforcement exists to
+ * prevent.
+ *
+ * An empty array is a VALUE, not an absence — see `SurfaceContent.claims`.
+ */
+function parseClaimsField(value: unknown, field: string): SurfaceClaim[] | string {
+  if (!Array.isArray(value)) return `${field} must be an array of claims`
+  if (value.length > MAX_SURFACE_CLAIMS) {
+    // Refused whole, never truncated, for the reason the size caps above give.
+    return `${field} declares more than ${MAX_SURFACE_CLAIMS} claims`
+  }
+  const out: SurfaceClaim[] = []
+  for (const entry of value) {
+    const claim = parseSurfaceClaim(entry)
+    if (typeof claim === 'string') return `${field}: ${claim}`
+    if (out.some(c => c.id === claim.id)) return `${field} declares ${JSON.stringify(claim.id)} twice`
+    out.push(claim)
+  }
+  return out
 }
 
 function parseIdList(value: unknown, field: string): string[] | string {
@@ -936,11 +977,11 @@ export class SurfaceService {
   /**
    * Replace authored content behind a revision gate.
    *
-   * The whitelist is `headline`, `body`, and `recipe` — nothing else on the record
-   * is authored content, and a caller that names anything else is told so rather
-   * than having it quietly ignored. `null` clears `body` or `recipe`; omitting
-   * them keeps what is there, which is the distinction a PATCH has to make and a
-   * PUT cannot.
+   * The whitelist is `headline`, `body`, `recipe`, and `claims` — nothing else on
+   * the record is authored content, and a caller that names anything else is told so
+   * rather than having it quietly ignored. `null` clears `body`, `recipe`, or
+   * `claims`; omitting them keeps what is there, which is the distinction a PATCH
+   * has to make and a PUT cannot.
    *
    * The whitelist is ENFORCED, exhaustively, which it was not: every field outside
    * the set below used to be dropped in silence, so a caller that believed it had
@@ -998,6 +1039,18 @@ export class SurfaceService {
       if (recipeTooLong) return invalid(recipeTooLong)
       recipe = raw.recipe || undefined
     }
+    // PATCH semantics, exactly as `body` and `recipe` have them: `null` clears the
+    // declaration, omitting it keeps what is there. The omission case is the
+    // load-bearing one — this endpoint is where a headline edit arrives, and without
+    // the carry-forward every such edit would silently delete the Surface's claims
+    // from the record and, through the egress adapter, from the author's own file.
+    let claims: SurfaceClaim[] | undefined = prior.content.claims
+    if (raw.claims === null) claims = undefined
+    else if (raw.claims !== undefined) {
+      const parsed = parseClaimsField(raw.claims, 'claims')
+      if (typeof parsed === 'string') return invalid(parsed)
+      claims = parsed
+    }
 
     const content: SurfaceContent = {
       headline: typeof headline === 'string' ? headline.trim() : prior.content.headline,
@@ -1008,6 +1061,13 @@ export class SurfaceService {
       // it here would make every headline edit silently delete the Surface's
       // triggers and put it back on the host defaults.
       ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+      // LAST, matching the key order every other content builder uses (the source
+      // entry, and the refresh barrier below). The store's storm guard compares
+      // records with `JSON.stringify`, so two builders that emit the same fields in
+      // different orders make a semantically identical record look like a change —
+      // one spurious revision and one SSE fan-out per API edit of a file-bound
+      // Surface. `!== undefined`, not truthiness: `[]` is a declaration and survives.
+      ...(claims !== undefined ? { claims } : {}),
     }
 
     // Source-bound content does not belong to the API (KTD4). Either an adapter
@@ -1800,8 +1860,8 @@ export class SurfaceService {
     let source = prior.source
     let content = prior.content
     if (input.content) {
-      // A refresh result replaces authored OUTPUT. The recipe and the freshness
-      // declaration are authored INPUT — a worker restates neither, and
+      // A refresh result replaces authored OUTPUT. The recipe, the freshness
+      // declaration, and the claims are authored INPUT — a worker restates none, and
       // `parseStagedResult` cannot even express them (it emits `headline` or
       // `headline` + `body`, nothing else). Assigning `input.content` wholesale
       // therefore DELETED both on the first successful refresh: from the record,
@@ -1817,6 +1877,11 @@ export class SurfaceService {
           ? { recipe: input.content.recipe ?? prior.content.recipe }
           : {}),
         ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+        // The same hazard for the same reason (U1): a rebuild that dropped the
+        // claims would leave a Surface that had just been rebuilt with nothing left
+        // saying what would prove it wrong — and would delete them from the author's
+        // file on the write-back below. `!== undefined` so `[]` survives too.
+        ...(prior.content.claims !== undefined ? { claims: prior.content.claims } : {}),
       }
       if (prior.contentAuthority === 'source-binding') {
         const adapter = prior.source ? this.adapters[prior.source.adapter] : undefined

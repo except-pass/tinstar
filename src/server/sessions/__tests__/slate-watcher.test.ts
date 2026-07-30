@@ -423,6 +423,101 @@ describe('SlateWatcher', () => {
     expect(harness.last().entries.map(e => e.localId)).toEqual(['q1'])
   })
 
+  // --- Claims (plan U1, R1) ------------------------------------------------
+  //
+  // Everything here goes through the REAL file → `toPointInput` → source-entry
+  // path. A test that handed the parser a pre-parsed claim would be asserting a
+  // contract nothing upstream can produce.
+
+  it('carries a well-formed claims array onto the source entry', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{
+      id: 'roadmap',
+      headline: 'Roadmap',
+      claims: [
+        { id: 'u1', witness: 'unit-landed', params: { unit: 'U1', plan: 'docs/plans/x.md' }, locus: 'repo' },
+        { id: 'up', witness: 'http-status', params: { url: 'https://example.test/health' }, locus: 'infra' },
+      ],
+    }])
+
+    await harness.watcher.pollOnce()
+
+    expect(harness.last().entries[0]!.content.claims).toEqual([
+      // Params come back key-sorted: reordering them in the file is a formatting
+      // change, and the watermark hashes this structure.
+      { id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' },
+      { id: 'up', witness: 'http-status', params: { url: 'https://example.test/health' }, locus: 'infra' },
+    ])
+  })
+
+  it('keeps `claims: []` and an absent `claims` as different answers', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'silent', headline: 'never said' },
+      { id: 'checked', headline: 'checked, nothing witnessable', claims: [] },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const [silent, checked] = harness.last().entries
+    // Not `toBeUndefined()` on both: the key must be genuinely ABSENT on one and an
+    // empty array on the other, because the egress adapter writes this field back
+    // into the author's own file and the two mean opposite things there.
+    expect('claims' in silent!.content).toBe(false)
+    expect(checked!.content.claims).toEqual([])
+    expect(silent!.watermark).not.toBe(checked!.watermark)
+  })
+
+  it('clears claims when a later write of the file omits them', async () => {
+    const claims = [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }]
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'roadmap', headline: 'Roadmap', claims }])
+    await harness.watcher.pollOnce()
+    expect(harness.last().entries[0]!.content.claims).toHaveLength(1)
+
+    // The file is the authority for authored content, so an omission is a deletion
+    // — the same rule `recipe` and `refreshPolicy` already follow.
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'roadmap', headline: 'Roadmap' }])
+    await harness.watcher.pollOnce()
+
+    expect('claims' in harness.last().entries[0]!.content).toBe(false)
+  })
+
+  it('REFUSES an oversized claims list whole rather than truncating it', async () => {
+    const many = Array.from({ length: 33 }, (_, i) => ({ id: `c${i}`, witness: 'http-status', locus: 'infra' }))
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'big', headline: 'Too many claims', claims: many }])
+
+    await harness.watcher.pollOnce()
+
+    // The surface still projects (a bad declaration is not worth a missing card),
+    // and it declares NOTHING — a prefix of 32 would have it report witnessed
+    // against a list its author did not write.
+    const entry = harness.last().entries[0]!
+    expect(entry.localId).toBe('big')
+    expect('claims' in entry.content).toBe(false)
+  })
+
+  it('drops an unusable claim, keeps its siblings, and keeps the surface', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{
+      id: 'mixed',
+      headline: 'Mixed',
+      claims: [
+        { id: 'ok', witness: 'http-status', params: { url: 'https://example.test' }, locus: 'infra' },
+        { id: 'no-locus', witness: 'http-status' },
+        { id: 'bad-locus', witness: 'http-status', locus: 'slate' },
+        { id: 'nested', witness: 'http-status', locus: 'infra', params: { headers: { a: 'b' } } },
+        { witness: 'http-status', locus: 'infra' },
+        'not even an object',
+        { id: 'ok', witness: 'http-status', locus: 'repo' }, // duplicate id — first wins
+      ],
+    }])
+
+    await harness.watcher.pollOnce()
+
+    const entry = harness.last().entries[0]!
+    expect(entry.localId).toBe('mixed')
+    expect(entry.content.claims).toEqual([
+      { id: 'ok', witness: 'http-status', params: { url: 'https://example.test' }, locus: 'infra' },
+    ])
+  })
+
   it('treats a missing slate dir as no error (ENOENT is normal)', async () => {
     rmSync(join(harness.workdir, '.tinstar'), { recursive: true, force: true })
     await expect(harness.watcher.pollOnce()).resolves.toBeUndefined()

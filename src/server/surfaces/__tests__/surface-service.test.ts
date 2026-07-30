@@ -232,6 +232,116 @@ describe('update-content', () => {
   })
 })
 
+describe('claims (plan U1, R1)', () => {
+  const claim = { id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }
+
+  it('accepts a declaration on create and keeps `[]` distinct from absent', async () => {
+    const h = harness()
+    const declared = await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const checked = await h.create('checked', { content: { headline: 'checked', claims: [] } })
+    const silent = await h.create('silent')
+
+    expect(declared.content.claims).toEqual([claim])
+    // `[]` is the author saying they looked and found nothing witnessable; absent is
+    // the author never having said. The two must not collapse into each other.
+    expect(checked.content.claims).toEqual([])
+    expect(silent.content).not.toHaveProperty('claims')
+  })
+
+  it('preserves claims through a headline-only content patch', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const patched = unwrap(await h.svc.updateContent('sf-1', { headline: 'renamed', expectedRev: 1 }, ctx()))
+    // The whole reason the carry-forward exists: this endpoint takes a whitelist, so
+    // omitting `claims` here means "unchanged", never "delete them".
+    expect(patched.surfaces[0]!.surface.content.claims).toEqual([claim])
+    expect(patched.surfaces[0]!.surface.content.headline).toBe('renamed')
+  })
+
+  it('replaces claims when they are named and clears them on an explicit null', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const replaced = unwrap(await h.svc.updateContent(
+      'sf-1', { claims: [{ id: 'up', witness: 'http-status', params: { url: 'https://x.test' }, locus: 'infra' }], expectedRev: 1 }, ctx(),
+    ))
+    expect(replaced.surfaces[0]!.surface.content.claims)
+      .toEqual([{ id: 'up', witness: 'http-status', params: { url: 'https://x.test' }, locus: 'infra' }])
+    const emptied = unwrap(await h.svc.updateContent('sf-1', { claims: [], expectedRev: 2 }, ctx()))
+    expect(emptied.surfaces[0]!.surface.content.claims).toEqual([])
+    const cleared = unwrap(await h.svc.updateContent('sf-1', { claims: null, expectedRev: 3 }, ctx()))
+    expect(cleared.surfaces[0]!.surface.content).not.toHaveProperty('claims')
+  })
+
+  it('REFUSES an oversized claims list whole rather than truncating it', async () => {
+    const h = harness()
+    const many = Array.from({ length: 33 }, (_, i) => ({ id: `c${i}`, witness: 'http-status', locus: 'infra' }))
+    // Truncating would persist a Surface declaring fewer claims than its author sent,
+    // and the caller would read back something it did not write with no way to tell
+    // that from its own bug — the same argument the headline cap is documented with.
+    const created = await h.svc.create(
+      { spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'big', claims: many } }, ctx(),
+    )
+    expect(err(created).code).toBe('invalid')
+    expect(err(created).message).toMatch(/more than 32 claims/)
+
+    await h.create('ok')
+    const patched = await h.svc.updateContent('sf-1', { claims: many, expectedRev: 1 }, ctx())
+    expect(err(patched).message).toMatch(/more than 32 claims/)
+    expect(h.docStore.getSurface('sf-1')!.rev).toBe(1)
+  })
+
+  it('names the claim it will not accept instead of dropping it in silence', async () => {
+    const h = harness()
+    await h.create('x')
+    const cases: Array<[unknown, RegExp]> = [
+      [{ id: 'u1', witness: 'unit-landed' }, /must declare a locus/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'slate' }, /must declare a locus/],
+      [{ id: 'u1', locus: 'repo' }, /needs a witness kind/],
+      [{ witness: 'unit-landed', locus: 'repo' }, /needs a non-empty id/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'repo', params: { nested: { a: 1 } } }, /must be a string, number, or boolean/],
+      ['not an object', /a claim must be an object/],
+    ]
+    for (const [bad, expected] of cases) {
+      const r = await h.svc.updateContent('sf-1', { claims: [bad], expectedRev: 1 }, ctx())
+      expect(err(r).code).toBe('invalid')
+      expect(err(r).message).toMatch(expected)
+    }
+    const dup = await h.svc.updateContent('sf-1', {
+      claims: [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }, { id: 'u1', witness: 'http-status', locus: 'infra' }],
+      expectedRev: 1,
+    }, ctx())
+    expect(err(dup).message).toMatch(/declares "u1" twice/)
+    expect(h.docStore.getSurface('sf-1')!.content).not.toHaveProperty('claims')
+  })
+
+  it('preserves claims through a successful rebuild', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', recipe: 'rebuild me', claims: [claim] } })
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at: 2_000 }))
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: h.docStore.getSurface('sf-1')!.rev }, ctx({ at: 2_100 }))
+    // A worker restates the OUTPUT only — `parseStagedResult` cannot even express a
+    // claims list — so the barrier has to carry the declaration itself.
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1',
+      expectedRev: h.docStore.getSurface('sf-1')!.rev,
+      observedGeneration: 0,
+      content: { headline: 'rebuilt' },
+    }, ctx({ at: 3_000 })))
+    expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
+    expect(done.surfaces[0]!.surface.content.claims).toEqual([claim])
+    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+  })
+
+  it('sorts params so reordering keys is not an edit', async () => {
+    const h = harness()
+    const a = await h.create('a', { content: { headline: 'a', claims: [{ id: 'c', witness: 'w', locus: 'repo', params: { z: 1, a: 2 } }] } })
+    const b = await h.create('b', { content: { headline: 'b', claims: [{ id: 'c', witness: 'w', locus: 'repo', params: { a: 2, z: 1 } }] } })
+    // Digests over content are what the refresh barrier compares, and the entry
+    // watermark hashes the same structure — a key reorder must not read as a move.
+    expect(JSON.stringify(a.content.claims)).toBe(JSON.stringify(b.content.claims))
+  })
+})
+
 describe('content authority (KTD4)', () => {
   const sourceBound = {
     source: { adapter: 'slate-file', locator: '/w/.tinstar/slate/a.json' },

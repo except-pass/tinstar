@@ -17,6 +17,8 @@
 
 import type {
   Surface,
+  SurfaceClaim,
+  SurfaceClaimLocus,
   SurfaceRefreshDeclaration,
   SurfaceRefreshPolicy,
   SurfaceStaleReason,
@@ -36,10 +38,28 @@ export const TRIGGER_KINDS: readonly SurfaceTriggerKind[] = [
 
 const POLICIES: readonly SurfaceRefreshPolicy[] = ['automatic', 'mark-stale', 'manual']
 
+/** Every locus a claim may observe. Closed, and separate from {@link TRIGGER_KINDS}
+ *  for the reason stated on {@link SurfaceClaimLocus}. U5's narrowing predicate
+ *  reads this. */
+export const CLAIM_LOCI: readonly SurfaceClaimLocus[] = ['repo', 'infra']
+
 /** Bounds on what an author may declare, so a hostile or runaway file cannot make
  *  the matcher walk a large list on every event. */
 const MAX_DECLARED = 32
 const MAX_DECLARED_LEN = 256
+
+/** Bounds on a claims declaration, in the same refuse-never-truncate style the
+ *  service's own caps are documented in: a truncated declaration is a Surface that
+ *  says it is witnessed by fewer things than its author wrote, and silently.
+ *
+ *  {@link MAX_SURFACE_CLAIMS} is exported because the HTTP door has to REFUSE at the
+ *  same number the file door drops at, or the two authoring channels would disagree
+ *  about what a Surface may declare. */
+export const MAX_SURFACE_CLAIMS = 32
+const MAX_CLAIM_PARAMS = 16
+/** A parameter value is a URL or a document path, not prose — bounded well below the
+ *  32 KiB an A2UI body gets, so no claim list can dominate the sidecar. */
+const MAX_CLAIM_PARAM_LEN = 1024
 
 /** Shortest interval an author may ask for. A one-second `intervalMs` on a dozen
  *  surfaces is a refresh storm, and the cap would absorb it as a permanently full
@@ -146,6 +166,117 @@ export function parseRefreshDeclaration(raw: unknown): SurfaceRefreshDeclaration
     ...(sources ? { sources } : {}),
     ...(signals ? { signals } : {}),
   }
+}
+
+// --- Author claims ---------------------------------------------------------
+
+/**
+ * Parse one claim out of an untrusted file entry or request body.
+ *
+ * Returns the claim, or a MESSAGE saying why it was refused. Two callers want
+ * opposite things from a bad claim and both are right: the file door drops it and
+ * keeps projecting the Surface (KTD5 — a mistyped witness kind must not take a card
+ * off the canvas), while the HTTP door refuses the request and names the field, the
+ * posture every other content field on that endpoint already has. One parser, two
+ * dispositions, so the two doors cannot drift on what a VALID claim is.
+ *
+ * `witness` is checked for shape only. The registry that decides whether a kind
+ * exists, and whether these parameters fit it, is U2's — and it is deliberately not
+ * imported here, so this module stays pure and a claim naming a not-yet-shipped kind
+ * still survives a file round trip instead of being rewritten out of the author's
+ * file by the host.
+ */
+export function parseSurfaceClaim(raw: unknown): SurfaceClaim | string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'a claim must be an object'
+  const r = raw as Record<string, unknown>
+
+  const id = typeof r.id === 'string' ? r.id.trim() : ''
+  if (!id) return 'a claim needs a non-empty id — components reference claims by it'
+  if (id.length > MAX_DECLARED_LEN) return `claim id exceeds ${MAX_DECLARED_LEN} characters`
+
+  const witness = typeof r.witness === 'string' ? r.witness.trim() : ''
+  if (!witness) return `claim ${JSON.stringify(id)} needs a witness kind`
+  if (witness.length > MAX_DECLARED_LEN) {
+    return `claim ${JSON.stringify(id)} names a witness kind over ${MAX_DECLARED_LEN} characters`
+  }
+
+  const locus = typeof r.locus === 'string' ? r.locus.trim() as SurfaceClaimLocus : undefined
+  if (!locus || !CLAIM_LOCI.includes(locus)) {
+    return `claim ${JSON.stringify(id)} must declare a locus of ${CLAIM_LOCI.join(' or ')}`
+  }
+
+  const params = parseClaimParams(r.params)
+  if (typeof params === 'string') return `claim ${JSON.stringify(id)}: ${params}`
+
+  return { id, witness, ...(params ? { params } : {}), locus }
+}
+
+/** A claim's parameters, or a refusal message. `undefined` means the claim declared
+ *  none — which is not the same as declaring an empty object, but nothing downstream
+ *  can tell those apart and a witness kind with no parameters has nothing to say
+ *  about the difference, so they collapse here rather than being carried. */
+function parseClaimParams(raw: unknown): Record<string, string | number | boolean> | undefined | string {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'params must be an object'
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length === 0) return undefined
+  if (entries.length > MAX_CLAIM_PARAMS) return `params exceeds ${MAX_CLAIM_PARAMS} keys`
+  // SORTED, so that reordering the keys in the file is not an author edit. The entry
+  // watermark hashes this structure, and `JSON.stringify` preserves insertion order —
+  // without the sort, a formatter that reordered a params object would advance the
+  // watermark, burn a revision, and queue a rebuild on a Surface nobody touched.
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const out: Record<string, string | number | boolean> = {}
+  for (const [key, value] of entries) {
+    if (!key || key.length > MAX_DECLARED_LEN) return `a params key exceeds ${MAX_DECLARED_LEN} characters`
+    if (typeof value === 'string') {
+      if (value.length > MAX_CLAIM_PARAM_LEN) return `params.${key} exceeds ${MAX_CLAIM_PARAM_LEN} characters`
+      out[key] = value
+    } else if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return `params.${key} must be a finite number`
+      out[key] = value
+    } else if (typeof value === 'boolean') {
+      out[key] = value
+    } else {
+      // Nested objects and arrays included. See `SurfaceClaim.params`.
+      return `params.${key} must be a string, number, or boolean`
+    }
+  }
+  return out
+}
+
+/**
+ * Parse an author's `claims` declaration out of an untrusted file (R1, plan U1).
+ *
+ * THREE-STATE, and the empty array survives. Absent means the author never said;
+ * `[]` means the author checked and found nothing witnessable. They schedule and
+ * render identically, but the egress adapter writes this field back into the
+ * author's own file — so collapsing `[]` to absent would have the host quietly
+ * delete a declaration somebody wrote.
+ *
+ * DROPS rather than refuses, per claim, the same posture `parseRefreshDeclaration`
+ * takes with an unknown trigger name: a mistyped witness kind costs that claim, not
+ * the Surface. U6 gives the dropped claim a visible refusal on the card; until then
+ * it is silent, which is exactly why U6 exists.
+ *
+ * A list OVER THE CAP is refused WHOLE. Truncating to the cap would leave a Surface
+ * declaring fewer claims than its author wrote, and a Surface reporting `witnessed`
+ * against a prefix of its own declaration is a worse lie than one reporting
+ * `unwitnessed` — which is what an absent list gets it.
+ */
+export function parseSurfaceClaims(raw: unknown): SurfaceClaim[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  if (raw.length > MAX_SURFACE_CLAIMS) return undefined
+  const out: SurfaceClaim[] = []
+  for (const entry of raw) {
+    const claim = parseSurfaceClaim(entry)
+    if (typeof claim === 'string') continue
+    // First occurrence wins, matching the epoch's duplicate-entry-id rule. Two
+    // claims under one id would make a component's reference ambiguous.
+    if (out.some(c => c.id === claim.id)) continue
+    out.push(claim)
+  }
+  return out
 }
 
 /**

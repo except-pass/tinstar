@@ -54,7 +54,7 @@ import { parseA2uiContent } from '../../a2ui/schema'
 import { synthesizeId, type PointInput } from '../stores/slate'
 import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
 import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
-import { parseRefreshDeclaration } from '../surfaces/surface-trigger-matcher'
+import { parseRefreshDeclaration, parseSurfaceClaims } from '../surfaces/surface-trigger-matcher'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A watched run and the worktree the watcher resolves its slate dir from. */
@@ -160,6 +160,9 @@ function toSourceEntry(runId: string, file: string, input: PointInput): SlateSou
     ...(input.content ? { body: input.content } : {}),
     ...(input.refresh ? { recipe: input.refresh } : {}),
     ...(input.refreshPolicy ? { refreshPolicy: input.refreshPolicy } : {}),
+    // `!== undefined` rather than truthiness: `[]` is a declaration ("the author
+    // checked and found nothing witnessable") and must reach the record as one.
+    ...(input.claims !== undefined ? { claims: input.claims } : {}),
   }
   return {
     localId: input.id && input.id.length > 0 ? input.id : synthesizeId(runId, input),
@@ -651,6 +654,13 @@ export function toPointInput(
   // enforces the closed vocabulary — see `parseRefreshDeclaration`.
   const declaration = parseRefreshDeclaration(r.refreshPolicy)
   if (declaration) out.refreshPolicy = declaration
+
+  // File-owned claims (plan U1, R1). Same drop-don't-fail posture again: an
+  // unparseable claim costs that claim, an oversized list costs the whole list, and
+  // neither costs the surface. `!== undefined` rather than truthiness — `[]` is a
+  // three-state value here, not an empty one (see `parseSurfaceClaims`).
+  const claims = parseSurfaceClaims(r.claims)
+  if (claims !== undefined) out.claims = claims
 
   // File-owned workbench set id (S4): points sharing a non-empty `group` render
   // side-by-side as one multi-question workbench. A non-string or empty value is

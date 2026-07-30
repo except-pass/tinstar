@@ -20,7 +20,7 @@
 // guard. It is server-only (rides the server esbuild bundle) and React-free.
 
 import { createHash, randomUUID } from 'node:crypto'
-import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus, SurfaceRefreshDeclaration } from '../../domain/types'
+import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus, SurfaceClaim, SurfaceRefreshDeclaration } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 
 /** The file-owned subset of a Point that a projection carries. Everything not here
@@ -47,6 +47,12 @@ export interface PointInput {
    *  vocabulary — so a persisted value only ever holds triggers the host implements.
    *  Rides the same file→store→bridge path as `refresh`. */
   refreshPolicy?: SurfaceRefreshDeclaration
+  /** File-owned claims (plan U1/R1): what this surface says would prove it wrong.
+   *  Parsed through `parseSurfaceClaims`, which drops a malformed claim and refuses
+   *  an oversized list whole. THREE-STATE — absent and `[]` are different answers
+   *  and both reach the canonical record, so this is read with `!== undefined`
+   *  rather than truthiness everywhere it is carried. */
+  claims?: SurfaceClaim[]
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number
 }

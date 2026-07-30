@@ -26,8 +26,8 @@
 import { createHash } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join, sep } from 'node:path'
-import type { A2uiContent, PointAuthor, SurfaceContent, SurfaceRefreshDeclaration } from '../../domain/types'
-import { parseRefreshDeclaration } from './surface-trigger-matcher'
+import type { A2uiContent, PointAuthor, SurfaceClaim, SurfaceContent, SurfaceRefreshDeclaration } from '../../domain/types'
+import { parseRefreshDeclaration, parseSurfaceClaims } from './surface-trigger-matcher'
 import type { SurfaceSourceAdapter } from './surface-service'
 
 /** The adapter name stamped on a Surface reconciled from a Slate source file. */
@@ -97,6 +97,7 @@ export function slateEntryWatermark(fields: {
   body?: A2uiContent
   recipe?: string
   refreshPolicy?: SurfaceRefreshDeclaration
+  claims?: SurfaceClaim[]
   author: PointAuthor
 }): string {
   const basis = JSON.stringify({
@@ -108,6 +109,17 @@ export function slateEntryWatermark(fields: {
     // entry. Leaving it out would mean the reconciler saw an unchanged watermark,
     // committed nothing, and quietly kept enforcing the old triggers.
     refreshPolicy: fields.refreshPolicy ?? null,
+    // U1's claims are in the basis for the same reason: a claim DECLARATION is
+    // author meaning — it says what would prove this surface wrong — so editing one
+    // is genuinely editing the entry, and an unchanged watermark would leave the
+    // host checking the old statement forever.
+    //
+    // ONLY THE DECLARATION. What a witness observed is host-owned and lives on
+    // `freshness` (KTD2), deliberately outside this basis: a host-written value in
+    // here would move the watermark every time the host looked, which is a revision
+    // and a rebuild per surface per sweep, forever. `?? null` keeps absent and `[]`
+    // apart — they serialize differently, which is the whole three-state contract.
+    claims: fields.claims ?? null,
     author: fields.author,
   })
   return 'sha256:' + createHash('sha256').update(basis).digest('hex').slice(0, 32)
@@ -143,13 +155,14 @@ const DEFAULT_FS: SlateSourceFs = {
  *  the same fields through {@link slateEntryWatermark}. */
 function authoredFieldsOf(raw: unknown): {
   headline: string; body?: A2uiContent; recipe?: string
-  refreshPolicy?: SurfaceRefreshDeclaration; author: PointAuthor
+  refreshPolicy?: SurfaceRefreshDeclaration; claims?: SurfaceClaim[]; author: PointAuthor
 } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
   if (typeof r.headline !== 'string' || !r.headline) return null
   const author: PointAuthor = r.author === 'user' || r.author === 'process' ? r.author : 'agent'
   const declaration = parseRefreshDeclaration(r.refreshPolicy)
+  const claims = parseSurfaceClaims(r.claims)
   return {
     headline: r.headline,
     ...(r.content !== undefined ? { body: r.content as A2uiContent } : {}),
@@ -158,6 +171,11 @@ function authoredFieldsOf(raw: unknown): {
     // one INGRESS computes from the same file. Hashing the raw declaration would let
     // a field the parser drops move the watermark on every epoch, forever.
     ...(declaration ? { refreshPolicy: declaration } : {}),
+    // Parsed for the same reason, and carried with `!== undefined` because `[]` is a
+    // declaration rather than an empty one: collapsing it here would make the
+    // egress side hash something the ingress side does not, and every write-back
+    // would look to the next epoch like an author edit.
+    ...(claims !== undefined ? { claims } : {}),
     author,
   }
 }
@@ -246,6 +264,12 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     // describing a surface the host refreshes on different terms.
     if (input.content.refreshPolicy === undefined) delete next.refreshPolicy
     else next.refreshPolicy = input.content.refreshPolicy as unknown as Record<string, unknown>
+    // Claims travel the same way (U1). They are in the entry watermark, so the
+    // set/delete pair has to be here too: an omitted write-back would leave the file
+    // holding a declaration the record no longer has, and the very next epoch would
+    // read the file's version back as an author edit and undo the write.
+    if (input.content.claims === undefined) delete next.claims
+    else next.claims = input.content.claims as unknown as Record<string, unknown>[]
     entries[index] = next
 
     const serialized = JSON.stringify(array ? entries : entries[0], null, 2) + '\n'

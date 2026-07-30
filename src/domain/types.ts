@@ -904,6 +904,58 @@ export interface SurfaceFreshness {
   jobId?: string
 }
 
+/**
+ * Where a claim's truth lives (R1/R5, plan U1).
+ *
+ * ITS OWN CLOSED UNION, deliberately NOT a member of {@link SurfaceTriggerKind}.
+ * Locus is an orthogonal axis: a trigger kind says what ANNOUNCED a change, a locus
+ * says where the observation that could falsify a claim is MADE — and one locus is
+ * reachable from several trigger kinds (`repo` from both `git-revision` and
+ * `periodic`). Folding it into the trigger vocabulary would put names in that union
+ * nothing can announce and nothing can match, and the closedness of that union is a
+ * stated safety property up there rather than a tidiness one.
+ */
+export type SurfaceClaimLocus =
+  /** The bound worktree and the repository it belongs to. */
+  | 'repo'
+  /** Deployed infrastructure, reached over the network. */
+  | 'infra'
+
+/**
+ * One falsifiable statement a Surface makes about the world (R1, plan U1).
+ *
+ * A claim is a DECLARATION and nothing else: it names a witness kind, the parameters
+ * that kind needs, and the locus it observes. What the witness saw is host-owned
+ * state that lives elsewhere (KTD2/KTD7) — putting an observed value here would put
+ * a host write inside authored content, and therefore inside the source watermark,
+ * which would move the watermark on every epoch forever.
+ *
+ * `witness` is an OPAQUE validated string at this layer. U2 owns the registry that
+ * resolves the name and checks {@link params} against that kind's schema; U1
+ * deliberately knows nothing about which kinds exist, so a claim naming a kind this
+ * host has not shipped yet still round-trips through the file rather than being
+ * silently rewritten.
+ */
+export interface SurfaceClaim {
+  /** Surface-local and author-chosen. A2UI components reference a claim BY THIS, so
+   *  it is part of the authored contract rather than a host-minted handle. Unique
+   *  within one Surface; a repeat is refused rather than allowed to shadow. */
+  id: string
+  /** The witness kind that can check this claim. See the note above on opacity. */
+  witness: string
+  /** What that kind needs to run.
+   *
+   *  FLAT SCALARS ONLY. These arrive from an agent-authored file — the same
+   *  untrusted channel the prompt-delivery guardrail exists for — and reach a
+   *  witness runner. A flat map is bounded by construction (no recursion to depth-
+   *  limit, no nested `{ exec: "..." }` shape to mistake for a parameter), and both
+   *  kinds this slice ships take scalars. Widening it is a one-place parser change
+   *  if a later kind genuinely needs structure. */
+  params?: Record<string, string | number | boolean>
+  /** Which trigger kinds can invalidate it (R5). */
+  locus: SurfaceClaimLocus
+}
+
 /** A Surface's authored content — the part an authority may replace (KTD4). */
 export interface SurfaceContent {
   /** One-line title. Always present: a Surface with no headline has nothing to
@@ -919,6 +971,20 @@ export interface SurfaceContent {
    *  applies its defaults — see `effectiveDeclaration` in
    *  `src/server/surfaces/surface-trigger-matcher.ts`. */
   refreshPolicy?: SurfaceRefreshDeclaration
+  /** What this Surface says would prove it wrong (R1, plan U1).
+   *
+   *  THREE-STATE, and the two empty states are not the same thing:
+   *    · absent — the author never said. The R23 authoring convention still owes
+   *      this Surface a claim.
+   *    · `[]` — the author checked and found nothing witnessable here.
+   *    · non-empty — these are the statements the host may check without waking an
+   *      agent.
+   *
+   *  The two empty states are identical in scheduling and rendering (both project
+   *  `unwitnessed` under U7). They are kept apart anyway because the EGRESS adapter
+   *  writes this field back into the author's own file, and collapsing `[]` to
+   *  absent would have the host quietly delete a declaration the author wrote. */
+  claims?: SurfaceClaim[]
 }
 
 /** View-independent discussion state (R5/R8). Shared, never per-user: a thread is
