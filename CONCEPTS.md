@@ -38,6 +38,8 @@ The mechanism that re-dispatches named server-sent events from a single shared e
 ### The Slate
 A region of a run's workspace card where an agent, the user, or any local process paints small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. Surfaces are described in A2UI and drawn by the shared host renderer. Authoring is file-in (a process writes a surface file into the run's worktree; a server watcher validates and projects it onto the run), while threads, lifecycle status, and control answers are answered HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run.
 
+Slate content is **semi-ephemeral**: surfaces are cheap to wipe and re-author, so a change to the authoring contract is resolved by clearing the Slate rather than by migrating it. This is why breaking changes to surface shape are acceptable and why durable value belongs in host-owned machinery rather than in any individual card.
+
 ### Addressable point
 The single primitive the Slate is built from: a durable, threaded item authored by an agent, a user, or a process, optionally anchored to a decision or a whole surface, carrying an append-only discussion thread and a soft lifecycle (open, discussing, waiting, resolved, dismissed). A Roundup notice, a canvas pin, and a per-surface discussion are the same object with a different anchor and default author. One id is reserved: a point at `objective` is the run's Objective and may only be written by the user, so a file-authored or HTTP-created point may not claim it.
 
