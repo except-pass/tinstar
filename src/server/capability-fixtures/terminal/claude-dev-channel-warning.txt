@@ -1,0 +1,8 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ WARNING: This MCP server is from a development channel and has not been      │
+│ reviewed. It can read and write data in this session.                        │
+│                                                                              │
+│   tinstar-nats                                                               │
+│                                                                              │
+│ Press Enter to confirm, or Esc to cancel                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯

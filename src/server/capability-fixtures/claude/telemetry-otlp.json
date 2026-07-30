@@ -1,0 +1,115 @@
+{
+  "_note": "Recorded PromQL that TelemetryQuery issues, plus a canned Prometheus response set and the snapshot it produces. Claude Code exports these series over OTLP; Alloy relabels and remote-writes them into Prometheus. Codex exports nothing equivalent today — this file is the parity target.",
+  "clock": {
+    "systemTimeIso": "2026-07-30T18:00:00.000Z",
+    "tzOffsetMinutes": 0
+  },
+  "opts": {
+    "userEmail": "fixture@example.com",
+    "sessionId": "sess-1"
+  },
+  "metricInventory": {
+    "metrics": [
+      "claude_code_cost_usage_USD_total",
+      "claude_code_token_usage_tokens_total",
+      "claude_code_active_time_seconds_total"
+    ],
+    "labels": ["user_email", "session_id", "model", "type"],
+    "typeSelectors": ["type=~\"input|output\"", "type=\"input\"", "type=\"cacheRead\"", "type=\"cli\""]
+  },
+  "expectedQueries": {
+    "todayHudGlobal": [
+      "sum(increase(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\"}[64800s]))",
+      "sum(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\"})",
+      "sum by (model) (increase(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\"}[64800s]))",
+      "sum by (model) (claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\"})",
+      "sum(increase(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=~\"input|output\"}[64800s]))",
+      "sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=~\"input|output\"})",
+      "sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=~\"input|output\"}[1m])) * 60",
+      "sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=~\"input|output\"}[1h])) * 3600",
+      "sum(increase(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=\"cacheRead\"}[64800s])) / (sum(increase(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=\"cacheRead\"}[64800s])) + sum(increase(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=\"input\"}[64800s])))",
+      "sum(rate(claude_code_active_time_seconds_total{user_email=\"fixture@example.com\",type=\"cli\"}[5m]))"
+    ],
+    "todayHudSession": [
+      "sum(increase(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\",session_id=\"sess-1\"}[64800s]))",
+      "sum(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\",session_id=\"sess-1\"})",
+      "sum by (model) (increase(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\",session_id=\"sess-1\"}[64800s]))",
+      "sum by (model) (claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\",session_id=\"sess-1\"})",
+      "sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=~\"input|output\"})",
+      "sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=~\"input|output\"})",
+      "sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=~\"input|output\"}[1m])) * 60",
+      "sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=~\"input|output\"}[1h])) * 3600",
+      "sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cacheRead\"}) / (sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cacheRead\"}) + sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"input\"}))",
+      "sum(rate(claude_code_active_time_seconds_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cli\"}[5m]))"
+    ],
+    "burningSessions": [
+      "sum by (session_id) (rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",type=~\"input|output\"}[30s])) > 0"
+    ],
+    "sessionSeries": [
+      "sum(claude_code_cost_usage_USD_total{user_email=\"fixture@example.com\",session_id=\"sess-1\"})",
+      "sum(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=~\"input|output\"})",
+      "sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cacheRead\"}[1m])) / (sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cacheRead\"}[1m])) + sum(rate(claude_code_token_usage_tokens_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"input\"}[1m])))",
+      "sum(rate(claude_code_active_time_seconds_total{user_email=\"fixture@example.com\",session_id=\"sess-1\",type=\"cli\"}[1m]))"
+    ]
+  },
+  "promResponses": [
+    {
+      "match": ["sum by (model) (increase("],
+      "result": [
+        { "metric": { "model": "claude-opus-5" }, "value": [1785434400, "9.5"] },
+        { "metric": { "model": "claude-sonnet-5" }, "value": [1785434400, "3"] }
+      ]
+    },
+    {
+      "match": ["sum by (model) ("],
+      "result": [
+        { "metric": { "model": "claude-opus-5" }, "value": [1785434400, "30"] },
+        { "metric": { "model": "claude-sonnet-5" }, "value": [1785434400, "10"] }
+      ]
+    },
+    {
+      "match": ["claude_code_active_time_seconds_total"],
+      "result": [{ "metric": {}, "value": [1785434400, "1.7"] }]
+    },
+    {
+      "match": ["cacheRead"],
+      "result": [{ "metric": {}, "value": [1785434400, "0.86"] }]
+    },
+    {
+      "match": ["increase(claude_code_cost_usage_USD_total"],
+      "result": [{ "metric": {}, "value": [1785434400, "12.5"] }]
+    },
+    {
+      "match": ["claude_code_cost_usage_USD_total"],
+      "result": [{ "metric": {}, "value": [1785434400, "40"] }]
+    },
+    {
+      "match": ["[1m])) * 60"],
+      "result": [{ "metric": {}, "value": [1785434400, "4200"] }]
+    },
+    {
+      "match": ["[1h])) * 3600"],
+      "result": [{ "metric": {}, "value": [1785434400, "210000"] }]
+    },
+    {
+      "match": ["increase(claude_code_token_usage_tokens_total"],
+      "result": [{ "metric": {}, "value": [1785434400, "1250000.7"] }]
+    },
+    {
+      "match": ["claude_code_token_usage_tokens_total"],
+      "result": [{ "metric": {}, "value": [1785434400, "4000000"] }]
+    }
+  ],
+  "expectedSnapshot": {
+    "window": "today",
+    "state": "ready",
+    "cost": {
+      "total": 12.5,
+      "byModel": { "claude-opus-5": 9.5, "claude-sonnet-5": 3 }
+    },
+    "tokens": { "total": 1250000 },
+    "rate": { "perMin": 4200, "perHour": 210000 },
+    "cacheHitPct": 0.86,
+    "dutyCycle": { "value": 1.7, "windowMinutes": 5 }
+  }
+}
