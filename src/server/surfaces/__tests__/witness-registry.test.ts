@@ -332,6 +332,38 @@ describe('unit-landed', () => {
     expect(out.status).toBe('unresolved')
   })
 
+  // FOUND BY U8's end-to-end pass, against the card this slice actually ships.
+  //
+  // The recursive-collaborative-surfaces plan is half backfilled and half not: four
+  // units merged before the `Plan:` trailer convention existed, and the four that
+  // have not merged will carry trailers when they do. With the trailer rung above
+  // the backfill rung, the FIRST trailered landing made the other four report
+  // `pending` — a false "not landed" about merges sitting in the log the witness had
+  // just read, on the one plan the backfill map covers. Ordered last in this block
+  // because it pushes a trailer for this plan that the tests above are written
+  // against the absence of.
+  it('keeps a backfilled unit landed once a sibling unit lands under the trailer convention', async () => {
+    commit(
+      pusher,
+      `feat(surfaces): contextual prompts and contributor drill-down (#171)\n\nPlan: ${RECURSIVE_PLAN}#U5\n`,
+      'src/recursive-u5.ts', 'export const u5 = 5\n',
+    )
+    git(pusher, 'push', '-q', 'origin', 'main')
+
+    // The new trailer is read: its own unit is landed …
+    expect(await run(unitClaim({ params: { plan: RECURSIVE_PLAN, unit: 'U5' } }), realGitDeps()))
+      .toEqual({ status: 'value', value: 'landed' })
+    // … the backfilled two-commit unit is STILL landed …
+    expect(await run(unitClaim({ params: { plan: RECURSIVE_PLAN, unit: 'U1' } }), realGitDeps()))
+      .toEqual({ status: 'value', value: 'landed' })
+    expect(await run(unitClaim({ params: { plan: RECURSIVE_PLAN, unit: 'U6' } }), realGitDeps()))
+      .toEqual({ status: 'value', value: 'landed' })
+    // … and a unit in neither channel is pending, which is the rung the trailer's
+    // presence legitimately buys.
+    expect(await run(unitClaim({ params: { plan: RECURSIVE_PLAN, unit: 'U4' } }), realGitDeps()))
+      .toEqual({ status: 'value', value: 'pending' })
+  })
+
   it('never lets an author-supplied parameter reach git as an option', async () => {
     // Claim parameters arrive from an agent-authored file — the same untrusted
     // channel the prompt-delivery guardrail exists for. Nothing derived from one

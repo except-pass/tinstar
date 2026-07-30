@@ -12,12 +12,15 @@
 // never reaches `Run.slate` is a silently invisible feature — the render layer's
 // tests pass on a prop production never sends.
 import { describe, it, expect } from 'vitest'
-import { isUnwitnessed, slateSurfaceFromCanonical } from '../run-slate-projection'
+import { bindClaimSteps, isUnwitnessed, slateSurfaceFromCanonical } from '../run-slate-projection'
 import { deriveDueAt, effectiveDeclaration } from '../../surfaces/surface-trigger-matcher'
 import { DocumentStore } from '../document-store'
 import { seedRunSlate } from './seedRunSlate'
 import { OBJECTIVE_POINT_ID } from '../../../domain/types'
-import type { Run, Surface, SurfaceClaim, SurfaceContent, SurfaceFreshness } from '../../../domain/types'
+import type {
+  A2uiContent, Run, Surface, SurfaceClaim, SurfaceClaimObservation, SurfaceClaimValue,
+  SurfaceContent, SurfaceFreshness,
+} from '../../../domain/types'
 
 const CLAIM: SurfaceClaim = { id: 'c1', witness: 'unit-landed', locus: 'repo' }
 
@@ -142,5 +145,140 @@ describe('unwitnessed reaches Run.slate', () => {
     store.upsertRun('run-1', makeRun())
     await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'pick a name', claims: [CLAIM] }], 100)
     expect(store.getRun('run-1')!.slate![0]!.unwitnessed).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Claim-bound step statuses (plan U8, R22).
+//
+// The roadmap card the slice ships states no status anywhere in its body: each step
+// names a claim and the value that means finished, and the host fills the rest in
+// from what it last WITNESSED. These tests are the pure half; `slice-cards.test.ts`
+// drives the same binding over the real file→witness→render chain.
+// ---------------------------------------------------------------------------
+
+/** A stepper body whose rows are bound to claims, as an author writes it. */
+function railBody(steps: Record<string, unknown>[]): A2uiContent {
+  return {
+    root: 'root',
+    components: [
+      { id: 'root', component: 'Column', children: ['rail'] },
+      { id: 'rail', component: 'Stepper', steps },
+    ],
+  }
+}
+
+function boundSteps(body: A2uiContent | undefined): Record<string, unknown>[] {
+  const rail = body?.components.find(c => c.component === 'Stepper')
+  return (rail?.steps as Record<string, unknown>[] | undefined) ?? []
+}
+
+function observed(values: Record<string, SurfaceClaimValue>): Record<string, SurfaceClaimObservation> {
+  return Object.fromEntries(Object.entries(values).map(([id, value]) => [id, { value, at: 1 }]))
+}
+
+describe('bindClaimSteps — a rail derives from claim values, never from an author', () => {
+  const steps = [
+    { label: 'U1', claim: 'u1', done: 'landed' },
+    { label: 'U4', claim: 'u4', done: 'landed' },
+  ]
+
+  it('marks a step done only when a completed lookup returned its `done` value', () => {
+    const bound = boundSteps(bindClaimSteps(railBody(steps), observed({ u1: 'landed', u4: 'pending' })))
+    expect(bound.map(s => s.status)).toEqual(['done', 'pending'])
+  })
+
+  // The whole point of the two-key binding: an author's own status may not survive.
+  // Author `done` on a unit that has not landed, and the host still says pending.
+  it('overrides an authored status rather than trusting it', () => {
+    const lying = [{ label: 'U4', claim: 'u4', done: 'landed', status: 'done' }]
+    const bound = boundSteps(bindClaimSteps(railBody(lying), observed({ u4: 'pending' })))
+    expect(bound[0]!.status).toBe('pending')
+  })
+
+  // There are only four step statuses and none of them means "unknown". `pending` is
+  // the honest one: the card says separately, through the freshness badge, that a
+  // claim could not be checked.
+  it('reads pending for a claim nobody has observed yet', () => {
+    expect(boundSteps(bindClaimSteps(railBody(steps), undefined)).map(s => s.status))
+      .toEqual(['pending', 'pending'])
+    expect(boundSteps(bindClaimSteps(railBody(steps), observed({ u1: 'landed' })))[1]!.status)
+      .toBe('pending')
+  })
+
+  // An observation that has ONLY ever been unresolved carries no `value` key, and an
+  // absent value may never satisfy a `done` — that is KTD8 reaching the rail.
+  it('reads pending for a claim that has only ever been unresolved', () => {
+    const problem: Record<string, SurfaceClaimObservation> = {
+      u1: { problem: { status: 'unresolved', detail: 'could not fetch' }, at: 1 },
+    }
+    expect(boundSteps(bindClaimSteps(railBody(steps), problem))[0]!.status).toBe('pending')
+  })
+
+  // A failed fetch says nothing about whether the world moved, so the last completed
+  // lookup still governs the rail. Blanking it would report a change that did not
+  // happen.
+  it('keeps reading the last completed value when the latest attempt failed', () => {
+    const stale: Record<string, SurfaceClaimObservation> = {
+      u1: { value: 'landed', problem: { status: 'unresolved', detail: 'offline' }, at: 1 },
+    }
+    expect(boundSteps(bindClaimSteps(railBody(steps), stale))[0]!.status).toBe('done')
+  })
+
+  // A typo in `claim`, or a `done` the author forgot, must not render a green tick —
+  // which is what leaving the authored status in place would do, silently.
+  it('never reads done from a dangling claim id or a missing `done`', () => {
+    const broken = [
+      { label: 'typo', claim: 'u9', done: 'landed', status: 'done' },
+      { label: 'no done', claim: 'u1', status: 'done' },
+    ]
+    expect(boundSteps(bindClaimSteps(railBody(broken), observed({ u1: 'landed' }))).map(s => s.status))
+      .toEqual(['pending', 'pending'])
+  })
+
+  it('leaves an unbound step, and an unbound body, exactly as authored', () => {
+    const plain = railBody([{ label: 'hand-written', status: 'active' }])
+    const out = bindClaimSteps(plain, observed({ u1: 'landed' }))
+    // Identity, not equality: an unbound body must cost the document store's
+    // `JSON.stringify` storm guard nothing extra.
+    expect(out).toBe(plain)
+  })
+
+  it('binds nothing into the record — the author\'s file keeps the author\'s statuses', () => {
+    const body = railBody(steps)
+    const s = surface({ body, claims: [CLAIM] }, {
+      freshness: freshness({ claimObservations: observed({ u1: 'landed', u4: 'pending' }) }),
+    })
+    slateSurfaceFromCanonical(s, 'p1')
+    expect(boundSteps(s.content.body).map(st => st.status)).toEqual([undefined, undefined])
+  })
+})
+
+// THE CHAIN, again. The binding could be perfect and never reach the browser.
+describe('a bound rail reaches Run.slate and the point routes alike', () => {
+  const steps = [
+    { label: 'U1', claim: 'u1', done: 'landed' },
+    { label: 'U4', claim: 'u4', done: 'landed' },
+  ]
+
+  it('projects the host\'s statuses onto the client-facing surface', async () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    await seedRunSlate(store, 'run-1', [
+      { id: 'roadmap', headline: 'Roadmap', body: railBody(steps), claims: [CLAIM] },
+    ], 100)
+    const id = store.surfaceForRunAlias('run-1', 'roadmap')!.id
+    const before = store.getSurface(id)!
+    store.loadSurfaces([{
+      ...before,
+      freshness: { ...before.freshness, claimObservations: observed({ u1: 'landed', u4: 'pending' }) },
+    }])
+
+    expect(boundSteps(store.getRun('run-1')!.slate![0]!.body).map(s => s.status))
+      .toEqual(['done', 'pending'])
+    // Two projections of ONE record. A card that says `done` through one door and
+    // `pending` through the other is a card disagreeing with itself.
+    expect(boundSteps(store.getSlatePoint('run-1', 'roadmap')!.content).map(s => s.status))
+      .toEqual(['done', 'pending'])
   })
 })

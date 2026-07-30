@@ -141,16 +141,28 @@ function define<P>(def: WitnessKindDef<P>): RegisteredWitness {
  * THE LADDER, and why each rung is where it is:
  *
  *   1. A trailer on the ref naming this plan AND this unit          → `landed`.
- *   2. A trailer on the ref naming this plan and some OTHER unit    → `pending`.
+ *   2. A backfill entry for this unit whose every PR is on the ref  → `landed`.
+ *   3. A trailer on the ref naming this plan and some OTHER unit    → `pending`.
  *      The convention is demonstrably in force for this plan, so the unit's absence
  *      is an absence a completed lookup observed (R7) rather than an unknown.
- *   3. Backfill coverage, corroborated by the ref                   → `landed` when
- *      every PR the backfill names is on the ref, `pending` otherwise.
- *   4. Backfill coverage the ref corroborates NOWHERE               → `unresolved`.
+ *   4. Backfill coverage, corroborated by the ref                   → `pending`.
+ *      A covered plan whose unit has no entry (or whose entry is only half on the
+ *      ref) has not landed.
+ *   5. Backfill coverage the ref corroborates NOWHERE               → `unresolved`.
  *      This is the shallow-clone and wrong-ref case. A backfill that asserts
  *      landings the history does not show is a backfill pointed at the wrong repo,
  *      and trusting its coverage into a `pending` would be inventing a fact.
- *   5. Anything else                                                → `unresolved`.
+ *   6. Anything else                                                → `unresolved`.
+ *
+ * RUNG 2 SITS ABOVE RUNG 3 BECAUSE A PLAN CAN BE HALF-BACKFILLED AND HALF-TRAILERED,
+ * and the recursive-collaborative-surfaces plan is exactly that plan: four of its
+ * units merged before the convention existed and are in {@link UNIT_LANDED_BACKFILL},
+ * and the four that have not merged yet will carry trailers when they do. With the
+ * trailer rung first, the DAY a fifth unit lands is the day the other four start
+ * reporting `pending` — a false "not landed" about merges sitting in the very log the
+ * witness just read. It is not a rare ordering: it is what happens next, on the one
+ * plan the map covers. A backfill entry is a fact about a merge, and a trailer on
+ * some other unit does not unmake it.
  */
 interface UnitLandedParams {
   plan: string
@@ -308,14 +320,21 @@ const unitLanded = define<UnitLandedParams>({
         m = PLAN_TRAILER.exec(c.message)
       }
     }
-    // Rung 2: the convention is live for this plan and this unit is not in it.
+    const backfill = UNIT_LANDED_BACKFILL[p.plan]
+    const mine = backfill?.[p.unit]
+    // Rung 2, ABOVE the trailer rung. See the ladder note: a plan that is half
+    // backfilled and half trailered would otherwise report its backfilled units as
+    // pending the moment a trailered one landed.
+    if (mine?.length && mine.every(pr => prs.has(pr))) return { status: 'value', value: 'landed' }
+
+    // Rung 3: the convention is live for this plan and this unit is neither in it nor
+    // recorded as landed by the backfill.
     if (planHasAnyTrailer) return { status: 'value', value: 'pending' }
 
-    const backfill = UNIT_LANDED_BACKFILL[p.plan]
     if (backfill) {
       const named = new Set<number>()
       for (const list of Object.values(backfill)) for (const pr of list) named.add(pr)
-      // Rung 4 before rung 3: coverage is only trustworthy once the ref has
+      // Rung 5 before rung 4: coverage is only trustworthy once the ref has
       // corroborated it. A depth-1 checkout sees none of these and must not be told
       // that eight units are pending.
       const corroborated = [...named].some(pr => prs.has(pr))
@@ -325,12 +344,11 @@ const unitLanded = define<UnitLandedParams>({
           detail: `${p.ref} contains none of the merges recorded for ${p.plan} — wrong ref, or a shallow clone`,
         }
       }
-      const mine = backfill[p.unit]
-      if (!mine || mine.length === 0) return { status: 'value', value: 'pending' }
-      return { status: 'value', value: mine.every(pr => prs.has(pr)) ? 'landed' : 'pending' }   // rung 3
+      // Rung 4. No entry, or an entry only half on the ref: it has not landed.
+      return { status: 'value', value: 'pending' }
     }
 
-    // Rung 5. Nothing links this unit to anything, and saying "pending" here is the
+    // Rung 6. Nothing links this unit to anything, and saying "pending" here is the
     // exact lie this kind exists to avoid.
     return {
       status: 'unresolved',

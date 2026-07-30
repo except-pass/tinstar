@@ -26,9 +26,11 @@
 import {
   OBJECTIVE_ORDER,
   OBJECTIVE_POINT_ID,
+  type A2uiContent,
   type Point,
   type SlateSurface,
   type Surface,
+  type SurfaceClaimObservation,
   type SurfaceCompatAlias,
 } from '../../domain/types'
 
@@ -81,9 +83,103 @@ export function isUnwitnessed(s: Surface): boolean {
   return !s.content.claims || s.content.claims.length === 0
 }
 
+/**
+ * How many step entries one `Stepper` is examined for a claim binding.
+ *
+ * Mirrors the catalog's own `MAX_SCAN` (60 rows × 20) rather than importing it: that
+ * constant lives in `a2ui/catalog.tsx`, a React module the server bundle may not
+ * pull in. The bound is for the same reason the catalog's is — `steps` expands one
+ * A2UI node into an unbounded array, and this walk runs on every projection of every
+ * Surface on every run, which is the hottest loop the storm guard sits behind.
+ */
+const MAX_BOUND_STEPS = 1200
+
+/**
+ * Fill a `Stepper`'s step statuses in from what the host last WITNESSED (R22, plan U8).
+ *
+ * THE POINT IS THAT NO AGENT IS INVOLVED. A roadmap card authored once says which
+ * claim decides each step; every later status on it is the host's own observation,
+ * so the card tells the truth about the repository between rebuilds instead of
+ * asserting whatever its author believed on the day it was written.
+ *
+ * THE BINDING, and why it takes two keys rather than one:
+ *
+ *   { "label": "U2 — …", "claim": "u2", "done": "landed" }
+ *
+ * `claim` names a {@link SurfaceClaim.id} on this same Surface — R1's "referenced
+ * from components by id". `done` names the observed VALUE that means finished. The
+ * host owns no vocabulary here: `unit-landed` answers `landed`/`pending` and
+ * `http-status` answers a number, and a projection that knew which strings meant
+ * success would have to be edited every time a witness kind shipped.
+ *
+ * EVERY OTHER CASE IS `pending`, deliberately, including a step whose `done` is
+ * missing or whose `claim` names nothing. There are only four step statuses and none
+ * of them means "unknown", so the alternative would be leaving the AUTHORED status in
+ * place — which is exactly the agent-asserted status R22 exists to remove, and it
+ * would fail silently: a typo in `claim` would render a permanent green tick. A card
+ * whose claim nobody could resolve says so separately, in the "claim not checked"
+ * line the freshness badge draws from `problem`.
+ *
+ * A STALE VALUE STILL COUNTS. When the last attempt failed but an earlier completed
+ * lookup left a value, the step reads from that value: a fetch that could not run
+ * says nothing about whether the world moved, and blanking the rail on a transient
+ * outage would report a change that did not happen.
+ *
+ * PROJECTION-TIME ONLY. The record keeps the author's own statuses, so the egress
+ * adapter writes the author's file back unchanged; this is a read on the way out.
+ * Returns the SAME body object when nothing bound, so an unbound Surface costs the
+ * document store's `JSON.stringify` comparison nothing extra.
+ */
+export function bindClaimSteps(
+  body: A2uiContent | undefined,
+  observations: Record<string, SurfaceClaimObservation> | undefined,
+): A2uiContent | undefined {
+  if (!body) return body
+  let bodyChanged = false
+  const components = body.components.map(component => {
+    if (component.component !== 'Stepper' || !Array.isArray(component.steps)) return component
+    const raw: unknown[] = component.steps
+    let stepsChanged = false
+    const steps = raw.slice()
+    const limit = Math.min(raw.length, MAX_BOUND_STEPS)
+    for (let i = 0; i < limit; i++) {
+      const entry: unknown = raw[i]
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const step = entry as Record<string, unknown>
+      if (typeof step.claim !== 'string' || !step.claim) continue
+      const status = claimStepStatus(step, observations)
+      if (step.status === status) continue
+      steps[i] = { ...step, status }
+      stepsChanged = true
+    }
+    if (!stepsChanged) return component
+    bodyChanged = true
+    return { ...component, steps }
+  })
+  return bodyChanged ? { ...body, components } : body
+}
+
+/** `done` when a completed lookup's stored value is exactly the step's `done`
+ *  value, and `pending` for everything else — see {@link bindClaimSteps}. */
+function claimStepStatus(
+  step: Record<string, unknown>,
+  observations: Record<string, SurfaceClaimObservation> | undefined,
+): 'done' | 'pending' {
+  const observed = observations?.[step.claim as string]
+  if (!observed || !('value' in observed)) return 'pending'
+  const done: unknown = step.done
+  // Scalars only, matching `SurfaceClaimValue`. An object `done` could never equal a
+  // witness value, so refusing it here is documentation rather than a behaviour change.
+  if (done !== null && typeof done !== 'string' && typeof done !== 'number' && typeof done !== 'boolean') {
+    return 'pending'
+  }
+  return Object.is(observed.value, done) ? 'done' : 'pending'
+}
+
 /** One canonical Surface as the client-facing `Run.slate` entry it aliases. */
 export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSurface {
   const objective = isObjectiveSurface(s, localId)
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
   return {
     id: localId,
     author: s.author,
@@ -91,7 +187,7 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
     // The objective is FORCED to its pin sentinel rather than storing one, so
     // whatever order it happens to carry cannot strand it mid-list.
     order: objective ? OBJECTIVE_ORDER : s.order ?? s.createdAt,
-    ...(s.content.body ? { body: s.content.body } : {}),
+    ...(body ? { body } : {}),
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
     headline: s.content.headline,
     status: s.thread.status,
@@ -122,15 +218,23 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
  * reconciler owns is `'file'`, and one the record itself owns is `'user'`. That is
  * the same pairing the migration wrote in the other direction, so a point that made
  * the round trip comes back as what it went in as.
+ *
+ * The claim binding is applied HERE TOO, and that is the whole reason it is a shared
+ * function rather than three lines inside the slate projection. These are two
+ * projections of ONE record: a card whose rail says `done` in `Run.slate` and
+ * `pending` through the point routes is a card that disagrees with itself depending
+ * on which door you read it through. This is a READ shape — every write path takes
+ * its content from a request body — so a derived status here never reaches the record.
  */
 export function pointFromCanonical(s: Surface, runId: string, localId: string): Point {
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
   return {
     id: localId,
     runId,
     author: s.author,
     source: s.contentAuthority === 'source-binding' ? 'file' : 'user',
     headline: s.content.headline,
-    ...(s.content.body ? { content: s.content.body } : {}),
+    ...(body ? { content: body } : {}),
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
     ...(s.order != null ? { order: s.order } : {}),
     status: s.thread.status,
