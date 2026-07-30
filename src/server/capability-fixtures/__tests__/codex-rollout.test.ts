@@ -216,6 +216,8 @@ describe('Codex compaction and abort', () => {
   })
 
   it('an interrupted turn is recorded as turn_aborted with a reason and duration', () => {
+    const lines = loadCodexRollout('rollout-spawned-thread')
+    const [started] = codexEventPayloads('rollout-spawned-thread', 'task_started')
     const [aborted] = codexEventPayloads('rollout-spawned-thread', 'turn_aborted')
     expect(aborted).toMatchObject({
       turn_id: expect.any(String),
@@ -223,6 +225,14 @@ describe('Codex compaction and abort', () => {
       completed_at: expect.any(Number),
       duration_ms: expect.any(Number),
     })
+
+    const startedAt = started?.started_at as number
+    const completedAt = aborted?.completed_at as number
+    const durationMs = aborted?.duration_ms as number
+    expect(completedAt).toBe(startedAt + durationMs / 1000)
+
+    const envelopeTimes = lines.map(line => Date.parse(line.timestamp ?? ''))
+    expect(envelopeTimes).toEqual([...envelopeTimes].sort((a, b) => a - b))
   })
 
   it('task_started carries the context window and turn id up front', () => {

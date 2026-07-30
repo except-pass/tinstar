@@ -95,7 +95,7 @@ describe('Claude statusline — native fields not yet consumed', () => {
   // These are pinned, not normalized. The provider plane will need them; if a
   // CC upgrade drops or renames one, this fails loudly instead of silently
   // producing an adapter that reports "--" forever.
-  const full = loadClaudeStatusline('statusline-full') as Record<string, never>
+  const full = loadClaudeStatusline('statusline-full')
 
   it('identifies the model and CLI version', () => {
     expect(full).toMatchObject({

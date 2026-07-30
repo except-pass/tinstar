@@ -3,10 +3,10 @@
  * the agent sitting on a modal?
  *
  * Both providers run in tmux, so the transport (has-session / capture-pane) is
- * already shared. What is NOT shared is the *reading* of a pane: every
- * "is it blocked / did it start / is it busy" heuristic in the codebase is a
- * substring match against provider-specific chrome. Those substrings are the
- * real capability surface, so the frozen captures pin them.
+ * already shared. A few launch-time checks read provider-specific chrome today;
+ * the remaining pane states are structural pins for capabilities with no
+ * production reader yet. Together they freeze the terminal-side signals a
+ * provider adapter will need to interpret.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { loadTerminalCapture } from '../index'
@@ -64,7 +64,7 @@ describe('pane capture', () => {
   })
 })
 
-describe('modal and busy states, as the pane renders them', () => {
+describe('provider chrome — behavioural launch markers and structural state pins', () => {
   it('Claude\'s NATS dev-channel prompt is detected by the literal "Enter to confirm"', () => {
     // This exact substring is what autoAcceptDevChannelWarning polls for before
     // sending Enter; lose it and every NATS-enabled launch hangs on the modal.

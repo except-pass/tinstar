@@ -26,6 +26,11 @@ Every suite mixes two kinds of assertion, deliberately:
   the big one), the native shape is pinned directly. That block is the spec the
   future normalizer has to satisfy.
 
+Some behavioural assertions intentionally overlap narrower production-unit
+tests. The overlap is the seam: these suites drive a complete native fixture
+through the real reader, while the adjacent unit suites isolate reader mechanics.
+If a reader contract changes, update both views together.
+
 Absent and partial fields are first-class: a fresh Claude session with no
 `rate_limits`, a `context_window` missing its size, a Codex `token_count` with
 no `rate_limits` / no `model_context_window` / a null `info`, a truncated final
