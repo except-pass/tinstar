@@ -66,7 +66,7 @@ export const CODEX_ROLLOUT_FIXTURES = [
   'rollout-spawned-thread',
   /** token_count events with absent rate_limits / model_context_window / info. */
   'rollout-partial-token-count',
-  /** A blank line, a non-JSON line, and a truncated final line. */
+  /** Blank + non-JSON + truncated tail; non-JSON stands in for task_started. */
   'rollout-malformed-tail',
 ] as const
 export type CodexRolloutFixture = (typeof CODEX_ROLLOUT_FIXTURES)[number]
