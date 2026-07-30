@@ -77,9 +77,9 @@ repository content to this directory.
 Re-derive the shape from a live artifact, then hand-rewrite the values. When a
 CLI upgrade changes a shape, update the fixture **and** the assertion in the same
 change — a fixture edited alone silently weakens the characterization.
-Keep parseable envelope timestamps in append order, keep each `task_started`
-epoch within two seconds before its envelope, and keep abort duration within one
-second of the start/completion delta.
+Keep every present, parseable envelope timestamp in append order. Keep each
+`task_started` epoch within two seconds before its envelope, and keep abort
+duration within one second of the start/completion delta.
 
 ## Not covered
 

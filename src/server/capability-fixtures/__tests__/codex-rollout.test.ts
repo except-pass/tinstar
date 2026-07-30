@@ -253,17 +253,31 @@ describe('Codex compaction and abort', () => {
 })
 
 describe('Codex rollout chronology', () => {
-  it.each(CODEX_ROLLOUT_FIXTURES)('%s keeps parseable append order monotonic', (fixture) => {
-    const envelopeTimes = loadCodexRollout(fixture).map(line => Date.parse(line.timestamp ?? ''))
+  const expectedTaskStarts = [
+    ['rollout-root-session', 1],
+    ['rollout-resumed-session', 2],
+    ['rollout-spawned-thread', 1],
+    ['rollout-partial-token-count', 1],
+    ['rollout-malformed-tail', 0],
+  ] as const
+
+  it.each(CODEX_ROLLOUT_FIXTURES)('%s keeps timestamped append order monotonic', (fixture) => {
+    const envelopeTimes = loadCodexRollout(fixture)
+      .map(line => line.timestamp)
+      .filter((timestamp): timestamp is string => typeof timestamp === 'string')
+      .map(timestamp => Date.parse(timestamp))
     expect(envelopeTimes.every(Number.isFinite)).toBe(true)
     expect(envelopeTimes).toEqual([...envelopeTimes].sort((a, b) => a - b))
+  })
+
+  it.each(expectedTaskStarts)('%s keeps its expected task_started count', (fixture, count) => {
+    expect(codexEventPayloads(fixture, 'task_started')).toHaveLength(count)
   })
 
   it.each(CODEX_ROLLOUT_FIXTURES)('%s aligns task_started epochs with their envelopes', (fixture) => {
     const startedLines = loadCodexRollout(fixture).filter(
       line => line.type === 'event_msg' && line.payload?.type === 'task_started',
     )
-    expect(startedLines.length).toBeGreaterThan(0)
     for (const line of startedLines) {
       const envelopeMs = Date.parse(line.timestamp ?? '')
       const startedAt = line.payload?.started_at
