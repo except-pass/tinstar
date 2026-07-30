@@ -385,7 +385,21 @@ export const BASE_CONFIG = {
     maxConcurrentWorkers: 4,
     workerTimeoutMs: 10 * 60_000,
     sweepMs: 5_000,
-    defaultIntervalMs: 30 * 60_000,
+    // SIX HOURS, raised from thirty minutes on measured evidence: across a
+    // three-hour session every one of twelve periodic fires returned "no change",
+    // and the surface that most needed periodic verification was tracking a number
+    // that drifts WEEKLY. A thirty-minute floor against a weekly-drifting answer is
+    // roughly three hundred wasted background agents per real change.
+    //
+    // The periodic tick is an AUDIT of whether a declaration is still complete, not a
+    // sampling of the world — the world is sampled by triggers and by witnesses.
+    //
+    // This is the interval for an author who declared a policy and no number. An
+    // author who knows their cadence should say so — `intervalMs: 86400000` for a
+    // daily check — and one whose sources are all in the repo needs no periodic
+    // trigger at all, because `git-revision` already covers exactly the moments
+    // their answer can change.
+    defaultIntervalMs: 6 * 60 * 60_000,
   },
 }
 

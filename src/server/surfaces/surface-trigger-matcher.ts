@@ -76,6 +76,59 @@ export function claimsObserveTriggerKind(
 }
 
 /**
+ * The kinds that ANNOUNCE a locus — the domain the narrowing predicate speaks about.
+ *
+ * Derived from the table rather than written out, so a kind added to a locus is
+ * narrowed by that locus automatically instead of silently falling through.
+ *
+ * Today this is `git-revision` and `periodic`, and only the first ever narrows
+ * anything: `periodic` is on every locus (see {@link CLAIM_LOCUS_TRIGGER_KINDS}), so
+ * an infra-only card is still revalidated by time.
+ */
+const LOCUS_ANNOUNCED_KINDS: readonly SurfaceTriggerKind[] =
+  [...new Set(Object.values(CLAIM_LOCUS_TRIGGER_KINDS).flat())]
+
+/**
+ * Whether this Surface's claims admit a trigger of this kind (R5, plan U5).
+ *
+ * THE NARROWING U5 EXISTS FOR. A card whose claims all sit at `infra` asserts nothing
+ * a commit could contradict, so a commit on the bound worktree must not reach it —
+ * not as a stale mark, and not as a job. On `main` a commit reaches every Surface
+ * bound to its worktree, and that fan-out is the storm this plan opened against.
+ *
+ * THREE WAYS TO PASS, and the second and third are the ones worth reading twice:
+ *
+ *  1. Some claim's locus is invalidated by this kind. The ordinary yes.
+ *
+ *  2. THE SURFACE DECLARES NO CLAIMS — absent or `[]`. Both fall through to today's
+ *     matching untouched. This is U1's tri-state and it is load-bearing here: absent
+ *     means the author never declared, `[]` means they checked and found nothing
+ *     witnessable, and NEITHER is a statement about which triggers should reach the
+ *     card. Narrowing on `[]` would let an author silence their own card by writing
+ *     down that they found nothing to witness.
+ *
+ *  3. THE KIND ANNOUNCES NO LOCUS AT ALL. A locus predicate narrows locus
+ *     announcements; it has nothing to say about a `source-content` event naming an
+ *     upstream file the author declared, or a `semantic-signal` the author named.
+ *     Those kinds reach a Surface only because its author asked for them by name —
+ *     `kindMatches` has already required the declaration and, for those two kinds, a
+ *     matching source id or signal — so they cannot storm, and silencing them would
+ *     mean adding a claim to a card quietly deafened it to the upstream file it was
+ *     built to follow. That is the same asymmetry `effectiveDeclaration` refuses when
+ *     it UNIONS claim-earned kinds onto an author's list rather than replacing them:
+ *     declaring a claim adds what the host should check, and takes nothing away.
+ *
+ * `human-intent` is in that third group and never reaches here anyway — the refresh
+ * button goes through the coordinator's `requestFor`, not through matching.
+ */
+export function claimLocusAdmits(surface: Surface, kind: SurfaceTriggerKind): boolean {
+  const claims = surface.content.claims
+  if (!claims?.length) return true
+  if (!LOCUS_ANNOUNCED_KINDS.includes(kind)) return true
+  return claimsObserveTriggerKind(claims, kind)
+}
+
+/**
  * Every trigger kind this Surface's claims EARN it (R14, plan U4).
  *
  * The inverse read of the same table {@link claimsObserveTriggerKind} uses, and the
@@ -481,6 +534,12 @@ export function matchTrigger(event: SurfaceTriggerEvent, surfaces: readonly Surf
     if (decl.policy === 'manual') continue
     if (!kindMatches(event, decl, surface)) continue
     if (!scopeMatches(event, surface)) continue
+    // THE CLAIM-LOCUS FILTER (R5, plan U5), and it is deliberately LAST: the three
+    // above answer "did the author ask for this / is it even in scope", and this one
+    // answers "could this event possibly contradict what the card asserts". A Surface
+    // that fails here is not marked and not scheduled — narrowing the JOB away, where
+    // U4 only guaranteed no witness was spent on it.
+    if (!claimLocusAdmits(surface, event.kind)) continue
     out.push({
       surface,
       policy: decl.policy,

@@ -1351,20 +1351,26 @@ describe('a trigger reaches the cheap check first', () => {
     expect(h.witnessRuns).toEqual([])
   })
 
-  it('does not run a witness for a trigger kind no claim on it observes', async () => {
+  it('a commit reaches an infra-only Surface not at all — no witness, no mark, no job', async () => {
     const h = harness()
     // `infra` is invalidated by time passing and nothing else, so a commit on the
     // worktree says nothing about whether this card is still right.
+    //
+    // THE RECIPE IS THE HARD HALF. It is what earns this Surface the host's default
+    // `git-revision` trigger, and on `main` that is exactly how a commit reached
+    // every card bound to the worktree. U4 guaranteed only that no WITNESS was spent
+    // here; U5's locus predicate in `matchTrigger` narrows the JOB away too.
     await h.seed(claiming({ claims: [INFRA_CLAIM], stored: { up: 200 }, freshness: { witnessedAt: 9_000 } }))
-    await h.coord.note(gitEvent())
+    const report = await h.coord.note(gitEvent())
     await h.coord.witnessPass()
     expect(h.witnessRuns).toEqual([])
-    // The commit still REACHES this Surface and still queues a rebuild, because it
-    // carries a recipe and a worktree and therefore the host's default `git-revision`
-    // trigger. Narrowing that away is U5's job (a claim-locus predicate in
-    // `matchTrigger`); U4's half is only that no witness was spent on a question this
-    // Surface's claims cannot answer.
-    expect(h.jobs.list()).toHaveLength(1)
+    expect(report.marked).toEqual([])
+    expect(report.queued).toEqual([])
+    expect(h.jobs.list()).toEqual([])
+    // And the card is untouched: no badge, no stale reason, still current.
+    const s = h.get('sf-1')
+    expect(s.freshness.phase).toBe('current')
+    expect(s.freshness).not.toHaveProperty('staleReason')
   })
 })
 

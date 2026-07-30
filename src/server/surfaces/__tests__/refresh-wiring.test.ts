@@ -67,6 +67,18 @@ describe('parseStagedResult', () => {
   })
 })
 
+describe('the shipped refresh defaults', () => {
+  it('verifies every six hours by default, not every thirty minutes', () => {
+    // The periodic tick is an AUDIT of whether a declaration is still complete, not
+    // a sampling of the world — triggers and witnesses sample the world. Thirty
+    // minutes is the value the live job table was measured under, and it is why the
+    // periodic tick fired sixty times in a few hours; across a three-hour session
+    // every one of twelve fires returned "no change", against a surface tracking a
+    // number that drifts WEEKLY.
+    expect(BASE_CONFIG.refresh.defaultIntervalMs).toBe(6 * 60 * 60_000)
+  })
+})
+
 describe('isLiveSessionRecord', () => {
   const record = (state: Session['state']): Pick<Session, 'state'> => ({ state })
 

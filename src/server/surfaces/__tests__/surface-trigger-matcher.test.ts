@@ -1,7 +1,8 @@
 // The closed trigger vocabulary and what it makes stale (plan U6, R14/R15).
 import { describe, it, expect } from 'vitest'
-import type { Surface, SurfaceRefreshDeclaration } from '../../../domain/types'
+import type { Surface, SurfaceClaim, SurfaceRefreshDeclaration } from '../../../domain/types'
 import {
+  claimLocusAdmits,
   claimsObserveTriggerKind,
   claimTriggerKinds,
   CLAIM_LOCUS_TRIGGER_KINDS,
@@ -355,5 +356,89 @@ describe('claim loci and the trigger kinds they observe (plan U3/U5, R5)', () =>
     // inbound and may clear nothing outbound.
     expect(claimsObserveTriggerKind(undefined, 'periodic')).toBe(false)
     expect(claimsObserveTriggerKind([], 'periodic')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The claim-locus narrowing (plan U5, R5).
+//
+// The whole point is a NEGATIVE — a commit reaching nothing — so every test that
+// asserts an absence is paired with the positive that makes the absence mean
+// something: the same event reaching a repo-locus card, or the same card being
+// reached by `periodic`. Without the pair, a matcher that matched nothing at all
+// would pass.
+// ---------------------------------------------------------------------------
+
+describe('a trigger reaches only the claims that observe its locus', () => {
+  const REPO: SurfaceClaim = { id: 'u5', witness: 'unit-landed', locus: 'repo' }
+  const INFRA: SurfaceClaim = { id: 'up', witness: 'http-status', locus: 'infra' }
+
+  /** A Surface carrying a recipe — so it earns the host's default `git-revision`
+   *  trigger — and whatever claims the test hands it. */
+  const claiming = (claims: SurfaceClaim[] | undefined, id = 'srf_1') => surface({
+    id,
+    content: { headline: 'Roadmap', recipe: 'Re-derive the roadmap.', ...(claims ? { claims } : {}) },
+  })
+
+  const commit = event()
+  const tick = event({ kind: 'periodic', sourceId: 'clock' })
+
+  it('a commit produces NO match on an infra-only Surface, recipe and all', () => {
+    // The card asserts an HTTP status. A commit on the worktree cannot contradict
+    // that, so it must not mark it and must not queue a rebuild — and the recipe is
+    // the hard half: it is what gives the Surface the host's default `git-revision`
+    // trigger in the first place, which is how a commit reached it on `main`.
+    const s = claiming([INFRA])
+    expect(effectiveDeclaration(s).triggers).toContain('git-revision')
+    expect(matchTrigger(commit, [s])).toEqual([])
+  })
+
+  it('the same commit DOES match a repo-locus Surface', () => {
+    expect(matchTrigger(commit, [claiming([REPO])])).toHaveLength(1)
+  })
+
+  it('a Surface claiming at both loci is reached by triggers at either', () => {
+    const both = claiming([REPO, INFRA])
+    expect(matchTrigger(commit, [both])).toHaveLength(1)
+    expect(matchTrigger(tick, [both])).toHaveLength(1)
+  })
+
+  it('narrows nothing for absent claims, and nothing for `[]`', () => {
+    // U1's tri-state, load-bearing here. `[]` is an author who checked and found
+    // nothing witnessable — not an author asking to be left alone. Narrowing on it
+    // would let writing down "nothing to witness" silence the card.
+    expect(matchTrigger(commit, [claiming(undefined)])).toHaveLength(1)
+    expect(matchTrigger(commit, [claiming([])])).toHaveLength(1)
+  })
+
+  it('a periodic tick still reaches an infra-only Surface', () => {
+    // It has to. `infra` is announced by nothing but elapsed time, so if the tick
+    // were narrowed away too, an infra card would never be revalidated at all and
+    // the deadline R14 earned it could never be answered.
+    expect(matchTrigger(tick, [claiming([INFRA])])).toHaveLength(1)
+  })
+
+  it('narrows only the kinds that ANNOUNCE a locus', () => {
+    // A `source-content` event naming an upstream file the author declared by name
+    // is not a locus announcement, and a claim says nothing about it. Silencing it
+    // would mean adding a claim to a card quietly deafened it to the file it was
+    // built to follow — the same asymmetry `effectiveDeclaration` refuses when it
+    // unions claim-earned kinds on rather than replacing the author's.
+    const s = surface({
+      content: {
+        headline: 'Budget', recipe: 'x',
+        refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['file:budget.csv'] },
+        claims: [INFRA],
+      },
+    })
+    expect(matchTrigger(event({ kind: 'source-content', sourceId: 'file:budget.csv' }), [s])).toHaveLength(1)
+  })
+
+  it('exposes the predicate on its own, for the coordinator to read', () => {
+    expect(claimLocusAdmits(claiming([INFRA]), 'git-revision')).toBe(false)
+    expect(claimLocusAdmits(claiming([INFRA]), 'periodic')).toBe(true)
+    expect(claimLocusAdmits(claiming([REPO]), 'git-revision')).toBe(true)
+    expect(claimLocusAdmits(claiming(undefined), 'git-revision')).toBe(true)
+    expect(claimLocusAdmits(claiming([]), 'git-revision')).toBe(true)
   })
 })
