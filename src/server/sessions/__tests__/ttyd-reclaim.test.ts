@@ -8,6 +8,7 @@ import {
   isCleanInspectionMiss,
   onTtydRestart,
   orphanTtydPidsToReap,
+  startTtyd,
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
@@ -377,6 +378,28 @@ describe('fenced ttyd start attempts', () => {
     stopManagedTtyd(opts.sessionName)
   })
 
+  it('reports a preflight supersession before inspecting or mutating', async () => {
+    const deps = fakeStartDeps({
+      incumbentsOnPort: vi.fn(async () => []),
+      allIncumbents: vi.fn(async () => []),
+    })
+
+    await expect(startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => false,
+      deps,
+    )).rejects.toMatchObject({
+      name: 'TtydStartSupersededError',
+      stage: 'preflight',
+    })
+
+    expect(deps.incumbentsOnPort).not.toHaveBeenCalled()
+    expect(deps.allIncumbents).not.toHaveBeenCalled()
+    expect(deps.stopManaged).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
   it('takes no destructive action when preflight inspection fails', async () => {
     const deps = fakeStartDeps({
       incumbentsOnPort: async () => {
@@ -407,6 +430,7 @@ describe('fenced ttyd start attempts', () => {
       deps,
     )).rejects.toMatchObject({
       name: 'TtydStartSupersededError',
+      stage: 'pre-spawn',
     })
 
     expect(deps.stopManaged).not.toHaveBeenCalled()
@@ -484,6 +508,7 @@ describe('fenced ttyd start attempts', () => {
     const rejection = expect(attempt)
       .rejects.toMatchObject({
         name: 'TtydStartSupersededError',
+        stage: 'post-spawn',
       })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 
@@ -491,6 +516,44 @@ describe('fenced ttyd start attempts', () => {
     scheduled[0]!.callback()
     await rejection
     expect(deps.enqueueRestart).not.toHaveBeenCalled()
+  })
+
+  it('lets a queued newer start survive a stale generic child error', async () => {
+    const firstChild = fakeChild(701)
+    const secondChild = fakeChild(702)
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const spawnProcess = vi.fn()
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild)
+    const deps = fakeStartDeps({
+      spawnProcess,
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const first = startTtyd(opts, deps)
+    const childError = new Error('stale child failed')
+    const firstRejection = expect(first).rejects.toMatchObject({
+      name: 'TtydStartSupersededError',
+      stage: 'settlement',
+      cause: childError,
+    })
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1))
+
+    const second = startTtyd({ ...opts, port: opts.port + 1 }, deps)
+    firstChild.emit('error', childError)
+    await firstRejection
+
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2))
+    expect(scheduled).toHaveLength(2)
+    scheduled[1]!.callback()
+
+    await expect(second).resolves.toBe(702)
   })
 
   it('routes a live unexpected exit through the injected restart coordinator', async () => {

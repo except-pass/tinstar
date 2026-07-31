@@ -296,8 +296,8 @@ export async function afterBootDeletionCleanups<T>(
 
 export interface VerifiedSessionTtydReattachDeps {
   identityInspectionUnavailable: () => boolean
-  isIdentityInspectionError?: (err: unknown) => boolean
-  isSupersededError?: (err: unknown) => boolean
+  isIdentityInspectionError: (err: unknown) => boolean
+  isSupersededError: (err: unknown) => boolean
   acquireLease: (
     config: TinstarConfig,
     name: string,
@@ -320,7 +320,7 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   isIdentityInspectionError: err =>
     err instanceof tmuxBackend.TtydIdentityInspectionError,
   isSupersededError: err =>
-    err instanceof tmuxBackend.TtydStartSupersededError,
+    tmuxBackend.findTtydStartSupersededError(err) !== null,
   acquireLease: acquirePersistedSessionBackendLeaseForConfig,
   getSession,
   findPort: config => tmuxBackend.findPort(interactivePortWindow(config)),
@@ -496,19 +496,20 @@ export async function reattachVerifiedSessionTtydAttempt(
     // inherit our allocator claim: findPort skips claimed ports and verifies a
     // real bind before reuse. Return the fresh claim without stopping a surface
     // that may already belong to the winning boundary.
-    const superseded = deps.isSupersededError !== undefined
-      ? deps.isSupersededError(err)
-      : err instanceof tmuxBackend.TtydStartSupersededError
-    if (superseded) {
+    if (deps.isSupersededError(err)) {
       if (freshPort != null) deps.releasePort(freshPort)
-      log.info('reattach', `${name}: reattach superseded at a newer lifecycle boundary`)
+      const stage = tmuxBackend.findTtydStartSupersededError(err)?.stage
+      log.info(
+        'reattach',
+        `${name}: reattach superseded${stage ? ` at ${stage}` : ''}`
+          + ' by a newer lifecycle boundary',
+      )
       return false
     }
     // Strict host-inspection failures are explicitly inconclusive: reattach
     // has not created a replacement, so tearing down the incumbent would turn
     // an observation outage into a terminal outage.
-    const inspectionInconclusive = deps.isIdentityInspectionError?.(err)
-      ?? err instanceof tmuxBackend.TtydIdentityInspectionError
+    const inspectionInconclusive = deps.isIdentityInspectionError(err)
     if (!inspectionInconclusive) deps.stopTtyd(name)
     let rollbackComplete = true
     if (sessionPublished && session) {

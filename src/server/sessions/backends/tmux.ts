@@ -1160,11 +1160,34 @@ export class TtydIdentityInspectionError extends Error {
   }
 }
 
+export type TtydStartSupersessionStage =
+  | 'preflight'
+  | 'pre-spawn'
+  | 'post-spawn'
+  | 'settlement'
+
 export class TtydStartSupersededError extends Error {
-  constructor(sessionName: string) {
-    super(`ttyd start for ${sessionName} was superseded`)
+  constructor(
+    sessionName: string,
+    readonly stage: TtydStartSupersessionStage,
+    options?: ErrorOptions,
+  ) {
+    super(`ttyd start for ${sessionName} was superseded at ${stage}`, options)
     this.name = 'TtydStartSupersededError'
   }
+}
+
+export function findTtydStartSupersededError(
+  err: unknown,
+): TtydStartSupersededError | null {
+  const seen = new Set<Error>()
+  let candidate = err
+  while (candidate instanceof Error && !seen.has(candidate)) {
+    if (candidate instanceof TtydStartSupersededError) return candidate
+    seen.add(candidate)
+    candidate = candidate.cause
+  }
+  return null
 }
 
 function markTtydIdentityInspectionAvailable(
@@ -1522,13 +1545,31 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
 function enqueueTtydStart(
   opts: StartTtydOptions,
   startToken: symbol,
+  deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
-  return serializeByKey(ttydStartChains, opts.sessionName, () =>
-    startTtydForTokenAttempt(
-      opts,
-      startToken,
-      () => ttydStartTokens.get(opts.sessionName) === startToken,
-    ))
+  const isCurrent = () =>
+    ttydStartTokens.get(opts.sessionName) === startToken
+  return serializeByKey(ttydStartChains, opts.sessionName, async () => {
+    try {
+      return await startTtydForTokenAttempt(
+        opts,
+        startToken,
+        isCurrent,
+        deps,
+      )
+    } catch (err) {
+      // A newer request can arrive while this task is rejecting. Classify at
+      // the serialized public settlement boundary so stale generic child
+      // errors cannot make background compensation invalidate the queued
+      // winner's token.
+      if (isCurrent() || findTtydStartSupersededError(err)) throw err
+      throw new TtydStartSupersededError(
+        opts.sessionName,
+        'settlement',
+        { cause: err },
+      )
+    }
+  })
 }
 
 /**
@@ -1541,10 +1582,11 @@ function enqueueTtydStart(
  */
 export function startTtyd(
   opts: StartTtydOptions,
+  deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
   const startToken = Symbol(opts.sessionName)
   ttydStartTokens.set(opts.sessionName, startToken)
-  return enqueueTtydStart(opts, startToken)
+  return enqueueTtydStart(opts, startToken, deps)
 }
 
 export async function startTtydForTokenAttempt(
@@ -1554,7 +1596,7 @@ export async function startTtydForTokenAttempt(
   deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(opts.sessionName)
+    throw new TtydStartSupersededError(opts.sessionName, 'preflight')
   }
 
   // Resolve both inventories before taking any destructive action. Operational
@@ -1575,7 +1617,7 @@ export async function startTtydForTokenAttempt(
     )
   }
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(opts.sessionName)
+    throw new TtydStartSupersededError(opts.sessionName, 'pre-spawn')
   }
 
   // resetHistory:false — preserve the restart-rate history across an
@@ -1695,7 +1737,7 @@ export async function startTtydForTokenAttempt(
     // Give ttyd a moment to bind the port
     deps.schedule(() => {
       if (!isCurrent()) {
-        reject(new TtydStartSupersededError(opts.sessionName))
+        reject(new TtydStartSupersededError(opts.sessionName, 'post-spawn'))
         return
       }
       resolve(child.pid)

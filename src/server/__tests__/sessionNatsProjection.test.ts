@@ -30,11 +30,16 @@ import {
   type TinstarConfig,
   type Session,
 } from '../sessions'
-import { TtydStartSupersededError } from '../sessions/backends/tmux'
+import {
+  findTtydStartSupersededError,
+  TtydStartSupersededError,
+} from '../sessions/backends/tmux'
 import { DocumentStore } from '../stores/document-store'
 import type { Run } from '../../domain/types'
 
 const scratchRoots: string[] = []
+const isNeverIdentityInspectionError = (): boolean => false
+const isNeverSupersededError = (): boolean => false
 
 describe('sessionNatsProjection', () => {
   it('does not rehydrate historical subjects for a disabled session', () => {
@@ -403,6 +408,8 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isSupersededError: isNeverSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -445,6 +452,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: err => err === inspectionError,
+        isSupersededError: isNeverSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -466,7 +474,12 @@ describe('getLiveSessionForBoot', () => {
   })
 
   it('leaves a newer terminal start untouched and returns its own fresh claim', async () => {
-    const supersededError = new Error('newer start owns the terminal')
+    const supersededError = new Error('reattach wrapped the terminal error', {
+      cause: new TtydStartSupersededError(
+        'superseded-reattach',
+        'preflight',
+      ),
+    })
     const session = {
       name: 'superseded-reattach',
       state: 'running',
@@ -486,7 +499,9 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
-        isSupersededError: err => err === supersededError,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isSupersededError: err =>
+          findTtydStartSupersededError(err) !== null,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -525,12 +540,13 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
         isSupersededError: () => false,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
         reattach: async () => {
-          throw new TtydStartSupersededError(session.name)
+          throw new TtydStartSupersededError(session.name, 'preflight')
         },
         isCurrent: () => true,
         verifySurface: async () => 'verified',
@@ -565,6 +581,8 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isSupersededError: isNeverSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -613,6 +631,8 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isSupersededError: isNeverSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -654,6 +674,8 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isSupersededError: isNeverSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
