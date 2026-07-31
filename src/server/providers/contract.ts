@@ -269,10 +269,7 @@ function guardDeliveryAdapter<TDetail extends object>(
           providerId,
           messageId: request.messageId,
           attempt: request.attempt,
-          recipient: {
-            providerId,
-            sessionId: request.recipient.sessionId,
-          },
+          recipient: request.recipient,
         },
       )
     }
@@ -291,26 +288,31 @@ function guardDeliveryAdapter<TDetail extends object>(
 
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
-    if (
-      acceptance.providerId !== providerId
-      || acceptance.recipient.providerId !== providerId
-    ) {
-      const acceptedProviderId = acceptance.providerId !== providerId
-        ? acceptance.providerId
-        : acceptance.recipient.providerId
+    if (acceptance.providerId !== providerId) {
       throw new ProviderDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation belongs to provider `
-        + `"${acceptedProviderId}"`,
+        + `"${acceptance.providerId}"`,
         false,
         null,
         {
           providerId,
           messageId: acceptance.messageId,
           attempt: acceptance.attempt,
-          recipient: {
-            providerId,
-            sessionId: acceptance.recipient.sessionId,
-          },
+          recipient: acceptance.recipient,
+        },
+      )
+    }
+    if (acceptance.recipient.providerId !== providerId) {
+      throw new ProviderDeliveryIdentityError(
+        `Provider "${providerId}" delivery confirmation targets recipient provider `
+        + `"${acceptance.recipient.providerId}"`,
+        false,
+        null,
+        {
+          providerId,
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
         },
       )
     }

@@ -793,9 +793,24 @@ describe('provider capability contract', () => {
     })
   })
 
-  it('rejects recipient-session drift across acceptance and confirmation', async () => {
+  it('rejects recipient identity drift across acceptance and confirmation', async () => {
     const delivery = forge.delivery
     if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
+    const wrongAcceptanceProvider = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async accept(request) {
+          return {
+            ...await delivery.accept(request),
+            recipient: {
+              ...request.recipient,
+              providerId: 'boundary',
+            },
+          }
+        },
+      },
+    })
     const wrongAcceptanceRecipient = defineProviderAdapter({
       ...forge,
       delivery: {
@@ -820,6 +835,12 @@ describe('provider capability contract', () => {
       text: 'Right session?',
     }
 
+    const wrongProviderResult = wrongAcceptanceProvider.delivery!.accept(request)
+    await expect(wrongProviderResult)
+      .rejects.toThrow('returned recipient providerId "boundary"')
+    await expect(wrongProviderResult).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: true,
+    })
     await expect(wrongAcceptanceRecipient.delivery!.accept(request))
       .rejects.toThrow('returned recipient sessionId "run-someone-else"')
 
@@ -879,6 +900,10 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-wrong-provider',
         attempt: 1,
+        recipient: {
+          providerId: 'boundary',
+          sessionId: 'run-boundary',
+        },
       },
     })
     expect(acceptCalls).toBe(0)
@@ -934,7 +959,7 @@ describe('provider capability contract', () => {
       },
     })
     await expect(misroutedRecipient)
-      .rejects.toThrow('belongs to provider "boundary"')
+      .rejects.toThrow('targets recipient provider "boundary"')
     await expect(misroutedRecipient).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
     expect(confirmCalls).toBe(0)
   })
