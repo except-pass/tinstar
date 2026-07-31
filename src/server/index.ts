@@ -297,9 +297,7 @@ export async function afterBootDeletionCleanups<T>(
 export interface VerifiedSessionTtydReattachDeps {
   identityInspectionUnavailable: () => boolean
   isIdentityInspectionError?: (err: unknown) => boolean
-  supersessionReason?: (
-    err: unknown,
-  ) => 'replaced' | 'cancelled' | null
+  isSupersededError?: (err: unknown) => boolean
   acquireLease: (
     config: TinstarConfig,
     name: string,
@@ -321,8 +319,8 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   identityInspectionUnavailable: tmuxBackend.ttydIdentityInspectionUnavailable,
   isIdentityInspectionError: err =>
     err instanceof tmuxBackend.TtydIdentityInspectionError,
-  supersessionReason: err =>
-    err instanceof tmuxBackend.TtydStartSupersededError ? err.reason : null,
+  isSupersededError: err =>
+    err instanceof tmuxBackend.TtydStartSupersededError,
   acquireLease: acquirePersistedSessionBackendLeaseForConfig,
   getSession,
   findPort: config => tmuxBackend.findPort(interactivePortWindow(config)),
@@ -494,23 +492,16 @@ export async function reattachVerifiedSessionTtydAttempt(
     log.info('reattach', `${session.name}: ttyd ready on :${result.port}`)
     return true
   } catch (err) {
-    // A replacement start owns the potentially shared port claim, while a
-    // cancellation has no winner and must return our fresh claim. Neither case
-    // may stop a surface at this stale lifecycle boundary.
-    const supersessionReason = deps.supersessionReason?.(err)
-      ?? (
-        err instanceof tmuxBackend.TtydStartSupersededError
-          ? err.reason
-          : null
-      )
-    if (supersessionReason) {
-      if (supersessionReason === 'cancelled' && freshPort != null) {
-        deps.releasePort(freshPort)
-      }
-      log.info(
-        'reattach',
-        `${name}: reattach ${supersessionReason} at a newer lifecycle boundary`,
-      )
+    // A newer lifecycle boundary owns whatever terminal survives, but cannot
+    // inherit our allocator claim: findPort skips claimed ports and verifies a
+    // real bind before reuse. Return the fresh claim without stopping a surface
+    // that may already belong to the winning boundary.
+    const superseded = deps.isSupersededError !== undefined
+      ? deps.isSupersededError(err)
+      : err instanceof tmuxBackend.TtydStartSupersededError
+    if (superseded) {
+      if (freshPort != null) deps.releasePort(freshPort)
+      log.info('reattach', `${name}: reattach superseded at a newer lifecycle boundary`)
       return false
     }
     // Strict host-inspection failures are explicitly inconclusive: reattach

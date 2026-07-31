@@ -50,7 +50,6 @@ function fakeStartDeps(
     }) as unknown as typeof setTimeout,
     tmuxAlive: async () => true,
     enqueueRestart: vi.fn(async () => child.pid),
-    supersessionReason: () => 'cancelled',
     ...overrides,
   }
 }
@@ -408,7 +407,6 @@ describe('fenced ttyd start attempts', () => {
       deps,
     )).rejects.toMatchObject({
       name: 'TtydStartSupersededError',
-      reason: 'cancelled',
     })
 
     expect(deps.stopManaged).not.toHaveBeenCalled()
@@ -475,7 +473,6 @@ describe('fenced ttyd start attempts', () => {
         scheduled.push({ callback, delay })
         return {} as NodeJS.Timeout
       }) as unknown as typeof setTimeout,
-      supersessionReason: () => 'replaced',
     })
 
     const attempt = startTtydForTokenAttempt(
@@ -487,7 +484,6 @@ describe('fenced ttyd start attempts', () => {
     const rejection = expect(attempt)
       .rejects.toMatchObject({
         name: 'TtydStartSupersededError',
-        reason: 'replaced',
       })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 

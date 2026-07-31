@@ -1161,11 +1161,8 @@ export class TtydIdentityInspectionError extends Error {
 }
 
 export class TtydStartSupersededError extends Error {
-  constructor(
-    sessionName: string,
-    readonly reason: 'replaced' | 'cancelled',
-  ) {
-    super(`ttyd start for ${sessionName} was ${reason}`)
+  constructor(sessionName: string) {
+    super(`ttyd start for ${sessionName} was superseded`)
     this.name = 'TtydStartSupersededError'
   }
 }
@@ -1500,10 +1497,6 @@ export interface StartTtydAttemptDeps {
     opts: StartTtydOptions,
     startToken: symbol,
   ) => Promise<number | undefined>
-  supersessionReason: (
-    opts: StartTtydOptions,
-    startToken: symbol,
-  ) => 'replaced' | 'cancelled'
 }
 
 const startTtydAttemptDeps: StartTtydAttemptDeps = {
@@ -1524,12 +1517,6 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
   schedule: setTimeout,
   tmuxAlive: tmuxHasSession,
   enqueueRestart: enqueueTtydStart,
-  supersessionReason: (opts, startToken) => {
-    const current = ttydStartTokens.get(opts.sessionName)
-    return current !== undefined && current !== startToken
-      ? 'replaced'
-      : 'cancelled'
-  },
 }
 
 function enqueueTtydStart(
@@ -1544,7 +1531,14 @@ function enqueueTtydStart(
     ))
 }
 
-/** Latest-request-wins, per-session serialized ttyd launch. */
+/**
+ * Latest-request-wins, per-session serialized ttyd launch.
+ *
+ * A superseded attempt rejects instead of reporting a false success with no
+ * PID. Public create/start callers hold exclusive lifecycle ownership and must
+ * propagate that cancellation; background reattach explicitly translates it
+ * into a non-destructive retry at the next boundary.
+ */
 export function startTtyd(
   opts: StartTtydOptions,
 ): Promise<number | undefined> {
@@ -1560,10 +1554,7 @@ export async function startTtydForTokenAttempt(
   deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(
-      opts.sessionName,
-      deps.supersessionReason(opts, startToken),
-    )
+    throw new TtydStartSupersededError(opts.sessionName)
   }
 
   // Resolve both inventories before taking any destructive action. Operational
@@ -1584,10 +1575,7 @@ export async function startTtydForTokenAttempt(
     )
   }
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(
-      opts.sessionName,
-      deps.supersessionReason(opts, startToken),
-    )
+    throw new TtydStartSupersededError(opts.sessionName)
   }
 
   // resetHistory:false — preserve the restart-rate history across an
@@ -1707,10 +1695,7 @@ export async function startTtydForTokenAttempt(
     // Give ttyd a moment to bind the port
     deps.schedule(() => {
       if (!isCurrent()) {
-        reject(new TtydStartSupersededError(
-          opts.sessionName,
-          deps.supersessionReason(opts, startToken),
-        ))
+        reject(new TtydStartSupersededError(opts.sessionName))
         return
       }
       resolve(child.pid)
