@@ -17,8 +17,10 @@ export interface ProviderDeliveryRecipient {
  * The adapter may already have performed its final-mile side effect before a
  * malformed result is detected. Callers must not blind-retry when
  * `sideEffectMayHaveOccurred` is true; the offending result remains attached
- * for ledger policy and diagnostics. A null result means the guard rejected
- * before invoking the adapter, so `sideEffectMayHaveOccurred` is false.
+ * for ledger policy and diagnostics. Only a post-invocation accept failure may
+ * have delivered. Preflight rejections and confirmation failures are read-only,
+ * so `sideEffectMayHaveOccurred` is false; a non-null confirmation result does
+ * not imply a delivery side effect.
  * `actualProviderId` is non-null exactly when a foreign top-level or recipient
  * provider caused rejection; it is null for provider-neutral message, attempt,
  * or session drift, across both preflight and post-invocation failures. In a
@@ -72,6 +74,17 @@ type ProviderDeliveryResult<TFields extends object> =
 type ProviderDeliveryOperation =
   | { name: 'accept'; sideEffectMayHaveOccurred: true }
   | { name: 'confirm'; sideEffectMayHaveOccurred: false }
+
+// Confirmation only probes provider evidence; a new operation must explicitly
+// decide whether it can perform the final-mile delivery side effect.
+const ACCEPT_OPERATION = {
+  name: 'accept',
+  sideEffectMayHaveOccurred: true,
+} as const satisfies ProviderDeliveryOperation
+const CONFIRM_OPERATION = {
+  name: 'confirm',
+  sideEffectMayHaveOccurred: false,
+} as const satisfies ProviderDeliveryOperation
 
 export type ProviderDeliveryAcceptance<TDetail extends object = object> =
   | ProviderDeliveryResult<{
@@ -284,7 +297,7 @@ function guardDeliveryAdapter<TDetail extends object>(
     const result = await rawAccept(request)
     assertDeliveryIdentity(
       providerId,
-      { name: 'accept', sideEffectMayHaveOccurred: true },
+      ACCEPT_OPERATION,
       result,
       deliveryIdentityFor(providerId, request),
     )
@@ -321,7 +334,7 @@ function guardDeliveryAdapter<TDetail extends object>(
     const result = await rawConfirm(acceptance)
     assertDeliveryIdentity(
       providerId,
-      { name: 'confirm', sideEffectMayHaveOccurred: false },
+      CONFIRM_OPERATION,
       result,
       deliveryIdentityFor(providerId, acceptance),
     )
