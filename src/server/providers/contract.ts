@@ -17,7 +17,8 @@ export interface ProviderDeliveryRecipient {
  * The adapter may already have performed its final-mile side effect before a
  * malformed result is detected. Callers must not blind-retry when
  * `sideEffectMayHaveOccurred` is true; the offending result remains attached
- * for ledger policy and diagnostics.
+ * for ledger policy and diagnostics. A null result means the guard rejected
+ * before invoking the adapter, so `sideEffectMayHaveOccurred` is false.
  */
 export class ProviderDeliveryIdentityError extends Error {
   readonly name = 'ProviderDeliveryIdentityError'
@@ -55,6 +56,7 @@ export interface ProviderDeliveryResultIdentity {
   providerId: string
   messageId: string
   attempt: number
+  recipient: ProviderDeliveryRecipient
 }
 
 type ProviderDeliveryResult<TFields extends object> =
@@ -88,10 +90,11 @@ export type AcceptedProviderDelivery<TDetail extends object = object> = Extract<
 >
 
 /**
- * Stable attempt identity used for confirmation. Provider-owned detail stays
- * out of this input so heterogeneous registries can safely erase adapter detail.
- * An adapter that needs provider-owned lookup state sets `attemptRef`; adapters
- * that can derive state from `messageId` and `attempt` may omit it.
+ * Stable provider, recipient, message, and attempt identity used for
+ * confirmation. Provider-owned detail stays out of this input so heterogeneous
+ * registries can safely erase adapter detail. An adapter that needs
+ * provider-owned lookup state sets `attemptRef`; adapters that can derive state
+ * from the shared identity may omit it.
  */
 export type AcceptedProviderDeliveryIdentity = Omit<
   AcceptedProviderDelivery<object>,
@@ -266,6 +269,10 @@ function guardDeliveryAdapter<TDetail extends object>(
           providerId,
           messageId: request.messageId,
           attempt: request.attempt,
+          recipient: {
+            providerId,
+            sessionId: request.recipient.sessionId,
+          },
         },
       )
     }
@@ -274,6 +281,7 @@ function guardDeliveryAdapter<TDetail extends object>(
       providerId,
       messageId: request.messageId,
       attempt: request.attempt,
+      recipient: request.recipient,
     })
     return result
   }
@@ -283,16 +291,26 @@ function guardDeliveryAdapter<TDetail extends object>(
 
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
-    if (acceptance.providerId !== providerId) {
+    if (
+      acceptance.providerId !== providerId
+      || acceptance.recipient.providerId !== providerId
+    ) {
+      const acceptedProviderId = acceptance.providerId !== providerId
+        ? acceptance.providerId
+        : acceptance.recipient.providerId
       throw new ProviderDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation belongs to provider `
-        + `"${acceptance.providerId}"`,
+        + `"${acceptedProviderId}"`,
         false,
         null,
         {
           providerId,
           messageId: acceptance.messageId,
           attempt: acceptance.attempt,
+          recipient: {
+            providerId,
+            sessionId: acceptance.recipient.sessionId,
+          },
         },
       )
     }
@@ -314,7 +332,7 @@ function assertDeliveryIdentity(
     throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned providerId `
       + `"${actual.providerId}", expected "${expected.providerId}"`,
-      operation === 'accept' && actual.state === 'accepted',
+      operation === 'accept',
       actual,
       expected,
     )
@@ -323,7 +341,7 @@ function assertDeliveryIdentity(
     throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned messageId `
       + `"${actual.messageId}", expected "${expected.messageId}"`,
-      operation === 'accept' && actual.state === 'accepted',
+      operation === 'accept',
       actual,
       expected,
     )
@@ -332,7 +350,25 @@ function assertDeliveryIdentity(
     throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned attempt `
       + `${actual.attempt}, expected ${expected.attempt}`,
-      operation === 'accept' && actual.state === 'accepted',
+      operation === 'accept',
+      actual,
+      expected,
+    )
+  }
+  if (actual.recipient.providerId !== expected.recipient.providerId) {
+    throw new ProviderDeliveryIdentityError(
+      `Provider "${providerId}" delivery ${operation} returned recipient providerId `
+      + `"${actual.recipient.providerId}", expected "${expected.recipient.providerId}"`,
+      operation === 'accept',
+      actual,
+      expected,
+    )
+  }
+  if (actual.recipient.sessionId !== expected.recipient.sessionId) {
+    throw new ProviderDeliveryIdentityError(
+      `Provider "${providerId}" delivery ${operation} returned recipient sessionId `
+      + `"${actual.recipient.sessionId}", expected "${expected.recipient.sessionId}"`,
+      operation === 'accept',
       actual,
       expected,
     )

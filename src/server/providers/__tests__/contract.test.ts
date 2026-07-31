@@ -201,6 +201,7 @@ const forge = defineProviderAdapter<ForgeDetail>({
         providerId: 'forge',
         messageId: request.messageId,
         attempt: request.attempt,
+        recipient: request.recipient,
         acceptedAt: CHECKED_AT,
         attemptRef: `forge:${request.messageId}:${request.attempt}`,
         detail: { region: 'workstation', sequence: request.attempt },
@@ -212,6 +213,7 @@ const forge = defineProviderAdapter<ForgeDetail>({
         providerId: 'forge',
         messageId: acceptance.messageId,
         attempt: acceptance.attempt,
+        recipient: acceptance.recipient,
         confirmedAt: CHECKED_AT,
         evidence: {
           source: { id: 'journal-message', label: 'Journal message' },
@@ -433,6 +435,7 @@ describe('provider capability contract', () => {
             providerId: 'boundary',
             messageId: request.messageId,
             attempt: request.attempt,
+            recipient: request.recipient,
             acceptedAt: CHECKED_AT,
           }
         },
@@ -463,6 +466,7 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 1,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
         checkedAt: CHECKED_AT,
         reason: 'Recipient is between prompt boundaries',
         retryAt: '2026-07-30T12:00:02.000Z',
@@ -472,6 +476,7 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-stopped',
         attempt: 1,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
         checkedAt: CHECKED_AT,
         reason: 'Recipient is not live',
         retryable: false,
@@ -483,6 +488,7 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 2,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
         checkedAt: CHECKED_AT,
         reason: 'No provider evidence yet',
         retryAt: '2026-07-30T12:00:03.000Z',
@@ -492,6 +498,7 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 2,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
         checkedAt: CHECKED_AT,
         reason: 'Provider rejected the attempt',
         retryable: true,
@@ -521,6 +528,7 @@ describe('provider capability contract', () => {
       providerId: 'forge',
       messageId: 'msg-7a51',
       attempt: 2,
+      recipient: request.recipient,
     })
     if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
 
@@ -532,6 +540,7 @@ describe('provider capability contract', () => {
       providerId: 'forge',
       messageId: 'msg-7a51',
       attempt: 2,
+      recipient: request.recipient,
       evidence: {
         source: { id: 'journal-message' },
         reference: 'forge:msg-7a51:2',
@@ -743,6 +752,101 @@ describe('provider capability contract', () => {
     })
   })
 
+  it('treats every malformed acceptance as possibly delivered after adapter invocation', async () => {
+    const delivery = forge.delivery
+    if (!delivery) throw new Error('expected delivery adapter')
+    const mismatched = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async accept(request) {
+          return {
+            state: 'rejected',
+            providerId: 'boundary',
+            messageId: request.messageId,
+            attempt: request.attempt,
+            recipient: request.recipient,
+            checkedAt: CHECKED_AT,
+            reason: 'Stale provider result',
+            retryable: true,
+          }
+        },
+      },
+    })
+    const request = {
+      messageId: 'msg-conservative-retry',
+      attempt: 1,
+      acceptedAt: CHECKED_AT,
+      senderSessionId: 'run-sender',
+      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      text: 'Do not duplicate me',
+    }
+
+    const result = mismatched.delivery!.accept(request)
+    await expect(result).rejects.toThrow('returned providerId "boundary"')
+    await expect(result).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: true,
+      result: {
+        state: 'rejected',
+        providerId: 'boundary',
+      },
+    })
+  })
+
+  it('rejects recipient-session drift across acceptance and confirmation', async () => {
+    const delivery = forge.delivery
+    if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
+    const wrongAcceptanceRecipient = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async accept(request) {
+          return {
+            ...await delivery.accept(request),
+            recipient: {
+              ...request.recipient,
+              sessionId: 'run-someone-else',
+            },
+          }
+        },
+      },
+    })
+    const request = {
+      messageId: 'msg-session-bound',
+      attempt: 1,
+      acceptedAt: CHECKED_AT,
+      senderSessionId: 'run-sender',
+      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      text: 'Right session?',
+    }
+
+    await expect(wrongAcceptanceRecipient.delivery!.accept(request))
+      .rejects.toThrow('returned recipient sessionId "run-someone-else"')
+
+    const acceptance = await delivery.accept(request)
+    if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
+    const wrongConfirmationRecipient = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async confirm(candidate) {
+          return {
+            ...await delivery.confirm!(candidate),
+            recipient: {
+              ...candidate.recipient,
+              sessionId: 'run-someone-else',
+            },
+          }
+        },
+      },
+    })
+    const confirming = wrongConfirmationRecipient.delivery
+    if (!confirming?.confirm) throw new Error('expected confirmation-capable delivery')
+
+    await expect(confirming.confirm(acceptance))
+      .rejects.toThrow('returned recipient sessionId "run-someone-else"')
+  })
+
   it('rejects a delivery for another provider before invoking the adapter', async () => {
     let acceptCalls = 0
     const delivery = forge.delivery
@@ -821,6 +925,17 @@ describe('provider capability contract', () => {
         attempt: 1,
       },
     })
+
+    const misroutedRecipient = confirming.confirm({
+      ...acceptance,
+      recipient: {
+        ...acceptance.recipient,
+        providerId: 'boundary',
+      },
+    })
+    await expect(misroutedRecipient)
+      .rejects.toThrow('belongs to provider "boundary"')
+    await expect(misroutedRecipient).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
     expect(confirmCalls).toBe(0)
   })
 
