@@ -18,11 +18,13 @@ export interface ProviderDeliveryRecipient {
  * malformed result is detected. Callers must not blind-retry when
  * `sideEffectMayHaveOccurred` is true; the offending result remains attached
  * for ledger policy and diagnostics. A null result means the guard rejected
- * before invoking the adapter, so `sideEffectMayHaveOccurred` is false. In that
- * preflight case, `expected.providerId` is the rejecting adapter while
- * `expected.recipient` preserves the submitted target. `actualProviderId`
- * records the foreign provider field that caused rejection; provider IDs
- * inside `expected` differ only for recipient-routing failures.
+ * before invoking the adapter, so `sideEffectMayHaveOccurred` is false.
+ * `actualProviderId` is non-null exactly when a foreign top-level or recipient
+ * provider caused rejection; it is null for provider-neutral message, attempt,
+ * or session drift, across both preflight and post-invocation failures. In a
+ * preflight failure, `expected.providerId` is the rejecting adapter while
+ * `expected.recipient` preserves the submitted target; provider IDs inside
+ * `expected` differ only for recipient-routing failures.
  */
 export class ProviderDeliveryIdentityError extends Error {
   readonly name = 'ProviderDeliveryIdentityError'
@@ -360,6 +362,24 @@ function deliveryIdentityFor(
   }
 }
 
+function deliveryResultIdentityError(
+  message: string,
+  options: {
+    operation: 'accept' | 'confirm'
+    actual: ProviderDeliveryAcceptance | ProviderDeliveryConfirmation
+    expected: ProviderDeliveryResultIdentity
+    actualProviderId: string | null
+  },
+): ProviderDeliveryIdentityError {
+  return new ProviderDeliveryIdentityError(
+    message,
+    options.operation === 'accept',
+    options.actual,
+    options.expected,
+    options.actualProviderId,
+  )
+}
+
 function assertDeliveryIdentity(
   providerId: string,
   operation: 'accept' | 'confirm',
@@ -367,53 +387,63 @@ function assertDeliveryIdentity(
   expected: ProviderDeliveryResultIdentity,
 ): void {
   if (actual.providerId !== expected.providerId) {
-    throw new ProviderDeliveryIdentityError(
+    throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation} returned providerId `
       + `"${actual.providerId}", expected "${expected.providerId}"`,
-      operation === 'accept',
-      actual,
-      expected,
-      actual.providerId,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: actual.providerId,
+      },
     )
   }
   if (actual.messageId !== expected.messageId) {
-    throw new ProviderDeliveryIdentityError(
+    throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation} returned messageId `
       + `"${actual.messageId}", expected "${expected.messageId}"`,
-      operation === 'accept',
-      actual,
-      expected,
-      null,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: null,
+      },
     )
   }
   if (actual.attempt !== expected.attempt) {
-    throw new ProviderDeliveryIdentityError(
+    throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation} returned attempt `
       + `${actual.attempt}, expected ${expected.attempt}`,
-      operation === 'accept',
-      actual,
-      expected,
-      null,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: null,
+      },
     )
   }
   if (actual.recipient.providerId !== expected.recipient.providerId) {
-    throw new ProviderDeliveryIdentityError(
+    throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation} returned recipient providerId `
       + `"${actual.recipient.providerId}", expected "${expected.recipient.providerId}"`,
-      operation === 'accept',
-      actual,
-      expected,
-      actual.recipient.providerId,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: actual.recipient.providerId,
+      },
     )
   }
   if (actual.recipient.sessionId !== expected.recipient.sessionId) {
-    throw new ProviderDeliveryIdentityError(
+    throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation} returned recipient sessionId `
       + `"${actual.recipient.sessionId}", expected "${expected.recipient.sessionId}"`,
-      operation === 'accept',
-      actual,
-      expected,
-      null,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: null,
+      },
     )
   }
 }
