@@ -380,7 +380,7 @@ async function doctor() {
       let hasFail = false
 
       // Backend alive check (tmux)
-      const r = spawnSync('tmux', ['has-session', '-t', `${tmuxPrefix}${name}`], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
+      const r = spawnSync('tmux', ['has-session', '-t', `=${tmuxPrefix}${name}`], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
       if (r.status === 0) {
         parts.push('tmux alive')
       } else {

@@ -9,11 +9,13 @@ import {
   coalesceGeneration,
   deriveDueAt,
   effectiveDeclaration,
+  isExternalSourceId,
   matchTrigger,
   MIN_INTERVAL_MS,
   normalizeTrigger,
   parseRefreshDeclaration,
   parseSurfaceClaims,
+  pathMatchesGlob,
   triggerDedupeKey,
   type SurfaceTriggerEvent,
 } from '../surface-trigger-matcher'
@@ -83,6 +85,19 @@ describe('parseRefreshDeclaration', () => {
     })
     expect(d?.sources).toEqual(['a', 'b'])
     expect(d?.signals).toEqual(['deploy-finished'])
+  })
+
+  it('keeps an EMPTY sources array distinct from an absent one', () => {
+    // Round-trip fidelity of the authored file, not a behaviour switch: nothing in
+    // trigger matching branches on `[]` vs absent today. The parser records what the
+    // author wrote — `"sources": []` is the statement "I checked, nothing derives
+    // this" — rather than silently rewriting it into an omission.
+    expect(parseRefreshDeclaration({ sources: [] })?.sources).toEqual([])
+    expect(parseRefreshDeclaration({ triggers: ['periodic'] })?.sources).toBeUndefined()
+  })
+
+  it('drops non-string source entries without collapsing the declaration', () => {
+    expect(parseRefreshDeclaration({ sources: [{ exec: 'ls' }, 42] })?.sources).toEqual([])
   })
 })
 
@@ -298,6 +313,23 @@ describe('matchTrigger', () => {
     expect(matchTrigger(event({ kind: 'source-content', sourceId: 'file:budget.csv' }), [s])).toHaveLength(1)
   })
 
+  it('a source-content event whose sourceId is PATH-SHAPED is matched by glob, not only by equality', () => {
+    // One declared list, two shapes: an `external:`-style id is compared for
+    // equality, and an adapter that emits a repo-relative path as its `sourceId`
+    // gets glob matching for free — so an author can write `scripts/**` instead of
+    // enumerating every file such an adapter might name.
+    const s = surface({
+      content: {
+        headline: 'x', recipe: 'x',
+        refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['scripts/integrity/**'] },
+      },
+    })
+    const hit = event({ kind: 'source-content', sourceId: 'scripts/integrity/detect-leftovers.sh' })
+    const miss = event({ kind: 'source-content', sourceId: 'scripts/other/thing.sh' })
+    expect(matchTrigger(hit, [s])).toHaveLength(1)
+    expect(matchTrigger(miss, [s])).toEqual([])
+  })
+
   it('a semantic signal only matches a Surface that named it', () => {
     const listening = surface({
       id: 'a',
@@ -315,6 +347,101 @@ describe('matchTrigger', () => {
     })
     const e = event({ kind: 'semantic-signal', sourceId: 'agent:alpha', signal: 'deploy-finished', worktree: undefined })
     expect(matchTrigger(e, [listening, deaf]).map(m => m.surface.id)).toEqual(['a'])
+  })
+})
+
+describe('declared sources do NOT narrow a commit', () => {
+  // A DECISION, pinned so the next reader sees it rather than inferring it from an
+  // absence. A branch of this file once compared a commit's changed paths against
+  // the author's `sources` globs and dropped the event when nothing matched. That
+  // came out: narrowing which triggers may reach a claim is claim-locus work — one
+  // mechanism, declared per claim — and two narrowing mechanisms for one decision
+  // leave an implementer no rule for which wins.
+  //
+  // So `sources` is a `source-content` matching list and nothing more. Declaring it
+  // must not change what a `git-revision` event does, in either direction.
+  function declaring(sources: string[] | undefined, id = 'srf_1'): Surface {
+    return surface({
+      id,
+      content: {
+        headline: 'Decision 6',
+        recipe: 'Re-run the detector and rewrite the surface.',
+        refreshPolicy: { policy: 'automatic', triggers: ['git-revision'], ...(sources ? { sources } : {}) },
+      },
+    })
+  }
+
+  it('a Surface declaring repo globs matches a commit like any other', () => {
+    // The case the removed narrowing would have dropped: declared globs that the
+    // commit did not touch. The host's declared trigger is the whole gate.
+    const s = declaring(['scripts/integrity/detect-site-reassignment-leftovers.sh'])
+    expect(matchTrigger(event(), [s])).toHaveLength(1)
+  })
+
+  it('an EMPTY sources declaration does not make a Surface commit-silent', () => {
+    expect(matchTrigger(event(), [declaring([])])).toHaveLength(1)
+  })
+
+  it('an all-external declaration is still woken by a commit', () => {
+    expect(matchTrigger(event(), [declaring(['external:prod-mysql/ra-physical', 'jira:CMT-510'])])).toHaveLength(1)
+  })
+
+  it('declaring sources changes nothing a commit does — same result as declaring none', () => {
+    const undeclared = matchTrigger(event(), [declaring(undefined, 'a')])
+    const declared = matchTrigger(event(), [declaring(['src/api/**', 'jira:CMT-510'], 'b')])
+    expect(declared.map(m => m.reason)).toEqual(undeclared.map(m => m.reason))
+  })
+})
+
+// `pathMatchesGlob` and `isExternalSourceId` are the two halves of `source-content`
+// matching — one declared list carrying external ids (equality) and repo path shapes
+// (glob). They are NOT reachable from a `git-revision` event; see above.
+describe('pathMatchesGlob', () => {
+  it('* stops at a separator and ** crosses one', () => {
+    expect(pathMatchesGlob('src/*.ts', 'src/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/*.ts', 'src/server/index.ts')).toBe(false)
+    expect(pathMatchesGlob('src/**/*.ts', 'src/server/api/routes.ts')).toBe(true)
+    expect(pathMatchesGlob('src/**', 'src/server/api/routes.ts')).toBe(true)
+  })
+
+  it('a wildcard-free glob is a PREFIX, because authors name directories', () => {
+    expect(pathMatchesGlob('src/server', 'src/server/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/server', 'src/server')).toBe(true)
+    // and does not leak into a sibling whose name merely starts the same way
+    expect(pathMatchesGlob('src/server', 'src/serverless/x.ts')).toBe(false)
+  })
+
+  it('? is exactly one non-separator character', () => {
+    expect(pathMatchesGlob('bin/serena?', 'bin/serena1')).toBe(true)
+    expect(pathMatchesGlob('bin/serena?', 'bin/serena')).toBe(false)
+    expect(pathMatchesGlob('bin/?', 'bin/a/b')).toBe(false)
+  })
+
+  it('treats regex metacharacters in a glob as literals', () => {
+    // An author writing a filename with a dot must not have it read as "any char".
+    expect(pathMatchesGlob('docs/a.md', 'docs/aXmd')).toBe(false)
+    expect(pathMatchesGlob('docs/a.md', 'docs/a.md')).toBe(true)
+    expect(pathMatchesGlob('docs/a+b.md', 'docs/a+b.md')).toBe(true)
+  })
+
+  it('normalizes a leading ./ and a trailing slash on either side', () => {
+    expect(pathMatchesGlob('./src/server/', 'src/server/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/server', './src/server/index.ts')).toBe(true)
+  })
+})
+
+describe('isExternalSourceId', () => {
+  it('a scheme prefix marks an opaque id, matched by equality rather than as a glob', () => {
+    expect(isExternalSourceId('external:prod-mysql/ra-physical')).toBe(true)
+    expect(isExternalSourceId('mysql://prod/detector')).toBe(true)
+    expect(isExternalSourceId('jira:CMT-510')).toBe(true)
+    expect(isExternalSourceId('file:cov.json#cov')).toBe(true)
+  })
+
+  it('a repo path is not external', () => {
+    expect(isExternalSourceId('src/server/**')).toBe(false)
+    expect(isExternalSourceId('docs/plans/2026-07-24-001-*.md')).toBe(false)
+    expect(isExternalSourceId('bin/serena')).toBe(false)
   })
 })
 

@@ -421,6 +421,19 @@ export class SurfaceRefreshCoordinator {
     surface: Surface, reason: SurfaceStaleReason | undefined, report: RefreshPassReport,
   ): Promise<SurfaceRefreshJob | undefined> {
     const at = this.deps.now()
+    // A PERMANENTLY BLOCKED SURFACE GETS NO JOB AT ALL. Creating one and failing it
+    // at dispatch would be the same loop with extra steps: the deadline that
+    // scheduled it can never move (`dueAt` derives from the last SUCCESSFUL
+    // verification), so every sweep after the failure cooldown would make another
+    // one. The blocker is recorded on the Surface instead, once, where the user can
+    // read it — and a human ⟳ hits this too, which is right: being asked does not
+    // conjure a file back.
+    const permanent = this.refreshBlocker(surface)
+    if (permanent?.permanent) {
+      await this.recordBlocked(surface, permanent.reason, at)
+      report.blocked.push({ jobId: '', reason: permanent.reason })
+      return undefined
+    }
     const generation = surface.source?.generation ?? 0
     const existing = this.deps.jobs.active(surface.id)
     if (existing) {
@@ -464,7 +477,7 @@ export class SurfaceRefreshCoordinator {
       authorization: {
         principal: COORDINATOR_PRINCIPAL,
         ...(worktree ? { worktree } : {}),
-        ...(this.authorizationProblem(surface) ? { blocked: this.authorizationProblem(surface)! } : {}),
+        ...(permanent ? { blocked: permanent.reason } : {}),
       },
       stagingPath: this.deps.jobs.stagingPathFor(id),
       createdAt: at,
@@ -490,18 +503,55 @@ export class SurfaceRefreshCoordinator {
    * authorized in. A Surface whose binding and provenance disagree about which
    * worktree it belongs to is precisely the "parent spanning two worktrees" case,
    * and guessing between them would write into a repository nobody authorized.
+   *
+   * THE MISSING SOURCE IS THE ONE THAT DOES NOT RETRY, and it is the only blocker
+   * here that is `permanent`. U2 keeps a Surface whose source file was deleted —
+   * deliberately, so an `rm` or a `git checkout` cannot destroy a thread — but U6
+   * never consulted that state, so the refresh engine kept scheduling work with
+   * nowhere to commit it. Observed on this machine: a Surface sat `refreshing` while
+   * a real background agent ran to its ten-minute timeout, failed, waited one
+   * interval, and did it again, forever, because `verifiedAt` can never advance
+   * through a binding that resolves to no file.
    */
-  private authorizationProblem(surface: Surface): string | undefined {
+  private refreshBlocker(surface: Surface): { reason: string; permanent: boolean } | undefined {
+    if (surface.source?.state === 'missing') {
+      return {
+        reason: `its source (${surface.source.locator}) is gone, so a rebuilt result would have nowhere to land`,
+        permanent: true,
+      }
+    }
     const bound = surface.source?.worktree
     const provenance = surface.provenance?.worktreeId
     if (bound && provenance && bound !== provenance) {
-      return `this Surface names two worktrees (${bound} and ${provenance}); a refresh may not choose between them`
+      return {
+        reason: `this Surface names two worktrees (${bound} and ${provenance}); a refresh may not choose between them`,
+        permanent: false,
+      }
     }
-    if (!bound && !provenance) return 'no worktree is recorded, so there is nowhere authorized to run a refresh'
+    if (!bound && !provenance) {
+      return { reason: 'no worktree is recorded, so there is nowhere authorized to run a refresh', permanent: false }
+    }
     if (!surface.content.recipe) {
-      return 'this Surface declares no refresh recipe, so nothing can rebuild it without a human'
+      return {
+        reason: 'this Surface declares no refresh recipe, so nothing can rebuild it without a human',
+        permanent: false,
+      }
     }
     return undefined
+  }
+
+  /**
+   * Record a blocker on the Surface WITHOUT burning a revision per sweep.
+   *
+   * A permanent blocker is re-derived on every deadline pass, so committing it
+   * unconditionally would rewrite the record — and emit SSE — every few seconds for
+   * as long as the file stays deleted. `failRefresh` cannot short-circuit this
+   * itself: its `failure.at` stamp moves on every call, so the store's no-change
+   * check never fires.
+   */
+  private async recordBlocked(surface: Surface, reason: string, at: number): Promise<void> {
+    if (surface.freshness.phase === 'failed' && surface.freshness.failure?.message === reason) return
+    await this.deps.service.failRefresh(surface.id, { jobId: '', message: reason }, this.ctx(at))
   }
 
   // --- The sweep -----------------------------------------------------------
@@ -557,7 +607,16 @@ export class SurfaceRefreshCoordinator {
       // barrier in `completeRefresh`. That is what stops a retry loop from making
       // an overdue Surface look attended to: entering queued or refreshing changes
       // nothing here.
-      const overdue = surface.freshness.overdue || (dueAt !== undefined && now >= dueAt)
+      //
+      // A Surface with NO deadline is not overdue, and that clause is the one
+      // exception to "only a barrier lowers it": `overdue` means a deadline elapsed
+      // unverified, so when the deadline itself goes away there is nothing left to
+      // be past. The plan's own wording allows it — overdue "remains visible until a
+      // successful barrier OR AN EXPLICIT POLICY CHANGE" — and without it an author
+      // who drops `periodic` from a Surface leaves an amber badge nothing can ever
+      // clear, because the only thing that clears it is the refresh they just
+      // stopped asking for.
+      const overdue = dueAt === undefined ? false : (surface.freshness.overdue || now >= dueAt)
       // An unchanged schedule is a SUCCESS, not a conflict — that is what
       // `setSchedule`'s short-circuit buys, and it is load-bearing on the first
       // sweep after a restart: a Surface that was ALREADY overdue when the process
@@ -869,6 +928,17 @@ export class SurfaceRefreshCoordinator {
         continue
       }
 
+      // A SOURCE THAT VANISHED MID-FLIGHT ends the job now rather than at the
+      // worker timeout. The result has nowhere to commit, so ten more minutes of a
+      // managed session in the user's worktree buys a failure that is already
+      // certain — and the Surface spends every one of those minutes badged
+      // `refreshing`, which is the single most misleading state it can show.
+      const gone = this.refreshBlocker(surface)
+      if (gone?.permanent) {
+        await this.failJob(job, gone.reason, report)
+        continue
+      }
+
       let staged: StagedRefreshResult | null = null
       try {
         staged = await this.deps.readStaged(job.stagingPath)
@@ -1023,8 +1093,12 @@ export class SurfaceRefreshCoordinator {
         )
         continue
       }
-      const blocked = this.authorizationProblem(surface)
-      if (blocked) {
+      // Re-checked at dispatch, not just at scheduling: a source can vanish between
+      // the two, and launching a worker for a Surface whose file went away in that
+      // window is a managed session guaranteed to time out with nothing to write.
+      const blocker = this.refreshBlocker(surface)
+      if (blocker) {
+        const blocked = blocker.reason
         this.deps.jobs.update(job.id, {
           state: 'failed',
           dispatch: { kind: 'blocked', reason: blocked, at: now },

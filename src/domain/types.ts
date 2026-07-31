@@ -842,8 +842,19 @@ export interface SurfaceRefreshDeclaration {
   /** Verification interval (ms) — what `dueAt` is derived from. Absent falls back
    *  to the host default. */
   intervalMs?: number
-  /** Source identifiers this Surface derives FROM, for `source-content` matching.
-   *  Adapter-scoped strings, compared for equality. */
+  /** What this Surface derives FROM, for `source-content` matching. Two shapes in
+   *  one list, told apart by whether the entry carries a `scheme:` prefix:
+   *
+   *  · An EXTERNAL SOURCE ID (`mysql://prod/detector`, `jira:KC-1302`) — opaque,
+   *    compared for equality against the observed `sourceId`.
+   *  · A REPO PATH SHAPE (`src/server/**`, `docs/*.md`, `bin/serena`) — compared as
+   *    a glob, so an adapter that emits a path-shaped `sourceId` is matched without
+   *    the author having to list every file.
+   *
+   *  This list does NOT narrow which commits reach this Surface. A `git-revision`
+   *  event is gated by the declared trigger kinds and nothing else; narrowing which
+   *  triggers may reach a claim is claim-locus work, and two narrowing mechanisms
+   *  for one decision leaves no rule for which wins. */
   sources?: string[]
   /** Named signals this Surface listens for, for `semantic-signal` matching. */
   signals?: string[]

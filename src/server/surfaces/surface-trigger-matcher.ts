@@ -182,6 +182,105 @@ const MAX_CLAIM_PARAM_LEN = 1024
  *  queue rather than as an error anyone could see. */
 export const MIN_INTERVAL_MS = 60_000
 
+// --- Declared sources: repo path globs vs external identifiers ---------------
+
+/**
+ * Does this declared source name something OUTSIDE the repository?
+ *
+ * The whole classification is the `scheme:` prefix, and it is deliberately the only
+ * rule: `mysql://prod/detector` and `jira:KC-1302` are opaque identifiers the host
+ * cannot walk, while `src/server/**` and `docs/plans/2026-*.md` are repo-relative
+ * path shapes. The split is what lets ONE declared list carry both kinds and still
+ * be matched sensibly: an external id is compared for equality, a path shape is
+ * compared as a glob.
+ *
+ * `file:x.json#id` — the `slate-file` locator shape — lands on the external side, and
+ * that is correct: it is matched by equality through `source-content`, not walked.
+ */
+export function isExternalSourceId(source: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(source)
+}
+
+/** The declared sources that are repo path shapes rather than external ids — the
+ *  half of the list `source-content` matches as globs. */
+export function declaredPathGlobs(decl: SurfaceRefreshDeclaration): string[] {
+  return (decl.sources ?? []).filter(s => !isExternalSourceId(s))
+}
+
+/** Escape a literal run for embedding in a `RegExp`. */
+function escapeLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Compile one author glob to a regex.
+ *
+ * The supported vocabulary is deliberately tiny — `**`, `*`, `?` — because an author
+ * writes these in a JSON file and the failure mode of a richer syntax is a glob that
+ * silently matches nothing, which looks exactly like a Surface whose source never
+ * changed.
+ *
+ *   `**`  any run of characters, separators included
+ *   `*`   any run of characters except `/`
+ *   `?`   exactly one character except `/`
+ *
+ * A glob with NO wildcard is a PREFIX: `src/server` matches `src/server/index.ts` as
+ * well as a file of that exact name. Authors write directories far more often than
+ * they write one file, and requiring `src/server/**` for the ordinary case would make
+ * the quiet-by-default failure the common one.
+ *
+ * Every quantifier here is over a single character class and none of them nest, so
+ * there is no input an author can write that makes this backtrack exponentially.
+ */
+function globToRegExp(glob: string): RegExp | null {
+  const trimmed = glob.replace(/^\.\//, '').replace(/\/+$/, '')
+  if (!trimmed) return null
+  const wildcarded = /[*?]/.test(trimmed)
+  let out = ''
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charAt(i)
+    if (c === '*') {
+      if (trimmed[i + 1] === '*') { out += '.*'; i++ } else { out += '[^/]*' }
+    } else if (c === '?') {
+      out += '[^/]'
+    } else {
+      out += escapeLiteral(c)
+    }
+  }
+  // The prefix rule, applied only to a literal path: a wildcarded glob already says
+  // exactly how far it reaches, and widening it would make `docs/*.md` match
+  // `docs/a.md/b` — a path that cannot exist, but also not what was asked for.
+  try {
+    return new RegExp(`^${out}${wildcarded ? '' : '(/.*)?'}$`)
+  } catch {
+    return null
+  }
+}
+
+const globCache = new Map<string, RegExp | null>()
+
+/** Does one repo-relative path match one author glob? */
+export function pathMatchesGlob(glob: string, path: string): boolean {
+  let re = globCache.get(glob)
+  if (re === undefined) {
+    re = globToRegExp(glob)
+    // Bounded by the number of distinct globs any author has ever declared in this
+    // process, which `MAX_DECLARED` bounds per Surface. Cleared wholesale rather
+    // than evicted per entry: there is no access pattern worth modelling here.
+    if (globCache.size > 4_000) globCache.clear()
+    globCache.set(glob, re)
+  }
+  return !!re && re.test(path.replace(/^\.\//, ''))
+}
+
+/** Does any of these source paths match any declared glob? */
+export function anyPathMatches(globs: readonly string[], paths: readonly string[]): boolean {
+  for (const glob of globs) {
+    for (const path of paths) if (pathMatchesGlob(glob, path)) return true
+  }
+  return false
+}
+
 /**
  * One host observation, normalized (plan U6: "Normalize observations onto the
  * typed local EventBus with stable source identifiers, evidence values, and
@@ -219,6 +318,17 @@ export interface SurfaceTriggerMatch {
 
 // --- Author declarations ---------------------------------------------------
 
+/**
+ * Parse a declared string list.
+ *
+ * AN EMPTY ARRAY SURVIVES rather than collapsing to `undefined`, so the parsed
+ * declaration records what the author actually wrote: `"sources": []` is the
+ * statement "I checked, and nothing derives this", which is not the same statement
+ * as leaving the field off. Nothing in trigger matching branches on the difference
+ * today — both read as "no declared sources" — but the parser is the authored file's
+ * round trip, and silently rewriting an author's `[]` into an omission is the kind
+ * of lossy read that makes a later reader mistrust the record.
+ */
 function strings(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: string[] = []
@@ -229,7 +339,7 @@ function strings(raw: unknown): string[] | undefined {
     out.push(s)
     if (out.length >= MAX_DECLARED) break
   }
-  return out.length > 0 ? out : undefined
+  return out
 }
 
 /**
@@ -444,6 +554,13 @@ export function parseSurfaceClaims(raw: unknown): ParsedSurfaceClaims {
  *     `observeSource` already marks that current. Treating it as a stale signal
  *     would make every save queue a refresh that immediately superseded itself.
  *
+ * `git-revision` STAYS IN THE DEFAULT SET even though it is the noisiest trigger the
+ * host has — it produced 45 of 57 refreshes in one measured session. Dropping it
+ * here would make every already-authored Surface stop refreshing on a commit, which
+ * is a freshness regression rather than a quietening. Narrowing which commits reach
+ * which Surfaces is a separate decision and does not live in this function — it lives
+ * in `claimLocusAdmits`, which is the one narrowing mechanism.
+ *
  * AND THE ONE ADDITION (R14, plan U4): whatever the author asked for, the kinds this
  * Surface's CLAIMS imply are unioned on top. Unioned rather than used as another
  * default, because an author who writes `triggers: ["git-revision"]` next to an
@@ -535,6 +652,17 @@ function scopeMatches(event: SurfaceTriggerEvent, surface: Surface): boolean {
   return true
 }
 
+/**
+ * Does this Surface's declaration accept an event of this kind?
+ *
+ * DECLARING A TRIGGER KIND IS THE WHOLE GATE for every kind except the two below.
+ * `git-revision` in particular is deliberately NOT narrowed here by declared source
+ * paths: a branch once had this arm compare a commit's changed files against the
+ * author's `sources` globs, and it came out because narrowing which triggers reach a
+ * Surface is claim-locus work — one mechanism, declared per claim — and two competing
+ * narrowings give an implementer no rule for which wins. A Surface that declares
+ * `sources` is therefore reached by a commit exactly like one that declares none.
+ */
 function kindMatches(event: SurfaceTriggerEvent, decl: SurfaceRefreshDeclaration, surface: Surface): boolean {
   if (!decl.triggers.includes(event.kind)) return false
   switch (event.kind) {
@@ -543,7 +671,10 @@ function kindMatches(event: SurfaceTriggerEvent, decl: SurfaceRefreshDeclaration
       // excluded on purpose (see `effectiveDeclaration`), and a declaration-free
       // Surface therefore matches no source-content event at all.
       if (surface.source && event.sourceId === surface.source.locator) return false
+      // Equality for external ids, glob for repo paths — one list, two shapes, and
+      // an adapter emitting a path-shaped `sourceId` gets glob matching for free.
       return (decl.sources ?? []).includes(event.sourceId)
+        || anyPathMatches(declaredPathGlobs(decl), [event.sourceId])
     case 'semantic-signal':
       return !!event.signal && (decl.signals ?? []).includes(event.signal)
     default:

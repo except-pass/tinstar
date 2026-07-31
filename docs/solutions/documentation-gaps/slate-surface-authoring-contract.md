@@ -13,18 +13,12 @@ tags:
   - json-contract
   - sse
   - agent-authoring
-  - claims
-  - witnesses
-  - freshness
 applies_when:
   - "Authoring or editing a Slate surface JSON file under a run workdir's .tinstar/slate/"
   - "Building A2UI content for a surface and needing the host component vocabulary"
   - "A surface silently fails to appear (invalid content dropped by parseA2uiContent)"
   - "Deciding surface kind (diagram vs open-point) via the anchor field"
   - "Validating authored surface files before shipping"
-  - "Declaring claims so the host can check a surface without waking an agent"
-  - "A card reads 'nothing to check' or 'not yet checked' and you expected otherwise"
-  - "Deriving a Stepper's step statuses from what the host witnessed"
 ---
 
 # Authoring a Slate surface: the file + A2UI contract
@@ -61,7 +55,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
 | `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
-| `refreshPolicy` | object | No | When the host may rebuild this surface on its own: `policy` (`automatic` \| `mark-stale` \| `manual`), `triggers[]` (which announcements it listens to), and an optional `intervalMs`. Parsed through a closed vocabulary — an unknown trigger name is dropped, not stored. Omit it and the host applies defaults: `automatic` when the entry carries a `refresh` recipe, `mark-stale` when it does not. |
+| `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
 | `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
 | `group` | string (non-empty) | No | **Workbench set id.** Give two or more question entries the *same* `group` and they render side-by-side, one per column, instead of as stacked rows (below). A non-string/empty value is silently dropped (the point renders as an ordinary row) — it never drops the entry. |
 | `createdAt` | finite number (epoch millis) | No | Sort/ordering hint. |
@@ -265,6 +259,47 @@ So apply the **vacuum test** to every living surface: *could this recipe produce
 - **Fails** — the only "source" is the main agent's own session (e.g. "summarize the session so far"). This is **session-derived**; it stays with the main agent. Don't give it a self-contained recipe it can't honor.
 
 A self-contained recipe is exactly what lets a surface refresh off the main agent's critical path. `"regenerate this surface"` fails the vacuum test — it assumes context the author won't have.
+
+## Declare what your surface derives from (`refreshPolicy.sources`)
+
+The recipe says *how* to rebuild a surface. `refreshPolicy` says *when*: `triggers` picks which host observations reach it, and `sources` says which upstream things a `source-content` observation must name before it counts.
+
+```jsonc
+{
+  "id": "decision-6",
+  "headline": "DECISION 6 — File a prevention ticket for the reassignment leftovers?",
+  "refresh": "Run scripts/integrity/detect-site-reassignment-leftovers.sh against prod, check whether CMT-510 is still open in Jira, and rewrite this surface with the current leftover count and ticket state.",
+  "refreshPolicy": {
+    "policy": "automatic",
+    "triggers": ["git-revision", "periodic"],
+    "intervalMs": 86400000,
+    "sources": [
+      "scripts/integrity/detect-site-reassignment-leftovers.sh",
+      "external:prod-mysql/ra-physical",
+      "external:jira/CMT-510"
+    ]
+  }
+}
+```
+
+**What `sources` does — and what it deliberately does not.** It is the match list for the `source-content` trigger: when the host observes that some upstream thing changed, this surface is made possibly-stale if the observed identifier is in your list. It is **not** a filter on commits. A `git-revision` observation reaches every surface that declared the `git-revision` trigger, whether or not you wrote `sources` and whether or not the commit touched anything you named. Narrowing which triggers may reach a claim is the job of the claim's declared **locus** (where its truth lives), not of this list — one mechanism, so there is never a question of which one wins.
+
+So `sources` earns its place two ways: it drives `source-content` matching, and it documents, for the next fresh author (yours or someone else's), where the answer actually comes from. It does not quieten a noisy surface — for that, drop the trigger you don't want, or set `policy` to `mark-stale`.
+
+**Two shapes in one list**, told apart by a `scheme:` prefix:
+
+| You write | Shape | Matched by `source-content` |
+|---|---|---|
+| `external:prod-mysql/ra-physical`, `jira:CMT-510`, `mysql://prod/detector` | External id — opaque; the host never resolves it | Exact equality against the observed identifier |
+| `src/api/**`, `docs/decisions/CostCeiling*.md`, `bin/serena` | Repo-relative path shape | As a glob, so an adapter that reports a path is matched without you listing every file |
+
+**Glob syntax** is deliberately tiny: `**` crosses directories, `*` doesn't, `?` is one character. A glob with no wildcard is a **prefix** — `src/server` matches everything beneath it. Prefer a glob over a literal list when files will be added later: `docs/decisions/CostCeiling*.md` picks up the fourth file without you re-editing the recipe.
+
+Writing `"sources": []` is a real statement — "I checked; nothing upstream feeds this" — and the host keeps it verbatim rather than treating it as if you'd left the field off. Nothing branches on the difference today; it is there so the record says what you meant.
+
+**`intervalMs` and the periodic trigger.** `periodic` is the time-safety net for answers that change without anything in the repo moving. It defaults to six hours, which is a floor, not a recommendation — set it to what your answer's real cadence is. A number that drifts weekly wants `86400000` (a day), not the default. A surface whose inputs are *all* in the repo usually needs no `periodic` trigger at all: `git-revision` already fires whenever the worktree moves.
+
+**`policy`** is `automatic` (rebuild it without asking — the default when you carry a recipe), `mark-stale` (badge it and wait for a human), or `manual` (nothing moves it but an explicit ⟳).
 
 ## Claims: what would prove this surface wrong
 

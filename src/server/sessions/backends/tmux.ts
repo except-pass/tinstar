@@ -107,9 +107,30 @@ export function tmuxSessionName(config: TinstarConfig, sessionName: string): str
   return `${config.sessions.prefix}${sessionName}`
 }
 
+/**
+ * Force tmux to resolve a session target by exact name.
+ *
+ * Bare targets are prefix-matched when the named session is gone, so targeting
+ * `tinstar-parent` can otherwise resolve to a live spawned session named
+ * `tinstar-parent-reviewer-ab12`. Keep canonical names raw everywhere else and
+ * add tmux's `=` marker only at command boundaries.
+ */
+export function exactTmuxSessionTarget(tmuxName: string): string {
+  return `=${tmuxName}`
+}
+
+/**
+ * Force commands that accept a pane or window target to resolve the session
+ * portion exactly. The trailing colon selects that session's active window
+ * instead of treating `=name` as a literal pane identifier.
+ */
+export function exactTmuxPaneTarget(tmuxName: string): string {
+  return `${exactTmuxSessionTarget(tmuxName)}:`
+}
+
 export async function tmuxHasSession(tmuxName: string): Promise<boolean> {
   try {
-    await execFileAsync('tmux', ['has-session', '-t', tmuxName])
+    await execFileAsync('tmux', ['has-session', '-t', exactTmuxSessionTarget(tmuxName)])
     return true
   } catch {
     return false
@@ -130,7 +151,8 @@ async function autoAcceptDevChannelWarning(tmuxName: string): Promise<void> {
 
     try {
       // Check if session still exists
-      await execFileAsync('tmux', ['has-session', '-t', tmuxName])
+      const target = exactTmuxSessionTarget(tmuxName)
+      await execFileAsync('tmux', ['has-session', '-t', target])
 
       // Capture pane content
       const stdout = await captureScreen(tmuxName)
@@ -138,7 +160,7 @@ async function autoAcceptDevChannelWarning(tmuxName: string): Promise<void> {
       // Look for the dev channel warning prompt
       if (stdout.includes('Enter to confirm')) {
         // Send Enter to accept
-        await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'])
+        await execFileAsync('tmux', ['send-keys', '-t', exactTmuxPaneTarget(tmuxName), 'Enter'])
         log.info('tmux', `${tmuxName}: auto-accepted dev channel warning`)
         return
       }
@@ -546,7 +568,7 @@ export async function scrubTmuxSessionEnv(
       // and secrets. Removing those names blindly replaces the child's own
       // session-scoped values with removal markers — verified: the pane then
       // has no TINSTAR_SESSION_NAME at all, destroying the session's identity.
-      execFileAsync('tmux', [...socketArgs, 'show-environment', '-t', `=${tmuxName}`]),
+      execFileAsync('tmux', [...socketArgs, 'show-environment', '-t', exactTmuxSessionTarget(tmuxName)]),
     ])
     const injected = parseTmuxEnvNames(sessionEnv.stdout)
     // 4th arg is the ATTRIBUTION filter: only strip what Tinstar itself could
@@ -561,7 +583,7 @@ export async function scrubTmuxSessionEnv(
     // `=name` is tmux's EXACT-match target syntax. A bare `-t name` matches by
     // prefix, so a session that disappears mid-scrub could let these removals
     // land on a different session whose name starts with the same characters.
-    const target = `=${tmuxName}`
+    const target = exactTmuxSessionTarget(tmuxName)
     const args: string[] = [...socketArgs]
     for (const name of removals) {
       if (args.length > socketArgs.length) args.push(';')
@@ -605,8 +627,10 @@ export async function createTmuxSession(
   // session-scoped vars, so the injections must already be in place.)
 
   // Configure tmux
-  await execFileAsync('tmux', ['set', '-t', tmuxName, 'status', 'off'])
-  await execFileAsync('tmux', ['set', '-t', tmuxName, 'mouse', 'on'])
+  const tmuxTarget = exactTmuxSessionTarget(tmuxName)
+  const tmuxPaneTarget = exactTmuxPaneTarget(tmuxName)
+  await execFileAsync('tmux', ['set', '-t', tmuxPaneTarget, 'status', 'off'])
+  await execFileAsync('tmux', ['set', '-t', tmuxPaneTarget, 'mouse', 'on'])
   // Ctrl+Backspace: xterm.js sends 0x08 (C-h) — remap to word-erase (C-w)
   await execFileAsync('tmux', ['bind-key', '-n', 'C-h', 'send-keys', 'C-w'])
 
@@ -634,10 +658,10 @@ export async function createTmuxSession(
   }
 
   // Inject session identity + secrets into tmux environment
-  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_SESSION_NAME', opts.session.name])
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, 'TINSTAR_SESSION_NAME', opts.session.name])
   for (const [key, value] of Object.entries(opts.secrets)) {
     if (value) {
-      await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
+      await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
     }
   }
 
@@ -655,7 +679,7 @@ export async function createTmuxSession(
       OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${opts.session.name}`,
     }
     for (const [key, value] of Object.entries(telemetryVars)) {
-      await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
+      await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
     }
   }
 
@@ -711,7 +735,7 @@ export async function createTmuxSession(
     ensureCursorWorkspaceTrust(opts.session.workspace.path)
   }
 
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxPaneTarget, parts.join(' && '), 'Enter'])
 
   // Auto-accept dev channel warning by polling for the prompt and sending Enter
   // More robust than fixed timeout - waits for actual prompt to appear
@@ -783,7 +807,7 @@ export async function startTmuxSession(
   if (isCursorAgentTemplate(opts.template) && opts.session.workspace?.path) {
     ensureCursorWorkspaceTrust(opts.session.workspace.path)
   }
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
+  await execFileAsync('tmux', ['send-keys', '-t', exactTmuxPaneTarget(tmuxName), parts.join(' && '), 'Enter'])
 
   // Same dev-channel auto-accept as createTmuxSession — restarting an exited
   // agent re-shows Claude's NATS warning prompt and must also be accepted.
@@ -803,8 +827,10 @@ export async function stopTmuxSession(config: TinstarConfig, session: Session): 
   stopManagedTtyd(session.name)
 
   const tmuxName = tmuxSessionName(config, session.name)
+  const target = exactTmuxSessionTarget(tmuxName)
+  log.info('tmux', `${session.name}: stopping tmux session`, { target })
   try {
-    await execFileAsync('tmux', ['kill-session', '-t', tmuxName])
+    await execFileAsync('tmux', ['kill-session', '-t', target])
   } catch {
     // Already gone
   }
@@ -814,8 +840,10 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   stopManagedTtyd(session.name)
 
   const tmuxName = tmuxSessionName(config, session.name)
+  const target = exactTmuxSessionTarget(tmuxName)
+  log.info('tmux', `${session.name}: deleting tmux session`, { target })
   try {
-    await execFileAsync('tmux', ['kill-session', '-t', tmuxName])
+    await execFileAsync('tmux', ['kill-session', '-t', target])
   } catch {
     // Already gone
   }
@@ -849,7 +877,7 @@ export async function reattachTmuxSession(
  *  lines of history (capture-pane -S -<n>). Shared by status detection, the
  *  codex transcript, and the GET /api/sessions/:name/screen endpoint. */
 export async function captureScreen(tmuxName: string, scrollback?: number): Promise<string> {
-  const args = ['capture-pane', '-t', tmuxName, '-p']
+  const args = ['capture-pane', '-t', exactTmuxPaneTarget(tmuxName), '-p']
   if (scrollback && scrollback > 0) args.push('-S', `-${scrollback}`)
   const { stdout } = await execFileAsync('tmux', args)
   return stdout
@@ -924,12 +952,14 @@ export interface TtydIncumbent {
  * alias, and never mistakes ttyd's own `-t` option flags (which precede `tmux`
  * in the args, e.g. `-t titleFixed=Tinstar`) for the session token. Single
  * source for both reclaim paths so the parser can't drift from how `startTtyd`
- * spawns the client (`bash -c "tmux attach -t <name>"`). Returns null when no
+ * spawns the client (`bash -c "tmux attach -t =<name>"`). Returns null when no
  * tmux target is present (e.g. the process vanished or runs a non-tmux command).
  */
 export function tmuxTargetFromArgs(args: string): string | null {
   const m = args.match(/\btmux\b.*?\battach(?:-session)?\b.*?\s-t\s+(\S+)/)
-  return m ? m[1]! : null
+  if (!m) return null
+  const target = m[1]!
+  return target.startsWith('=') ? target.slice(1) : target
 }
 
 /** ttyd processes listening on `port`, each with the tmux session it attaches. */
@@ -1134,7 +1164,7 @@ export function startTtyd(opts: {
       '-p', String(opts.port),
       '-t', 'titleFixed=Tinstar',
       '-t', 'theme={"background":"#000000"}',
-      'bash', '-c', `tmux attach -t ${opts.tmuxName}`,
+      'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
     ], {
       stdio: 'ignore',
       // ttyd is a guest boundary twice over: it is the tmux CLIENT that attaches
@@ -1237,7 +1267,7 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
 async function exitAnyMode(tmuxName: string): Promise<void> {
   let paneId: string
   try {
-    const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxName, '#{pane_id}'])
+    const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', exactTmuxPaneTarget(tmuxName), '#{pane_id}'])
     paneId = stdout.trim()
     if (!paneId) return
   } catch {
@@ -1274,7 +1304,7 @@ async function exitAnyMode(tmuxName: string): Promise<void> {
 export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
   await exitAnyMode(tmuxName)
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
+  await execFileAsync('tmux', ['send-keys', '-t', exactTmuxPaneTarget(tmuxName), ...keys])
 }
 
 // Per-session send queue (keyed by tmux session name). A prompt is delivered in
@@ -1295,9 +1325,10 @@ async function doSendPrompt(tmuxName: string, prompt: string): Promise<void> {
   // text goes to the mode handler instead of the underlying process — which
   // is how a prompt starting with 'F' silently triggers "jump backward".
   await exitAnyMode(tmuxName)
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
+  const target = exactTmuxPaneTarget(tmuxName)
+  await execFileAsync('tmux', ['send-keys', '-t', target, prompt, ''])
   await new Promise(r => setTimeout(r, 300))
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, '', 'Enter'])
+  await execFileAsync('tmux', ['send-keys', '-t', target, '', 'Enter'])
 }
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {
@@ -1314,4 +1345,3 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
   }
   return false
 }
-
