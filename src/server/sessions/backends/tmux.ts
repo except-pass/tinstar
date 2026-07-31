@@ -1177,6 +1177,17 @@ export class TtydStartSupersededError extends Error {
   }
 }
 
+export class TtydStartCancelledError extends Error {
+  constructor(
+    sessionName: string,
+    readonly stage: TtydStartSupersessionStage,
+    options?: ErrorOptions,
+  ) {
+    super(`ttyd start for ${sessionName} was cancelled at ${stage}`, options)
+    this.name = 'TtydStartCancelledError'
+  }
+}
+
 export function findTtydStartSupersededError(
   err: unknown,
 ): TtydStartSupersededError | null {
@@ -1574,35 +1585,60 @@ function enqueueTtydStart(
       // the serialized public settlement boundary so stale generic child
       // errors cannot make background compensation invalidate the queued
       // winner's token.
-      if (isCurrent() || findTtydStartSupersededError(err)) throw err
-      let cause = err
+      if (isCurrent()) throw err
+      const replacementPending = ttydStartTokens.has(opts.sessionName)
+      const superseded = findTtydStartSupersededError(err)
+      let cleanupError: unknown
       if (mutated) {
         // T1 may have killed its incumbent and spawned a child before failing.
-        // Remove only T1's managed surface here, while T2 is still serialized
-        // behind us, without invalidating T2's already-installed token.
+        // Remove only T1's managed surface without changing the token.
         try {
           deps.stopManaged(
             opts.sessionName,
             { resetHistory: false, invalidateStarts: false },
           )
+          log.info(
+            'ttyd',
+            `${opts.sessionName}: removed stale `
+              + `${replacementPending ? 'superseded' : 'cancelled'} start surface`,
+          )
         } catch (cleanupErr) {
-          // Keep supersession authoritative even when best-effort T1 cleanup
-          // fails. T2 will retry managed cleanup before it spawns.
+          // Production cleanup is currently noexcept. Keep this containment
+          // because the dependency seam is injectable and a future cleanup
+          // change must not expose a generic error across a replacement token.
           log.warn(
             'ttyd',
             `${opts.sessionName}: stale start cleanup failed: `
               + `${(cleanupErr as Error).message}`,
           )
-          cause = new AggregateError(
-            [err, cleanupErr],
-            `stale ttyd start cleanup failed for ${opts.sessionName}`,
-          )
+          cleanupError = cleanupErr
         }
       }
+      const combinedFailure = cleanupError === undefined
+        ? null
+        : new AggregateError(
+            [err, cleanupError],
+            `stale ttyd start cleanup failed for ${opts.sessionName}`,
+          )
+      if (!replacementPending) {
+        if (superseded) {
+          const cancellationCause = combinedFailure ?? superseded.cause
+          throw new TtydStartCancelledError(
+            opts.sessionName,
+            superseded.stage,
+            cancellationCause === undefined
+              ? undefined
+              : { cause: cancellationCause },
+          )
+        }
+        if (combinedFailure) throw combinedFailure
+        throw err
+      }
+      if (superseded && !combinedFailure) throw err
       throw new TtydStartSupersededError(
         opts.sessionName,
-        'settlement',
-        { cause },
+        superseded?.stage ?? 'settlement',
+        { cause: combinedFailure ?? err },
       )
     }
   })
@@ -1762,7 +1798,7 @@ export async function startTtydForTokenAttempt(
             }
             if (cur.onRestart && pid) cur.onRestart(pid)
           }).catch(err => {
-            if (err instanceof TtydStartSupersededError) return
+            if (isExpectedTtydStartInterruption(err)) return
             log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
           })
         }, 2000)
@@ -1786,6 +1822,11 @@ export async function startTtydForTokenAttempt(
       resolve(child.pid)
     }, 500)
   })
+}
+
+export function isExpectedTtydStartInterruption(err: unknown): boolean {
+  return err instanceof TtydStartSupersededError
+    || err instanceof TtydStartCancelledError
 }
 
 export function stopManagedTtyd(

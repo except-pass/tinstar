@@ -500,6 +500,13 @@ export async function reattachVerifiedSessionTtydAttempt(
     const superseded = deps.findSupersededError(err)
     if (superseded) {
       if (freshPort != null) deps.releasePort(freshPort)
+      if (deps.isIdentityInspectionError(superseded.cause)) {
+        log.warn(
+          'reattach',
+          `${name}: identity inspection failed while reattach was superseded: `
+            + `${(superseded.cause as Error).message}`,
+        )
+      }
       log.info(
         'reattach',
         `${name}: reattach superseded at ${superseded.stage}`

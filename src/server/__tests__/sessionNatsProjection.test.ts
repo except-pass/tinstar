@@ -474,10 +474,12 @@ describe('getLiveSessionForBoot', () => {
   })
 
   it('leaves a newer terminal start untouched and returns its own fresh claim', async () => {
+    const inspectionError = new Error('lsof failed during replacement')
     const supersededError = new Error('reattach wrapped the terminal error', {
       cause: new TtydStartSupersededError(
         'superseded-reattach',
         'settlement',
+        { cause: inspectionError },
       ),
     })
     const session = {
@@ -499,7 +501,7 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
-        isIdentityInspectionError: isNeverIdentityInspectionError,
+        isIdentityInspectionError: err => err === inspectionError,
         findSupersededError: findTtydStartSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,

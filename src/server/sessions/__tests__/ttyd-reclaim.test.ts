@@ -6,12 +6,16 @@ import {
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
+  isExpectedTtydStartInterruption,
+  findTtydStartSupersededError,
   onTtydRestart,
   orphanTtydPidsToReap,
   startTtydWithDeps,
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
+  TtydStartCancelledError,
+  TtydStartSupersededError,
   TtydIdentityInspectionError,
   ttydIdentityInspectionUnavailable,
   ttydIncumbentMatchesSession,
@@ -378,6 +382,23 @@ describe('fenced ttyd start attempts', () => {
     stopManagedTtyd(opts.sessionName)
   })
 
+  it('treats cancellation as expected without reclassifying its cause', () => {
+    const diagnostic = new Error('restart was intentionally stopped')
+    const cancellation = new TtydStartCancelledError(
+      opts.sessionName,
+      'post-spawn',
+      { cause: diagnostic },
+    )
+
+    expect(isExpectedTtydStartInterruption(cancellation)).toBe(true)
+    expect(isExpectedTtydStartInterruption(
+      new TtydStartSupersededError(opts.sessionName, 'preflight'),
+    )).toBe(true)
+    expect(isExpectedTtydStartInterruption(diagnostic)).toBe(false)
+    expect(findTtydStartSupersededError(cancellation)).toBeNull()
+    expect(cancellation.cause).toBe(diagnostic)
+  })
+
   it('reports a preflight supersession before inspecting or mutating', async () => {
     const deps = fakeStartDeps({
       incumbentsOnPort: vi.fn(async () => []),
@@ -516,6 +537,27 @@ describe('fenced ttyd start attempts', () => {
     scheduled[0]!.callback()
     await rejection
     expect(deps.enqueueRestart).not.toHaveBeenCalled()
+  })
+
+  it('reports an absent token as cancellation rather than replacement', async () => {
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const deps = fakeStartDeps({
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const attempt = startTtydWithDeps(opts, deps)
+    const rejection = expect(attempt).rejects.toMatchObject({
+      name: 'TtydStartCancelledError',
+      stage: 'post-spawn',
+    })
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+
+    stopManagedTtyd(opts.sessionName)
+    scheduled[0]!()
+    await rejection
   })
 
   it('lets a queued newer start survive a stale generic child error', async () => {
