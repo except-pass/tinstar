@@ -11,6 +11,7 @@ import type {
 } from '../../../domain/provider-capabilities'
 import {
   defineProviderAdapter,
+  ProviderDeliveryIdentityError,
   type ProviderAdapter,
   type ProviderDeliveryAcceptance,
   type ProviderDeliveryConfirmation,
@@ -197,6 +198,7 @@ const forge = defineProviderAdapter<ForgeDetail>({
     async accept(request) {
       return {
         state: 'accepted',
+        providerId: 'forge',
         messageId: request.messageId,
         attempt: request.attempt,
         acceptedAt: CHECKED_AT,
@@ -207,6 +209,7 @@ const forge = defineProviderAdapter<ForgeDetail>({
     async confirm(acceptance) {
       return {
         state: 'confirmed',
+        providerId: 'forge',
         messageId: acceptance.messageId,
         attempt: acceptance.attempt,
         confirmedAt: CHECKED_AT,
@@ -427,6 +430,7 @@ describe('provider capability contract', () => {
         async accept(request) {
           return {
             state: 'accepted',
+            providerId: 'boundary',
             messageId: request.messageId,
             attempt: request.attempt,
             acceptedAt: CHECKED_AT,
@@ -456,6 +460,7 @@ describe('provider capability contract', () => {
     const acceptances = [
       {
         state: 'deferred',
+        providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 1,
         checkedAt: CHECKED_AT,
@@ -464,6 +469,7 @@ describe('provider capability contract', () => {
       },
       {
         state: 'rejected',
+        providerId: 'forge',
         messageId: 'msg-stopped',
         attempt: 1,
         checkedAt: CHECKED_AT,
@@ -474,6 +480,7 @@ describe('provider capability contract', () => {
     const confirmations = [
       {
         state: 'pending',
+        providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 2,
         checkedAt: CHECKED_AT,
@@ -482,6 +489,7 @@ describe('provider capability contract', () => {
       },
       {
         state: 'failed',
+        providerId: 'forge',
         messageId: 'msg-retry',
         attempt: 2,
         checkedAt: CHECKED_AT,
@@ -510,6 +518,7 @@ describe('provider capability contract', () => {
     const acceptance = await forge.delivery!.accept(request)
     expect(acceptance).toMatchObject({
       state: 'accepted',
+      providerId: 'forge',
       messageId: 'msg-7a51',
       attempt: 2,
     })
@@ -520,6 +529,7 @@ describe('provider capability contract', () => {
     const confirmation = await delivery.confirm(acceptance)
     expect(confirmation).toMatchObject({
       state: 'confirmed',
+      providerId: 'forge',
       messageId: 'msg-7a51',
       attempt: 2,
       evidence: {
@@ -698,10 +708,19 @@ describe('provider capability contract', () => {
     const mismatchedAcceptance = mismatched.delivery!.accept(request)
     await expect(mismatchedAcceptance)
       .rejects.toThrow('returned messageId "some-other-message"')
+    await expect(mismatchedAcceptance).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
     await expect(mismatchedAcceptance).rejects.toMatchObject({
       sideEffectMayHaveOccurred: true,
       result: {
+        state: 'accepted',
+        providerId: 'forge',
         messageId: 'some-other-message',
+        attempt: 3,
+        attemptRef: 'forge:msg-stable:3',
+      },
+      expected: {
+        providerId: 'forge',
+        messageId: 'msg-stable',
         attempt: 3,
       },
     })
@@ -710,8 +729,18 @@ describe('provider capability contract', () => {
     if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
     const confirming = mismatched.delivery
     if (!confirming?.confirm) throw new Error('expected confirmation-capable delivery')
-    await expect(confirming.confirm(acceptance))
+    const mismatchedConfirmation = confirming.confirm(acceptance)
+    await expect(mismatchedConfirmation)
       .rejects.toThrow('returned attempt 4')
+    await expect(mismatchedConfirmation).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
+    await expect(mismatchedConfirmation).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: false,
+      expected: {
+        providerId: 'forge',
+        messageId: 'msg-stable',
+        attempt: 3,
+      },
+    })
   })
 
   it('rejects a delivery for another provider before invoking the adapter', async () => {
@@ -729,15 +758,70 @@ describe('provider capability contract', () => {
       },
     })
 
-    await expect(guarded.delivery!.accept({
+    const misrouted = guarded.delivery!.accept({
       messageId: 'msg-wrong-provider',
       attempt: 1,
       acceptedAt: CHECKED_AT,
       senderSessionId: 'run-sender',
       recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
       text: 'Do not send this',
-    })).rejects.toThrow('addressed to provider "boundary"')
+    })
+    await expect(misrouted).rejects.toThrow('addressed to provider "boundary"')
+    await expect(misrouted).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
+    await expect(misrouted).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: false,
+      result: null,
+      expected: {
+        providerId: 'forge',
+        messageId: 'msg-wrong-provider',
+        attempt: 1,
+      },
+    })
     expect(acceptCalls).toBe(0)
+  })
+
+  it('rejects confirmation for another provider before invoking the adapter', async () => {
+    let confirmCalls = 0
+    const delivery = forge.delivery
+    if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
+    const guarded = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async confirm(acceptance) {
+          confirmCalls += 1
+          return delivery.confirm!(acceptance)
+        },
+      },
+    })
+    const acceptance = await delivery.accept({
+      messageId: 'msg-cross-provider-confirm',
+      attempt: 1,
+      acceptedAt: CHECKED_AT,
+      senderSessionId: 'run-sender',
+      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      text: 'Confirm?',
+    })
+    if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
+
+    const confirming = guarded.delivery
+    if (!confirming?.confirm) throw new Error('expected confirmation-capable delivery')
+    const misrouted = confirming.confirm({
+      ...acceptance,
+      providerId: 'boundary',
+    })
+    await expect(misrouted).rejects.toThrow('belongs to provider "boundary"')
+    await expect(misrouted).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
+    await expect(misrouted).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: false,
+      result: null,
+      expected: {
+        providerId: 'forge',
+        messageId: 'msg-cross-provider-confirm',
+        attempt: 1,
+      },
+    })
+    expect(confirmCalls).toBe(0)
   })
 
   it('rejects a provider quota snapshot for another configured account', async () => {

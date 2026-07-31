@@ -25,8 +25,11 @@ export class ProviderDeliveryIdentityError extends Error {
   constructor(
     message: string,
     readonly sideEffectMayHaveOccurred: boolean,
-    readonly result: { messageId: string; attempt: number },
-    readonly expected: { messageId: string; attempt: number },
+    readonly result:
+      | ProviderDeliveryAcceptance
+      | ProviderDeliveryConfirmation
+      | null,
+    readonly expected: ProviderDeliveryResultIdentity,
   ) {
     super(message)
   }
@@ -48,33 +51,36 @@ export interface ProviderDeliveryRequest {
   text: string
 }
 
+export interface ProviderDeliveryResultIdentity {
+  providerId: string
+  messageId: string
+  attempt: number
+}
+
+type ProviderDeliveryResult<TFields extends object> =
+  ProviderDeliveryResultIdentity & TFields
+
 export type ProviderDeliveryAcceptance<TDetail extends object = object> =
-  | {
+  | ProviderDeliveryResult<{
       state: 'accepted'
-      messageId: string
-      attempt: number
       acceptedAt: string
       attemptRef?: string
       detail?: TDetail
-    }
-  | {
+    }>
+  | ProviderDeliveryResult<{
       state: 'deferred'
-      messageId: string
-      attempt: number
       checkedAt: string
       reason: string
       retryAt?: string
       detail?: TDetail
-    }
-  | {
+    }>
+  | ProviderDeliveryResult<{
       state: 'rejected'
-      messageId: string
-      attempt: number
       checkedAt: string
       reason: string
       retryable: boolean
       detail?: TDetail
-    }
+    }>
 
 export type AcceptedProviderDelivery<TDetail extends object = object> = Extract<
   ProviderDeliveryAcceptance<TDetail>,
@@ -98,32 +104,26 @@ export interface ProviderDeliveryEvidence {
 }
 
 export type ProviderDeliveryConfirmation<TDetail extends object = object> =
-  | {
+  | ProviderDeliveryResult<{
       state: 'confirmed'
-      messageId: string
-      attempt: number
       confirmedAt: string
       evidence: ProviderDeliveryEvidence
       detail?: TDetail
-    }
-  | {
+    }>
+  | ProviderDeliveryResult<{
       state: 'pending'
-      messageId: string
-      attempt: number
       checkedAt: string
       reason: string
       retryAt?: string
       detail?: TDetail
-    }
-  | {
+    }>
+  | ProviderDeliveryResult<{
       state: 'failed'
-      messageId: string
-      attempt: number
       checkedAt: string
       reason: string
       retryable: boolean
       detail?: TDetail
-    }
+    }>
 
 interface ProviderDeliveryAcceptanceAdapter<TDetail extends object = object> {
   accept: (
@@ -257,13 +257,24 @@ function guardDeliveryAdapter<TDetail extends object>(
   const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
   const accept = async (request: ProviderDeliveryRequest) => {
     if (request.recipient.providerId !== providerId) {
-      throw new Error(
+      throw new ProviderDeliveryIdentityError(
         `Provider "${providerId}" delivery request is addressed to provider `
         + `"${request.recipient.providerId}"`,
+        false,
+        null,
+        {
+          providerId,
+          messageId: request.messageId,
+          attempt: request.attempt,
+        },
       )
     }
     const result = await rawAccept(request)
-    assertDeliveryIdentity(providerId, 'accept', result, request)
+    assertDeliveryIdentity(providerId, 'accept', result, {
+      providerId,
+      messageId: request.messageId,
+      attempt: request.attempt,
+    })
     return result
   }
   rememberGuardedHandler(accept, rawAccept, 'delivery:accept')
@@ -272,6 +283,19 @@ function guardDeliveryAdapter<TDetail extends object>(
 
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
+    if (acceptance.providerId !== providerId) {
+      throw new ProviderDeliveryIdentityError(
+        `Provider "${providerId}" delivery confirmation belongs to provider `
+        + `"${acceptance.providerId}"`,
+        false,
+        null,
+        {
+          providerId,
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+        },
+      )
+    }
     const result = await rawConfirm(acceptance)
     assertDeliveryIdentity(providerId, 'confirm', result, acceptance)
     return result
@@ -283,14 +307,23 @@ function guardDeliveryAdapter<TDetail extends object>(
 function assertDeliveryIdentity(
   providerId: string,
   operation: 'accept' | 'confirm',
-  actual: { messageId: string; attempt: number },
-  expected: { messageId: string; attempt: number },
+  actual: ProviderDeliveryAcceptance | ProviderDeliveryConfirmation,
+  expected: ProviderDeliveryResultIdentity,
 ): void {
+  if (actual.providerId !== expected.providerId) {
+    throw new ProviderDeliveryIdentityError(
+      `Provider "${providerId}" delivery ${operation} returned providerId `
+      + `"${actual.providerId}", expected "${expected.providerId}"`,
+      operation === 'accept' && actual.state === 'accepted',
+      actual,
+      expected,
+    )
+  }
   if (actual.messageId !== expected.messageId) {
     throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned messageId `
       + `"${actual.messageId}", expected "${expected.messageId}"`,
-      operation === 'accept',
+      operation === 'accept' && actual.state === 'accepted',
       actual,
       expected,
     )
@@ -299,7 +332,7 @@ function assertDeliveryIdentity(
     throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned attempt `
       + `${actual.attempt}, expected ${expected.attempt}`,
-      operation === 'accept',
+      operation === 'accept' && actual.state === 'accepted',
       actual,
       expected,
     )
