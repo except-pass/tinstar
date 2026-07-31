@@ -69,6 +69,10 @@ export interface ProviderDeliveryResultIdentity {
 type ProviderDeliveryResult<TFields extends object> =
   ProviderDeliveryResultIdentity & TFields
 
+type ProviderDeliveryOperation =
+  | { name: 'accept'; sideEffectMayHaveOccurred: true }
+  | { name: 'confirm'; sideEffectMayHaveOccurred: false }
+
 export type ProviderDeliveryAcceptance<TDetail extends object = object> =
   | ProviderDeliveryResult<{
       state: 'accepted'
@@ -280,7 +284,7 @@ function guardDeliveryAdapter<TDetail extends object>(
     const result = await rawAccept(request)
     assertDeliveryIdentity(
       providerId,
-      'accept',
+      { name: 'accept', sideEffectMayHaveOccurred: true },
       result,
       deliveryIdentityFor(providerId, request),
     )
@@ -317,7 +321,7 @@ function guardDeliveryAdapter<TDetail extends object>(
     const result = await rawConfirm(acceptance)
     assertDeliveryIdentity(
       providerId,
-      'confirm',
+      { name: 'confirm', sideEffectMayHaveOccurred: false },
       result,
       deliveryIdentityFor(providerId, acceptance),
     )
@@ -365,7 +369,7 @@ function deliveryIdentityFor(
 function deliveryResultIdentityError(
   message: string,
   options: {
-    operation: 'accept' | 'confirm'
+    operation: ProviderDeliveryOperation
     actual: ProviderDeliveryAcceptance | ProviderDeliveryConfirmation
     expected: ProviderDeliveryResultIdentity
     actualProviderId: string | null
@@ -373,7 +377,7 @@ function deliveryResultIdentityError(
 ): ProviderDeliveryIdentityError {
   return new ProviderDeliveryIdentityError(
     message,
-    options.operation === 'accept',
+    options.operation.sideEffectMayHaveOccurred,
     options.actual,
     options.expected,
     options.actualProviderId,
@@ -382,13 +386,13 @@ function deliveryResultIdentityError(
 
 function assertDeliveryIdentity(
   providerId: string,
-  operation: 'accept' | 'confirm',
+  operation: ProviderDeliveryOperation,
   actual: ProviderDeliveryAcceptance | ProviderDeliveryConfirmation,
   expected: ProviderDeliveryResultIdentity,
 ): void {
   if (actual.providerId !== expected.providerId) {
     throw deliveryResultIdentityError(
-      `Provider "${providerId}" delivery ${operation} returned providerId `
+      `Provider "${providerId}" delivery ${operation.name} returned providerId `
       + `"${actual.providerId}", expected "${expected.providerId}"`,
       {
         operation,
@@ -400,7 +404,7 @@ function assertDeliveryIdentity(
   }
   if (actual.messageId !== expected.messageId) {
     throw deliveryResultIdentityError(
-      `Provider "${providerId}" delivery ${operation} returned messageId `
+      `Provider "${providerId}" delivery ${operation.name} returned messageId `
       + `"${actual.messageId}", expected "${expected.messageId}"`,
       {
         operation,
@@ -412,7 +416,7 @@ function assertDeliveryIdentity(
   }
   if (actual.attempt !== expected.attempt) {
     throw deliveryResultIdentityError(
-      `Provider "${providerId}" delivery ${operation} returned attempt `
+      `Provider "${providerId}" delivery ${operation.name} returned attempt `
       + `${actual.attempt}, expected ${expected.attempt}`,
       {
         operation,
@@ -424,7 +428,7 @@ function assertDeliveryIdentity(
   }
   if (actual.recipient.providerId !== expected.recipient.providerId) {
     throw deliveryResultIdentityError(
-      `Provider "${providerId}" delivery ${operation} returned recipient providerId `
+      `Provider "${providerId}" delivery ${operation.name} returned recipient providerId `
       + `"${actual.recipient.providerId}", expected "${expected.recipient.providerId}"`,
       {
         operation,
@@ -436,7 +440,7 @@ function assertDeliveryIdentity(
   }
   if (actual.recipient.sessionId !== expected.recipient.sessionId) {
     throw deliveryResultIdentityError(
-      `Provider "${providerId}" delivery ${operation} returned recipient sessionId `
+      `Provider "${providerId}" delivery ${operation.name} returned recipient sessionId `
       + `"${actual.recipient.sessionId}", expected "${expected.recipient.sessionId}"`,
       {
         operation,
