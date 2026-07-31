@@ -948,6 +948,10 @@ describe('provider capability contract', () => {
         providerId: 'forge',
         messageId: 'msg-cross-provider-confirm',
         attempt: 1,
+        recipient: {
+          providerId: 'forge',
+          sessionId: 'run-forge',
+        },
       },
     })
 
@@ -961,6 +965,19 @@ describe('provider capability contract', () => {
     await expect(misroutedRecipient)
       .rejects.toThrow('targets recipient provider "boundary"')
     await expect(misroutedRecipient).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
+    await expect(misroutedRecipient).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: false,
+      result: null,
+      expected: {
+        providerId: 'forge',
+        messageId: 'msg-cross-provider-confirm',
+        attempt: 1,
+        recipient: {
+          providerId: 'boundary',
+          sessionId: 'run-forge',
+        },
+      },
+    })
     expect(confirmCalls).toBe(0)
   })
 

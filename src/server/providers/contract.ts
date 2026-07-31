@@ -18,7 +18,10 @@ export interface ProviderDeliveryRecipient {
  * malformed result is detected. Callers must not blind-retry when
  * `sideEffectMayHaveOccurred` is true; the offending result remains attached
  * for ledger policy and diagnostics. A null result means the guard rejected
- * before invoking the adapter, so `sideEffectMayHaveOccurred` is false.
+ * before invoking the adapter, so `sideEffectMayHaveOccurred` is false. In that
+ * preflight case, `expected.providerId` is the rejecting adapter while
+ * `expected.recipient` preserves the submitted target; their provider IDs
+ * intentionally differ when routing was invalid.
  */
 export class ProviderDeliveryIdentityError extends Error {
   readonly name = 'ProviderDeliveryIdentityError'
@@ -265,21 +268,16 @@ function guardDeliveryAdapter<TDetail extends object>(
         + `"${request.recipient.providerId}"`,
         false,
         null,
-        {
-          providerId,
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-        },
+        deliveryIdentityFor(providerId, request),
       )
     }
     const result = await rawAccept(request)
-    assertDeliveryIdentity(providerId, 'accept', result, {
+    assertDeliveryIdentity(
       providerId,
-      messageId: request.messageId,
-      attempt: request.attempt,
-      recipient: request.recipient,
-    })
+      'accept',
+      result,
+      deliveryIdentityFor(providerId, request),
+    )
     return result
   }
   rememberGuardedHandler(accept, rawAccept, 'delivery:accept')
@@ -294,12 +292,7 @@ function guardDeliveryAdapter<TDetail extends object>(
         + `"${acceptance.providerId}"`,
         false,
         null,
-        {
-          providerId,
-          messageId: acceptance.messageId,
-          attempt: acceptance.attempt,
-          recipient: acceptance.recipient,
-        },
+        deliveryIdentityFor(providerId, acceptance),
       )
     }
     if (acceptance.recipient.providerId !== providerId) {
@@ -308,12 +301,7 @@ function guardDeliveryAdapter<TDetail extends object>(
         + `"${acceptance.recipient.providerId}"`,
         false,
         null,
-        {
-          providerId,
-          messageId: acceptance.messageId,
-          attempt: acceptance.attempt,
-          recipient: acceptance.recipient,
-        },
+        deliveryIdentityFor(providerId, acceptance),
       )
     }
     const result = await rawConfirm(acceptance)
@@ -322,6 +310,21 @@ function guardDeliveryAdapter<TDetail extends object>(
   }
   rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
   return { accept, confirm }
+}
+
+function deliveryIdentityFor(
+  providerId: string,
+  source: Pick<
+    ProviderDeliveryResultIdentity,
+    'messageId' | 'attempt' | 'recipient'
+  >,
+): ProviderDeliveryResultIdentity {
+  return {
+    providerId,
+    messageId: source.messageId,
+    attempt: source.attempt,
+    recipient: source.recipient,
+  }
 }
 
 function assertDeliveryIdentity(
