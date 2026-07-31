@@ -824,20 +824,19 @@ export interface SurfaceRefreshDeclaration {
   /** Verification interval (ms) — what `dueAt` is derived from. Absent falls back
    *  to the host default. */
   intervalMs?: number
-  /** What this Surface derives FROM. Two shapes in one list, told apart by whether
-   *  the entry carries a `scheme:` prefix:
+  /** What this Surface derives FROM, for `source-content` matching. Two shapes in
+   *  one list, told apart by whether the entry carries a `scheme:` prefix:
    *
-   *  · A REPO PATH GLOB (`src/server/**`, `docs/*.md`, `bin/serena`) — matched
-   *    against the paths a commit actually touched, so a `git-revision` trigger
-   *    only reaches Surfaces the commit is about.
-   *  · An EXTERNAL SOURCE ID (`mysql://prod/detector`, `jira:KC-1302`) — opaque and
-   *    compared for equality by `source-content`. Nothing in the repo can match it,
-   *    which is exactly what makes such a Surface commit-silent.
+   *  · An EXTERNAL SOURCE ID (`mysql://prod/detector`, `jira:KC-1302`) — opaque,
+   *    compared for equality against the observed `sourceId`.
+   *  · A REPO PATH SHAPE (`src/server/**`, `docs/*.md`, `bin/serena`) — compared as
+   *    a glob, so an adapter that emits a path-shaped `sourceId` is matched without
+   *    the author having to list every file.
    *
-   *  Declaring NOTHING here is not "watch everything" — it is "the host does not
-   *  know what this derives from", and a Surface in that state gets no automatic
-   *  `git-revision` trigger at all. See `effectiveDeclaration` in
-   *  `src/server/surfaces/surface-trigger-matcher.ts` for why. */
+   *  This list does NOT narrow which commits reach this Surface. A `git-revision`
+   *  event is gated by the declared trigger kinds and nothing else; narrowing which
+   *  triggers may reach a claim is claim-locus work, and two narrowing mechanisms
+   *  for one decision leaves no rule for which wins. */
   sources?: string[]
   /** Named signals this Surface listens for, for `semantic-signal` matching. */
   signals?: string[]
