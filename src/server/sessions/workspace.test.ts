@@ -72,7 +72,10 @@ describe('createWorktree', () => {
 
   it('creates a fresh worktree branch when the name is clear', async () => {
     const wt = await createWorktree(repo, 'feature-x')
-    expect(wt).toBe(join(`${repo}-worktrees`, 'feature-x'))
+    expect(wt).toEqual({
+      path: join(`${repo}-worktrees`, 'feature-x'),
+      created: true,
+    })
     const branches = execFileSync('git', ['-C', repo, 'branch', '--list', 'feature-x'], { encoding: 'utf-8' })
     expect(branches).toContain('feature-x')
   })

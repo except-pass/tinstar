@@ -894,9 +894,15 @@ export function providerTelemetryEnvironmentCommands(
   template: CliTemplate | null | undefined,
   endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
 ): string[][] {
-  const enabled = providerTelemetryEnabled(provider, template)
   const support = provider.terminal.capabilities.telemetry
-  if (support.state === 'unsupported') return []
+  if (support.state === 'unsupported') {
+    // An explicit opt-in is a configuration error and must still fail fast.
+    // With telemetry off (explicitly or by provider default), an unsupported
+    // provider has no environment to reconcile.
+    if (template?.telemetry === true) providerTelemetryEnabled(provider, template)
+    return []
+  }
+  const enabled = providerTelemetryEnabled(provider, template)
 
   const telemetryVars = support.detail.environment({
     sessionName,

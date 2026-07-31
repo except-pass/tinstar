@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
-import { registerSaloonSubs } from '../api/saloonBridge'
+import { rehydrateSaloonSubs } from '../api/saloonBridge'
 
 describe('saloon bridge hydration on server boot', () => {
-  it('registers every session with the bridge using saloon:<name>', () => {
+  it('registers only NATS-enabled persisted sessions on restart', () => {
     const bridge = { updateWidgetSubscriptions: vi.fn(), removeWidget: vi.fn() }
     const sessions = [
       { name: 'alpha', nats: { enabled: true,  subscriptions: ['tinstar.a'] } },
@@ -11,11 +11,9 @@ describe('saloon bridge hydration on server boot', () => {
       { name: 'gamma', nats: null },
     ]
     for (const s of sessions) {
-      registerSaloonSubs(bridge as any, s.name, s.nats?.subscriptions ?? [])
+      rehydrateSaloonSubs(bridge as any, s as any)
     }
-    expect(bridge.updateWidgetSubscriptions).toHaveBeenCalledTimes(3)
+    expect(bridge.updateWidgetSubscriptions).toHaveBeenCalledTimes(1)
     expect(bridge.updateWidgetSubscriptions).toHaveBeenCalledWith('saloon:alpha', ['tinstar.a'])
-    expect(bridge.updateWidgetSubscriptions).toHaveBeenCalledWith('saloon:beta',  ['tinstar.b'])
-    expect(bridge.updateWidgetSubscriptions).toHaveBeenCalledWith('saloon:gamma', [])
   })
 })

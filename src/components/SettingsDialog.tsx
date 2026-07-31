@@ -591,9 +591,28 @@ export function SettingsDialog({ onClose }: Props) {
                       {t.adapter && (
                         <span className="text-2xs text-slate-600 font-mono">{t.adapter}</span>
                       )}
-                      {t.telemetry === true && (
-                        <span className="text-2xs text-emerald-600" title="OTLP telemetry enabled">telem</span>
-                      )}
+                      <span
+                        className={`text-2xs ${
+                          t.telemetry === true
+                            ? 'text-emerald-600'
+                            : t.telemetry === false
+                              ? 'text-slate-600'
+                              : 'text-amber-600'
+                        }`}
+                        title={
+                          t.telemetry === true
+                            ? 'OTLP telemetry enabled'
+                            : t.telemetry === false
+                              ? 'OTLP telemetry disabled'
+                              : 'OTLP telemetry uses the provider default'
+                        }
+                      >
+                        {t.telemetry === true
+                          ? 'telem'
+                          : t.telemetry === false
+                            ? 'no telem'
+                            : 'provider default'}
+                      </span>
                       <span className="flex-1" />
                       <button
                         className="text-xs text-slate-500 hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mr-1"

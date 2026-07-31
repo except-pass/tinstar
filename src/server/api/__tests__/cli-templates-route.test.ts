@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { loadConfig } from '../../sessions/config'
 import type { CliTemplate } from '../../sessions/config'
+import { log } from '../../logger'
 
 // One ctx + server reused across requests, so a write that reassigns
 // ctx.sessionConfig is visible to the next request — the exact shape of the
@@ -39,7 +40,8 @@ async function getTemplates(): Promise<CliTemplate[]> {
 }
 
 describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
-  it('ignores legacy id-less user templates instead of treating a mutable name as identity', () => {
+  it('warns for a legacy id-less template and removes it when a replacement is saved', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
     writeFileSync(join(root, 'config.json'), JSON.stringify({
       cliTemplates: [{
         name: 'Legacy Agent',
@@ -52,6 +54,34 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
     const reloaded = loadConfig({ _rootDir: root })
     expect(reloaded.cliTemplates.some(template => template.name === 'Legacy Agent')).toBe(false)
     expect(reloaded.cliTemplates.every(template => template.id.length > 0)).toBe(true)
+    expect(warn).toHaveBeenCalledWith(
+      'config',
+      expect.stringContaining('Ignoring CLI template "Legacy Agent" because it has no stable "id"'),
+    )
+    warn.mockClear()
+    ctx.sessionConfig = reloaded
+
+    const replacement = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Legacy Agent',
+        adapter: 'generic',
+        startCmd: 'legacy -- {prompt}',
+        resumeCmd: 'legacy resume',
+      }),
+    })
+    expect(replacement.status).toBe(200)
+    const persisted = JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')) as {
+      cliTemplates: CliTemplate[]
+    }
+    expect(persisted.cliTemplates).toHaveLength(1)
+    expect(persisted.cliTemplates[0]).toMatchObject({
+      name: 'Legacy Agent',
+      id: expect.any(String),
+    })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('an edited default template is visible on the next GET (no restart)', async () => {

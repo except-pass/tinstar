@@ -113,7 +113,10 @@ export class StatusWatcher {
       const liveSessions = sessions.filter(
         session => session.state === 'running' || session.state === 'idle',
       )
-      this.pruneInactiveSessions(new Set(liveSessions.map(session => session.name)))
+      this.pruneInactiveSessions(
+        new Set(liveSessions.map(session => session.name)),
+        names,
+      )
       const results = await Promise.allSettled(
         liveSessions.map(session => this.checkSession(session)),
       )
@@ -542,7 +545,10 @@ export class StatusWatcher {
     }
   }
 
-  private pruneInactiveSessions(liveNames: ReadonlySet<string>): void {
+  private pruneInactiveSessions(
+    liveNames: ReadonlySet<string>,
+    existingNames: ReadonlySet<string>,
+  ): void {
     const knownNames = new Set([
       ...this.transcriptAdapters.keys(),
       ...this.transcriptPaths.keys(),
@@ -553,7 +559,16 @@ export class StatusWatcher {
     ])
     for (const name of knownNames) {
       if (liveNames.has(name)) continue
-      this.clearSessionCaches(name)
+      if (existingNames.has(name)) {
+        // A stopped session will resume the same conversation/transcript.
+        // Rediscover its path on restart, but preserve the provider's byte
+        // offset so old recap entries are not appended a second time.
+        this.clearTransientSessionCaches(name)
+      } else {
+        // The record is gone, so this name can later identify a completely new
+        // session. Forget both its incarnation and transcript offset.
+        this.clearSessionCaches(name)
+      }
     }
   }
 
@@ -582,12 +597,16 @@ export class StatusWatcher {
       )
     } finally {
       this.transcriptAdapters.delete(name)
-      this.transcriptPaths.delete(name)
-      this.transcriptDiscoveries.delete(name)
-      this.idleStreak.delete(name)
-      this.processTreeOverride.delete(name)
+      this.clearTransientSessionCaches(name)
       this.sessionIncarnations.delete(name)
     }
+  }
+
+  private clearTransientSessionCaches(name: string): void {
+    this.transcriptPaths.delete(name)
+    this.transcriptDiscoveries.delete(name)
+    this.idleStreak.delete(name)
+    this.processTreeOverride.delete(name)
   }
 
   private isPgrepNoMatch(error: Error): boolean {

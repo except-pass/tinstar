@@ -26,6 +26,7 @@ import {
   interactivePortWindow,
   refreshConfigProblem,
   type TinstarConfig,
+  type Session,
 } from './sessions'
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
@@ -42,7 +43,7 @@ import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
-import { registerSaloonSubs } from './api/saloonBridge'
+import { rehydrateSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
@@ -63,6 +64,25 @@ import { createDefaultProviderRegistry } from './providers/lifecycle'
 // so we avoid a double-signal race. The first instance's shutdown handler is
 // accepted as-is — prod only calls initBackend once.
 let shutdownRegistered = false
+
+/** NATS fields mirrored from durable Session truth onto the Run projection.
+ * Historical subjects on disabled sessions are deliberately not live state. */
+export function sessionNatsProjection(
+  session: Pick<Session, 'nats'>,
+): Pick<import('../domain/types').Run, 'natsEnabled' | 'natsSubject' | 'natsSubscriptions'> {
+  if (!session.nats?.enabled) {
+    return {
+      natsEnabled: false,
+      natsSubject: undefined,
+      natsSubscriptions: undefined,
+    }
+  }
+  return {
+    natsEnabled: true,
+    natsSubject: session.nats.subscriptions[1] ?? session.nats.subscriptions[0],
+    natsSubscriptions: session.nats.subscriptions,
+  }
+}
 
 export function initBackend(): RouteContext {
   // Instantiate core components
@@ -180,7 +200,7 @@ export function initBackend(): RouteContext {
         if (!entry.isDirectory()) continue
         const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
-        registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
+        rehydrateSaloonSubs(natsTraffic, sess)
       }
     }
 
@@ -362,11 +382,9 @@ export function initBackend(): RouteContext {
             port: sess.port ?? null,
             backend: sess.backend ?? null,
             agentIcon: tpl?.icon,
-            natsEnabled: sess.nats?.enabled ?? false,
             // Direct subject is the second subscription (index 1) in two-tier model
-            // Format: [broadcast, direct] where direct = broadcast + session name
-            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
-            natsSubscriptions: sess.nats?.subscriptions,
+            // Format: [broadcast, direct] where direct = broadcast + session name.
+            ...sessionNatsProjection(sess),
             natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             taskId: '',
             worktreeId: '',
@@ -391,9 +409,7 @@ export function initBackend(): RouteContext {
           const refreshed = {
             ...existingRun,
             background: sess.background ?? false,
-            natsEnabled: sess.nats?.enabled ?? false,
-            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
-            natsSubscriptions: sess.nats?.subscriptions,
+            ...sessionNatsProjection(sess),
             natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             agentIcon: tpl?.icon ?? existingRun.agentIcon,
           }

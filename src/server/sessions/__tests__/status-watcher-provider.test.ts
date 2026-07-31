@@ -321,6 +321,7 @@ describe('StatusWatcher provider transcripts', () => {
       onStatusChanged: vi.fn(),
     })
     const tick = (watcher as unknown as { tick(): Promise<void> }).tick.bind(watcher)
+    const resetOffset = provider.terminal.transcript!.resetOffset as ReturnType<typeof vi.fn>
 
     await tick()
     setState(sessionsDir, 'restart-worker', 'stopped')
@@ -330,6 +331,7 @@ describe('StatusWatcher provider transcripts', () => {
 
     expect(discover).toHaveBeenCalledTimes(2)
     expect(readStatus).toHaveBeenCalledWith(transcriptPath)
+    expect(resetOffset).not.toHaveBeenCalled()
   })
 
   it('does not carry transcript caches across a reused session name', async () => {
@@ -401,7 +403,7 @@ describe('StatusWatcher provider transcripts', () => {
       }),
     }
     const internals = watcher as unknown as {
-      pruneInactiveSessions(names: Set<string>): void
+      pruneInactiveSessions(liveNames: Set<string>, existingNames: Set<string>): void
       transcriptAdapters: Map<string, typeof transcript>
       transcriptPaths: Map<string, string>
       transcriptDiscoveries: Map<string, Promise<string | null>>
@@ -417,7 +419,7 @@ describe('StatusWatcher provider transcripts', () => {
     internals.idleStreak.set('deleted-worker', 1)
     internals.processTreeOverride.add('deleted-worker')
 
-    expect(() => internals.pruneInactiveSessions(new Set())).not.toThrow()
+    expect(() => internals.pruneInactiveSessions(new Set(), new Set())).not.toThrow()
     expect(internals.transcriptAdapters.has('deleted-worker')).toBe(false)
     expect(internals.transcriptPaths.has('deleted-worker')).toBe(false)
     expect(internals.transcriptDiscoveries.has('deleted-worker')).toBe(false)

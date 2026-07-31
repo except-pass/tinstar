@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { getConfigRoot } from '../configRoot'
+import { log } from '../logger'
 import type { ErrorCode } from '../../domain/api'
 
 // --- Types ---
@@ -51,6 +52,16 @@ export interface CliTemplate {
   telemetry?: boolean
   startCmd: string
   resumeCmd: string
+}
+
+export function isCliTemplate(entry: unknown): entry is CliTemplate {
+  if (!entry || typeof entry !== 'object') return false
+  const template = entry as Partial<CliTemplate>
+  return typeof template.id === 'string'
+    && template.id.length > 0
+    && typeof template.name === 'string'
+    && typeof template.startCmd === 'string'
+    && typeof template.resumeCmd === 'string'
 }
 
 export interface TinstarConfig {
@@ -424,18 +435,27 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
   // CLI templates: user list extends defaults by stable ID. Entries written
   // before IDs were introduced are intentionally ignored: names are labels now,
   // so guessing identity from a mutable name would recreate the rename bug.
-  const userTemplates = Array.isArray(userConfig.cliTemplates)
-    ? (userConfig.cliTemplates as unknown[]).filter(
-        (entry): entry is CliTemplate =>
-          !!entry
-          && typeof entry === 'object'
-          && typeof (entry as Partial<CliTemplate>).id === 'string'
-          && (entry as Partial<CliTemplate>).id!.length > 0
-          && typeof (entry as Partial<CliTemplate>).name === 'string'
-          && typeof (entry as Partial<CliTemplate>).startCmd === 'string'
-          && typeof (entry as Partial<CliTemplate>).resumeCmd === 'string',
+  const userTemplates: CliTemplate[] = []
+  for (const entry of Array.isArray(userConfig.cliTemplates) ? userConfig.cliTemplates : []) {
+    const template = entry as Partial<CliTemplate> | null
+    const hasRequiredFields = !!template
+      && typeof template === 'object'
+      && typeof template.name === 'string'
+      && typeof template.startCmd === 'string'
+      && typeof template.resumeCmd === 'string'
+    if (isCliTemplate(template)) {
+      userTemplates.push(template)
+      continue
+    }
+    if (hasRequiredFields) {
+      log.warn(
+        'config',
+        `Ignoring CLI template "${template.name}" because it has no stable "id"; `
+        + 'recreate it in Settings to use the new template format. '
+        + 'Saving any template removes legacy id-less entries from config.json.',
       )
-    : []
+    }
+  }
   const cliTemplates = [...DEFAULT_CLI_TEMPLATES]
   for (const ut of userTemplates) {
     const idx = cliTemplates.findIndex(t => t.id === ut.id)

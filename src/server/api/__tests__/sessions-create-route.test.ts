@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -16,17 +16,21 @@ const {
   releasePortMock,
   startTmuxSessionMock,
   stopTmuxSessionMock,
+  createWorktreeMock,
 } = vi.hoisted(() => ({
   createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
   findPortMock: vi.fn(async () => 6123),
   releasePortMock: vi.fn(),
   startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
   stopTmuxSessionMock: vi.fn(async () => undefined),
+  createWorktreeMock: vi.fn(),
 }))
 vi.mock('../../sessions', async (importActual) => {
   const actual = await importActual<typeof import('../../sessions')>()
+  createWorktreeMock.mockImplementation(actual.createWorktree)
   return {
     ...actual,
+    createWorktree: createWorktreeMock,
     tmuxBackend: {
       ...actual.tmuxBackend,
       findPort: findPortMock,
@@ -56,7 +60,7 @@ vi.mock('../../hands', async (importActual) => {
 })
 
 import { handleRequest, type RouteContext } from '../routes'
-import { getSession, updateSession } from '../../sessions'
+import { createWorktree, getSession, updateSession } from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
 import type { Run } from '../../../domain/types'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
@@ -153,6 +157,7 @@ beforeEach(() => {
   releasePortMock.mockClear()
   startTmuxSessionMock.mockClear()
   stopTmuxSessionMock.mockClear()
+  createWorktreeMock.mockClear()
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-create-route-test-'))
   testCtx = createTestServer(tmpRoot)
 })
@@ -315,6 +320,19 @@ describe('POST /api/sessions', () => {
     })
   })
 
+  it('rejects a non-string task-session name as a client error', async () => {
+    const res = await testCtx.fetch(`/api/tasks/${TASK_ID}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 42 }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      error: { message: 'Session name is required' },
+    })
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
   it('resolves the same provider adapter for create, resume, and stop', async () => {
     const registry = createDefaultProviderRegistry()
     const resolveSession = vi.spyOn(registry, 'resolveSession')
@@ -346,7 +364,87 @@ describe('POST /api/sessions', () => {
     }).provider.provider.id).toBe('codex')
   })
 
-  it('validates resume capabilities before claiming a new port', async () => {
+  it('rejects a concurrent create that targets the same session name', async () => {
+    let finishLaunch!: () => void
+    createTmuxSessionMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+      }),
+    )
+
+    const first = testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'single-writer' }),
+    })
+    await vi.waitFor(() => expect(createTmuxSessionMock).toHaveBeenCalledTimes(1))
+
+    const competing = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'single-writer' }),
+    })
+    expect(competing.status).toBe(409)
+    expect(await competing.json()).toMatchObject({
+      error: { message: expect.stringContaining('already being created') },
+    })
+
+    finishLaunch()
+    expect((await first).status).toBe(201)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps graveyard revive names away from direct creates still acquiring a worktree', async () => {
+    const repo = join(tmpRoot, 'proj')
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+
+    let finishWorktree!: () => void
+    createWorktreeMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishWorktree = () => resolve({
+          path: join(`${repo}-worktrees`, 'revive-race-necro'),
+          created: false,
+        })
+      }),
+    )
+    const directCreate = testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'revive-race-necro',
+        project: 'proj',
+        worktree: true,
+      }),
+    })
+    await vi.waitFor(() => expect(createWorktreeMock).toHaveBeenCalledTimes(1))
+    expect(getSession(join(tmpRoot, 'sessions'), 'revive-race-necro')).toBeNull()
+
+    const convId = 'revive-name-race'
+    const snapshot = graveyardSnapshotPath(tmpRoot, convId)
+    mkdirSync(dirname(snapshot), { recursive: true })
+    writeFileSync(snapshot, '{"type":"assistant"}\n')
+    testCtx.docStore.upsertTombstone({
+      convId,
+      provider: 'claude',
+      sessionName: 'revive-race',
+      coversSummary: 'A revive racing direct worktree acquisition',
+      retiredAt: new Date().toISOString(),
+      snapshotted: true,
+    })
+
+    const revived = await testCtx.fetch(`/api/graveyard/${convId}/revive`, {
+      method: 'POST',
+    })
+    expect(revived.status).toBe(200)
+    expect(await revived.json()).toMatchObject({
+      data: { sessionName: 'revive-race-necro-2' },
+    })
+
+    finishWorktree()
+    expect((await directCreate).status).toBe(201)
+    expect(getSession(join(tmpRoot, 'sessions'), 'revive-race-necro')).not.toBeNull()
+    expect(getSession(join(tmpRoot, 'sessions'), 'revive-race-necro-2')).not.toBeNull()
+  })
+
+  it('clears stale unsupported NATS state while resuming an existing session', async () => {
     const created = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'generic-resume', cliTemplate: 'Cursor Agent' }),
@@ -355,19 +453,50 @@ describe('POST /api/sessions', () => {
     expect((await testCtx.fetch('/api/sessions/generic-resume/stop', { method: 'POST' })).status).toBe(200)
 
     updateSession(join(tmpRoot, 'sessions'), 'generic-resume', {
-      nats: { enabled: true, subscriptions: [] },
+      nats: { enabled: true, subscriptions: ['legacy.subject'] },
     })
+    const run = testCtx.docStore.getRun('generic-resume')!
+    testCtx.docStore.upsertRun('generic-resume', {
+      ...run,
+      natsEnabled: true,
+      natsSubject: 'legacy.subject',
+      natsSubscriptions: ['legacy.subject'],
+    })
+    const removeWidget = vi.fn()
+    const untrackSession = vi.fn()
+    testCtx.routeContext.natsTraffic = {
+      updateWidgetSubscriptions: vi.fn(),
+      removeWidget,
+    } as never
+    testCtx.routeContext.natsHealth = {
+      trackSession: vi.fn(),
+      untrackSession,
+    } as never
     findPortMock.mockClear()
     releasePortMock.mockClear()
 
     const resumed = await testCtx.fetch('/api/sessions/generic-resume/start', { method: 'POST' })
-    expect(resumed.status).toBe(400)
-    expect(await resumed.json()).toMatchObject({
-      error: { message: expect.stringContaining('does not support terminal capability "nats"') },
+    expect(resumed.status).toBe(200)
+    expect(startTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        session: expect.objectContaining({
+          nats: expect.objectContaining({ enabled: false }),
+        }),
+      }),
+    )
+    expect(getSession(join(tmpRoot, 'sessions'), 'generic-resume')).toMatchObject({
+      nats: { enabled: false, subscriptions: [] },
     })
-    expect(findPortMock).not.toHaveBeenCalled()
+    expect(testCtx.docStore.getRun('generic-resume')).toMatchObject({
+      natsEnabled: false,
+    })
+    expect(testCtx.docStore.getRun('generic-resume')?.natsSubject).toBeUndefined()
+    expect(testCtx.docStore.getRun('generic-resume')?.natsSubscriptions).toBeUndefined()
+    expect(findPortMock).toHaveBeenCalled()
     expect(releasePortMock).not.toHaveBeenCalled()
-    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+    expect(removeWidget).toHaveBeenCalledWith('saloon:generic-resume')
+    expect(untrackSession).toHaveBeenCalledWith('generic-resume')
   })
 
   it('rejects resume when a persisted named template was deleted', async () => {
@@ -525,6 +654,89 @@ describe('POST /api/sessions', () => {
     expect(testCtx.docStore.getRun('failed-run-projection')).toBeUndefined()
   })
 
+  it('preserves a reused worktree and its entity when session provisioning fails', async () => {
+    const repo = join(tmpRoot, 'proj')
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com'])
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test'])
+    execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'])
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+
+    const existing = await createWorktree(repo, 'reused-worktree')
+    expect(existing.created).toBe(true)
+    const priorEntity = {
+      id: 'reused-worktree',
+      name: 'Existing worktree label',
+      branch: 'reused-worktree',
+      repo: 'existing-repo-label',
+      worktreePath: existing.path,
+      spaceId: SPACE_ID,
+    }
+    testCtx.docStore.upsertWorktree(priorEntity.id, priorEntity)
+    createTmuxSessionMock.mockRejectedValueOnce(new Error('launch failed'))
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'reused-worktree',
+        project: 'proj',
+        worktree: true,
+      }),
+    })
+
+    expect(failed.status).toBe(500)
+    expect(existsSync(existing.path)).toBe(true)
+    expect(testCtx.docStore.getWorktree(priorEntity.id)).toEqual(priorEntity)
+    expect(getSession(join(tmpRoot, 'sessions'), 'reused-worktree')).toBeNull()
+  })
+
+  it('preserves a worktree adopted by a concurrent entity update', async () => {
+    const repo = join(tmpRoot, 'proj')
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com'])
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test'])
+    execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'])
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+
+    let adoptedEntity: ReturnType<DocumentStore['getWorktree']>
+    createTmuxSessionMock.mockImplementationOnce(async () => {
+      adoptedEntity = {
+        ...testCtx.docStore.getWorktree('adopted-worktree')!,
+        name: 'Updated while launching',
+      }
+      testCtx.docStore.upsertWorktree('adopted-worktree', adoptedEntity)
+      throw new Error('launch failed after adoption')
+    })
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'adopted-worktree',
+        project: 'proj',
+        worktree: true,
+      }),
+    })
+
+    expect(failed.status).toBe(500)
+    expect(testCtx.docStore.getWorktree('adopted-worktree')).toBe(adoptedEntity)
+    expect(existsSync(join(`${repo}-worktrees`, 'adopted-worktree'))).toBe(true)
+  })
+
+  it('rejects a non-string session name before creating worktree resources', async () => {
+    const repo = join(tmpRoot, 'proj')
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 42, project: 'proj', worktree: true }),
+    })
+
+    expect(failed.status).toBe(400)
+    expect(existsSync(join(`${repo}-worktrees`, '42'))).toBe(false)
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
   it('continues core rollback when auxiliary registration cleanup also throws', async () => {
     const removeWidget = vi.fn(() => { throw new Error('Saloon cleanup failed') })
     const untrackSession = vi.fn(() => { throw new Error('health cleanup failed') })
@@ -557,9 +769,13 @@ describe('POST /api/sessions', () => {
       expect.objectContaining({ name: 'failed-registration-cleanup' }),
     )
     expect(releasePortMock).toHaveBeenCalledWith(6123)
-    expect(removeWidget).toHaveBeenCalled()
-    expect(untrackSession).toHaveBeenCalled()
-    expect(onDelete).toHaveBeenCalled()
+    // Registration itself broadcasts once and fails there. The outer
+    // provisioning transaction performs exactly one rollback; registration
+    // must not run a second nested cleanup before rethrowing.
+    expect(removeWidget).toHaveBeenCalledTimes(1)
+    expect(untrackSession).toHaveBeenCalledTimes(1)
+    expect(onDelete).toHaveBeenCalledTimes(1)
+    expect(testCtx.routeContext.sse.broadcastReadyQueueUpdate).toHaveBeenCalledTimes(2)
     expect(getSession(join(tmpRoot, 'sessions'), 'failed-registration-cleanup')).toBeNull()
     expect(testCtx.docStore.getRun('failed-registration-cleanup')).toBeUndefined()
     // Shared live-set/task metadata is never rollback-owned: another session

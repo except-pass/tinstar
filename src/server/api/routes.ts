@@ -51,7 +51,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice } from '../../domain/types'
+import type { Run, Worktree, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice } from '../../domain/types'
 // Server-side A2UI validation (KTD4): the notice `content` is parsed through the
 // same web_core v0_9 schema the renderer uses, so malformed descriptions are
 // rejected at the boundary. Importing the plugin's schema here is what pulls
@@ -74,7 +74,7 @@ import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
-import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig, interactivePortWindow } from '../sessions/config'
+import { isCliTemplate, saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig, interactivePortWindow } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies, type Reply } from '../../domain/pinSet'
 import { readBody } from './readBody'
@@ -520,18 +520,13 @@ export function registerLaunchedSession(
   resolvedNats: { enabled: boolean; subscriptions: string[] } | null,
   status: SessionStatus,
 ): void {
-  try {
-    registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-    bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
-    if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
-    deps.readyQueue.onStatusChange(name, status)
-    deps.sse.setReadyQueue(deps.readyQueue.getQueue())
-    deps.sse.broadcastReadyQueueUpdate()
-    deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
-  } catch (err) {
-    rollbackLaunchedSessionRegistration(deps, name, resolvedNats)
-    throw err
-  }
+  registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
+  if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
+  deps.readyQueue.onStatusChange(name, status)
+  deps.sse.setReadyQueue(deps.readyQueue.getQueue())
+  deps.sse.broadcastReadyQueueUpdate()
+  deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
 }
 
 /**
@@ -590,12 +585,16 @@ async function rollbackFailedSessionProvisioning(args: {
   sse: SSEBroadcaster
   resolvedNats: { enabled: boolean; subscriptions: string[] } | null
   createdWorktreeProject: string | null
-  worktreeEntityId: string | null
+  worktreeEntityRollback: {
+    id: string
+    previous: Worktree | null
+    provisional: Worktree
+  } | null
 }): Promise<void> {
   const {
     cfg, sessDir, docStore, name, session, claimedPort,
     natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
-    createdWorktreeProject, worktreeEntityId,
+    createdWorktreeProject, worktreeEntityRollback,
   } = args
 
   // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
@@ -633,26 +632,83 @@ async function rollbackFailedSessionProvisioning(args: {
     log.warn('sessions', `${name}: failed provisioning rollback could not delete session record: ${(err as Error).message}`)
   }
 
-  if (createdWorktreeProject) {
+  const currentWorktreeEntity = worktreeEntityRollback
+    ? docStore.getWorktree(worktreeEntityRollback.id)
+    : undefined
+  const worktreeEntityReplaced = !!(
+    worktreeEntityRollback
+    && currentWorktreeEntity
+    && currentWorktreeEntity !== worktreeEntityRollback.provisional
+  )
+  if (createdWorktreeProject && !worktreeEntityReplaced) {
     try {
       await deleteWorktree(createdWorktreeProject, name)
     } catch (err) {
       log.warn('sessions', `${name}: failed provisioning rollback could not remove worktree: ${(err as Error).message}`)
     }
   }
-  if (worktreeEntityId) {
+  if (worktreeEntityRollback) {
     try {
-      docStore.deleteWorktree(worktreeEntityId)
+      if (worktreeEntityReplaced) {
+        log.info(
+          'sessions',
+          `${name}: preserving worktree and entity changed during failed launch`,
+        )
+      } else if (currentWorktreeEntity !== worktreeEntityRollback.provisional) {
+        // A concurrent delete already removed the provisional entity.
+      } else if (worktreeEntityRollback.previous) {
+        docStore.upsertWorktree(worktreeEntityRollback.id, worktreeEntityRollback.previous)
+      } else {
+        docStore.deleteWorktree(worktreeEntityRollback.id)
+      }
     } catch (err) {
-      log.warn('sessions', `${name}: failed provisioning rollback could not delete worktree entity: ${(err as Error).message}`)
+      log.warn('sessions', `${name}: failed provisioning rollback could not restore worktree entity: ${(err as Error).message}`)
     }
   }
 }
 
+type CreateSessionResult =
+  | { ok: true; session: Session }
+  | { ok: false; error: { code: string; message: string } }
+
+/** Session names are process-wide backend identities (disk dir + tmux target).
+ * Reserve one before any async provisioning so competing creates cannot launch
+ * or roll back each other's resources. */
+const sessionCreatesInFlight = new Set<string>()
+
+function sessionNameUnavailable(sessionsDir: string, name: string): boolean {
+  return sessionCreatesInFlight.has(name) || getSession(sessionsDir, name) !== null
+}
+
 async function createSessionInternal(
   params: CreateSessionParams,
-  ctx: CreateSessionContext
-): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
+  ctx: CreateSessionContext,
+): Promise<CreateSessionResult> {
+  if (typeof params.name !== 'string' || !params.name) {
+    return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
+  }
+  if (sessionCreatesInFlight.has(params.name)) {
+    return {
+      ok: false,
+      error: {
+        code: 'SESSION_EXISTS',
+        message: `Session '${params.name}' is already being created`,
+      },
+    }
+  }
+
+  sessionCreatesInFlight.add(params.name)
+  try {
+    return await createReservedSession(params, ctx)
+  } finally {
+    sessionCreatesInFlight.delete(params.name)
+  }
+}
+
+async function createReservedSession(
+  params: CreateSessionParams,
+  ctx: CreateSessionContext,
+): Promise<CreateSessionResult> {
   const {
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateId,
@@ -667,8 +723,8 @@ async function createSessionInternal(
   } = ctx
   const providerRegistry = ctx.providerRegistry ?? defaultProviderRegistry
 
-  if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
-
+  // This call already owns the in-flight reservation; only durable state can
+  // conflict here.
   if (getSession(sessDir, name)) {
     return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
   }
@@ -723,43 +779,6 @@ async function createSessionInternal(
     if (!projectPath) return { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${project}' not found` } }
   }
 
-  // Create worktree or use existing
-  let workspacePath = projectPath
-  let branch: string | null = null
-  if (worktreePath && projectPath) {
-    workspacePath = worktreePath
-    branch = await detectBranch(worktreePath)
-  } else if (worktree && projectPath) {
-    // Fail fast on a blocked branch name (e.g. a `cockpit/…` branch blocking a
-    // plain `cockpit`) BEFORE any tmux/launch work, with a clean message the
-    // caller can show — not git's cryptic "invalid reference".
-    try {
-      workspacePath = await createWorktree(projectPath, name)
-    } catch (err) {
-      if (err instanceof WorktreeBranchConflictError) {
-        return { ok: false, error: { code: 'WORKTREE_NAME_CONFLICT', message: err.message } }
-      }
-      throw err
-    }
-    branch = name
-  }
-
-  const isWorktree = !!(worktreePath || worktree)
-
-  // Register a Worktree entity so it appears in hierarchy/grouping
-  let worktreeEntityId = ''
-  if (isWorktree && workspacePath) {
-    worktreeEntityId = name
-    docStore.upsertWorktree(worktreeEntityId, {
-      id: worktreeEntityId,
-      name,
-      branch: branch ?? name,
-      repo: project ?? '',
-      worktreePath: workspacePath,
-      spaceId: docStore.activeSpaceId,
-    })
-  }
-
   // Resolve run color
   const color = colorParam
     ?? (taskId ? docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
@@ -796,10 +815,83 @@ async function createSessionInternal(
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   }
 
+  // Acquire worktree resources only after all validation and pure projection
+  // work above has completed. From this point onward every possible failure is
+  // inside an ownership-aware compensation boundary.
+  let workspacePath = projectPath
+  let branch: string | null = null
+  let createdWorktreeProject: string | null = null
+  if (worktreePath && projectPath) {
+    workspacePath = worktreePath
+    branch = await detectBranch(worktreePath)
+  } else if (worktree && projectPath) {
+    // Fail fast on a blocked branch name (e.g. a `cockpit/…` branch blocking a
+    // plain `cockpit`) BEFORE any tmux/launch work, with a clean message the
+    // caller can show — not git's cryptic "invalid reference".
+    try {
+      const result = await createWorktree(projectPath, name)
+      workspacePath = result.path
+      if (result.created) createdWorktreeProject = projectPath
+    } catch (err) {
+      if (err instanceof WorktreeBranchConflictError) {
+        return { ok: false, error: { code: 'WORKTREE_NAME_CONFLICT', message: err.message } }
+      }
+      throw err
+    }
+    branch = name
+  }
+
+  const isWorktree = !!(worktreePath || worktree)
+
+  // Register a Worktree entity so it appears in hierarchy/grouping. Keep both
+  // the old value and the exact provisional object: rollback restores/deletes
+  // only while the store still contains our write, preserving a concurrent
+  // PATCH that replaced it during an async launch.
+  let worktreeEntityId = ''
+  let worktreeEntityRollback: {
+    id: string
+    previous: Worktree | null
+    provisional: Worktree
+  } | null = null
+  if (isWorktree && workspacePath) {
+    worktreeEntityId = name
+    const previous = docStore.getWorktree(worktreeEntityId) ?? null
+    const provisional: Worktree = {
+      id: worktreeEntityId,
+      name,
+      branch: branch ?? name,
+      repo: project ?? '',
+      worktreePath: workspacePath,
+      spaceId: docStore.activeSpaceId,
+    }
+    worktreeEntityRollback = { id: worktreeEntityId, previous, provisional }
+    try {
+      docStore.upsertWorktree(worktreeEntityId, provisional)
+    } catch (err) {
+      // The backend transaction has not started yet, so compensate only the
+      // worktree resources touched above.
+      try {
+        if (docStore.getWorktree(worktreeEntityId) === provisional) {
+          if (previous) docStore.upsertWorktree(worktreeEntityId, previous)
+          else docStore.deleteWorktree(worktreeEntityId)
+        }
+      } catch (rollbackErr) {
+        log.warn('sessions', `${name}: could not restore worktree entity after setup failure: ${(rollbackErr as Error).message}`)
+      }
+      if (createdWorktreeProject) {
+        try {
+          await deleteWorktree(createdWorktreeProject, name)
+        } catch (rollbackErr) {
+          log.warn('sessions', `${name}: could not remove worktree after setup failure: ${(rollbackErr as Error).message}`)
+        }
+      }
+      throw err
+    }
+  }
+
   let session: Session | null = null
   let claimedPort: number | null = null
   let sessionPort: number | null = null
-  const createdWorktreeProject = worktree && !worktreePath ? projectPath : null
   try {
     session = createSession(sessDir, {
       name,
@@ -862,7 +954,7 @@ async function createSessionInternal(
       sse,
       resolvedNats,
       createdWorktreeProject,
-      worktreeEntityId: worktreeEntityId || null,
+      worktreeEntityRollback,
     })
     throw err
   }
@@ -945,7 +1037,7 @@ async function createSessionInternal(
       sse,
       resolvedNats,
       createdWorktreeProject,
-      worktreeEntityId: worktreeEntityId || null,
+      worktreeEntityRollback,
     })
     throw err
   }
@@ -4480,7 +4572,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const taskId = taskSessionsMatch[1]!
         readBody(req).then(async (body) => {
           const overrides = body ? JSON.parse(body) : {}
-          if (!overrides.name) {
+          if (typeof overrides.name !== 'string' || !overrides.name) {
             return fail(res, 'BAD_REQUEST', 'Session name is required')
           }
 
@@ -4515,6 +4607,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!result.ok) {
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
+            if (result.error.code === 'MISSING_NAME') return fail(res, 'BAD_REQUEST', result.error.message)
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
             if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
               return fail(res, 'BAD_REQUEST', result.error.message)
@@ -4624,14 +4717,44 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             }
             const provider = (ctx.providerRegistry ?? defaultProviderRegistry)
               .resolveSession(session, resumeTemplate)
-            if (session.nats?.enabled) requireProviderCapability(provider, 'nats')
+            let resumeSession = session
+            if (
+              session.nats?.enabled
+              && provider.terminal.capabilities.nats.state === 'unsupported'
+            ) {
+              // Older task launches persisted nats.enabled=true even for
+              // providers whose command line never supported Tinstar's NATS
+              // transport. That stale state must not make an otherwise valid
+              // stopped Codex/generic session permanently unrestartable.
+              const disabledNats = { enabled: false, subscriptions: [] }
+              log.warn(
+                'sessions',
+                `${session.name}: clearing stale NATS state while resuming provider `
+                + `"${provider.provider.id}"`,
+              )
+              updateSession(sessDir, session.name, { nats: disabledNats })
+              unregisterSaloonSubs(ctx.natsTraffic, session.name)
+              ctx.natsHealth?.untrackSession(session.name)
+              const run = ctx.docStore.getRun(session.name)
+              if (run) {
+                ctx.docStore.upsertRun(session.name, {
+                  ...run,
+                  natsEnabled: false,
+                  natsSubject: undefined,
+                  natsSubscriptions: undefined,
+                })
+              }
+              resumeSession = { ...session, nats: disabledNats }
+            } else if (session.nats?.enabled) {
+              requireProviderCapability(provider, 'nats')
+            }
             providerTelemetryEnabled(provider, resumeTemplate)
             const claimedPort = session.port == null
             const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
             let result: Awaited<ReturnType<typeof tmuxBackend.startTmuxSession>>
             try {
               result = await tmuxBackend.startTmuxSession(cfg, {
-                session,
+                session: resumeSession,
                 secrets: sec,
                 port,
                 provider,
@@ -4923,7 +5046,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
               hasSnapshot: (id) => hasGraveyardSnapshot(cfg.dirs.root, id),
-              sessionExists: (n) => getSession(sessDir, n) !== null,
+              sessionExists: (n) => sessionNameUnavailable(sessDir, n),
               pathExists: (p) => existsSync(p),
               // One launch closure: place the transcript, create + resume the session,
               // and wire it as a first-class citizen (NATS + ready queue + full Run).
@@ -5905,7 +6028,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const templates = Array.isArray(data.cliTemplates)
+          ? data.cliTemplates.filter(isCliTemplate)
+          : []
         const entry: CliTemplate = {
           id: randomUUID(),
           name,
@@ -5949,7 +6074,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const templates = Array.isArray(data.cliTemplates)
+          ? data.cliTemplates.filter(isCliTemplate)
+          : []
         const entry: CliTemplate = {
           id: templateId,
           name,
@@ -5990,7 +6117,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const templateId = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       let data: Record<string, unknown> = {}
       try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-      const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+      const templates = Array.isArray(data.cliTemplates)
+        ? data.cliTemplates.filter(isCliTemplate)
+        : []
       const idx = templates.findIndex(t => t.id === templateId)
       if (idx === -1) return fail(res, 'NOT_FOUND', `Template "${templateId}" not found`), true
       templates.splice(idx, 1)
