@@ -83,10 +83,10 @@ describe('parseRefreshDeclaration', () => {
   })
 
   it('keeps an EMPTY sources array distinct from an absent one', () => {
-    // The three-state contract. `[]` is a real declaration — "I checked, nothing in
-    // the repo derives this" — and collapsing it to undefined would make it
-    // indistinguishable from an author who never said, which behaves the opposite
-    // way.
+    // Round-trip fidelity of the authored file, not a behaviour switch: nothing in
+    // trigger matching branches on `[]` vs absent today. The parser records what the
+    // author wrote — `"sources": []` is the statement "I checked, nothing derives
+    // this" — rather than silently rewriting it into an omission.
     expect(parseRefreshDeclaration({ sources: [] })?.sources).toEqual([])
     expect(parseRefreshDeclaration({ triggers: ['periodic'] })?.sources).toBeUndefined()
   })
@@ -200,6 +200,23 @@ describe('matchTrigger', () => {
     expect(matchTrigger(event({ kind: 'source-content', sourceId: 'file:budget.csv' }), [s])).toHaveLength(1)
   })
 
+  it('a source-content event whose sourceId is PATH-SHAPED is matched by glob, not only by equality', () => {
+    // One declared list, two shapes: an `external:`-style id is compared for
+    // equality, and an adapter that emits a repo-relative path as its `sourceId`
+    // gets glob matching for free — so an author can write `scripts/**` instead of
+    // enumerating every file such an adapter might name.
+    const s = surface({
+      content: {
+        headline: 'x', recipe: 'x',
+        refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['scripts/integrity/**'] },
+      },
+    })
+    const hit = event({ kind: 'source-content', sourceId: 'scripts/integrity/detect-leftovers.sh' })
+    const miss = event({ kind: 'source-content', sourceId: 'scripts/other/thing.sh' })
+    expect(matchTrigger(hit, [s])).toHaveLength(1)
+    expect(matchTrigger(miss, [s])).toEqual([])
+  })
+
   it('a semantic signal only matches a Surface that named it', () => {
     const listening = surface({
       id: 'a',
@@ -220,10 +237,16 @@ describe('matchTrigger', () => {
   })
 })
 
-describe('declared source paths narrow a commit (U6 follow-up)', () => {
-  // The measured failure this fixes: one session produced 57 refresh jobs, 45 of
-  // them from commits, essentially all "no change" — because every commit to a
-  // worktree made every Surface bound to it stale regardless of what it touched.
+describe('declared sources do NOT narrow a commit', () => {
+  // A DECISION, pinned so the next reader sees it rather than inferring it from an
+  // absence. A branch of this file once compared a commit's changed paths against
+  // the author's `sources` globs and dropped the event when nothing matched. That
+  // came out: narrowing which triggers may reach a claim is claim-locus work — one
+  // mechanism, declared per claim — and two narrowing mechanisms for one decision
+  // leave an implementer no rule for which wins.
+  //
+  // So `sources` is a `source-content` matching list and nothing more. Declaring it
+  // must not change what a `git-revision` event does, in either direction.
   function declaring(sources: string[] | undefined, id = 'srf_1'): Surface {
     return surface({
       id,
@@ -235,56 +258,31 @@ describe('declared source paths narrow a commit (U6 follow-up)', () => {
     })
   }
 
-  const commit = (paths: string[]) => event({ paths })
-
-  it('an UNDECLARED Surface still matches any commit — absence is not a declaration', () => {
-    // Back-compat, and the reason this is the first assertion: every Surface
-    // authored before declared sources existed carries no `sources` field, and
-    // silently making those never-refreshing would break freshness across the
-    // canvas rather than quieten it.
-    expect(matchTrigger(commit(['README.md']), [declaring(undefined)])).toHaveLength(1)
+  it('a Surface declaring repo globs matches a commit like any other', () => {
+    // The case the removed narrowing would have dropped: declared globs that the
+    // commit did not touch. The host's declared trigger is the whole gate.
+    const s = declaring(['scripts/integrity/detect-site-reassignment-leftovers.sh'])
+    expect(matchTrigger(event(), [s])).toHaveLength(1)
   })
 
-  it('an EMPTY declaration is commit-silent — the author checked and said "nothing here"', () => {
-    expect(matchTrigger(commit(['README.md']), [declaring([])])).toEqual([])
-    expect(matchTrigger(commit(['src/anything.ts']), [declaring([])])).toEqual([])
+  it('an EMPTY sources declaration does not make a Surface commit-silent', () => {
+    expect(matchTrigger(event(), [declaring([])])).toHaveLength(1)
   })
 
-  it('the mixed shape: repo code declared, data external — quiet on unrelated commits, awake on its own', () => {
-    // The real Decision 6. Its number comes from production MySQL and Jira; its
-    // LOGIC is a detector script in the repo. A path glob captures the code that
-    // derives the answer, never the data the answer is derived from.
-    const d6 = declaring([
-      'scripts/integrity/detect-site-reassignment-leftovers.sh',
-      'external:prod-mysql/ra-physical',
-      'external:jira/CMT-510',
-    ])
-    expect(matchTrigger(commit(['src/server/index.ts', 'docs/readme.md']), [d6])).toEqual([])
-    expect(matchTrigger(commit(['scripts/integrity/detect-site-reassignment-leftovers.sh']), [d6])).toHaveLength(1)
+  it('an all-external declaration is still woken by a commit', () => {
+    expect(matchTrigger(event(), [declaring(['external:prod-mysql/ra-physical', 'jira:CMT-510'])])).toHaveLength(1)
   })
 
-  it('an all-external declaration can never be woken by a commit', () => {
-    const s = declaring(['external:prod-mysql/ra-physical', 'jira:CMT-510'])
-    expect(matchTrigger(commit(['scripts/anything.sh']), [s])).toEqual([])
-  })
-
-  it('a commit with UNKNOWN paths matches anyway — silence must never be inferred', () => {
-    // No path list means the host could not work out the diff (first poll after a
-    // restart, a garbage-collected SHA, a change set past the cap). A Surface whose
-    // sources might be in that unknown set has to be allowed to go stale.
-    expect(matchTrigger(event({ paths: undefined }), [declaring(['scripts/**'])])).toHaveLength(1)
-  })
-
-  it('matches a glob written for files that do not exist yet', () => {
-    // The authoring case that motivated globs over literal lists: three files
-    // written at different times, and the author should not have to re-edit the
-    // recipe when a fourth lands.
-    const s = declaring(['docs/decisions/SerenaSelfCostCeiling*.md'])
-    expect(matchTrigger(commit(['docs/decisions/SerenaSelfCostCeilingIV.md']), [s])).toHaveLength(1)
-    expect(matchTrigger(commit(['docs/decisions/other.md']), [s])).toEqual([])
+  it('declaring sources changes nothing a commit does — same result as declaring none', () => {
+    const undeclared = matchTrigger(event(), [declaring(undefined, 'a')])
+    const declared = matchTrigger(event(), [declaring(['src/api/**', 'jira:CMT-510'], 'b')])
+    expect(declared.map(m => m.reason)).toEqual(undeclared.map(m => m.reason))
   })
 })
 
+// `pathMatchesGlob` and `isExternalSourceId` are the two halves of `source-content`
+// matching — one declared list carrying external ids (equality) and repo path shapes
+// (glob). They are NOT reachable from a `git-revision` event; see above.
 describe('pathMatchesGlob', () => {
   it('* stops at a separator and ** crosses one', () => {
     expect(pathMatchesGlob('src/*.ts', 'src/index.ts')).toBe(true)
@@ -320,7 +318,7 @@ describe('pathMatchesGlob', () => {
 })
 
 describe('isExternalSourceId', () => {
-  it('a scheme prefix marks a source no commit can touch', () => {
+  it('a scheme prefix marks an opaque id, matched by equality rather than as a glob', () => {
     expect(isExternalSourceId('external:prod-mysql/ra-physical')).toBe(true)
     expect(isExternalSourceId('mysql://prod/detector')).toBe(true)
     expect(isExternalSourceId('jira:CMT-510')).toBe(true)

@@ -261,11 +261,7 @@ A self-contained recipe is exactly what lets a surface refresh off the main agen
 
 ## Declare what your surface derives from (`refreshPolicy.sources`)
 
-The recipe says *how* to rebuild a surface. `refreshPolicy` says *when*, and the field that matters most is `sources`.
-
-Without it, the host has to assume the worst: any commit to your worktree might have invalidated any surface bound to it. One measured session produced 57 refreshes, 45 of them from commits, essentially all of them "no change" — each one a real background agent launched to discover nothing had happened.
-
-**The rule: a path glob captures the CODE that derives the answer, never the DATA the answer is derived from.**
+The recipe says *how* to rebuild a surface. `refreshPolicy` says *when*: `triggers` picks which host observations reach it, and `sources` says which upstream things a `source-content` observation must name before it counts.
 
 ```jsonc
 {
@@ -285,23 +281,22 @@ Without it, the host has to assume the worst: any commit to your worktree might 
 }
 ```
 
-That surface's number comes from production MySQL and Jira — nothing a commit can touch. Its *logic* is a script in the repo. Declaring both gets two behaviours right at once: unrelated commits no longer wake it, and editing the detector still does. This **mixed** shape is the common one, not the exception.
+**What `sources` does — and what it deliberately does not.** It is the match list for the `source-content` trigger: when the host observes that some upstream thing changed, this surface is made possibly-stale if the observed identifier is in your list. It is **not** a filter on commits. A `git-revision` observation reaches every surface that declared the `git-revision` trigger, whether or not you wrote `sources` and whether or not the commit touched anything you named. Narrowing which triggers may reach a claim is the job of the claim's declared **locus** (where its truth lives), not of this list — one mechanism, so there is never a question of which one wins.
 
-**`sources` has three states, and they are not the same:**
+So `sources` earns its place two ways: it drives `source-content` matching, and it documents, for the next fresh author (yours or someone else's), where the answer actually comes from. It does not quieten a noisy surface — for that, drop the trigger you don't want, or set `policy` to `mark-stale`.
 
-| You write | It means | A commit… |
+**Two shapes in one list**, told apart by a `scheme:` prefix:
+
+| You write | Shape | Matched by `source-content` |
 |---|---|---|
-| *(field absent)* | You never said. The host does not know. | …may make it stale. Any commit to the worktree. |
-| `"sources": []` | You checked. Nothing in the repo derives this. | …never wakes it. |
-| `"sources": ["src/api/**"]` | Exactly these. | …wakes it only if it touched a declared path. |
+| `external:prod-mysql/ra-physical`, `jira:CMT-510`, `mysql://prod/detector` | External id — opaque; the host never resolves it | Exact equality against the observed identifier |
+| `src/api/**`, `docs/decisions/CostCeiling*.md`, `bin/serena` | Repo-relative path shape | As a glob, so an adapter that reports a path is matched without you listing every file |
 
-Absence is deliberately *not* the same as `[]` — every surface written before this field existed has no `sources`, and silently making those never-refreshing would break freshness across the canvas rather than quieten it. If nothing in the repo derives your surface, say so with `[]` (or with `external:` entries); don't leave it off.
+**Glob syntax** is deliberately tiny: `**` crosses directories, `*` doesn't, `?` is one character. A glob with no wildcard is a **prefix** — `src/server` matches everything beneath it. Prefer a glob over a literal list when files will be added later: `docs/decisions/CostCeiling*.md` picks up the fourth file without you re-editing the recipe.
 
-**Glob syntax** is repo-relative and deliberately tiny: `**` crosses directories, `*` doesn't, `?` is one character. A glob with no wildcard is a **prefix** — `src/server` matches everything beneath it. Prefer a glob over a literal list when files will be added later: `docs/decisions/CostCeiling*.md` picks up the fourth file without you re-editing the recipe.
+Writing `"sources": []` is a real statement — "I checked; nothing upstream feeds this" — and the host keeps it verbatim rather than treating it as if you'd left the field off. Nothing branches on the difference today; it is there so the record says what you meant.
 
-**External sources** are anything with a `scheme:` prefix — `external:prod-mysql/ra-physical`, `jira:CMT-510`, `mysql://prod/detector`. The host does not resolve or understand these strings. They do two jobs: they can never be matched by a commit, and they document for the next fresh author (yours or someone else's) where the answer actually comes from.
-
-**`intervalMs` and the periodic trigger.** `periodic` is the time-safety net for answers that change without anything in the repo moving. It defaults to six hours, which is a floor, not a recommendation — set it to what your answer's real cadence is. A number that drifts weekly wants `86400000` (a day), not the default. A surface whose sources are *all* in the repo usually needs no `periodic` trigger at all: `git-revision` already fires at exactly the moments its answer can change.
+**`intervalMs` and the periodic trigger.** `periodic` is the time-safety net for answers that change without anything in the repo moving. It defaults to six hours, which is a floor, not a recommendation — set it to what your answer's real cadence is. A number that drifts weekly wants `86400000` (a day), not the default. A surface whose inputs are *all* in the repo usually needs no `periodic` trigger at all: `git-revision` already fires whenever the worktree moves.
 
 **`policy`** is `automatic` (rebuild it without asking — the default when you carry a recipe), `mark-stale` (badge it and wait for a human), or `manual` (nothing moves it but an explicit ⟳).
 

@@ -33,7 +33,7 @@ import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
 import { SurfaceService } from './surfaces/surface-service'
 import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
-import { buildRefreshCoordinator, changedPaths, headRevision } from './surfaces/refresh-wiring'
+import { buildRefreshCoordinator, headRevision } from './surfaces/refresh-wiring'
 import { slateSourceAdapters } from './surfaces/slate-source'
 import { boundSlateRuns, reconcileSlateEpoch } from './surfaces/source-reconciler'
 import { deriveRunIncarnation } from './stores/surfaces'
@@ -617,13 +617,6 @@ export function initBackend(): RouteContext {
       // The `git-revision` trigger source. Rides the same cadence as the git-diff
       // reconcile above rather than adding a third timer, and reports the HEAD it
       // read as EVIDENCE — the coordinator dedupes on it and never orders it.
-      //
-      // The HEAD this poll last SAW, per worktree, so a move can be turned into the
-      // set of paths it touched. In-process on purpose: after a restart there is no
-      // previous revision to diff from, the event goes out with no path list, and
-      // every Surface bound to the worktree matches — which is the honest answer,
-      // because the host genuinely does not know what moved while it was down.
-      const lastHead = new Map<string, string>()
       setInterval(() => {
         if (!refreshCoordinator) return
         const seen = new Set<string>()
@@ -631,20 +624,11 @@ export function initBackend(): RouteContext {
           const workdir = getSession(cfg.dirs.sessions, run.id)?.workspace?.path
           if (!workdir || seen.has(workdir)) continue
           seen.add(workdir)
-          void headRevision(workdir).then(async sha => {
+          void headRevision(workdir).then(sha => {
             if (!sha || !refreshCoordinator) return
-            const previous = lastHead.get(workdir)
-            lastHead.set(workdir, sha)
-            // Only a MOVE is worth attributing. The steady state is that this poll
-            // re-reads the same SHA every fifteen seconds, and diffing a revision
-            // against itself is a subprocess spawned to learn nothing.
-            const paths = previous && previous !== sha
-              ? await changedPaths(workdir, previous, sha)
-              : null
             return refreshCoordinator.note({
               kind: 'git-revision', sourceId: workdir, worktree: workdir,
               evidence: sha, runId: run.id, at: Date.now(),
-              ...(paths ? { paths } : {}),
             })
           }).catch(err => log.warn('refresh', `git trigger failed for ${run.id}: ${(err as Error).message}`))
         }
