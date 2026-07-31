@@ -13,6 +13,7 @@ import {
   matchTrigger,
   MIN_INTERVAL_MS,
   normalizeTrigger,
+  parseProposal,
   parseRefreshDeclaration,
   parseSurfaceClaims,
   pathMatchesGlob,
@@ -442,6 +443,39 @@ describe('isExternalSourceId', () => {
     expect(isExternalSourceId('src/server/**')).toBe(false)
     expect(isExternalSourceId('docs/plans/2026-07-24-001-*.md')).toBe(false)
     expect(isExternalSourceId('bin/serena')).toBe(false)
+  })
+})
+
+describe('parseProposal (the author\'s claim)', () => {
+  it('accepts the four states and nothing else', () => {
+    for (const state of ['working', 'blocked', 'resolved', 'superseded']) {
+      expect(parseProposal({ state }, 7)?.state).toBe(state)
+    }
+    expect(parseProposal({ state: 'shipped' }, 7)).toBeUndefined()
+    expect(parseProposal({ state: 'dismissed' }, 7)).toBeUndefined()
+  })
+
+  it('drops a proposal that is not an object, rather than failing the entry', () => {
+    expect(parseProposal('done', 7)).toBeUndefined()
+    expect(parseProposal(['resolved'], 7)).toBeUndefined()
+    expect(parseProposal(null, 7)).toBeUndefined()
+    expect(parseProposal({}, 7)).toBeUndefined()
+  })
+
+  it('HOST-STAMPS the time and ignores any the author supplied', () => {
+    // A card renders an elapsed time from this ("working, 4h"). A value the author
+    // controls is one they could use — accidentally or not — to make a stale claim
+    // look fresh. The claim's age is the host's observation.
+    expect(parseProposal({ state: 'working', at: 1 }, 999)?.at).toBe(999)
+  })
+
+  it('collapses the detail to ONE line and bounds it', () => {
+    // It renders on a card row. A paragraph there stops the Slate being glanceable,
+    // and a newline could otherwise fake a second field.
+    const p = parseProposal({ state: 'working', detail: 'not started,\n  half a day' }, 7)
+    expect(p?.detail).toBe('not started, half a day')
+    expect(parseProposal({ state: 'working', detail: 'x'.repeat(500) }, 7)?.detail).toHaveLength(200)
+    expect(parseProposal({ state: 'working', detail: '   ' }, 7)?.detail).toBeUndefined()
   })
 })
 

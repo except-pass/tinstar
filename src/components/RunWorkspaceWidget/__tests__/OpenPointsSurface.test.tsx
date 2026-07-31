@@ -790,4 +790,77 @@ describe('OpenPointsSurface (U6)', () => {
       expect(screen.queryByTestId('claim-problems-bare')).toBeNull()
     })
   })
+
+  describe('the author\'s proposal (status honesty)', () => {
+    // The wound this closes: status derives from who spoke last, so an agent that
+    // ANSWERED and an agent that answered AND SHIPPED both read `discussing`. The
+    // observed workaround was rewriting the headline to shout RESOLVED, which
+    // renders and is theatre. The card must be able to say what the author knows
+    // without the author being able to move the status.
+    const claiming = (state: string, extra: Record<string, unknown> = {}) =>
+      point('p1', { status: 'discussing', proposal: { state, at: 5, ...extra } } as never)
+
+    it('a "working" claim renders its ONE free-text line and moves nothing', () => {
+      render(<OpenPointsSurface runId="run-1" points={[claiming('working', {
+        detail: 'not started, half a day, one open judgement call on the alarm window',
+      })]} />)
+      const chip = screen.getByTestId('proposal-working')
+      expect(chip.textContent).toMatch(/working/i)
+      expect(chip.textContent).toMatch(/one open judgement call/i)
+      // THE INVARIANT. The status is still what the thread derived.
+      expect(screen.getByTestId('pill-p1').textContent).toMatch(/discussing/i)
+      // and it is a statement, not a button — nothing to click, nothing posted
+      expect(chip.tagName).toBe('SPAN')
+      expect(apiFetch).not.toHaveBeenCalled()
+    })
+
+    it('a "done" claim is an OFFER — the status only moves when the user accepts', async () => {
+      render(<OpenPointsSurface runId="run-1" points={[claiming('resolved')]} />)
+      // Before the click: the agent says done, the card still says discussing.
+      expect(screen.getByTestId('pill-p1').textContent).toMatch(/discussing/i)
+      expect(apiFetch).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByTestId('proposal-accept-resolved'))
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/points/p1/resolve',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      await waitFor(() => expect(screen.getByTestId('pill-p1').textContent).toMatch(/resolved/i))
+    })
+
+    it('a "moot" claim accepts into SUPERSEDE, not resolve and not dismiss', async () => {
+      // Superseded is its own outcome: the question stopped being the right
+      // question. Folding it into dismiss would file the author's discovery under
+      // the user's verdict.
+      render(<OpenPointsSurface runId="run-1" points={[claiming('superseded')]} />)
+      fireEvent.click(screen.getByTestId('proposal-accept-superseded'))
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/points/p1/supersede',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      await waitFor(() => expect(screen.getByTestId('pill-p1').textContent).toMatch(/superseded/i))
+      // Off-track, like dismissed: an exit, not a further step toward resolved.
+      expect(screen.getByTestId('track-p1').getAttribute('data-stage')).toBe('-1')
+    })
+
+    it('a spent offer disappears once the status already agrees', () => {
+      render(<OpenPointsSurface runId="run-1" points={[point('p1', {
+        status: 'resolved', proposal: { state: 'resolved', at: 5 },
+      } as never)]} />)
+      expect(screen.queryByTestId('proposal-accept-resolved')).toBeNull()
+    })
+
+    it('a user dismissal ends the argument — the offer is not re-made', () => {
+      render(<OpenPointsSurface runId="run-1" points={[point('p1', {
+        status: 'dismissed', proposal: { state: 'resolved', at: 5 },
+      } as never)]} />)
+      expect(screen.queryByTestId('proposal-accept-resolved')).toBeNull()
+    })
+
+    it('a point with no claim renders exactly as it did before', () => {
+      render(<OpenPointsSurface runId="run-1" points={[point('p1', { status: 'discussing' })]} />)
+      expect(screen.queryByTestId('proposal-working')).toBeNull()
+      expect(screen.queryByTestId('proposal-accept-resolved')).toBeNull()
+    })
+  })
 })

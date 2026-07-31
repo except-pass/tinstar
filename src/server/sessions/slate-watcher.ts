@@ -54,7 +54,7 @@ import { parseA2uiContent } from '../../a2ui/schema'
 import { synthesizeId, type PointInput } from '../stores/slate'
 import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
 import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
-import { parseRefreshDeclaration, parseSurfaceClaims } from '../surfaces/surface-trigger-matcher'
+import { parseProposal, parseRefreshDeclaration, parseSurfaceClaims } from '../surfaces/surface-trigger-matcher'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A watched run and the worktree the watcher resolves its slate dir from. */
@@ -162,8 +162,10 @@ function toSourceEntry(
     ...(input.content ? { body: input.content } : {}),
     ...(input.refresh ? { recipe: input.refresh } : {}),
     ...(input.refreshPolicy ? { refreshPolicy: input.refreshPolicy } : {}),
+    ...(input.proposal ? { proposal: input.proposal } : {}),
     // `!== undefined` rather than truthiness: `[]` is a declaration ("the author
     // checked and found nothing witnessable") and must reach the record as one.
+    // LAST, and every other content builder matches — see `updateContent`.
     ...(input.claims !== undefined ? { claims: input.claims } : {}),
   }
   return {
@@ -679,6 +681,12 @@ export function toPointInput(
   // enforces the closed vocabulary — see `parseRefreshDeclaration`.
   const declaration = parseRefreshDeclaration(r.refreshPolicy)
   if (declaration) out.refreshPolicy = declaration
+
+  // File-owned author claim about the work. Same drop-don't-fail posture as every
+  // other optional field: an unusable proposal leaves the surface with none, which
+  // renders as it does today rather than dropping the entry.
+  const proposal = parseProposal(r.proposal, Date.now())
+  if (proposal) out.proposal = proposal
 
   // File-owned claims (plan U1, R1). Same drop-don't-fail posture again: an
   // unparseable claim costs that claim, an oversized list costs the whole list, and

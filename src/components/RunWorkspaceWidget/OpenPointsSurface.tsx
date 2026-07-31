@@ -16,7 +16,7 @@
 // when the SSE `run` delta carries it on run.slate (run.slate IS the channel — no
 // second subscription).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { SlateSurface, PointStatus } from '../../types'
+import type { SlateSurface, PointStatus, SurfaceProposal } from '../../types'
 import { A2uiRenderer } from '../../a2ui/A2uiRenderer'
 import { isAnswerable } from '../../a2ui/controls'
 import type { NoticeFormState } from '../../a2ui/controlComponents'
@@ -45,7 +45,9 @@ const TRACK: Array<{ key: PointStatus; label: string }> = [
  *  Literal strings for the JIT. Unlit dots use `primary/12` (the faint resting rail). */
 const TRACK_DOT_ON = ['bg-hue-open', 'bg-hue-discussing', 'bg-hue-waiting', 'bg-hue-resolved']
 
-/** Which track index a status lights up to. `dismissed` returns -1 (off-track). */
+/** Which track index a status lights up to. `dismissed` and `superseded` return -1
+ *  (off-track): both are exits, and neither is a further step along the way to
+ *  `resolved`. */
 function stageOf(status: PointStatus | undefined): number {
   switch (status) {
     case 'discussing':
@@ -55,6 +57,7 @@ function stageOf(status: PointStatus | undefined): number {
     case 'resolved':
       return 3
     case 'dismissed':
+    case 'superseded':
       return -1
     case 'open':
     default:
@@ -69,13 +72,92 @@ const PILL_TONE: Record<PointStatus, string> = {
   discussing: 'bg-hue-discussing/15 border border-hue-discussing/30 text-hue-discussing',
   waiting: 'bg-hue-waiting/15 border border-hue-waiting/30 text-hue-waiting',
   resolved: 'bg-hue-resolved/15 border border-hue-resolved/30 text-hue-resolved',
+  superseded: 'bg-hue-superseded/15 border border-hue-superseded/30 text-hue-superseded',
   dismissed: 'bg-hue-dismissed/20 border border-hue-dismissed/25 text-hue-dismissed',
+}
+
+/** The author's claim, as a chip beside the status.
+ *
+ *  WHY THIS EXISTS AT ALL. Status derives from who spoke last, so an agent that
+ *  answered and an agent that answered AND SHIPPED THE WORK both read `discussing`.
+ *  The observed workaround was rewriting the headline to shout RESOLVED — which
+ *  renders, and is theatre. These chips let the card say what the author knows
+ *  without letting the author move the status.
+ *
+ *  `working` wears the discussing amber on purpose: it is the same "someone is on
+ *  it" meaning the track already spends that hue on. */
+const PROPOSAL_TONE: Record<SurfaceProposal['state'], string> = {
+  working: 'bg-hue-discussing/15 border border-hue-discussing/30 text-hue-discussing',
+  blocked: 'bg-hue-waiting/15 border border-hue-waiting/30 text-hue-waiting',
+  resolved: 'bg-hue-resolved/15 border border-hue-resolved/30 text-hue-resolved',
+  superseded: 'bg-hue-superseded/15 border border-hue-superseded/30 text-hue-superseded',
+}
+
+/** What each claim says on the card. The two terminal ones are phrased as OFFERS —
+ *  the user still has to accept them, and a label reading "resolved" beside a status
+ *  reading "discussing" would look like the card contradicting itself. */
+const PROPOSAL_LABEL: Record<SurfaceProposal['state'], string> = {
+  working: 'working',
+  blocked: 'blocked',
+  resolved: 'agent says: done',
+  superseded: 'agent says: moot',
 }
 
 // Author is meta, not meaning — a quiet mono label. The WORD distinguishes agent /
 // user / process; color is reserved for status (P1, and P4 forbids the old cyan
 // `process` badge — cyan is the live edge only).
 const AUTHOR_TONE = 'bg-surface-hover text-ink-low'
+
+/**
+ * The author's claim about the work, rendered beside the status.
+ *
+ * TWO SHAPES, and the split is the point. `working`/`blocked` are STATEMENTS — they
+ * inform and nothing more. `resolved`/`superseded` are OFFERS — a button, because the
+ * user is the only one who may move a status, and a claim the user cannot act on in
+ * one click is a claim they will go to the transcript to verify instead.
+ *
+ * Hidden once the status already agrees: an "agent says: done" chip beside a
+ * `resolved` pill is a stale offer to do something already done.
+ *
+ * The detail line is deliberately free text and deliberately not an ETA — see
+ * {@link SurfaceProposal}. It renders TRUNCATED on one line, because a card that
+ * grows a paragraph stops being glanceable, and the thread is where prose belongs.
+ */
+function ProposalChip({ proposal, status, busy, onAccept }: {
+  proposal?: SurfaceProposal
+  status: PointStatus
+  busy: boolean
+  onAccept: () => void
+}) {
+  if (!proposal) return null
+  const terminal = proposal.state === 'resolved' || proposal.state === 'superseded'
+  // The offer is spent the moment the status agrees with it. `dismissed` counts too:
+  // the user has ruled, and re-offering would be arguing with them.
+  if (terminal && (status === proposal.state || status === 'dismissed')) return null
+  const tone = PROPOSAL_TONE[proposal.state]
+  const label = PROPOSAL_LABEL[proposal.state]
+  const classes = `shrink-0 max-w-[16rem] truncate px-1.5 py-0.5 rounded-sm font-mono text-[9px] font-semibold uppercase tracking-[0.1em] ${tone}`
+  const text = proposal.detail ? `${label} — ${proposal.detail}` : label
+
+  if (!terminal) {
+    return (
+      <span data-testid={`proposal-${proposal.state}`} className={classes} title={text}>
+        {text}
+      </span>
+    )
+  }
+  return (
+    <button
+      data-testid={`proposal-accept-${proposal.state}`}
+      onClick={onAccept}
+      disabled={busy}
+      title={`${text} — click to mark this point ${proposal.state}`}
+      className={`${classes} hover:brightness-125 disabled:opacity-50`}
+    >
+      {text} ✓
+    </button>
+  )
+}
 
 /** The reorder affordance (S6 U2): a thumb-pad grip that reveals ▲/▼ to nudge the
  *  point one slot. NOT pointer-drag — native DnD is unreliable on the zoom/pan
@@ -175,7 +257,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   const interactive = isAnswerable(surface.body)
 
   const lifecycle = useCallback(
-    async (action: 'resolve' | 'reopen' | 'dismiss', nextStatus: PointStatus | null) => {
+    async (action: 'resolve' | 'reopen' | 'dismiss' | 'supersede', nextStatus: PointStatus | null) => {
       if (busy) return
       setError(null)
       // The row shows ONE error line, and before the S4 U2 extraction one `error`
@@ -219,6 +301,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   const toggleResolve = useCallback(() => {
     void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? null : 'resolved')
   }, [resolved, lifecycle])
+
+  // Accepting the author's claim. ONE CLICK, and it is a real lifecycle POST — the
+  // proposal itself changes nothing until the user does this, which is the whole
+  // reason a claim and a status are separate fields.
+  const acceptProposal = useCallback(() => {
+    const state = surface.proposal?.state
+    if (state !== 'resolved' && state !== 'superseded') return
+    void lifecycle(state === 'resolved' ? 'resolve' : 'supersede', state)
+  }, [surface.proposal?.state, lifecycle])
 
   // VISUAL answered posture only — same contract as the workbench column. `answer.answered`
   // is the hook's optimistic lock (plain `useState`, so it dies on remount); the durable
@@ -310,6 +401,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             >
               {status}
             </span>
+            {/* The AUTHOR's claim, beside the host's status rather than inside it.
+                A `resolved`/`superseded` claim is an offer: clicking it is what
+                actually moves the status, so the Slate still never resolves itself. */}
+            <ProposalChip
+              proposal={surface.proposal}
+              status={status}
+              busy={busy}
+              onAccept={acceptProposal}
+            />
             {/* ⚡ — this point self-refreshes from a recipe (fast path, off the main
                 agent). */}
             {surface.refresh && <FastPathBadge className="text-[10px]" />}

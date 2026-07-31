@@ -563,6 +563,10 @@ export interface SlateSurface {
   status?: PointStatus
   thread?: Reply[]
   anchor?: PointAnchor
+  /** File-owned author claim about the work (see {@link SurfaceProposal}), projected
+   *  onto the legacy shape so the Run Workspace Slate can render "shipped — confirm?"
+   *  and "working: <one line>" without waiting for the recursive Canvas. */
+  proposal?: SurfaceProposal
   /** Server-set staleness marker (plan R19): present when a `process`-authored
    *  surface has gone stale (its wrapper stopped updating). The renderer styles it
    *  as "stalled/unknown" instead of a live spinner. */
@@ -598,10 +602,48 @@ export interface SlateSurface {
 export type PointAuthor = 'agent' | 'user' | 'process'
 
 /** A point's lifecycle status. `open`/`discussing`/`waiting` are DERIVED from the
- *  thread (replies + last-author); `resolved`/`dismissed` are EXPLICIT (set only by
- *  an HTTP resolve/dismiss and survive a subsequent file re-projection). The Slate
- *  never auto-resolves a point — that was the CMT-1302 failure this feature prevents. */
-export type PointStatus = 'open' | 'discussing' | 'waiting' | 'resolved' | 'dismissed'
+ *  thread (replies + last-author); `resolved`/`dismissed`/`superseded` are EXPLICIT
+ *  (set only by an HTTP resolve/dismiss/supersede and survive a subsequent file
+ *  re-projection). The Slate never auto-resolves a point — that was the CMT-1302
+ *  failure this feature prevents.
+ *
+ *  `superseded` is the third exit and it is NOT a synonym for the other two: the
+ *  question stopped being the right question. A decision whose premise dissolved —
+ *  the prevention work turned out to be already filed and closed — was neither
+ *  answered nor waved away, and forcing it into `dismissed` would file the author's
+ *  discovery under the user's verdict. Dismissal stays the user's. */
+export type PointStatus = 'open' | 'discussing' | 'waiting' | 'resolved' | 'dismissed' | 'superseded'
+
+/** What the AUTHOR says about the work behind a surface — a HINT, never authority.
+ *
+ *  THE PROBLEM IT SOLVES. Status derives from who spoke last, deliberately, so the
+ *  Slate can never auto-resolve. But that leaves the card unable to tell
+ *  "awaiting your ruling" from "already shipped": both are `discussing`, because in
+ *  both the agent spoke last. The observed workaround was rewriting the headline to
+ *  shout RESOLVED — which renders, and is theatre. It also leaves no way to say an
+ *  answered surface is being WORKED rather than untouched; one answer sat half a day
+ *  looking identical to one nobody had started.
+ *
+ *  A proposal is the author's claim about the work. It is rendered beside the status
+ *  and it changes nothing about the status — {@link PointStatus} is still derived
+ *  from the thread, and only a user action moves it. A `resolved` or `superseded`
+ *  proposal is an offer the user confirms in one click; it never confirms itself. */
+export interface SurfaceProposal {
+  /** `working` — someone is on it. `blocked` — they cannot proceed. `resolved` and
+   *  `superseded` — the author believes it is finished, and offers the matching
+   *  {@link PointStatus} for the user to accept. */
+  state: 'working' | 'blocked' | 'resolved' | 'superseded'
+  /** ONE short line, rendered on the card.
+   *
+   *  DELIBERATELY FREE TEXT AND DELIBERATELY NOT AN ETA. The case that asked for it
+   *  would have read "not started, half a day, one open judgement call on the alarm
+   *  window" — three facts a structured field would have had to invent, and an ETA
+   *  the author would have had to make up and been wrong about. A Stepper was
+   *  useless for the same case precisely because nothing had started, so there were
+   *  no steps to colour. */
+  detail?: string
+  at: number
+}
 
 /** What a point is attached to. `none` = a free-standing open-points entry;
  *  `decision` / `surface` anchor it to a decision record or a Slate surface by id. */
@@ -643,6 +685,11 @@ export interface Point {
    *  — an omitted `group` is today's behavior exactly. Rides the file→store→bridge
    *  path like `refresh`: overwritten on projection, cleared when omitted. */
   group?: string
+  /** File-owned author claim about the work (see {@link SurfaceProposal}). Rides the
+   *  file→store→bridge path like `refresh`: overwritten on projection, cleared when
+   *  omitted. NEVER feeds {@link derivePointStatus} — it is a hint rendered beside
+   *  the status, and only a user action moves the status itself. */
+  proposal?: SurfaceProposal
   /** STORE-OWNED sort order within the run's points (S6 U2). Absent until the user
    *  reorders, in which case the projection falls back to `createdAt` — so an
    *  un-reordered Slate keeps its creation order exactly as before. A file
@@ -661,6 +708,9 @@ export interface Point {
   resolvedAt?: number
   /** Set only by an explicit dismiss; survives a later file re-projection. */
   dismissedAt?: number
+  /** Set only by an explicit supersede; survives a later file re-projection. The
+   *  question stopped being the right question — neither answered nor waved away. */
+  supersededAt?: number
   /** Server-set backstop marker (plan R19): a `process`-authored point whose
    *  `amendedAt` has gone stale (no file update for N minutes) is marked stalled so
    *  a `kill -9`'d `tinstar-run` wrapper can't leave a permanent fake-live spinner.
@@ -1136,6 +1186,18 @@ export interface SurfaceContent {
    *  applies its defaults — see `effectiveDeclaration` in
    *  `src/server/surfaces/surface-trigger-matcher.ts`. */
   refreshPolicy?: SurfaceRefreshDeclaration
+  /** The author's claim about the work behind this surface — see
+   *  {@link SurfaceProposal}.
+   *
+   *  AUTHORED CONTENT, not thread state, and the placement is the argument: a
+   *  proposal is something the author SAYS, so it belongs to the part an authority
+   *  may replace (KTD4). It therefore travels the same path as the headline — the
+   *  file owns it, a re-projection replaces it, omitting it clears it, and the
+   *  watermark covers it so an author who changes only their claim has genuinely
+   *  changed the entry. Putting it on the thread would have made it survive
+   *  re-authoring, which is wrong: an agent who rewrites a card and says nothing
+   *  about progress is no longer claiming progress. */
+  proposal?: SurfaceProposal
   /** What this Surface says would prove it wrong (R1, plan U1).
    *
    *  THREE-STATE, and the two empty states are not the same thing:
@@ -1167,6 +1229,8 @@ export interface SurfaceThread {
   resolvedAt?: number
   /** Set only by an explicit dismiss; survives a source re-projection. */
   dismissedAt?: number
+  /** Set only by an explicit supersede; survives a source re-projection. */
+  supersededAt?: number
 }
 
 /** A legacy presentation of a canonical Surface (plan KTD3). NOT a home: the

@@ -3669,16 +3669,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // POST /api/runs/:id/slate/points/:pid/resolve|reopen|dismiss — explicit lifecycle.
+  // POST /api/runs/:id/slate/points/:pid/resolve|reopen|dismiss|supersede — explicit
+  // lifecycle. `supersede` is the third exit: the question stopped being the right
+  // question, which is neither an answer nor the user waving it away.
   // Sticky status the store owns; no delivery (a lifecycle flip is not an injection,
   // mirroring the notices dismiss route). Matched BEFORE the greedy PATCH handler.
-  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/(resolve|reopen|dismiss)$/.test(url.split('?')[0] ?? '')) {
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/(resolve|reopen|dismiss|supersede)$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const rest = path.slice('/api/runs/'.length)
     const segs = rest.split('/') // [runId, 'slate', 'points', pid, action]
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
-    const action = segs[4] as 'resolve' | 'reopen' | 'dismiss'
+    const action = segs[4] as 'resolve' | 'reopen' | 'dismiss' | 'supersede'
     const existing = ctx.docStore.getSlatePoint(runId, pid)
     if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
     void slateBridge().setDisposition(runId, pid, action, slateActor('user')).then(result => {
