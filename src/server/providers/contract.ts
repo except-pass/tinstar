@@ -35,7 +35,7 @@ export class ProviderDeliveryIdentityError extends Error {
       | ProviderDeliveryConfirmation
       | null,
     readonly expected: ProviderDeliveryResultIdentity,
-    readonly actualProviderId: string | null = result?.providerId ?? null,
+    readonly actualProviderId: string | null,
   ) {
     super(message)
   }
@@ -268,9 +268,11 @@ function guardDeliveryAdapter<TDetail extends object>(
       throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery request is addressed to provider `
         + `"${request.recipient.providerId}"`,
-        providerId,
-        request.recipient.providerId,
-        request,
+        {
+          providerId,
+          actualProviderId: request.recipient.providerId,
+          source: request,
+        },
       )
     }
     const result = await rawAccept(request)
@@ -292,18 +294,22 @@ function guardDeliveryAdapter<TDetail extends object>(
       throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation belongs to provider `
         + `"${acceptance.providerId}"`,
-        providerId,
-        acceptance.providerId,
-        acceptance,
+        {
+          providerId,
+          actualProviderId: acceptance.providerId,
+          source: acceptance,
+        },
       )
     }
     if (acceptance.recipient.providerId !== providerId) {
       throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation targets recipient provider `
         + `"${acceptance.recipient.providerId}"`,
-        providerId,
-        acceptance.recipient.providerId,
-        acceptance,
+        {
+          providerId,
+          actualProviderId: acceptance.recipient.providerId,
+          source: acceptance,
+        },
       )
     }
     const result = await rawConfirm(acceptance)
@@ -321,19 +327,21 @@ function guardDeliveryAdapter<TDetail extends object>(
 
 function preflightDeliveryIdentityError(
   message: string,
-  providerId: string,
-  actualProviderId: string,
-  source: Pick<
-    ProviderDeliveryResultIdentity,
-    'messageId' | 'attempt' | 'recipient'
-  >,
+  options: {
+    providerId: string
+    actualProviderId: string
+    source: Pick<
+      ProviderDeliveryResultIdentity,
+      'messageId' | 'attempt' | 'recipient'
+    >
+  },
 ): ProviderDeliveryIdentityError {
   return new ProviderDeliveryIdentityError(
     message,
     false,
     null,
-    deliveryIdentityFor(providerId, source),
-    actualProviderId,
+    deliveryIdentityFor(options.providerId, options.source),
+    options.actualProviderId,
   )
 }
 
@@ -365,6 +373,7 @@ function assertDeliveryIdentity(
       operation === 'accept',
       actual,
       expected,
+      actual.providerId,
     )
   }
   if (actual.messageId !== expected.messageId) {
@@ -374,6 +383,7 @@ function assertDeliveryIdentity(
       operation === 'accept',
       actual,
       expected,
+      null,
     )
   }
   if (actual.attempt !== expected.attempt) {
@@ -383,6 +393,7 @@ function assertDeliveryIdentity(
       operation === 'accept',
       actual,
       expected,
+      null,
     )
   }
   if (actual.recipient.providerId !== expected.recipient.providerId) {
@@ -392,6 +403,7 @@ function assertDeliveryIdentity(
       operation === 'accept',
       actual,
       expected,
+      actual.recipient.providerId,
     )
   }
   if (actual.recipient.sessionId !== expected.recipient.sessionId) {
@@ -401,6 +413,7 @@ function assertDeliveryIdentity(
       operation === 'accept',
       actual,
       expected,
+      null,
     )
   }
 }

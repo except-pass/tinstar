@@ -720,6 +720,7 @@ describe('provider capability contract', () => {
     await expect(mismatchedAcceptance).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
     await expect(mismatchedAcceptance).rejects.toMatchObject({
       sideEffectMayHaveOccurred: true,
+      actualProviderId: null,
       result: {
         state: 'accepted',
         providerId: 'forge',
@@ -744,6 +745,7 @@ describe('provider capability contract', () => {
     await expect(mismatchedConfirmation).rejects.toBeInstanceOf(ProviderDeliveryIdentityError)
     await expect(mismatchedConfirmation).rejects.toMatchObject({
       sideEffectMayHaveOccurred: false,
+      actualProviderId: null,
       expected: {
         providerId: 'forge',
         messageId: 'msg-stable',
@@ -786,6 +788,7 @@ describe('provider capability contract', () => {
     await expect(result).rejects.toThrow('returned providerId "boundary"')
     await expect(result).rejects.toMatchObject({
       sideEffectMayHaveOccurred: true,
+      actualProviderId: 'boundary',
       result: {
         state: 'rejected',
         providerId: 'boundary',
@@ -840,9 +843,14 @@ describe('provider capability contract', () => {
       .rejects.toThrow('returned recipient providerId "boundary"')
     await expect(wrongProviderResult).rejects.toMatchObject({
       sideEffectMayHaveOccurred: true,
+      actualProviderId: 'boundary',
     })
-    await expect(wrongAcceptanceRecipient.delivery!.accept(request))
+    const wrongSessionResult = wrongAcceptanceRecipient.delivery!.accept(request)
+    await expect(wrongSessionResult)
       .rejects.toThrow('returned recipient sessionId "run-someone-else"')
+    await expect(wrongSessionResult).rejects.toMatchObject({
+      actualProviderId: null,
+    })
 
     const acceptance = await delivery.accept(request)
     if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
