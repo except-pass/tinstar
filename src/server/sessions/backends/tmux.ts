@@ -1160,7 +1160,7 @@ export class TtydIdentityInspectionError extends Error {
   }
 }
 
-export type TtydStartSupersessionStage =
+export type TtydStartInterruptionStage =
   | 'preflight'
   | 'pre-spawn'
   | 'post-spawn'
@@ -1169,7 +1169,7 @@ export type TtydStartSupersessionStage =
 export class TtydStartSupersededError extends Error {
   constructor(
     sessionName: string,
-    readonly stage: TtydStartSupersessionStage,
+    readonly stage: TtydStartInterruptionStage,
     options?: ErrorOptions,
   ) {
     super(`ttyd start for ${sessionName} was superseded at ${stage}`, options)
@@ -1180,7 +1180,10 @@ export class TtydStartSupersededError extends Error {
 export class TtydStartCancelledError extends Error {
   constructor(
     sessionName: string,
-    readonly stage: TtydStartSupersessionStage,
+    /** Boundary stage inherited from the supersession this cancellation replaces. */
+    readonly stage: TtydStartInterruptionStage,
+    /** Original failure, retained outside `cause` so it cannot imply supersession. */
+    readonly interrupted: unknown,
     options?: ErrorOptions,
   ) {
     super(`ttyd start for ${sessionName} was cancelled at ${stage}`, options)
@@ -1626,6 +1629,7 @@ function enqueueTtydStart(
           throw new TtydStartCancelledError(
             opts.sessionName,
             superseded.stage,
+            err,
             cancellationCause === undefined
               ? undefined
               : { cause: cancellationCause },

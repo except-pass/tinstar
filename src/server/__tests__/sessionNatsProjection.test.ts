@@ -32,8 +32,11 @@ import {
 } from '../sessions'
 import {
   findTtydStartSupersededError,
+  TtydIdentityInspectionError,
+  TtydStartCancelledError,
   TtydStartSupersededError,
 } from '../sessions/backends/tmux'
+import { log } from '../logger'
 import { DocumentStore } from '../stores/document-store'
 import type { Run } from '../../domain/types'
 
@@ -92,6 +95,7 @@ describe('sessionNatsProjection', () => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   resetSessionBackendOwnersForTests()
   for (const root of scratchRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true })
@@ -474,7 +478,10 @@ describe('getLiveSessionForBoot', () => {
   })
 
   it('leaves a newer terminal start untouched and returns its own fresh claim', async () => {
-    const inspectionError = new Error('lsof failed during replacement')
+    const inspectionError = new TtydIdentityInspectionError(
+      'lsof failed during replacement',
+    )
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
     const supersededError = new Error('reattach wrapped the terminal error', {
       cause: new TtydStartSupersededError(
         'superseded-reattach',
@@ -501,7 +508,8 @@ describe('getLiveSessionForBoot', () => {
       'generation',
       {
         identityInspectionUnavailable: () => false,
-        isIdentityInspectionError: err => err === inspectionError,
+        isIdentityInspectionError: err =>
+          err instanceof TtydIdentityInspectionError,
         findSupersededError: findTtydStartSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
@@ -522,6 +530,58 @@ describe('getLiveSessionForBoot', () => {
     expect(releasePort).toHaveBeenCalledWith(7000)
     expect(update).not.toHaveBeenCalled()
     expect(releaseLease).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      'reattach',
+      expect.stringContaining(
+        'identity inspection failed while reattach was superseded',
+      ),
+    )
+  })
+
+  it('compensates a cancelled terminal start with the production matcher', async () => {
+    const session = {
+      name: 'cancelled-reattach',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        findSupersededError: findTtydStartSupersededError,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async () => {
+          throw new TtydStartCancelledError(
+            session.name,
+            'post-spawn',
+            new TtydStartSupersededError(session.name, 'post-spawn'),
+          )
+        },
+        isCurrent: () => true,
+        verifySurface: async () => 'verified',
+        stopTtyd,
+        releasePort,
+        updateSession: vi.fn(() => session),
+        tmuxName: () => 'tinstar-cancelled-reattach',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).toHaveBeenCalledTimes(1)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name)
+    expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(7000)
   })
 
   it('respects an injected negative supersession classifier', async () => {

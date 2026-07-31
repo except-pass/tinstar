@@ -384,9 +384,15 @@ describe('fenced ttyd start attempts', () => {
 
   it('treats cancellation as expected without reclassifying its cause', () => {
     const diagnostic = new Error('restart was intentionally stopped')
+    const interrupted = new TtydStartSupersededError(
+      opts.sessionName,
+      'post-spawn',
+      { cause: diagnostic },
+    )
     const cancellation = new TtydStartCancelledError(
       opts.sessionName,
       'post-spawn',
+      interrupted,
       { cause: diagnostic },
     )
 
@@ -397,6 +403,7 @@ describe('fenced ttyd start attempts', () => {
     expect(isExpectedTtydStartInterruption(diagnostic)).toBe(false)
     expect(findTtydStartSupersededError(cancellation)).toBeNull()
     expect(cancellation.cause).toBe(diagnostic)
+    expect(cancellation.interrupted).toBe(interrupted)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {
