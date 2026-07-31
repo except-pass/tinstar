@@ -20,8 +20,9 @@ export interface ProviderDeliveryRecipient {
  * for ledger policy and diagnostics. A null result means the guard rejected
  * before invoking the adapter, so `sideEffectMayHaveOccurred` is false. In that
  * preflight case, `expected.providerId` is the rejecting adapter while
- * `expected.recipient` preserves the submitted target; their provider IDs
- * intentionally differ when routing was invalid.
+ * `expected.recipient` preserves the submitted target. `actualProviderId`
+ * records the foreign provider field that caused rejection; provider IDs
+ * inside `expected` differ only for recipient-routing failures.
  */
 export class ProviderDeliveryIdentityError extends Error {
   readonly name = 'ProviderDeliveryIdentityError'
@@ -34,6 +35,7 @@ export class ProviderDeliveryIdentityError extends Error {
       | ProviderDeliveryConfirmation
       | null,
     readonly expected: ProviderDeliveryResultIdentity,
+    readonly actualProviderId: string | null = result?.providerId ?? null,
   ) {
     super(message)
   }
@@ -263,12 +265,12 @@ function guardDeliveryAdapter<TDetail extends object>(
   const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
   const accept = async (request: ProviderDeliveryRequest) => {
     if (request.recipient.providerId !== providerId) {
-      throw new ProviderDeliveryIdentityError(
+      throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery request is addressed to provider `
         + `"${request.recipient.providerId}"`,
-        false,
-        null,
-        deliveryIdentityFor(providerId, request),
+        providerId,
+        request.recipient.providerId,
+        request,
       )
     }
     const result = await rawAccept(request)
@@ -287,29 +289,52 @@ function guardDeliveryAdapter<TDetail extends object>(
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
     if (acceptance.providerId !== providerId) {
-      throw new ProviderDeliveryIdentityError(
+      throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation belongs to provider `
         + `"${acceptance.providerId}"`,
-        false,
-        null,
-        deliveryIdentityFor(providerId, acceptance),
+        providerId,
+        acceptance.providerId,
+        acceptance,
       )
     }
     if (acceptance.recipient.providerId !== providerId) {
-      throw new ProviderDeliveryIdentityError(
+      throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery confirmation targets recipient provider `
         + `"${acceptance.recipient.providerId}"`,
-        false,
-        null,
-        deliveryIdentityFor(providerId, acceptance),
+        providerId,
+        acceptance.recipient.providerId,
+        acceptance,
       )
     }
     const result = await rawConfirm(acceptance)
-    assertDeliveryIdentity(providerId, 'confirm', result, acceptance)
+    assertDeliveryIdentity(
+      providerId,
+      'confirm',
+      result,
+      deliveryIdentityFor(providerId, acceptance),
+    )
     return result
   }
   rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
   return { accept, confirm }
+}
+
+function preflightDeliveryIdentityError(
+  message: string,
+  providerId: string,
+  actualProviderId: string,
+  source: Pick<
+    ProviderDeliveryResultIdentity,
+    'messageId' | 'attempt' | 'recipient'
+  >,
+): ProviderDeliveryIdentityError {
+  return new ProviderDeliveryIdentityError(
+    message,
+    false,
+    null,
+    deliveryIdentityFor(providerId, source),
+    actualProviderId,
+  )
 }
 
 function deliveryIdentityFor(

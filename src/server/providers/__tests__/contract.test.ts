@@ -896,6 +896,7 @@ describe('provider capability contract', () => {
     await expect(misrouted).rejects.toMatchObject({
       sideEffectMayHaveOccurred: false,
       result: null,
+      actualProviderId: 'boundary',
       expected: {
         providerId: 'forge',
         messageId: 'msg-wrong-provider',
@@ -944,6 +945,7 @@ describe('provider capability contract', () => {
     await expect(misrouted).rejects.toMatchObject({
       sideEffectMayHaveOccurred: false,
       result: null,
+      actualProviderId: 'boundary',
       expected: {
         providerId: 'forge',
         messageId: 'msg-cross-provider-confirm',
@@ -968,6 +970,7 @@ describe('provider capability contract', () => {
     await expect(misroutedRecipient).rejects.toMatchObject({
       sideEffectMayHaveOccurred: false,
       result: null,
+      actualProviderId: 'boundary',
       expected: {
         providerId: 'forge',
         messageId: 'msg-cross-provider-confirm',
