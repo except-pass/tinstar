@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   afterBootDeletionCleanups,
+  createSessionTtydReattachSingleFlight,
   getLiveSessionForBoot,
   reconcileDeletingSessionOnBoot,
+  reattachVerifiedSessionTtydAttempt,
   rehydrateDeletingSessionOnBoot,
+  rehydrateRunProjectionFromSession,
   sessionNatsProjection,
   startupReattachStillCurrent,
 } from '../index'
@@ -25,6 +28,7 @@ import {
   setState,
   updateSession,
   type TinstarConfig,
+  type Session,
 } from '../sessions'
 import { DocumentStore } from '../stores/document-store'
 import type { Run } from '../../domain/types'
@@ -55,6 +59,28 @@ describe('sessionNatsProjection', () => {
       natsEnabled: true,
       natsSubject: 'tinstar.direct',
       natsSubscriptions: ['tinstar.broadcast', 'tinstar.direct'],
+    })
+  })
+
+  it('uses Session as the boot-time authority for a stale Run port', () => {
+    const run = {
+      id: 'stale-run-port',
+      port: 6123,
+      agentIcon: 'old-icon',
+    } as Run
+    const session = {
+      port: null,
+      background: false,
+      nats: { enabled: false, subscriptions: [] },
+      natsControlOrphanedAt: null,
+    } satisfies Pick<
+      Session,
+      'port' | 'background' | 'nats' | 'natsControlOrphanedAt'
+    >
+
+    expect(rehydrateRunProjectionFromSession(run, session)).toMatchObject({
+      port: null,
+      agentIcon: 'old-icon',
     })
   })
 })
@@ -355,5 +381,193 @@ describe('getLiveSessionForBoot', () => {
       ensureMarshal,
     )).resolves.toBe('ready')
     expect(ensureMarshal).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases a failed fresh reattach port exactly once', async () => {
+    const session = {
+      name: 'fresh-port-failure',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const releasePort = vi.fn()
+    const releaseLease = vi.fn()
+    const update = vi.fn(() => session)
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        acquireLease: () => ({ token: 'generation', release: releaseLease }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
+        isCurrent: () => true,
+        verifySurface: async () => 'unhealthy',
+        stopTtyd: vi.fn(),
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-fresh-port-failure',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(7000)
+    expect(update).not.toHaveBeenCalled()
+    expect(releaseLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves an incumbent untouched when identity inspection is inconclusive', async () => {
+    const inspectionError = new Error('lsof timed out')
+    const session = {
+      name: 'inspection-inconclusive',
+      state: 'running',
+      port: 6123,
+      ttydPid: 99,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+    const update = vi.fn(() => session)
+    const releaseLease = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: err => err === inspectionError,
+        acquireLease: () => ({ token: 'generation', release: releaseLease }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async () => { throw inspectionError },
+        isCurrent: () => true,
+        verifySurface: async () => 'verified',
+        stopTtyd,
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-inspection-inconclusive',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).not.toHaveBeenCalled()
+    expect(releasePort).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(releaseLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('durably retires a stale port before publishing a verified replacement', async () => {
+    let session = {
+      name: 'stale-port-migration',
+      state: 'running',
+      port: 6123,
+      ttydPid: 99,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const releasePort = vi.fn()
+    const update = vi.fn((
+      _sessionsDir: string,
+      _name: string,
+      patch: Partial<Session>,
+    ) => {
+      session = { ...session, ...patch }
+      return session
+    })
+    const verifySurface = vi.fn()
+      .mockResolvedValueOnce('unhealthy')
+      .mockResolvedValueOnce('verified')
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
+        isCurrent: () => true,
+        verifySurface,
+        stopTtyd: vi.fn(),
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-stale-port-migration',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(true)
+
+    expect(update.mock.calls.map(call => call[2])).toEqual([
+      { port: null, ttydPid: null },
+      { port: 7000, ttydPid: 101 },
+    ])
+    expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(6123)
+    expect(session).toMatchObject({ port: 7000, ttydPid: 101 })
+  })
+
+  it('publishes nothing when the generation becomes stale after reattach', async () => {
+    const session = {
+      name: 'stale-generation-reattach',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const update = vi.fn(() => session)
+    const releasePort = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
+        isCurrent: () => false,
+        verifySurface: async () => 'verified',
+        stopTtyd: vi.fn(),
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-stale-generation-reattach',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(update).not.toHaveBeenCalled()
+    expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(7000)
+  })
+
+  it('single-flights concurrent reattach attempts for the same name', async () => {
+    let finish!: (value: boolean) => void
+    const operation = vi.fn(() => new Promise<boolean>(resolve => {
+      finish = resolve
+    }))
+    const singleFlight = createSessionTtydReattachSingleFlight(operation)
+
+    const first = singleFlight('same-name', 'generation-1')
+    const second = singleFlight('same-name', 'generation-1')
+    expect(first).toBe(second)
+    expect(operation).toHaveBeenCalledTimes(1)
+
+    finish(true)
+    await expect(first).resolves.toBe(true)
+    operation.mockImplementationOnce(async () => true)
+    await singleFlight('same-name', 'generation-2')
+    expect(operation).toHaveBeenCalledTimes(2)
   })
 })

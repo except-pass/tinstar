@@ -990,6 +990,7 @@ export async function stopTmuxSession(
   stopManagedTtyd(session.name)
 
   const tmuxName = tmuxSessionName(config, session.name)
+  strictProbeWarnings.delete(tmuxName)
   const target = exactTmuxSessionTarget(tmuxName)
   log.info('tmux', `${session.name}: stopping tmux session`, { target })
   try {
@@ -1004,6 +1005,7 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   stopManagedTtyd(session.name)
 
   const tmuxName = tmuxSessionName(config, session.name)
+  strictProbeWarnings.delete(tmuxName)
   const target = exactTmuxSessionTarget(tmuxName)
   log.info('tmux', `${session.name}: deleting tmux session`, { target })
   try {
@@ -1026,7 +1028,7 @@ export async function reattachTmuxSession(
 
   // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
   // any unrelated HTTP listener) must never make this session look healthy.
-  const incumbent = ttydIncumbentsOnPort(opts.port).find(
+  const incumbent = (await ttydIncumbentsOnPortStrict(opts.port)).find(
     candidate => candidate.tmuxTarget === tmuxName,
   )
   if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
@@ -1063,12 +1065,15 @@ interface ManagedTtydEntry {
   child: ChildProcess
   tmuxName: string
   port: number
+  startToken: symbol
   stopped: boolean
   restartTimer?: ReturnType<typeof setTimeout>
   onRestart?: (pid: number) => void
 }
 
 const managedTtyd = new Map<string, ManagedTtydEntry>()
+const ttydStartTokens = new Map<string, symbol>()
+const ttydStartChains = new Map<string, Promise<unknown>>()
 
 // Epoch-ms of recent auto-restarts per session, for the circuit breaker.
 // Kept module-level (not on the entry) so it survives startTtyd's internal
@@ -1142,30 +1147,146 @@ export function tmuxTargetFromArgs(args: string): string | null {
   return target.startsWith('=') ? target.slice(1) : target
 }
 
-/** ttyd processes listening on `port`, each with the tmux session it attaches. */
-export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
-  const out: TtydIncumbent[] = []
-  let pidLines: string
+let ttydIdentityInspectionState: 'unknown' | 'available' | 'unavailable' = 'unknown'
+let ttydIdentityInspectionWarned = false
+let ttydIdentityInspectionRetryAt = 0
+const TTYD_IDENTITY_INSPECTION_RETRY_MS = 30_000
+
+export class TtydIdentityInspectionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'TtydIdentityInspectionError'
+  }
+}
+
+/** Whether strict identity inspection is in a non-destructive retry cooldown. */
+export function ttydIdentityInspectionUnavailable(): boolean {
+  return (
+    ttydIdentityInspectionState === 'unavailable'
+    && Date.now() < ttydIdentityInspectionRetryAt
+  )
+}
+
+interface IdentityExecFailure {
+  code?: string | number
+  stdout?: string | Buffer
+  stderr?: string | Buffer
+  killed?: boolean
+  signal?: NodeJS.Signals | null
+}
+
+type IdentityExec = (
+  file: string,
+  args: readonly string[],
+  opts?: { timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>
+
+function inspectionOutput(value: string | Buffer | undefined): string {
+  return typeof value === 'string'
+    ? value.trim()
+    : value?.toString('utf8').trim() ?? ''
+}
+
+/**
+ * lsof/pgrep/ps use exit 1 with no diagnostics for an ordinary empty match.
+ * Anything with diagnostics, a signal, or a forced kill is infrastructure
+ * failure and must remain inconclusive.
+ */
+export function isCleanInspectionMiss(err: unknown): boolean {
+  const failure = err as IdentityExecFailure
+  return (
+    (failure.code === 1 || failure.code === '1')
+    && inspectionOutput(failure.stdout) === ''
+    && inspectionOutput(failure.stderr) === ''
+    && failure.killed !== true
+    && failure.signal == null
+  )
+}
+
+async function inspectTtydPid(
+  pid: number,
+  run: IdentityExec,
+): Promise<TtydIncumbent | null> {
+  let comm: string
   try {
-    pidLines = execSync(
-      `lsof -ti :${port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
-      { encoding: 'utf-8' },
-    ).trim()
-  } catch {
-    return out // nothing on the port
+    comm = (await run(
+      'ps',
+      ['-o', 'comm=', '-p', String(pid)],
+      { timeout: 2_000 },
+    )).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return null
+    throw err
   }
-  if (!pidLines) return out
-  for (const line of pidLines.split('\n')) {
-    const pid = Number(line)
-    if (!pid) continue
-    let tmuxTarget: string | null = null
-    try {
-      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      tmuxTarget = tmuxTargetFromArgs(args)
-    } catch { /* process vanished between lsof and ps */ }
-    out.push({ pid, tmuxTarget })
+  if (comm.trim() !== 'ttyd') return null
+
+  try {
+    const { stdout: args } = await run(
+      'ps',
+      ['-o', 'args=', '-p', String(pid)],
+      { timeout: 2_000 },
+    )
+    return { pid, tmuxTarget: tmuxTargetFromArgs(args) }
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return null
+    throw err
   }
-  return out
+}
+
+/** Strict, bounded host inspection without global retry/circuit state. */
+export async function inspectTtydIncumbentsOnPort(
+  port: number,
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  let stdout: string
+  try {
+    stdout = (await run(
+      'lsof',
+      ['-ti', `:${port}`],
+      { timeout: 2_000 },
+    )).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return []
+    throw err
+  }
+
+  const pids = stdout
+    .split('\n')
+    .map(Number)
+    .filter(pid => Number.isInteger(pid) && pid > 0)
+  const inspected = await Promise.all(pids.map(pid => inspectTtydPid(pid, run)))
+  return inspected.filter((entry): entry is TtydIncumbent => entry !== null)
+}
+
+/**
+ * Async, strict counterpart used by periodic readiness verification.
+ * Exit 1 with no output means the port has no listeners; every other lsof
+ * or ps failure is inconclusive. Failures enter a cooldown so a misconfigured
+ * service cannot thrash, while later boundaries can recover from a transient.
+ */
+export async function ttydIncumbentsOnPortStrict(
+  port: number,
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  if (ttydIdentityInspectionUnavailable()) {
+    throw new TtydIdentityInspectionError(
+      'terminal identity inspection is in retry cooldown',
+    )
+  }
+  try {
+    const incumbents = await inspectTtydIncumbentsOnPort(port, run)
+    ttydIdentityInspectionState = 'available'
+    ttydIdentityInspectionRetryAt = 0
+    ttydIdentityInspectionWarned = false
+    return incumbents
+  } catch (err) {
+    ttydIdentityInspectionState = 'unavailable'
+    ttydIdentityInspectionRetryAt = Date.now() + TTYD_IDENTITY_INSPECTION_RETRY_MS
+    throw new TtydIdentityInspectionError(
+      `terminal identity inspection failed: ${(err as Error).message}`,
+      { cause: err },
+    )
+  }
 }
 
 /**
@@ -1187,28 +1308,23 @@ export function ttydPidsToReclaim(
   return { kill, foreign }
 }
 
-/** Every ttyd process on the machine, each with the tmux session it attaches. */
-export function allTtydIncumbents(): TtydIncumbent[] {
-  const out: TtydIncumbent[] = []
-  let pidLines: string
+/** Every ttyd process on the machine, inspected asynchronously with timeouts. */
+export async function allTtydIncumbentsStrict(
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  let stdout: string
   try {
-    // pgrep exits 1 (throws) when no ttyd is running — caught below.
-    pidLines = execSync('pgrep -x ttyd', { encoding: 'utf-8' }).trim()
-  } catch {
-    return out
+    stdout = (await run('pgrep', ['-x', 'ttyd'], { timeout: 2_000 })).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return []
+    throw err
   }
-  if (!pidLines) return out
-  for (const line of pidLines.split('\n')) {
-    const pid = Number(line)
-    if (!pid) continue
-    let tmuxTarget: string | null = null
-    try {
-      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      tmuxTarget = tmuxTargetFromArgs(args)
-    } catch { /* process vanished between pgrep and ps */ }
-    out.push({ pid, tmuxTarget })
-  }
-  return out
+  const pids = stdout
+    .split('\n')
+    .map(Number)
+    .filter(pid => Number.isInteger(pid) && pid > 0)
+  const inspected = await Promise.all(pids.map(pid => inspectTtydPid(pid, run)))
+  return inspected.filter((entry): entry is TtydIncumbent => entry !== null)
 }
 
 /**
@@ -1291,7 +1407,17 @@ async function listLiveTmuxSessionNames(): Promise<Set<string> | null> {
 export async function reapOrphanTtyds(prefix: string): Promise<number> {
   const live = await listLiveTmuxSessionNames()
   if (live === null) return 0 // liveness unknown — never risk killing live ttyds
-  const pids = orphanTtydPidsToReap(allTtydIncumbents(), live, prefix)
+  let incumbents: TtydIncumbent[]
+  try {
+    incumbents = await allTtydIncumbentsStrict()
+  } catch (err) {
+    log.warn(
+      'ttyd',
+      `orphan sweep skipped because process inspection failed: ${(err as Error).message}`,
+    )
+    return 0
+  }
+  const pids = orphanTtydPidsToReap(incumbents, live, prefix)
   for (const pid of pids) {
     try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
   }
@@ -1301,14 +1427,60 @@ export async function reapOrphanTtyds(prefix: string): Promise<number> {
   return pids.length
 }
 
-export function startTtyd(opts: {
+interface StartTtydOptions {
   tmuxName: string
   port: number
   sessionName: string
-}): Promise<number | undefined> {
+}
+
+function enqueueTtydStart(
+  opts: StartTtydOptions,
+  startToken: symbol,
+): Promise<number | undefined> {
+  return serializeByKey(ttydStartChains, opts.sessionName, () =>
+    startTtydForToken(opts, startToken))
+}
+
+/** Latest-request-wins, per-session serialized ttyd launch. */
+export function startTtyd(
+  opts: StartTtydOptions,
+): Promise<number | undefined> {
+  const startToken = Symbol(opts.sessionName)
+  ttydStartTokens.set(opts.sessionName, startToken)
+  return enqueueTtydStart(opts, startToken)
+}
+
+async function startTtydForToken(
+  opts: StartTtydOptions,
+  startToken: symbol,
+): Promise<number | undefined> {
+  if (ttydStartTokens.get(opts.sessionName) !== startToken) return undefined
+
+  // Resolve both inventories before taking any destructive action. Operational
+  // lsof/pgrep/ps failures therefore abort this attempt without killing a
+  // surface whose identity we could not prove.
+  let portIncumbents: TtydIncumbent[]
+  let allIncumbents: TtydIncumbent[]
+  try {
+    [portIncumbents, allIncumbents] = await Promise.all([
+      ttydIncumbentsOnPortStrict(opts.port),
+      allTtydIncumbentsStrict(),
+    ])
+  } catch (err) {
+    if (err instanceof TtydIdentityInspectionError) throw err
+    throw new TtydIdentityInspectionError(
+      `terminal process inspection failed: ${(err as Error).message}`,
+      { cause: err },
+    )
+  }
+  if (ttydStartTokens.get(opts.sessionName) !== startToken) return undefined
+
   // resetHistory:false — preserve the restart-rate history across an
   // auto-restart so the circuit breaker can count cumulative restarts.
-  stopManagedTtyd(opts.sessionName, { resetHistory: false })
+  stopManagedTtyd(
+    opts.sessionName,
+    { resetHistory: false, invalidateStarts: false },
+  )
 
   // Reclaim the port from an orphaned ttyd (e.g. after a server restart), but
   // ONLY from our own previous ttyd or one we can't identify. Killing a ttyd
@@ -1317,7 +1489,7 @@ export function startTtyd(opts: {
   // flaps between the two terminals. If a foreign session holds the port we
   // leave it alone and let the bind fail — the circuit breaker then backs off
   // instead of warring.
-  const { kill, foreign } = ttydPidsToReclaim(ttydIncumbentsOnPort(opts.port), opts.tmuxName)
+  const { kill, foreign } = ttydPidsToReclaim(portIncumbents, opts.tmuxName)
   for (const pid of kill) {
     try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
   }
@@ -1330,7 +1502,9 @@ export function startTtyd(opts: {
   // tmux session) on its old port. The port-scoped pass above only sees the new
   // port, so those orphans pile up — one per restart — and double-attach the
   // session. Exact session match so a child hand session is never swept in.
-  const staleSessionPids = ttydPidsForSession(allTtydIncumbents(), opts.tmuxName)
+  const portKills = new Set(kill)
+  const staleSessionPids = ttydPidsForSession(allIncumbents, opts.tmuxName)
+    .filter(pid => !portKills.has(pid))
   if (staleSessionPids.length > 0) {
     log.info('ttyd', `${opts.sessionName}: reaping ${staleSessionPids.length} stale ttyd(s) on other ports for ${opts.tmuxName}`)
     for (const pid of staleSessionPids) {
@@ -1363,16 +1537,23 @@ export function startTtyd(opts: {
     // port (a second backend on the same config dir). See shouldRestartTtyd.
     child.on('exit', (code) => {
       const entry = managedTtyd.get(opts.sessionName)
-      if (!entry || entry.stopped) {
-        managedTtyd.delete(opts.sessionName)
-        return
-      }
+      if (
+        !entry
+        || entry.child !== child
+        || entry.startToken !== startToken
+        || entry.stopped
+        || ttydStartTokens.get(opts.sessionName) !== startToken
+      ) return
       void tmuxHasSession(opts.tmuxName).then((tmuxAlive) => {
         const cur = managedTtyd.get(opts.sessionName)
-        if (!cur || cur.stopped) {
-          managedTtyd.delete(opts.sessionName)
-          return
-        }
+        if (
+          !cur
+          || cur !== entry
+          || cur.child !== child
+          || cur.startToken !== startToken
+          || cur.stopped
+          || ttydStartTokens.get(opts.sessionName) !== startToken
+        ) return
         const now = Date.now()
         const history = (ttydRestartHistory.get(opts.sessionName) ?? []).filter(
           (t) => now - t < TTYD_RESTART_WINDOW_MS,
@@ -1381,14 +1562,26 @@ export function startTtyd(opts: {
         if (!decision.restart) {
           log.info('ttyd', `${opts.sessionName}: exited (code ${code}), not restarting (${decision.reason})`)
           managedTtyd.delete(opts.sessionName)
+          if (ttydStartTokens.get(opts.sessionName) === startToken) {
+            ttydStartTokens.delete(opts.sessionName)
+          }
           ttydRestartHistory.delete(opts.sessionName)
           return
         }
         log.info('ttyd', `${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
         cur.restartTimer = setTimeout(() => {
+          if (
+            managedTtyd.get(opts.sessionName) !== cur
+            || cur.stopped
+            || ttydStartTokens.get(opts.sessionName) !== startToken
+          ) return
           ttydRestartHistory.set(opts.sessionName, [...history, Date.now()])
-          startTtyd(opts).then(pid => {
+          enqueueTtydStart(opts, startToken).then(pid => {
             log.info('ttyd', `${opts.sessionName}: restarted`, { pid })
+            const restarted = managedTtyd.get(opts.sessionName)
+            if (restarted?.startToken === startToken) {
+              restarted.onRestart = cur.onRestart
+            }
             if (cur.onRestart && pid) cur.onRestart(pid)
           }).catch(err => {
             log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
@@ -1401,6 +1594,7 @@ export function startTtyd(opts: {
       child,
       tmuxName: opts.tmuxName,
       port: opts.port,
+      startToken,
       stopped: false,
     })
 
@@ -1409,7 +1603,11 @@ export function startTtyd(opts: {
   })
 }
 
-export function stopManagedTtyd(sessionName: string, opts: { resetHistory?: boolean } = {}): void {
+export function stopManagedTtyd(
+  sessionName: string,
+  opts: { resetHistory?: boolean; invalidateStarts?: boolean } = {},
+): void {
+  if (opts.invalidateStarts !== false) ttydStartTokens.delete(sessionName)
   const entry = managedTtyd.get(sessionName)
   if (entry) {
     entry.stopped = true
@@ -1540,7 +1738,7 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
 }
 
 interface TtydSurfaceVerificationDeps {
-  incumbentsOnPort: (port: number) => TtydIncumbent[]
+  incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
   healthCheck: typeof healthCheck
 }
 
@@ -1559,19 +1757,32 @@ export async function verifyTtydSessionSurface(
     interval?: number
   },
   deps: TtydSurfaceVerificationDeps = {
-    incumbentsOnPort: ttydIncumbentsOnPort,
+    incumbentsOnPort: ttydIncumbentsOnPortStrict,
     healthCheck,
   },
-): Promise<boolean> {
-  const matches = (): boolean => ttydIncumbentMatchesSession(
-    deps.incumbentsOnPort(opts.port),
-    opts.pid,
-    opts.tmuxName,
-  )
-  if (!matches()) return false
+): Promise<'verified' | 'unhealthy' | 'inconclusive'> {
+  // Readiness is the slow side of startup. Wait for ttyd to bind before asking
+  // lsof which process owns the socket, avoiding a race with startTtyd's
+  // intentionally short spawn delay.
   if (!await deps.healthCheck(
     opts.port,
     { timeout: opts.timeout, interval: opts.interval },
-  )) return false
-  return matches()
+  )) return 'unhealthy'
+  try {
+    const incumbents = await deps.incumbentsOnPort(opts.port)
+    return ttydIncumbentMatchesSession(
+      incumbents,
+      opts.pid,
+      opts.tmuxName,
+    ) ? 'verified' : 'unhealthy'
+  } catch (err) {
+    if (!ttydIdentityInspectionWarned) {
+      ttydIdentityInspectionWarned = true
+      log.warn(
+        'ttyd',
+        `terminal identity verification is unavailable: ${(err as Error).message}`,
+      )
+    }
+    return 'inconclusive'
+  }
 }

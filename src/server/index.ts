@@ -14,7 +14,7 @@ import {
   handleRequest,
   invalidatePersistedSessionBackendGenerationForConfig,
   persistedSessionBackendGenerationForConfig,
-  probePersistedSessionBackendForReconcile,
+  probeOrRetireSessionBackendForReconcile,
   reserveBootSessionDeletion,
   type RouteContext,
 } from './api/routes'
@@ -41,6 +41,7 @@ import {
   type TinstarConfig,
   type Session,
 } from './sessions'
+import type { Run } from '../domain/types'
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
@@ -82,7 +83,7 @@ let shutdownRegistered = false
  * Historical subjects on disabled sessions are deliberately not live state. */
 export function sessionNatsProjection(
   session: Pick<Session, 'nats'>,
-): Pick<import('../domain/types').Run, 'natsEnabled' | 'natsSubject' | 'natsSubscriptions'> {
+): Pick<Run, 'natsEnabled' | 'natsSubject' | 'natsSubscriptions'> {
   if (!session.nats?.enabled) {
     return {
       natsEnabled: false,
@@ -94,6 +95,29 @@ export function sessionNatsProjection(
     natsEnabled: true,
     natsSubject: session.nats.subscriptions[1] ?? session.nats.subscriptions[0],
     natsSubscriptions: session.nats.subscriptions,
+  }
+}
+
+/**
+ * Rebuild fields whose durable authority is Session during boot. In
+ * particular, Run.port must never resurrect a stale proxy target after a
+ * crash between Session retirement and the debounced docstore write.
+ */
+export function rehydrateRunProjectionFromSession(
+  existingRun: Run,
+  session: Pick<
+    Session,
+    'port' | 'background' | 'nats' | 'natsControlOrphanedAt'
+  >,
+  agentIcon?: string,
+): Run {
+  return {
+    ...existingRun,
+    port: session.port ?? null,
+    background: session.background ?? false,
+    ...sessionNatsProjection(session),
+    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
+    agentIcon: agentIcon ?? existingRun.agentIcon,
   }
 }
 
@@ -268,6 +292,276 @@ export async function afterBootDeletionCleanups<T>(
 ): Promise<T> {
   await Promise.allSettled(cleanups)
   return action()
+}
+
+export interface VerifiedSessionTtydReattachDeps {
+  identityInspectionUnavailable: () => boolean
+  isIdentityInspectionError?: (err: unknown) => boolean
+  acquireLease: (
+    config: TinstarConfig,
+    name: string,
+    generation: string,
+  ) => { token: string; release: () => void } | null
+  getSession: typeof getSession
+  findPort: (config: TinstarConfig) => Promise<number>
+  reattach: typeof tmuxBackend.reattachTmuxSession
+  isCurrent: typeof startupReattachStillCurrent
+  verifySurface: typeof tmuxBackend.verifyTtydSessionSurface
+  stopTtyd: typeof tmuxBackend.stopManagedTtyd
+  releasePort: typeof tmuxBackend.releasePort
+  updateSession: typeof updateSession
+  tmuxName: typeof tmuxBackend.tmuxSessionName
+  onTtydRestart: typeof tmuxBackend.onTtydRestart
+}
+
+const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
+  identityInspectionUnavailable: tmuxBackend.ttydIdentityInspectionUnavailable,
+  isIdentityInspectionError: err =>
+    err instanceof tmuxBackend.TtydIdentityInspectionError,
+  acquireLease: acquirePersistedSessionBackendLeaseForConfig,
+  getSession,
+  findPort: config => tmuxBackend.findPort(interactivePortWindow(config)),
+  reattach: tmuxBackend.reattachTmuxSession,
+  isCurrent: startupReattachStillCurrent,
+  verifySurface: tmuxBackend.verifyTtydSessionSurface,
+  stopTtyd: tmuxBackend.stopManagedTtyd,
+  releasePort: tmuxBackend.releasePort,
+  updateSession,
+  tmuxName: tmuxBackend.tmuxSessionName,
+  onTtydRestart: tmuxBackend.onTtydRestart,
+}
+
+/**
+ * Restore one strictly observed live session's terminal surface.
+ *
+ * This is a two-phase port/publication transaction: verify the existing port,
+ * durably retire it if suspect, verify any replacement, then publish Session
+ * and Run together. Compensation retains claims whenever rollback is uncertain.
+ */
+export async function reattachVerifiedSessionTtydAttempt(
+  config: TinstarConfig,
+  docStore: DocumentStore,
+  name: string,
+  verifiedGeneration: string,
+  deps: VerifiedSessionTtydReattachDeps = verifiedSessionTtydReattachDeps,
+): Promise<boolean> {
+  if (deps.identityInspectionUnavailable()) return false
+  const lease = deps.acquireLease(config, name, verifiedGeneration)
+  if (!lease) return false
+  let freshPort: number | null = null
+  let session: Session | null = null
+  let sessionPublished = false
+  let priorRun: ReturnType<DocumentStore['getRun']> = undefined
+  let runPublicationAttempted = false
+  try {
+    session = deps.getSession(config.dirs.sessions, name)
+    if (
+      !session
+      || session.state === 'stopped'
+      || session.state === 'creating'
+    ) return false
+    let port = session.port ?? await deps.findPort(config)
+    if (session.port == null) freshPort = port
+    let result = await deps.reattach(config, { session, port })
+    if (!deps.isCurrent(config, session, lease.token)) {
+      deps.stopTtyd(session.name)
+      if (freshPort != null) deps.releasePort(freshPort)
+      return false
+    }
+    let surfaceState = await deps.verifySurface({
+      port: result.port,
+      pid: result.ttydPid,
+      tmuxName: deps.tmuxName(config, session.name),
+    })
+    if (surfaceState === 'inconclusive') {
+      if (freshPort != null) {
+        deps.stopTtyd(session.name)
+        deps.releasePort(freshPort)
+      }
+      return false
+    }
+    if (
+      surfaceState === 'unhealthy'
+      && session.port != null
+      && deps.isCurrent(config, session, lease.token)
+    ) {
+      deps.stopTtyd(session.name)
+      const staleSession = session
+      const stalePort = session.port
+      const staleRun = docStore.getRun(session.name)
+      const clearedSession = deps.updateSession(
+        config.dirs.sessions,
+        session.name,
+        { port: null, ttydPid: null },
+      )
+      if (!clearedSession) {
+        throw new Error(`failed to retire stale port ${stalePort}`)
+      }
+      try {
+        if (staleRun && staleRun.port != null) {
+          docStore.upsertRun(session.name, { ...staleRun, port: null })
+        }
+      } catch (err) {
+        const sessionRolledBack = deps.updateSession(
+          config.dirs.sessions,
+          staleSession.name,
+          {
+            port: staleSession.port,
+            ttydPid: staleSession.ttydPid ?? null,
+          },
+        ) !== null
+        try {
+          if (staleRun) docStore.upsertRun(staleSession.name, staleRun)
+        } catch {
+          // The old claim remains held below when either rollback fails.
+        }
+        if (!sessionRolledBack) {
+          log.warn(
+            'reattach',
+            `${name}: retaining stale port claim after retirement rollback failed`,
+          )
+        }
+        throw err
+      }
+      deps.releasePort(stalePort)
+      session = clearedSession
+      port = await deps.findPort(config)
+      freshPort = port
+      result = await deps.reattach(config, { session, port })
+      if (!deps.isCurrent(config, session, lease.token)) {
+        deps.stopTtyd(session.name)
+        deps.releasePort(port)
+        return false
+      }
+      surfaceState = await deps.verifySurface({
+        port: result.port,
+        pid: result.ttydPid,
+        tmuxName: deps.tmuxName(config, session.name),
+      })
+    }
+    if (surfaceState === 'inconclusive') {
+      if (freshPort != null) {
+        deps.stopTtyd(session.name)
+        deps.releasePort(freshPort)
+      }
+      return false
+    }
+    if (
+      surfaceState !== 'verified'
+      || !deps.isCurrent(config, session, lease.token)
+    ) {
+      deps.stopTtyd(session.name)
+      if (surfaceState === 'verified') {
+        if (freshPort != null) deps.releasePort(freshPort)
+        return false
+      }
+      throw new Error(`ttyd on port ${result.port} did not become ready`)
+    }
+    const updated = deps.updateSession(
+      config.dirs.sessions,
+      session.name,
+      { port: result.port, ttydPid: result.ttydPid ?? null },
+    )
+    if (!updated) {
+      deps.stopTtyd(session.name)
+      if (freshPort != null) deps.releasePort(freshPort)
+      return false
+    }
+    sessionPublished = true
+    const sessionName = session.name
+    deps.onTtydRestart(sessionName, (newPid) => {
+      const callbackLease = deps.acquireLease(
+        config,
+        sessionName,
+        lease.token,
+      )
+      if (!callbackLease) return
+      try {
+        deps.updateSession(config.dirs.sessions, sessionName, { ttydPid: newPid })
+      } finally {
+        callbackLease.release()
+      }
+    })
+    priorRun = docStore.getRun(session.name)
+    if (priorRun && priorRun.port !== result.port) {
+      runPublicationAttempted = true
+      docStore.upsertRun(session.name, { ...priorRun, port: result.port })
+    }
+    log.info('reattach', `${session.name}: ttyd ready on :${result.port}`)
+    return true
+  } catch (err) {
+    // Strict host-inspection failures are explicitly inconclusive: reattach
+    // has not created a replacement, so tearing down the incumbent would turn
+    // an observation outage into a terminal outage.
+    const inspectionInconclusive = deps.isIdentityInspectionError?.(err)
+      ?? err instanceof tmuxBackend.TtydIdentityInspectionError
+    if (!inspectionInconclusive) deps.stopTtyd(name)
+    let rollbackComplete = true
+    if (sessionPublished && session) {
+      try {
+        rollbackComplete = deps.updateSession(
+          config.dirs.sessions,
+          session.name,
+          {
+            port: session.port ?? null,
+            ttydPid: session.ttydPid ?? null,
+          },
+        ) !== null
+      } catch (rollbackErr) {
+        rollbackComplete = false
+        log.warn(
+          'reattach',
+          `${name}: failed to roll back Session publication: `
+          + `${(rollbackErr as Error).message}`,
+        )
+      }
+    }
+    if (runPublicationAttempted && priorRun) {
+      try {
+        docStore.upsertRun(name, priorRun)
+      } catch (rollbackErr) {
+        rollbackComplete = false
+        log.warn(
+          'reattach',
+          `${name}: failed to roll back Run projection: `
+          + `${(rollbackErr as Error).message}`,
+        )
+      }
+    }
+    if (freshPort != null) {
+      if (rollbackComplete) {
+        deps.releasePort(freshPort)
+      } else {
+        log.warn(
+          'reattach',
+          `${name}: retaining port ${freshPort} after publication rollback failed`,
+        )
+      }
+    }
+    log.warn(
+      'reattach',
+      `${name}: failed to reattach: ${(err as Error).message}`,
+    )
+    return false
+  } finally {
+    lease.release()
+  }
+}
+
+/** Serialize reattach attempts by session name while allowing different names in parallel. */
+export function createSessionTtydReattachSingleFlight(
+  operation: (name: string, generation: string) => Promise<boolean>,
+): (name: string, generation: string) => Promise<boolean> {
+  const inFlight = new Map<string, Promise<boolean>>()
+  return (name, generation) => {
+    const existing = inFlight.get(name)
+    if (existing) return existing
+    const attempt = operation(name, generation).finally(() => {
+      if (inFlight.get(name) === attempt) inFlight.delete(name)
+    })
+    inFlight.set(name, attempt)
+    return attempt
+  }
 }
 
 export function initBackend(): RouteContext {
@@ -608,13 +902,11 @@ export function initBackend(): RouteContext {
           // the (status, blocked) pair so a persisted blocked flip re-derives
           // attention (AE4) — mirroring it here first would trip the mutator's
           // equality short-circuit and leave attention stale.
-          const refreshed = {
-            ...existingRun,
-            background: sess.background ?? false,
-            ...sessionNatsProjection(sess),
-            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
-            agentIcon: tpl?.icon ?? existingRun.agentIcon,
-          }
+          const refreshed = rehydrateRunProjectionFromSession(
+            existingRun,
+            sess,
+            tpl?.icon,
+          )
           docStore.upsertRun(sess.name, refreshed)
           const persistedBlocked = sess.blocked ?? false
           if (runNeedsStatusCorrection(existingRun, sess.state, persistedBlocked)) {
@@ -668,185 +960,20 @@ export function initBackend(): RouteContext {
         })
       }
 
-      const reattachSessionTtydInFlight = new Map<string, Promise<boolean>>()
-      const runVerifiedSessionTtydReattach = async (
-        name: string,
-        verifiedGeneration: string,
-      ): Promise<boolean> => {
-        const lease = acquirePersistedSessionBackendLeaseForConfig(
-          cfg,
-          name,
-          verifiedGeneration,
-        )
-        if (!lease) return false
-        let freshPort: number | null = null
-        let session: Session | null = null
-        let sessionPublished = false
-        let priorRun: ReturnType<DocumentStore['getRun']> = undefined
-        let runPublicationAttempted = false
-        try {
-          session = getSession(cfg.dirs.sessions, name)
-          if (
-            !session
-            || session.state === 'stopped'
-            || session.state === 'creating'
-          ) return false
-          let port = session.port
-            ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
-          if (session.port == null) freshPort = port
-          let result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
-          if (!startupReattachStillCurrent(cfg, session, lease.token)) {
-            tmuxBackend.stopManagedTtyd(session.name)
-            if (freshPort != null) tmuxBackend.releasePort(freshPort)
-            return false
-          }
-          let ready = await tmuxBackend.verifyTtydSessionSurface({
-            port: result.port,
-            pid: result.ttydPid,
-            tmuxName: tmuxBackend.tmuxSessionName(cfg, session.name),
-          })
-          if (
-            !ready
-            && session.port != null
-            && startupReattachStillCurrent(cfg, session, lease.token)
-          ) {
-            // A crash-era persisted port may now belong to a foreign service.
-            // Keep its old claim until a replacement is durably published, but
-            // do not retry the losing port forever.
-            tmuxBackend.stopManagedTtyd(session.name)
-            port = await tmuxBackend.findPort(interactivePortWindow(cfg))
-            freshPort = port
-            result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
-            if (!startupReattachStillCurrent(cfg, session, lease.token)) {
-              tmuxBackend.stopManagedTtyd(session.name)
-              tmuxBackend.releasePort(port)
-              return false
-            }
-            ready = await tmuxBackend.verifyTtydSessionSurface({
-              port: result.port,
-              pid: result.ttydPid,
-              tmuxName: tmuxBackend.tmuxSessionName(cfg, session.name),
-            })
-          }
-          if (
-            !ready
-            || !startupReattachStillCurrent(cfg, session, lease.token)
-          ) {
-            tmuxBackend.stopManagedTtyd(session.name)
-            if (freshPort != null) tmuxBackend.releasePort(freshPort)
-            if (ready) return false
-            throw new Error(`ttyd on port ${result.port} did not become ready`)
-          }
-          const updated = updateSession(
-            cfg.dirs.sessions,
-            session.name,
-            { port: result.port, ttydPid: result.ttydPid ?? null },
-          )
-          if (!updated) {
-            tmuxBackend.stopManagedTtyd(session.name)
-            if (freshPort != null) tmuxBackend.releasePort(freshPort)
-            return false
-          }
-          sessionPublished = true
-          const sessionName = session.name
-          tmuxBackend.onTtydRestart(sessionName, (newPid) => {
-            const callbackLease = acquirePersistedSessionBackendLeaseForConfig(
-              cfg,
-              sessionName,
-              lease.token,
-            )
-            if (!callbackLease) return
-            try {
-              updateSession(cfg.dirs.sessions, sessionName, { ttydPid: newPid })
-            } finally {
-              callbackLease.release()
-            }
-          })
-          priorRun = docStore.getRun(session.name)
-          if (priorRun && priorRun.port !== result.port) {
-            runPublicationAttempted = true
-            docStore.upsertRun(session.name, { ...priorRun, port: result.port })
-          }
-          if (session.port != null && session.port !== result.port) {
-            tmuxBackend.releasePort(session.port)
-          }
-          log.info('reattach', `${session.name}: ttyd ready on :${result.port}`)
-          return true
-        } catch (err) {
-          tmuxBackend.stopManagedTtyd(name)
-          let rollbackComplete = true
-          if (sessionPublished && session) {
-            try {
-              rollbackComplete = updateSession(
-                cfg.dirs.sessions,
-                session.name,
-                {
-                  port: session.port ?? null,
-                  ttydPid: session.ttydPid ?? null,
-                },
-              ) !== null
-            } catch (rollbackErr) {
-              rollbackComplete = false
-              log.warn(
-                'reattach',
-                `${name}: failed to roll back Session publication: `
-                + `${(rollbackErr as Error).message}`,
-              )
-            }
-          }
-          if (runPublicationAttempted && priorRun) {
-            try {
-              docStore.upsertRun(name, priorRun)
-            } catch (rollbackErr) {
-              rollbackComplete = false
-              log.warn(
-                'reattach',
-                `${name}: failed to roll back Run projection: `
-                + `${(rollbackErr as Error).message}`,
-              )
-            }
-          }
-          if (freshPort != null) {
-            if (rollbackComplete) {
-              tmuxBackend.releasePort(freshPort)
-            } else {
-              log.warn(
-                'reattach',
-                `${name}: retaining port ${freshPort} after publication rollback failed`,
-              )
-            }
-          }
-          log.warn(
-            'reattach',
-            `${name}: failed to reattach: ${(err as Error).message}`,
-          )
-          return false
-        } finally {
-          lease.release()
-        }
-      }
-      const reattachVerifiedSessionTtyd = (
-        name: string,
-        verifiedGeneration: string,
-      ): Promise<boolean> => {
-        const existing = reattachSessionTtydInFlight.get(name)
-        if (existing) return existing
-        const attempt = runVerifiedSessionTtydReattach(
-          name,
-          verifiedGeneration,
-        ).finally(() => {
-          if (reattachSessionTtydInFlight.get(name) === attempt) {
-            reattachSessionTtydInFlight.delete(name)
-          }
-        })
-        reattachSessionTtydInFlight.set(name, attempt)
-        return attempt
-      }
+      const reattachVerifiedSessionTtyd = createSessionTtydReattachSingleFlight(
+        (name, generation) =>
+          reattachVerifiedSessionTtydAttempt(
+            cfg,
+            docStore,
+            name,
+            generation,
+          ),
+      )
 
       const confirmedLiveSessionGenerations = new Map<string, string>()
       reconcileSessionStates(cfg.dirs.sessions, {
         getTmuxSessionState: name =>
-          probePersistedSessionBackendForReconcile(cfg, name),
+          probeOrRetireSessionBackendForReconcile(cfg, name),
         onTmuxSessionStateObserved: (name, observation) => {
           if (observation.state === 'exists') {
             confirmedLiveSessionGenerations.set(name, observation.generation)
@@ -918,7 +1045,7 @@ export function initBackend(): RouteContext {
         const verifiedLiveGenerations = new Map<string, string>()
         reconcileSessionStates(cfg.dirs.sessions, {
           getTmuxSessionState: name =>
-            probePersistedSessionBackendForReconcile(cfg, name),
+            probeOrRetireSessionBackendForReconcile(cfg, name),
           onTmuxSessionStateObserved: (name, observation) => {
             if (observation.state === 'exists') {
               verifiedLiveGenerations.set(name, observation.generation)
@@ -944,15 +1071,17 @@ export function initBackend(): RouteContext {
                   || session.state === 'stopped'
                   || session.state === 'creating'
                 ) return
-                const surfaceHealthy = session.port != null
-                  && await tmuxBackend.verifyTtydSessionSurface({
+                if (tmuxBackend.ttydIdentityInspectionUnavailable()) return
+                const surfaceState = session.port == null
+                  ? 'unhealthy'
+                  : await tmuxBackend.verifyTtydSessionSurface({
                     port: session.port,
                     pid: session.ttydPid ?? undefined,
                     tmuxName: tmuxBackend.tmuxSessionName(cfg, session.name),
                     timeout: 750,
                     interval: 150,
                   })
-                if (!surfaceHealthy) {
+                if (surfaceState === 'unhealthy') {
                   await reattachVerifiedSessionTtyd(name, generation)
                 }
               }),

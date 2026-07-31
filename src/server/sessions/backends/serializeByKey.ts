@@ -32,6 +32,10 @@ export function serializeByKey<T>(
   const result = prev.then(task, task)
   // Store a NON-rejecting tail so one task's failure can't reject the next
   // `.then` for this key. The returned `result` keeps the real rejection.
-  chains.set(key, result.catch(() => {}))
+  const tail = result.catch(() => {})
+  chains.set(key, tail)
+  void tail.finally(() => {
+    if (chains.get(key) === tail) chains.delete(key)
+  })
   return result
 }

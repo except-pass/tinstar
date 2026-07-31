@@ -1135,7 +1135,12 @@ function acquirePersistedSessionBackendLease(
     : null
 }
 
-export async function probePersistedSessionBackendForReconcile(
+/**
+ * Observe a persisted backend for reconciliation. When a prior stop is
+ * orphaned, this also serializes another teardown attempt so the accepted stop
+ * intent can eventually complete. Callers must treat this as mutating.
+ */
+export async function probeOrRetireSessionBackendForReconcile(
   cfg: TinstarConfig,
   name: string,
 ): Promise<{
@@ -5173,7 +5178,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // after the probe but never takes a lease that can reject a concurrent
         // user start/stop/delete operation.
         getTmuxSessionState: name =>
-          probePersistedSessionBackendForReconcile(cfg, name),
+          probeOrRetireSessionBackendForReconcile(cfg, name),
         beforeStateChanged: (name, _state, observation) =>
           invalidatePersistedSessionBackendGenerationForConfig(
             cfg,

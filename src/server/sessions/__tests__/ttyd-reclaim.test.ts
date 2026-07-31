@@ -1,12 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  inspectTtydIncumbentsOnPort,
+  isCleanInspectionMiss,
   orphanTtydPidsToReap,
   tmuxTargetFromArgs,
+  ttydIdentityInspectionUnavailable,
   ttydIncumbentMatchesSession,
+  ttydIncumbentsOnPortStrict,
   ttydPidsForSession,
   ttydPidsToReclaim,
   verifyTtydSessionSurface,
 } from '../backends/tmux'
+
+function inspectionFailure(
+  fields: Record<string, unknown>,
+): Error & Record<string, unknown> {
+  return Object.assign(new Error('inspection failed'), fields)
+}
 
 describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
   it('parses the exact form startTtyd spawns', () => {
@@ -71,6 +81,95 @@ describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
 })
 
 describe('verified ttyd session surfaces', () => {
+  it('recognizes only an empty, unsignaled exit 1 as a clean inspection miss', () => {
+    expect(isCleanInspectionMiss(inspectionFailure({
+      code: 1,
+      stdout: '',
+      stderr: '',
+    }))).toBe(true)
+    expect(isCleanInspectionMiss(inspectionFailure({
+      code: 1,
+      stdout: '',
+      stderr: 'permission denied',
+    }))).toBe(false)
+    expect(isCleanInspectionMiss(inspectionFailure({
+      code: 1,
+      stdout: '',
+      stderr: '',
+      killed: true,
+      signal: 'SIGTERM',
+    }))).toBe(false)
+  })
+
+  it('keeps lsof diagnostics inconclusive instead of proving no listener', async () => {
+    const run = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 1,
+        stdout: '',
+        stderr: 'lsof: permission denied',
+      })
+    })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run))
+      .rejects.toThrow('inspection failed')
+  })
+
+  it('keeps ps infrastructure failures inconclusive', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockRejectedValueOnce(inspectionFailure({
+        code: 'ENOENT',
+        stdout: '',
+        stderr: '',
+      }))
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run))
+      .rejects.toThrow('inspection failed')
+  })
+
+  it('treats a clean ps miss as a listener that vanished during inspection', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockRejectedValueOnce(inspectionFailure({
+        code: 1,
+        stdout: '',
+        stderr: '',
+      }))
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run))
+      .resolves.toEqual([])
+  })
+
+  it('retries strict identity inspection after a transient-failure cooldown', async () => {
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const failingRun = vi.fn(async () => {
+        throw inspectionFailure({
+          code: 'ETIMEDOUT',
+          stdout: '',
+          stderr: '',
+          killed: true,
+          signal: 'SIGTERM',
+        })
+      })
+
+      await expect(ttydIncumbentsOnPortStrict(6123, failingRun))
+        .rejects.toThrow('terminal identity inspection failed')
+      expect(ttydIdentityInspectionUnavailable()).toBe(true)
+
+      now += 30_001
+      expect(ttydIdentityInspectionUnavailable()).toBe(false)
+      await expect(ttydIncumbentsOnPortStrict(
+        6123,
+        vi.fn(async () => ({ stdout: '', stderr: '' })),
+      )).resolves.toEqual([])
+      expect(ttydIdentityInspectionUnavailable()).toBe(false)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
   it('requires the expected PID to attach to the exact tmux target', () => {
     expect(ttydIncumbentMatchesSession(
       [{ pid: 101, tmuxTarget: 'tinstar-other' }],
@@ -90,26 +189,46 @@ describe('verified ttyd session surfaces', () => {
     await expect(verifyTtydSessionSurface(
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
-        incumbentsOnPort: () => [],
+        incumbentsOnPort: async () => [],
         healthCheck: httpHealthy,
       },
-    )).resolves.toBe(false)
+    )).resolves.toBe('unhealthy')
 
-    expect(httpHealthy).not.toHaveBeenCalled()
+    expect(httpHealthy).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects a target that changes while readiness is awaited', async () => {
-    let observation = 0
-
+  it('rejects a foreign target after readiness succeeds', async () => {
     await expect(verifyTtydSessionSurface(
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
-        incumbentsOnPort: () => observation++ === 0
-          ? [{ pid: 101, tmuxTarget: 'tinstar-ours' }]
-          : [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+        incumbentsOnPort: async () =>
+          [{ pid: 101, tmuxTarget: 'tinstar-other' }],
         healthCheck: async () => true,
       },
-    )).resolves.toBe(false)
+    )).resolves.toBe('unhealthy')
+  })
+
+  it('returns inconclusive when strict identity inspection is unavailable', async () => {
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: async () => {
+          throw new Error('lsof missing')
+        },
+        healthCheck: async () => true,
+      },
+    )).resolves.toBe('inconclusive')
+  })
+
+  it('verifies the exact ttyd after HTTP readiness', async () => {
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: async () =>
+          [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+        healthCheck: async () => true,
+      },
+    )).resolves.toBe('verified')
   })
 })
 
