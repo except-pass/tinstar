@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import type {
   ProviderCapabilities,
   ProviderObservationKind,
@@ -6,6 +6,8 @@ import type {
   ProviderObservationSnapshotFor,
   ProviderQuotaSnapshot,
   ProviderQuotaWindow,
+  ProviderScope,
+  ProviderTokenUsage,
 } from '../../../domain/provider-capabilities'
 import {
   defineProviderAdapter,
@@ -202,10 +204,10 @@ const forge = defineProviderAdapter<ForgeDetail>({
         detail: { region: 'workstation', sequence: request.attempt },
       }
     },
-    async confirm(request, acceptance) {
+    async confirm(acceptance) {
       return {
         state: 'confirmed',
-        messageId: request.messageId,
+        messageId: acceptance.messageId,
         attempt: acceptance.attempt,
         confirmedAt: CHECKED_AT,
         evidence: {
@@ -220,7 +222,7 @@ const forge = defineProviderAdapter<ForgeDetail>({
 
 describe('provider capability contract', () => {
   it('accepts a fake third provider without a closed provider registry', async () => {
-    const adapter: ProviderAdapter = forge
+    const adapter: ProviderAdapter<ForgeDetail> = forge
     const snapshot = await adapter.observe['session-usage']({
       kind: 'session-usage',
       scope: { kind: 'session', sessionId: 'run-forge' },
@@ -303,7 +305,7 @@ describe('provider capability contract', () => {
 
     const snapshot = await observer.observe['provider-quota']({
       kind: 'provider-quota',
-      scope: { kind: 'provider' },
+      scope: { kind: 'provider', accountRef: 'default' },
     })
 
     expect(observer.delivery).toBeNull()
@@ -315,10 +317,13 @@ describe('provider capability contract', () => {
   })
 
   it('scopes quota to one provider and keeps zero utilization available', () => {
+    expectTypeOf<{ kind: 'provider' }>().not.toMatchTypeOf<ProviderScope>()
+    expectTypeOf<{}>().not.toMatchTypeOf<ProviderTokenUsage>()
+
     const quota = {
       kind: 'provider-quota',
       providerId: 'forge',
-      scope: { kind: 'provider' },
+      scope: { kind: 'provider', accountRef: 'default' },
       source: { id: 'account-window', label: 'Account window' },
       freshness: {
         state: 'fresh',
@@ -340,7 +345,6 @@ describe('provider capability contract', () => {
       detail: { region: 'account' },
     } satisfies ProviderQuotaSnapshot<ForgeDetail>
 
-    expect(quota.scope).toEqual({ kind: 'provider' })
     expect(quota.availability.value.windows[0]?.usedPercent).toBe(0)
     expect(quota.availability.value.windows[0]?.windowMinutes).toBe(300)
   })
@@ -484,7 +488,7 @@ describe('provider capability contract', () => {
 
     const delivery = forge.delivery
     if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
-    const confirmation = await delivery.confirm(request, acceptance)
+    const confirmation = await delivery.confirm(acceptance)
     expect(confirmation).toMatchObject({
       state: 'confirmed',
       messageId: 'msg-7a51',
@@ -494,5 +498,57 @@ describe('provider capability contract', () => {
         reference: 'forge:msg-7a51:2',
       },
     })
+  })
+
+  it('rejects delivery implementations that contradict declared capabilities', () => {
+    const delivery = forge.delivery
+    if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
+
+    expect(() => defineProviderAdapter({
+      ...forge,
+      delivery: null,
+    })).toThrow('acceptance is supported')
+
+    expect(() => defineProviderAdapter({
+      ...forge,
+      delivery: {
+        accept: delivery.accept,
+      },
+    })).toThrow('confirmation is supported')
+
+    expect(() => defineProviderAdapter({
+      ...forge,
+      capabilities: {
+        ...forge.capabilities,
+        delivery: {
+          ...forge.capabilities.delivery,
+          confirmation: {
+            state: 'unsupported',
+            reason: 'No evidence is exposed',
+          },
+        },
+      },
+    })).toThrow('confirmation is unsupported')
+  })
+
+  it('rejects observation results that contradict declared capabilities', async () => {
+    const inconsistent = defineProviderAdapter({
+      ...forge,
+      capabilities: {
+        ...forge.capabilities,
+        observations: {
+          ...forge.capabilities.observations,
+          'session-usage': {
+            state: 'unsupported',
+            reason: 'Usage is disabled',
+          },
+        },
+      },
+    })
+
+    await expect(inconsistent.observe['session-usage']({
+      kind: 'session-usage',
+      scope: { kind: 'session', sessionId: 'run-forge' },
+    })).rejects.toThrow('observation "session-usage" is declared unsupported')
   })
 })

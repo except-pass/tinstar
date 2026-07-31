@@ -95,9 +95,9 @@ export type ProviderDeliveryConfirmation<TDetail extends object = object> =
     }
 
 interface ProviderDeliveryAcceptanceAdapter<TDetail extends object = object> {
-  accept(
+  accept: (
     request: ProviderDeliveryRequest,
-  ): Promise<ProviderDeliveryAcceptance<TDetail>>
+  ) => Promise<ProviderDeliveryAcceptance<TDetail>>
 }
 
 export interface ProviderAcceptanceOnlyDeliveryAdapter<
@@ -113,10 +113,9 @@ export interface ProviderAcceptanceOnlyDeliveryAdapter<
 export interface ProviderConfirmingDeliveryAdapter<
   TDetail extends object = object,
 > extends ProviderDeliveryAcceptanceAdapter<TDetail> {
-  confirm(
-    request: ProviderDeliveryRequest,
+  confirm: (
     acceptance: AcceptedProviderDelivery<TDetail>,
-  ): Promise<ProviderDeliveryConfirmation<TDetail>>
+  ) => Promise<ProviderDeliveryConfirmation<TDetail>>
 }
 
 export type ProviderDeliveryAdapter<TDetail extends object = object> =
@@ -151,11 +150,63 @@ export interface ProviderAdapter<TDetail extends object = object> {
 }
 
 /**
- * Identity helper that preserves an adapter's provider-specific detail type
- * while exposing the provider-neutral contract to registries and consumers.
+ * Registration boundary that preserves provider-specific detail while rejecting
+ * capability drift. Observation results are checked when their handlers run
+ * because availability can change between observations.
  */
 export function defineProviderAdapter<TDetail extends object = object>(
   adapter: ProviderAdapter<TDetail>,
 ): ProviderAdapter<TDetail> {
-  return adapter
+  const acceptanceSupported = adapter.capabilities.delivery.acceptance.state === 'supported'
+  const hasAcceptance = adapter.delivery !== null
+  if (acceptanceSupported !== hasAcceptance) {
+    throw new Error(
+      `Provider "${adapter.provider.id}" delivery acceptance is ${acceptanceSupported ? 'supported' : 'unsupported'}, `
+      + `but its adapter ${hasAcceptance ? 'supplies' : 'does not supply'} accept`,
+    )
+  }
+
+  const confirmationSupported = adapter.capabilities.delivery.confirmation.state === 'supported'
+  const hasConfirmation = typeof adapter.delivery?.confirm === 'function'
+  if (confirmationSupported !== hasConfirmation) {
+    throw new Error(
+      `Provider "${adapter.provider.id}" delivery confirmation is ${confirmationSupported ? 'supported' : 'unsupported'}, `
+      + `but its adapter ${hasConfirmation ? 'supplies' : 'does not supply'} confirm`,
+    )
+  }
+
+  return {
+    ...adapter,
+    observe: {
+      'session-usage': guardObservationHandler(adapter, 'session-usage'),
+      'session-context': guardObservationHandler(adapter, 'session-context'),
+      'provider-quota': guardObservationHandler(adapter, 'provider-quota'),
+      'historical-telemetry': guardObservationHandler(adapter, 'historical-telemetry'),
+      'context-breakdown': guardObservationHandler(adapter, 'context-breakdown'),
+    },
+  }
+}
+
+function guardObservationHandler<
+  K extends ProviderObservationKind,
+  TDetail extends object,
+>(
+  adapter: ProviderAdapter<TDetail>,
+  kind: K,
+): (
+  request: ProviderObservationRequestFor<K>,
+) => Promise<ProviderObservationSnapshotFor<K, TDetail>> {
+  return async (request) => {
+    const snapshot = await adapter.observe[kind](request)
+    const capabilitySupported = adapter.capabilities.observations[kind].state === 'supported'
+    const observationSupported = snapshot.availability.state !== 'unsupported'
+    if (capabilitySupported !== observationSupported) {
+      throw new Error(
+        `Provider "${adapter.provider.id}" observation "${kind}" is declared `
+        + `${capabilitySupported ? 'supported' : 'unsupported'}, but its handler returned `
+        + `${snapshot.availability.state}`,
+      )
+    }
+    return snapshot
+  }
 }

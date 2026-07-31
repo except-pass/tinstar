@@ -94,7 +94,8 @@ export interface ProviderSessionScope {
  */
 export interface ProviderScope {
   kind: 'provider'
-  accountRef?: string
+  /** Stable within one provider; single-account adapters use a constant such as `default`. */
+  accountRef: string
 }
 
 export type ProviderSnapshotFreshness =
@@ -142,7 +143,7 @@ export type ProviderSnapshotAvailability<TValue> =
       reason: string
     }
 
-export interface ProviderTokenUsage {
+interface ProviderTokenUsageFields {
   input?: number
   output?: number
   cacheRead?: number
@@ -150,6 +151,13 @@ export interface ProviderTokenUsage {
   reasoning?: number
   total?: number
 }
+
+type RequireAtLeastOne<T> = {
+  [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>
+}[keyof T]
+
+/** A reported usage bag always contains at least one real counter. */
+export type ProviderTokenUsage = RequireAtLeastOne<ProviderTokenUsageFields>
 
 export type ProviderSessionUsage = {
   model?: string
@@ -168,6 +176,11 @@ export type ProviderSessionUsage = {
 )
 
 export interface ProviderSessionContext {
+  /**
+   * Shared normalized names intentionally differ from the Claude-specific
+   * `SessionContextSnapshot` fields in `src/server/cc-quota/types.ts`.
+   * The Claude adapter maps `usedPercentage` and `windowSize` explicitly.
+   */
   usedTokens?: number
   windowTokens?: number
   usedPercent?: number
@@ -180,6 +193,7 @@ export interface ProviderQuotaWindow {
   /** Native window duration; Codex exposes this directly as `window_minutes`. */
   windowMinutes: number
   usedPercent: number
+  /** Adapters normalize provider-native reset fields such as Claude's `resets_at`. */
   resetsAt?: string
 }
 
