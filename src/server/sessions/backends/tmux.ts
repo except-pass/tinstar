@@ -1180,6 +1180,10 @@ export class TtydStartSupersededError extends Error {
 export function findTtydStartSupersededError(
   err: unknown,
 ): TtydStartSupersededError | null {
+  // Adapter and lifecycle boundaries may each preserve a failure as `cause`,
+  // so walk the complete native cause chain. The Set deliberately terminates
+  // malformed cycles. AggregateError siblings are not causal wrappers and are
+  // intentionally outside this classifier.
   const seen = new Set<Error>()
   let candidate = err
   while (candidate instanceof Error && !seen.has(candidate)) {
@@ -1549,13 +1553,21 @@ function enqueueTtydStart(
 ): Promise<number | undefined> {
   const isCurrent = () =>
     ttydStartTokens.get(opts.sessionName) === startToken
+  let mutated = false
+  const trackedDeps: StartTtydAttemptDeps = {
+    ...deps,
+    stopManaged: (...args) => {
+      mutated = true
+      return deps.stopManaged(...args)
+    },
+  }
   return serializeByKey(ttydStartChains, opts.sessionName, async () => {
     try {
       return await startTtydForTokenAttempt(
         opts,
         startToken,
         isCurrent,
-        deps,
+        trackedDeps,
       )
     } catch (err) {
       // A newer request can arrive while this task is rejecting. Classify at
@@ -1563,10 +1575,34 @@ function enqueueTtydStart(
       // errors cannot make background compensation invalidate the queued
       // winner's token.
       if (isCurrent() || findTtydStartSupersededError(err)) throw err
+      let cause = err
+      if (mutated) {
+        // T1 may have killed its incumbent and spawned a child before failing.
+        // Remove only T1's managed surface here, while T2 is still serialized
+        // behind us, without invalidating T2's already-installed token.
+        try {
+          deps.stopManaged(
+            opts.sessionName,
+            { resetHistory: false, invalidateStarts: false },
+          )
+        } catch (cleanupErr) {
+          // Keep supersession authoritative even when best-effort T1 cleanup
+          // fails. T2 will retry managed cleanup before it spawns.
+          log.warn(
+            'ttyd',
+            `${opts.sessionName}: stale start cleanup failed: `
+              + `${(cleanupErr as Error).message}`,
+          )
+          cause = new AggregateError(
+            [err, cleanupErr],
+            `stale ttyd start cleanup failed for ${opts.sessionName}`,
+          )
+        }
+      }
       throw new TtydStartSupersededError(
         opts.sessionName,
         'settlement',
-        { cause: err },
+        { cause },
       )
     }
   })
@@ -1582,7 +1618,14 @@ function enqueueTtydStart(
  */
 export function startTtyd(
   opts: StartTtydOptions,
-  deps: StartTtydAttemptDeps = startTtydAttemptDeps,
+): Promise<number | undefined> {
+  return startTtydWithDeps(opts, startTtydAttemptDeps)
+}
+
+/** Internal dependency seam for deterministic lifecycle concurrency tests. */
+export function startTtydWithDeps(
+  opts: StartTtydOptions,
+  deps: StartTtydAttemptDeps,
 ): Promise<number | undefined> {
   const startToken = Symbol(opts.sessionName)
   ttydStartTokens.set(opts.sessionName, startToken)

@@ -8,7 +8,7 @@ import {
   isCleanInspectionMiss,
   onTtydRestart,
   orphanTtydPidsToReap,
-  startTtyd,
+  startTtydWithDeps,
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
@@ -528,15 +528,18 @@ describe('fenced ttyd start attempts', () => {
     const spawnProcess = vi.fn()
       .mockReturnValueOnce(firstChild)
       .mockReturnValueOnce(secondChild)
+    const stopManaged = vi.fn(stopManagedTtyd) as unknown as
+      StartTtydAttemptDeps['stopManaged']
     const deps = fakeStartDeps({
       spawnProcess,
+      stopManaged,
       schedule: vi.fn((callback, delay) => {
         scheduled.push({ callback, delay })
         return {} as NodeJS.Timeout
       }) as unknown as typeof setTimeout,
     })
 
-    const first = startTtyd(opts, deps)
+    const first = startTtydWithDeps(opts, deps)
     const childError = new Error('stale child failed')
     const firstRejection = expect(first).rejects.toMatchObject({
       name: 'TtydStartSupersededError',
@@ -545,15 +548,113 @@ describe('fenced ttyd start attempts', () => {
     })
     await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1))
 
-    const second = startTtyd({ ...opts, port: opts.port + 1 }, deps)
+    const second = startTtydWithDeps(
+      { ...opts, port: opts.port + 1 },
+      deps,
+    )
     firstChild.emit('error', childError)
     await firstRejection
 
+    expect(deps.stopManaged).toHaveBeenNthCalledWith(
+      2,
+      opts.sessionName,
+      { resetHistory: false, invalidateStarts: false },
+    )
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM')
     await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2))
     expect(scheduled).toHaveLength(2)
     scheduled[1]!.callback()
 
     await expect(second).resolves.toBe(702)
+    expect(secondChild.kill).not.toHaveBeenCalled()
+  })
+
+  it('preserves the incumbent when a stale preflight inspection fails', async () => {
+    let rejectFirst!: (err: Error) => void
+    let resolveSecond!: (incumbents: []) => void
+    const incumbentsOnPort = vi.fn()
+      .mockImplementationOnce(() => new Promise<never>((_resolve, reject) => {
+        rejectFirst = reject
+      }))
+      .mockImplementationOnce(() => new Promise<[]>((resolve) => {
+        resolveSecond = resolve
+      }))
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const deps = fakeStartDeps({
+      incumbentsOnPort,
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const first = startTtydWithDeps(opts, deps)
+    const firstRejection = expect(first).rejects.toMatchObject({
+      name: 'TtydStartSupersededError',
+      stage: 'settlement',
+    })
+    await vi.waitFor(() => expect(incumbentsOnPort).toHaveBeenCalledTimes(1))
+
+    const second = startTtydWithDeps(
+      { ...opts, port: opts.port + 1 },
+      deps,
+    )
+    rejectFirst(new Error('lsof failed before mutation'))
+    await firstRejection
+
+    await vi.waitFor(() => expect(incumbentsOnPort).toHaveBeenCalledTimes(2))
+    expect(deps.stopManaged).not.toHaveBeenCalled()
+
+    resolveSecond([])
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled[0]!()
+    await expect(second).resolves.toBe(777)
+  })
+
+  it('keeps queued starts alive when stale cleanup itself fails', async () => {
+    const firstChild = fakeChild(801)
+    const secondChild = fakeChild(802)
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const cleanupError = new Error('cleanup failed')
+    const stopManaged = vi.fn()
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => { throw cleanupError })
+      .mockImplementationOnce(() => {})
+    const deps = fakeStartDeps({
+      stopManaged,
+      spawnProcess: vi.fn()
+        .mockReturnValueOnce(firstChild)
+        .mockReturnValueOnce(secondChild),
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const first = startTtydWithDeps(opts, deps)
+    await vi.waitFor(() => expect(deps.spawnProcess).toHaveBeenCalledTimes(1))
+    const second = startTtydWithDeps(
+      { ...opts, port: opts.port + 1 },
+      deps,
+    )
+    const childError = new Error('stale child failed')
+    firstChild.emit('error', childError)
+
+    const rejection = await first.catch(err => err)
+    expect(rejection).toMatchObject({
+      name: 'TtydStartSupersededError',
+      stage: 'settlement',
+    })
+    expect(rejection.cause).toBeInstanceOf(AggregateError)
+    expect((rejection.cause as AggregateError).errors).toEqual([
+      childError,
+      cleanupError,
+    ])
+
+    await vi.waitFor(() => expect(deps.spawnProcess).toHaveBeenCalledTimes(2))
+    expect(scheduled).toHaveLength(2)
+    scheduled[1]!()
+    await expect(second).resolves.toBe(802)
   })
 
   it('routes a live unexpected exit through the injected restart coordinator', async () => {

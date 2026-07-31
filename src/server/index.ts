@@ -297,7 +297,9 @@ export async function afterBootDeletionCleanups<T>(
 export interface VerifiedSessionTtydReattachDeps {
   identityInspectionUnavailable: () => boolean
   isIdentityInspectionError: (err: unknown) => boolean
-  isSupersededError: (err: unknown) => boolean
+  findSupersededError: (
+    err: unknown,
+  ) => tmuxBackend.TtydStartSupersededError | null
   acquireLease: (
     config: TinstarConfig,
     name: string,
@@ -319,8 +321,7 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   identityInspectionUnavailable: tmuxBackend.ttydIdentityInspectionUnavailable,
   isIdentityInspectionError: err =>
     err instanceof tmuxBackend.TtydIdentityInspectionError,
-  isSupersededError: err =>
-    tmuxBackend.findTtydStartSupersededError(err) !== null,
+  findSupersededError: tmuxBackend.findTtydStartSupersededError,
   acquireLease: acquirePersistedSessionBackendLeaseForConfig,
   getSession,
   findPort: config => tmuxBackend.findPort(interactivePortWindow(config)),
@@ -496,12 +497,12 @@ export async function reattachVerifiedSessionTtydAttempt(
     // inherit our allocator claim: findPort skips claimed ports and verifies a
     // real bind before reuse. Return the fresh claim without stopping a surface
     // that may already belong to the winning boundary.
-    if (deps.isSupersededError(err)) {
+    const superseded = deps.findSupersededError(err)
+    if (superseded) {
       if (freshPort != null) deps.releasePort(freshPort)
-      const stage = tmuxBackend.findTtydStartSupersededError(err)?.stage
       log.info(
         'reattach',
-        `${name}: reattach superseded${stage ? ` at ${stage}` : ''}`
+        `${name}: reattach superseded at ${superseded.stage}`
           + ' by a newer lifecycle boundary',
       )
       return false

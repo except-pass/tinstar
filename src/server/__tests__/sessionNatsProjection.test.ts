@@ -39,7 +39,7 @@ import type { Run } from '../../domain/types'
 
 const scratchRoots: string[] = []
 const isNeverIdentityInspectionError = (): boolean => false
-const isNeverSupersededError = (): boolean => false
+const findNoSupersededError = (): null => null
 
 describe('sessionNatsProjection', () => {
   it('does not rehydrate historical subjects for a disabled session', () => {
@@ -409,7 +409,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: isNeverSupersededError,
+        findSupersededError: findNoSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -452,7 +452,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: err => err === inspectionError,
-        isSupersededError: isNeverSupersededError,
+        findSupersededError: findNoSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -477,7 +477,7 @@ describe('getLiveSessionForBoot', () => {
     const supersededError = new Error('reattach wrapped the terminal error', {
       cause: new TtydStartSupersededError(
         'superseded-reattach',
-        'preflight',
+        'settlement',
       ),
     })
     const session = {
@@ -500,8 +500,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: err =>
-          findTtydStartSupersededError(err) !== null,
+        findSupersededError: findTtydStartSupersededError,
         acquireLease: () => ({ token: 'generation', release: releaseLease }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -541,7 +540,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: () => false,
+        findSupersededError: () => null,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -582,7 +581,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: isNeverSupersededError,
+        findSupersededError: findNoSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -632,7 +631,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: isNeverSupersededError,
+        findSupersededError: findNoSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
@@ -675,7 +674,7 @@ describe('getLiveSessionForBoot', () => {
       {
         identityInspectionUnavailable: () => false,
         isIdentityInspectionError: isNeverIdentityInspectionError,
-        isSupersededError: isNeverSupersededError,
+        findSupersededError: findNoSupersededError,
         acquireLease: () => ({ token: 'generation', release: vi.fn() }),
         getSession: () => session,
         findPort: async () => 7000,
