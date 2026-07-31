@@ -1,21 +1,57 @@
 import { describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
 import {
+  allTtydIncumbentsStrict,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
+  onTtydRestart,
   orphanTtydPidsToReap,
   tmuxTargetFromArgs,
+  startTtydForTokenAttempt,
+  stopManagedTtyd,
+  TtydIdentityInspectionError,
+  TtydStartSupersededError,
   ttydIdentityInspectionUnavailable,
   ttydIncumbentMatchesSession,
   ttydIncumbentsOnPortStrict,
   ttydPidsForSession,
   ttydPidsToReclaim,
   verifyTtydSessionSurface,
+  type StartTtydAttemptDeps,
 } from '../backends/tmux'
 
 function inspectionFailure(
   fields: Record<string, unknown>,
 ): Error & Record<string, unknown> {
   return Object.assign(new Error('inspection failed'), fields)
+}
+
+function fakeChild(pid = 777): ChildProcess {
+  return Object.assign(new EventEmitter(), {
+    pid,
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess
+}
+
+function fakeStartDeps(
+  overrides: Partial<StartTtydAttemptDeps> = {},
+): StartTtydAttemptDeps {
+  const child = fakeChild()
+  return {
+    incumbentsOnPort: async () => [],
+    allIncumbents: async () => [],
+    stopManaged: vi.fn() as unknown as StartTtydAttemptDeps['stopManaged'],
+    killProcess: vi.fn(),
+    spawnProcess: vi.fn(() => child),
+    schedule: ((callback: (...args: unknown[]) => void) => {
+      callback()
+      return {} as NodeJS.Timeout
+    }) as unknown as typeof setTimeout,
+    tmuxAlive: async () => true,
+    enqueueRestart: vi.fn(async () => child.pid),
+    ...overrides,
+  }
 }
 
 describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
@@ -112,6 +148,11 @@ describe('verified ttyd session surfaces', () => {
 
     await expect(inspectTtydIncumbentsOnPort(6123, run))
       .rejects.toThrow('inspection failed')
+    expect(run).toHaveBeenCalledWith(
+      'lsof',
+      ['-w', '-ti', ':6123'],
+      { timeout: 2_000 },
+    )
   })
 
   it('keeps ps infrastructure failures inconclusive', async () => {
@@ -140,6 +181,23 @@ describe('verified ttyd session surfaces', () => {
       .resolves.toEqual([])
   })
 
+  it('recognizes a macOS ps executable path as ttyd', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: '/opt/homebrew/bin/ttyd\n',
+        stderr: '',
+      })
+      .mockResolvedValueOnce({
+        stdout: 'ttyd bash -c tmux attach -t =tinstar-ours',
+        stderr: '',
+      })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run)).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours' },
+    ])
+  })
+
   it('retries strict identity inspection after a transient-failure cooldown', async () => {
     let now = 1_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -166,6 +224,68 @@ describe('verified ttyd session surfaces', () => {
       )).resolves.toEqual([])
       expect(ttydIdentityInspectionUnavailable()).toBe(false)
     } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('uses the same cooldown for pgrep-side inspection failures', async () => {
+    let now = 50_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await expect(allTtydIncumbentsStrict(vi.fn(async () => {
+        throw inspectionFailure({
+          code: 'ETIMEDOUT',
+          stdout: '',
+          stderr: '',
+          killed: true,
+          signal: 'SIGTERM',
+        })
+      }))).rejects.toBeInstanceOf(TtydIdentityInspectionError)
+      expect(ttydIdentityInspectionUnavailable()).toBe(true)
+
+      now += 30_001
+      expect(ttydIdentityInspectionUnavailable()).toBe(false)
+      await expect(allTtydIncumbentsStrict(
+        vi.fn(async () => ({ stdout: '', stderr: '' })),
+      )).resolves.toEqual([])
+      expect(ttydIdentityInspectionUnavailable()).toBe(false)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('does not let an older successful probe clear a newer failure cooldown', async () => {
+    let now = 100_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let resolveSlowProbe!: (result: { stdout: string; stderr: string }) => void
+    const slowRun = vi.fn(() => new Promise<{ stdout: string; stderr: string }>(
+      resolve => { resolveSlowProbe = resolve },
+    ))
+
+    try {
+      const slowProbe = ttydIncumbentsOnPortStrict(6123, slowRun)
+      await vi.waitFor(() => expect(slowRun).toHaveBeenCalledTimes(1))
+
+      await expect(allTtydIncumbentsStrict(vi.fn(async () => {
+        throw inspectionFailure({
+          code: 'ETIMEDOUT',
+          stdout: '',
+          stderr: '',
+          killed: true,
+          signal: 'SIGTERM',
+        })
+      }))).rejects.toBeInstanceOf(TtydIdentityInspectionError)
+      expect(ttydIdentityInspectionUnavailable()).toBe(true)
+
+      resolveSlowProbe({ stdout: '', stderr: '' })
+      await expect(slowProbe).resolves.toEqual([])
+      expect(ttydIdentityInspectionUnavailable()).toBe(true)
+    } finally {
+      now += 30_001
+      await ttydIncumbentsOnPortStrict(
+        6123,
+        vi.fn(async () => ({ stdout: '', stderr: '' })),
+      )
       nowSpy.mockRestore()
     }
   })
@@ -229,6 +349,204 @@ describe('verified ttyd session surfaces', () => {
         healthCheck: async () => true,
       },
     )).resolves.toBe('verified')
+  })
+})
+
+describe('fenced ttyd start attempts', () => {
+  const opts = {
+    sessionName: 'fenced-start',
+    tmuxName: 'tinstar-fenced-start',
+    port: 6123,
+  }
+
+  it('takes no destructive action when preflight inspection fails', async () => {
+    const deps = fakeStartDeps({
+      incumbentsOnPort: async () => {
+        throw new TtydIdentityInspectionError('lsof unavailable')
+      },
+    })
+
+    await expect(startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => true,
+      deps,
+    )).rejects.toBeInstanceOf(TtydIdentityInspectionError)
+
+    expect(deps.stopManaged).not.toHaveBeenCalled()
+    expect(deps.killProcess).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('takes no destructive action when superseded during inspection', async () => {
+    let currentCheck = 0
+    const deps = fakeStartDeps()
+
+    await expect(startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => ++currentCheck === 1,
+      deps,
+    )).rejects.toBeInstanceOf(TtydStartSupersededError)
+
+    expect(deps.stopManaged).not.toHaveBeenCalled()
+    expect(deps.killProcess).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('kills an incumbent found by both inventories only once', async () => {
+    const deps = fakeStartDeps({
+      incumbentsOnPort: async () => [
+        { pid: 100, tmuxTarget: opts.tmuxName },
+      ],
+      allIncumbents: async () => [
+        { pid: 100, tmuxTarget: opts.tmuxName },
+        { pid: 101, tmuxTarget: opts.tmuxName },
+      ],
+    })
+
+    await expect(startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => true,
+      deps,
+    )).resolves.toBe(777)
+
+    expect(deps.killProcess).toHaveBeenCalledTimes(2)
+    expect(deps.killProcess).toHaveBeenNthCalledWith(1, 100)
+    expect(deps.killProcess).toHaveBeenNthCalledWith(2, 101)
+    expect(deps.spawnProcess).toHaveBeenCalledTimes(1)
+    stopManagedTtyd(opts.sessionName)
+  })
+
+  it('rejects a start superseded while waiting for ttyd to bind', async () => {
+    let current = true
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const deps = fakeStartDeps({
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const attempt = startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => current,
+      deps,
+    )
+    const rejection = expect(attempt)
+      .rejects.toBeInstanceOf(TtydStartSupersededError)
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+
+    current = false
+    scheduled[0]!.callback()
+    await rejection
+    expect(deps.enqueueRestart).not.toHaveBeenCalled()
+    stopManagedTtyd(opts.sessionName)
+  })
+
+  it('routes a live unexpected exit through the injected restart coordinator', async () => {
+    const child = fakeChild(777)
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const enqueueRestart = vi.fn(async () => 888)
+    const startToken = Symbol('start')
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn(() => child),
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+      enqueueRestart,
+    })
+
+    const attempt = startTtydForTokenAttempt(
+      opts,
+      startToken,
+      () => true,
+      deps,
+    )
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(500))
+    scheduled.shift()!.callback()
+    await expect(attempt).resolves.toBe(777)
+
+    const onRestart = vi.fn()
+    onTtydRestart(opts.sessionName, onRestart)
+    child.emit('exit', 1)
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(2_000))
+    scheduled.shift()!.callback()
+
+    await vi.waitFor(() => expect(enqueueRestart).toHaveBeenCalledWith(
+      opts,
+      startToken,
+    ))
+    await vi.waitFor(() => expect(onRestart).toHaveBeenCalledWith(888))
+    stopManagedTtyd(opts.sessionName)
+  })
+
+  it('fences a queued restart when the start is superseded before its timer', async () => {
+    const child = fakeChild(777)
+    let current = true
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const enqueueRestart = vi.fn(async () => 888)
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn(() => child),
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+      enqueueRestart,
+    })
+
+    const attempt = startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => current,
+      deps,
+    )
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(500))
+    scheduled.shift()!.callback()
+    await attempt
+
+    child.emit('exit', 1)
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(2_000))
+    current = false
+    scheduled.shift()!.callback()
+    await Promise.resolve()
+
+    expect(enqueueRestart).not.toHaveBeenCalled()
+    stopManagedTtyd(opts.sessionName)
+  })
+
+  it('fences exit handling after an explicit stop', async () => {
+    const child = fakeChild(777)
+    const tmuxAlive = vi.fn(async () => true)
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn(() => child),
+      tmuxAlive,
+    })
+
+    await startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => true,
+      deps,
+    )
+    stopManagedTtyd(opts.sessionName)
+    child.emit('exit', 1)
+    await Promise.resolve()
+
+    expect(tmuxAlive).not.toHaveBeenCalled()
+    expect(deps.enqueueRestart).not.toHaveBeenCalled()
   })
 })
 

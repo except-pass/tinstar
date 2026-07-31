@@ -353,6 +353,13 @@ export async function reattachVerifiedSessionTtydAttempt(
   let sessionPublished = false
   let priorRun: ReturnType<DocumentStore['getRun']> = undefined
   let runPublicationAttempted = false
+  const abandonInconclusiveSurface = (): false => {
+    if (freshPort != null) {
+      deps.stopTtyd(session?.name ?? name)
+      deps.releasePort(freshPort)
+    }
+    return false
+  }
   try {
     session = deps.getSession(config.dirs.sessions, name)
     if (
@@ -374,11 +381,7 @@ export async function reattachVerifiedSessionTtydAttempt(
       tmuxName: deps.tmuxName(config, session.name),
     })
     if (surfaceState === 'inconclusive') {
-      if (freshPort != null) {
-        deps.stopTtyd(session.name)
-        deps.releasePort(freshPort)
-      }
-      return false
+      return abandonInconclusiveSurface()
     }
     if (
       surfaceState === 'unhealthy'
@@ -440,11 +443,7 @@ export async function reattachVerifiedSessionTtydAttempt(
       })
     }
     if (surfaceState === 'inconclusive') {
-      if (freshPort != null) {
-        deps.stopTtyd(session.name)
-        deps.releasePort(freshPort)
-      }
-      return false
+      return abandonInconclusiveSurface()
     }
     if (
       surfaceState !== 'verified'
@@ -552,14 +551,40 @@ export async function reattachVerifiedSessionTtydAttempt(
 export function createSessionTtydReattachSingleFlight(
   operation: (name: string, generation: string) => Promise<boolean>,
 ): (name: string, generation: string) => Promise<boolean> {
-  const inFlight = new Map<string, Promise<boolean>>()
+  const inFlight = new Map<string, {
+    tail: Promise<boolean>
+    byGeneration: Map<string, Promise<boolean>>
+  }>()
   return (name, generation) => {
-    const existing = inFlight.get(name)
-    if (existing) return existing
-    const attempt = operation(name, generation).finally(() => {
-      if (inFlight.get(name) === attempt) inFlight.delete(name)
+    const existingState = inFlight.get(name)
+    const existingAttempt = existingState?.byGeneration.get(generation)
+    if (existingAttempt) return existingAttempt
+    // A newer backend generation must not collapse onto a stale attempt.
+    // Queue it behind the current name-scoped mutation, then run with its own
+    // lease once the older attempt has released.
+    const attempt = (
+      existingState
+        ? existingState.tail.catch(() => false).then(
+          () => operation(name, generation),
+        )
+        : operation(name, generation)
+    ).finally(() => {
+      const current = inFlight.get(name)
+      if (!current) return
+      if (current.byGeneration.get(generation) === attempt) {
+        current.byGeneration.delete(generation)
+      }
+      if (current.tail === attempt && current.byGeneration.size === 0) {
+        inFlight.delete(name)
+      }
     })
-    inFlight.set(name, attempt)
+    const state = existingState ?? {
+      tail: attempt,
+      byGeneration: new Map<string, Promise<boolean>>(),
+    }
+    state.tail = attempt
+    state.byGeneration.set(generation, attempt)
+    inFlight.set(name, state)
     return attempt
   }
 }

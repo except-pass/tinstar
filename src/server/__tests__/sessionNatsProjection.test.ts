@@ -464,6 +464,45 @@ describe('getLiveSessionForBoot', () => {
     expect(releaseLease).toHaveBeenCalledTimes(1)
   })
 
+  it('compensates a generic failure after reattach has produced a surface', async () => {
+    const session = {
+      name: 'post-reattach-failure',
+      state: 'running',
+      port: 6123,
+      ttydPid: 99,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+    const update = vi.fn(() => session)
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async () => ({ port: 6123, ttydPid: 101 }),
+        isCurrent: () => true,
+        verifySurface: async () => { throw new Error('verification crashed') },
+        stopTtyd,
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-post-reattach-failure',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).toHaveBeenCalledTimes(1)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name)
+    expect(releasePort).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('durably retires a stale port before publishing a verified replacement', async () => {
     let session = {
       name: 'stale-port-migration',
@@ -564,10 +603,19 @@ describe('getLiveSessionForBoot', () => {
     expect(first).toBe(second)
     expect(operation).toHaveBeenCalledTimes(1)
 
+    const newer = singleFlight('same-name', 'generation-2')
+    expect(newer).not.toBe(first)
+    expect(singleFlight('same-name', 'generation-1')).toBe(first)
+    expect(operation).toHaveBeenCalledTimes(1)
+
     finish(true)
     await expect(first).resolves.toBe(true)
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(2))
+    finish(false)
+    await expect(newer).resolves.toBe(false)
+
     operation.mockImplementationOnce(async () => true)
-    await singleFlight('same-name', 'generation-2')
-    expect(operation).toHaveBeenCalledTimes(2)
+    await singleFlight('same-name', 'generation-3')
+    expect(operation).toHaveBeenCalledTimes(3)
   })
 })
