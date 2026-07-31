@@ -14,7 +14,6 @@ import {
   type ProviderAdapter,
   type ProviderDeliveryAcceptance,
   type ProviderDeliveryConfirmation,
-  type ProviderObservationHandlers,
 } from '../contract'
 
 interface ForgeDetail {
@@ -127,29 +126,6 @@ function notObserved<
       reason: 'not-observed',
     },
     detail: { region: 'workstation' },
-  }
-}
-
-function handlersForProvider<TDetail extends object>(
-  providerId: string,
-  handlers: ProviderObservationHandlers<TDetail>,
-): ProviderObservationHandlers<TDetail> {
-  return {
-    async 'session-usage'(request) {
-      return { ...await handlers['session-usage'](request), providerId }
-    },
-    async 'session-context'(request) {
-      return { ...await handlers['session-context'](request), providerId }
-    },
-    async 'provider-quota'(request) {
-      return { ...await handlers['provider-quota'](request), providerId }
-    },
-    async 'historical-telemetry'(request) {
-      return { ...await handlers['historical-telemetry'](request), providerId }
-    },
-    async 'context-breakdown'(request) {
-      return { ...await handlers['context-breakdown'](request), providerId }
-    },
   }
 }
 
@@ -397,11 +373,21 @@ describe('provider capability contract', () => {
   })
 
   it('represents acceptance-only delivery without fabricating confirmation', async () => {
+    const unsupported = {
+      state: 'unsupported',
+      reason: 'Boundary exposes delivery only',
+    } as const
     const acceptanceOnly = defineProviderAdapter({
       provider: { id: 'boundary', label: 'Boundary CLI' },
       sessionLifecycle: 'terminal',
       capabilities: {
-        observations: forge.capabilities.observations,
+        observations: {
+          'session-usage': unsupported,
+          'session-context': unsupported,
+          'provider-quota': unsupported,
+          'historical-telemetry': unsupported,
+          'context-breakdown': unsupported,
+        },
         delivery: {
           acceptance: {
             state: 'supported',
@@ -412,7 +398,6 @@ describe('provider capability contract', () => {
                 label: 'Terminal input',
               }],
               timing: ['next-boundary'],
-              region: 'workstation',
             },
           },
           confirmation: {
@@ -421,7 +406,23 @@ describe('provider capability contract', () => {
           },
         },
       },
-      observe: handlersForProvider('boundary', forge.observe),
+      observe: {
+        async 'session-usage'(request) {
+          return unsupportedSnapshot('boundary', request, unsupported.reason, {})
+        },
+        async 'session-context'(request) {
+          return unsupportedSnapshot('boundary', request, unsupported.reason, {})
+        },
+        async 'provider-quota'(request) {
+          return unsupportedSnapshot('boundary', request, unsupported.reason, {})
+        },
+        async 'historical-telemetry'(request) {
+          return unsupportedSnapshot('boundary', request, unsupported.reason, {})
+        },
+        async 'context-breakdown'(request) {
+          return unsupportedSnapshot('boundary', request, unsupported.reason, {})
+        },
+      },
       delivery: {
         async accept(request) {
           return {
@@ -694,8 +695,16 @@ describe('provider capability contract', () => {
       text: 'Still there?',
     }
 
-    await expect(mismatched.delivery!.accept(request))
+    const mismatchedAcceptance = mismatched.delivery!.accept(request)
+    await expect(mismatchedAcceptance)
       .rejects.toThrow('returned messageId "some-other-message"')
+    await expect(mismatchedAcceptance).rejects.toMatchObject({
+      sideEffectMayHaveOccurred: true,
+      result: {
+        messageId: 'some-other-message',
+        attempt: 3,
+      },
+    })
 
     const acceptance = await delivery.accept(request)
     if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
@@ -703,6 +712,52 @@ describe('provider capability contract', () => {
     if (!confirming?.confirm) throw new Error('expected confirmation-capable delivery')
     await expect(confirming.confirm(acceptance))
       .rejects.toThrow('returned attempt 4')
+  })
+
+  it('rejects a delivery for another provider before invoking the adapter', async () => {
+    let acceptCalls = 0
+    const delivery = forge.delivery
+    if (!delivery) throw new Error('expected delivery adapter')
+    const guarded = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        ...delivery,
+        async accept(request) {
+          acceptCalls += 1
+          return delivery.accept(request)
+        },
+      },
+    })
+
+    await expect(guarded.delivery!.accept({
+      messageId: 'msg-wrong-provider',
+      attempt: 1,
+      acceptedAt: CHECKED_AT,
+      senderSessionId: 'run-sender',
+      recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
+      text: 'Do not send this',
+    })).rejects.toThrow('addressed to provider "boundary"')
+    expect(acceptCalls).toBe(0)
+  })
+
+  it('rejects a provider quota snapshot for another configured account', async () => {
+    const mismatched = defineProviderAdapter({
+      ...forge,
+      observe: {
+        ...forge.observe,
+        async 'provider-quota'(request) {
+          return {
+            ...await forge.observe['provider-quota'](request),
+            scope: { kind: 'provider', accountRef: 'some-other-account' },
+          }
+        },
+      },
+    })
+
+    await expect(mismatched.observe['provider-quota']({
+      kind: 'provider-quota',
+      scope: { kind: 'provider', accountRef: 'default' },
+    })).rejects.toThrow('scope that does not match the request')
   })
 
   it('re-registers derived adapters against raw handlers instead of stale guards', async () => {

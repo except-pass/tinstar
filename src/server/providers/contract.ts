@@ -14,6 +14,25 @@ export interface ProviderDeliveryRecipient {
 }
 
 /**
+ * The adapter may already have performed its final-mile side effect before a
+ * malformed result is detected. Callers must not blind-retry when
+ * `sideEffectMayHaveOccurred` is true; the offending result remains attached
+ * for ledger policy and diagnostics.
+ */
+export class ProviderDeliveryIdentityError extends Error {
+  readonly name = 'ProviderDeliveryIdentityError'
+
+  constructor(
+    message: string,
+    readonly sideEffectMayHaveOccurred: boolean,
+    readonly result: { messageId: string; attempt: number },
+    readonly expected: { messageId: string; attempt: number },
+  ) {
+    super(message)
+  }
+}
+
+/**
  * One already-ledgered logical message making one final-mile attempt.
  *
  * `acceptedAt` is the router/ledger acceptance time. The adapter's own
@@ -237,6 +256,12 @@ function guardDeliveryAdapter<TDetail extends object>(
 ): ProviderDeliveryAdapter<TDetail> {
   const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
   const accept = async (request: ProviderDeliveryRequest) => {
+    if (request.recipient.providerId !== providerId) {
+      throw new Error(
+        `Provider "${providerId}" delivery request is addressed to provider `
+        + `"${request.recipient.providerId}"`,
+      )
+    }
     const result = await rawAccept(request)
     assertDeliveryIdentity(providerId, 'accept', result, request)
     return result
@@ -262,15 +287,21 @@ function assertDeliveryIdentity(
   expected: { messageId: string; attempt: number },
 ): void {
   if (actual.messageId !== expected.messageId) {
-    throw new Error(
+    throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned messageId `
       + `"${actual.messageId}", expected "${expected.messageId}"`,
+      operation === 'accept',
+      actual,
+      expected,
     )
   }
   if (actual.attempt !== expected.attempt) {
-    throw new Error(
+    throw new ProviderDeliveryIdentityError(
       `Provider "${providerId}" delivery ${operation} returned attempt `
       + `${actual.attempt}, expected ${expected.attempt}`,
+      operation === 'accept',
+      actual,
+      expected,
     )
   }
 }
