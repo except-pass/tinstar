@@ -4,9 +4,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { handleRequest, type RouteContext } from '../routes'
+import { handleRequest, resetSessionBackendOwnersForTests, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
-import { createSession, getSession } from '../../sessions/session'
+import { createSession, getSession, setState } from '../../sessions/session'
 import type { Run } from '../../../domain/types'
 
 const FIXTURE_SPACE_ID = 'spc-test-fixture'
@@ -97,12 +97,14 @@ let tmpRoot: string
 let testCtx: TestCtx
 
 beforeEach(() => {
+  resetSessionBackendOwnersForTests()
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-runs-route-test-'))
   testCtx = createTestServer(tmpRoot)
 })
 
 afterEach(async () => {
   await testCtx.close()
+  resetSessionBackendOwnersForTests()
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
@@ -141,6 +143,7 @@ describe('PATCH /api/runs/:id', () => {
     it('AE5: demoting an idle run clears its "Ready for input" attention', async () => {
       // Visible idle run with the standard "Ready for input" attention row.
       createSession(join(tmpRoot, 'sessions'), { name: 's1', backend: 'tmux' })
+      setState(join(tmpRoot, 'sessions'), 's1', 'idle')
       testCtx.docStore.upsertRun('r1', makeRun())
 
       const res = await testCtx.fetch('/api/runs/r1', {
@@ -162,6 +165,7 @@ describe('PATCH /api/runs/:id', () => {
     it('demoting a blocked run re-derives urgent "Waiting on permission"', async () => {
       // Session persisted as blocked (pending permission prompt), mirrored on the run.
       createSession(join(tmpRoot, 'sessions'), { name: 's1', backend: 'tmux', blocked: true })
+      setState(join(tmpRoot, 'sessions'), 's1', 'idle')
       testCtx.docStore.upsertRun('r1', makeRun({ blocked: true }))
 
       const res = await testCtx.fetch('/api/runs/r1', {
@@ -178,6 +182,7 @@ describe('PATCH /api/runs/:id', () => {
 
     it('promoting an idle background run restores "Ready for input"', async () => {
       createSession(join(tmpRoot, 'sessions'), { name: 's1', backend: 'tmux', background: true })
+      setState(join(tmpRoot, 'sessions'), 's1', 'idle')
       testCtx.docStore.upsertRun('r1', makeRun({ background: true, attention: undefined }))
 
       const res = await testCtx.fetch('/api/runs/r1', {
@@ -251,6 +256,7 @@ describe('PATCH /api/runs/:id', () => {
 
     it('composes with a taskId patch in the same body', async () => {
       createSession(join(tmpRoot, 'sessions'), { name: 's1', backend: 'tmux' })
+      setState(join(tmpRoot, 'sessions'), 's1', 'idle')
       testCtx.docStore.upsertRun('r1', makeRun())
 
       const res = await testCtx.fetch('/api/runs/r1', {

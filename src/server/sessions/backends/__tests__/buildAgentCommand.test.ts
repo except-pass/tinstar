@@ -5,6 +5,8 @@ import type { AgentDef } from '../tmux'
 import type { CliTemplate } from '../../config'
 import {
   CLAUDE_PROVIDER,
+  GENERIC_PROVIDER,
+  ProviderCapabilityError,
   type TerminalProviderAdapter,
 } from '../../../providers/lifecycle'
 
@@ -93,6 +95,24 @@ describe('provider telemetry environment reconciliation', () => {
       'OTEL_EXPORTER_OTLP_ENDPOINT',
       'http://otel:4318',
     ])
+  })
+
+  it('returns no commands when an unsupported provider uses its disabled default', () => {
+    expect(providerTelemetryEnvironmentCommands(
+      '=tinstar-worker',
+      'worker',
+      GENERIC_PROVIDER,
+      tmpl('agent', 'agent resume'),
+    )).toEqual([])
+  })
+
+  it('rejects an explicit telemetry opt-in for an unsupported provider', () => {
+    expect(() => providerTelemetryEnvironmentCommands(
+      '=tinstar-worker',
+      'worker',
+      GENERIC_PROVIDER,
+      { ...tmpl('agent', 'agent resume'), telemetry: true },
+    )).toThrow(ProviderCapabilityError)
   })
 })
 

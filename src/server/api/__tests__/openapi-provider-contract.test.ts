@@ -14,6 +14,12 @@ describe('OpenAPI provider/template contract', () => {
     expect(spec.paths['/api/cli-templates/{id}'].delete.responses[200].content['application/json'].schema)
       .toEqual({ $ref: '#/components/schemas/NullResponse' })
     expect(schemas.CliTemplate).toBeDefined()
+    expect(schemas.CliTemplate.allOf[1].required).toContain('telemetryState')
+    expect(schemas.CliTemplate.allOf[1].properties.telemetryState.enum)
+      .toEqual(['enabled', 'disabled', 'unsupported', 'unavailable'])
+    expect(spec.paths['/api/cli-templates']?.get.responses[200].content['application/json'].schema
+      .properties.data.items)
+      .toEqual({ $ref: '#/components/schemas/CliTemplate' })
     expect(schemas.CliTemplateResponse.properties.data)
       .toEqual({ $ref: '#/components/schemas/CliTemplate' })
     expect(schemas.EntitySettings.properties.cliTemplate).toBeDefined()

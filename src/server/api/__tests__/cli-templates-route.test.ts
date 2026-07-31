@@ -34,12 +34,63 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-async function getTemplates(): Promise<CliTemplate[]> {
+interface DiscoveredCliTemplate extends CliTemplate {
+  telemetryState: 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
+}
+
+async function getTemplates(): Promise<DiscoveredCliTemplate[]> {
   const r = await fetch(`${base}/api/cli-templates`)
-  return (await r.json() as { data: CliTemplate[] }).data
+  return (await r.json() as { data: DiscoveredCliTemplate[] }).data
 }
 
 describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
+  it('returns the resolved provider telemetry state for every template', async () => {
+    const templates = await getTemplates()
+
+    expect(templates.find(template => template.id === 'claude-auto')?.telemetryState)
+      .toBe('enabled')
+    expect(templates.find(template => template.id === 'codex-full-auto')?.telemetryState)
+      .toBe('unsupported')
+    expect(templates.find(template => template.id === 'shell')?.telemetryState)
+      .toBe('unsupported')
+  })
+
+  it('returns disabled for a supported provider with an explicit opt-out', async () => {
+    const post = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Quiet Claude',
+        adapter: 'claude',
+        telemetry: false,
+        startCmd: 'claude -- {prompt}',
+        resumeCmd: 'claude --resume latest',
+      }),
+    })
+
+    expect(post.status).toBe(200)
+    expect((await post.json() as { data: DiscoveredCliTemplate }).data.telemetryState)
+      .toBe('disabled')
+    expect((await getTemplates()).find(template => template.name === 'Quiet Claude')?.telemetryState)
+      .toBe('disabled')
+  })
+
+  it('returns unavailable for a configured template whose adapter is not registered', async () => {
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      cliTemplates: [{
+        id: 'missing-provider-template',
+        name: 'Missing Provider',
+        adapter: 'not-installed',
+        startCmd: 'missing -- {prompt}',
+        resumeCmd: 'missing resume',
+      }],
+    }))
+    ctx.sessionConfig = loadConfig({ _rootDir: root })
+
+    expect((await getTemplates()).find(template => template.id === 'missing-provider-template')?.telemetryState)
+      .toBe('unavailable')
+  })
+
   it('warns for a legacy id-less template and removes it when a replacement is saved', async () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
     writeFileSync(join(root, 'config.json'), JSON.stringify({
@@ -97,6 +148,8 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
       body: JSON.stringify(edited),
     })
     expect(put.status).toBe(200)
+    expect((await put.json() as { data: DiscoveredCliTemplate }).data.telemetryState)
+      .toBe('unsupported')
 
     // The bug: GET returned the boot-time snapshot, so the edit "reverted" in the
     // modal. It must now reflect the saved command.

@@ -51,7 +51,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, Worktree, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice } from '../../domain/types'
+import type { Run, Worktree, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice, AttentionState } from '../../domain/types'
 // Server-side A2UI validation (KTD4): the notice `content` is parsed through the
 // same web_core v0_9 schema the renderer uses, so malformed descriptions are
 // rejected at the boundary. Importing the plugin's schema here is what pulls
@@ -132,6 +132,26 @@ function validateCliTemplateProvider(
     return null
   } catch (err) {
     return (err as Error).message
+  }
+}
+
+type CliTemplateTelemetryState = 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
+
+function discoverCliTemplate(
+  registry: ProviderAdapterRegistry,
+  template: CliTemplate,
+): CliTemplate & { telemetryState: CliTemplateTelemetryState } {
+  try {
+    const provider = registry.resolveTemplate(template)
+    if (provider.terminal.capabilities.telemetry.state === 'unsupported') {
+      return { ...template, telemetryState: 'unsupported' }
+    }
+    return {
+      ...template,
+      telemetryState: providerTelemetryEnabled(provider, template) ? 'enabled' : 'disabled',
+    }
+  } catch {
+    return { ...template, telemetryState: 'unavailable' }
   }
 }
 
@@ -572,6 +592,18 @@ function rollbackLaunchedSessionRegistration(
   }
 }
 
+class SessionProvisioningError extends Error {
+  readonly name = 'SessionProvisioningError'
+
+  constructor(
+    cause: unknown,
+    readonly backendCleanupConfirmed: boolean,
+  ) {
+    super((cause as Error).message)
+    this.cause = cause
+  }
+}
+
 async function rollbackFailedSessionProvisioning(args: {
   cfg: TinstarConfig
   sessDir: string
@@ -590,7 +622,7 @@ async function rollbackFailedSessionProvisioning(args: {
     previous: Worktree | null
     provisional: Worktree
   } | null
-}): Promise<void> {
+}): Promise<boolean> {
   const {
     cfg, sessDir, docStore, name, session, claimedPort,
     natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
@@ -599,6 +631,7 @@ async function rollbackFailedSessionProvisioning(args: {
 
   // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
   // broken without ever stranding a live process or an allocator claim.
+  let backendCleanupConfirmed = session === null
   if (session) {
     try {
       // Safe before, during, or after backend creation: the tmux backend treats
@@ -607,12 +640,33 @@ async function rollbackFailedSessionProvisioning(args: {
     } catch (err) {
       log.warn('sessions', `${name}: failed provisioning rollback could not stop backend: ${(err as Error).message}`)
     }
+    try {
+      backendCleanupConfirmed =
+        await tmuxBackend.getTmuxSessionState(cfg, name) === 'missing'
+    } catch (err) {
+      backendCleanupConfirmed = false
+      log.warn(
+        'sessions',
+        `${name}: failed provisioning rollback could not verify backend teardown: `
+        + `${(err as Error).message}`,
+      )
+    }
   }
-  if (claimedPort != null) {
+  if (claimedPort != null && backendCleanupConfirmed) {
     try {
       tmuxBackend.releasePort(claimedPort)
     } catch (err) {
       log.warn('sessions', `${name}: failed provisioning rollback could not release port ${claimedPort}: ${(err as Error).message}`)
+    }
+  } else if (claimedPort != null && session) {
+    try {
+      updateSession(sessDir, name, { port: claimedPort })
+    } catch (err) {
+      log.warn(
+        'sessions',
+        `${name}: failed provisioning rollback could not persist claimed port ${claimedPort}: `
+        + `${(err as Error).message}`,
+      )
     }
   }
 
@@ -626,10 +680,17 @@ async function rollbackFailedSessionProvisioning(args: {
   } catch (err) {
     log.warn('sessions', `${name}: failed provisioning rollback could not delete run: ${(err as Error).message}`)
   }
-  try {
-    deleteSession(sessDir, name)
-  } catch (err) {
-    log.warn('sessions', `${name}: failed provisioning rollback could not delete session record: ${(err as Error).message}`)
+  if (backendCleanupConfirmed) {
+    try {
+      deleteSession(sessDir, name)
+    } catch (err) {
+      log.warn('sessions', `${name}: failed provisioning rollback could not delete session record: ${(err as Error).message}`)
+    }
+  } else if (session && !persistSessionDeletionMarker(sessDir, name)) {
+    log.error(
+      'sessions',
+      `${name}: failed provisioning rollback could not persist its cleanup marker`,
+    )
   }
 
   const currentWorktreeEntity = worktreeEntityRollback
@@ -640,14 +701,14 @@ async function rollbackFailedSessionProvisioning(args: {
     && currentWorktreeEntity
     && currentWorktreeEntity !== worktreeEntityRollback.provisional
   )
-  if (createdWorktreeProject && !worktreeEntityReplaced) {
+  if (createdWorktreeProject && backendCleanupConfirmed && !worktreeEntityReplaced) {
     try {
       await deleteWorktree(createdWorktreeProject, name)
     } catch (err) {
       log.warn('sessions', `${name}: failed provisioning rollback could not remove worktree: ${(err as Error).message}`)
     }
   }
-  if (worktreeEntityRollback) {
+  if (worktreeEntityRollback && backendCleanupConfirmed) {
     try {
       if (worktreeEntityReplaced) {
         log.info(
@@ -664,20 +725,357 @@ async function rollbackFailedSessionProvisioning(args: {
     } catch (err) {
       log.warn('sessions', `${name}: failed provisioning rollback could not restore worktree entity: ${(err as Error).message}`)
     }
+  } else if (worktreeEntityRollback && !backendCleanupConfirmed) {
+    log.warn(
+      'sessions',
+      `${name}: preserving worktree state while backend cleanup remains unconfirmed`,
+    )
   }
+  return backendCleanupConfirmed
 }
 
 type CreateSessionResult =
   | { ok: true; session: Session }
   | { ok: false; error: { code: string; message: string } }
 
-/** Session names are process-wide backend identities (disk dir + tmux target).
+/** Session names are process-wide backend identities (tmux target + managed
+ * ttyd registry), even when tests host more than one config root in a process.
  * Reserve one before any async provisioning so competing creates cannot launch
- * or roll back each other's resources. */
-const sessionCreatesInFlight = new Set<string>()
+ * or roll back each other's resources. This can become root-scoped only after
+ * every backend registry is namespaced the same way. */
+interface SessionBackendOwner {
+  sessionsDir: string
+  sessionName: string
+  state:
+    | 'in-flight'
+    | 'persisted'
+    | 'starting'
+    | 'stopping'
+    | 'deleting'
+    | 'orphaned'
+  token: string
+  keys: readonly string[]
+  activeLeases: number
+}
 
-function sessionNameUnavailable(sessionsDir: string, name: string): boolean {
-  return sessionCreatesInFlight.has(name) || getSession(sessionsDir, name) !== null
+const sessionBackendOwners = new Map<string, SessionBackendOwner>()
+const sessionRootRegistrations = new Map<string, Promise<void>>()
+
+function sessionBackendOwnershipKeys(prefix: string, name: string): readonly string[] {
+  return [`session:${name}`, `tmux:${prefix}${name}`]
+}
+
+function clearSessionBackendOwner(owner: SessionBackendOwner): void {
+  for (const key of owner.keys) {
+    if (sessionBackendOwners.get(key) === owner) sessionBackendOwners.delete(key)
+  }
+}
+
+function liveSessionBackendOwner(key: string): SessionBackendOwner | undefined {
+  return sessionBackendOwners.get(key)
+}
+
+function registerPersistedSessionName(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+): boolean {
+  const normalizedDir = resolve(sessionsDir)
+  const keys = sessionBackendOwnershipKeys(prefix, name)
+  const owners = keys
+    .map(key => liveSessionBackendOwner(key))
+    .filter((owner): owner is SessionBackendOwner => owner !== undefined)
+  if (owners.length > 0) {
+    return owners.every(owner =>
+      owner.sessionsDir === normalizedDir
+      && owner.sessionName === name
+      && owner.state === 'persisted'
+    )
+  }
+
+  const owner: SessionBackendOwner = {
+    sessionsDir: normalizedDir,
+    sessionName: name,
+    state: 'persisted',
+    token: randomUUID(),
+    keys,
+    activeLeases: 0,
+  }
+  for (const key of keys) sessionBackendOwners.set(key, owner)
+  return true
+}
+
+async function registerPersistedSessionRoot(
+  sessionsDir: string,
+  prefix: string,
+): Promise<void> {
+  const normalizedDir = resolve(sessionsDir)
+  const rootKey = `${normalizedDir}\0${prefix}`
+  let registration = sessionRootRegistrations.get(rootKey)
+  if (!registration) {
+    registration = listSessions(normalizedDir).then(sessions => {
+      for (const session of sessions) {
+        registerPersistedSessionName(normalizedDir, prefix, session.name)
+      }
+    })
+    sessionRootRegistrations.set(rootKey, registration)
+  }
+  await registration
+}
+
+function sessionNameUnavailable(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+): boolean {
+  const keys = sessionBackendOwnershipKeys(prefix, name)
+  if (keys.some(key => liveSessionBackendOwner(key))) return true
+  if (getSession(sessionsDir, name) === null) return false
+  registerPersistedSessionName(sessionsDir, prefix, name)
+  return true
+}
+
+type SessionNameReservation =
+  | { state: 'reserved'; token: string }
+  | {
+      state:
+        | 'in-flight'
+        | 'persisted'
+        | 'starting'
+        | 'stopping'
+        | 'deleting'
+        | 'orphaned'
+    }
+
+function reserveSessionName(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+): SessionNameReservation {
+  const keys = sessionBackendOwnershipKeys(prefix, name)
+  const owner = keys
+    .map(key => liveSessionBackendOwner(key))
+    .find(existing => existing !== undefined)
+  if (owner) return { state: owner.state }
+  if (getSession(sessionsDir, name) !== null) {
+    registerPersistedSessionName(sessionsDir, prefix, name)
+    return { state: 'persisted' }
+  }
+  const token = randomUUID()
+  const newOwner: SessionBackendOwner = {
+    sessionsDir: resolve(sessionsDir),
+    sessionName: name,
+    state: 'in-flight',
+    token,
+    keys,
+    activeLeases: 0,
+  }
+  for (const key of keys) sessionBackendOwners.set(key, newOwner)
+  return { state: 'reserved', token }
+}
+
+function finishSessionNameReservation(
+  sessionsDir: string,
+  name: string,
+  token: string,
+  outcome: 'committed' | 'aborted' | 'orphaned',
+): void {
+  const normalizedDir = resolve(sessionsDir)
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    !owner
+    || owner.sessionsDir !== normalizedDir
+    || owner.sessionName !== name
+    || owner.token !== token
+  ) return
+  if (outcome === 'committed') {
+    owner.state = 'persisted'
+  } else if (outcome === 'orphaned') {
+    owner.state = 'orphaned'
+  } else {
+    clearSessionBackendOwner(owner)
+  }
+}
+
+function releasePersistedSessionBackendOwner(
+  sessionsDir: string,
+  name: string,
+  token: string | null,
+): void {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    owner
+    && owner.state === 'deleting'
+    && owner.sessionsDir === resolve(sessionsDir)
+    && owner.sessionName === name
+    && token !== null
+    && owner.token === token
+  ) {
+    clearSessionBackendOwner(owner)
+  }
+}
+
+function ownedSessionBackendForAction(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+): SessionBackendOwner | null {
+  const normalizedDir = resolve(sessionsDir)
+  const keys = sessionBackendOwnershipKeys(prefix, name)
+  let owners = keys.map(key => liveSessionBackendOwner(key))
+  if (owners.every(owner => owner === undefined)) {
+    if (getSession(sessionsDir, name) === null) return null
+    if (!registerPersistedSessionName(sessionsDir, prefix, name)) return null
+    owners = keys.map(key => liveSessionBackendOwner(key))
+  }
+  const owner = owners.find(
+    (candidate): candidate is SessionBackendOwner => candidate !== undefined,
+  )
+  if (
+    !owner
+    || owner.sessionsDir !== normalizedDir
+    || owner.sessionName !== name
+    || !owners.every(candidate => candidate === owner)
+  ) return null
+  return owner
+}
+
+function persistedSessionBackendGeneration(
+  ctx: RouteContext,
+  name: string,
+): string | null {
+  const cfg = ctx.sessionConfig
+  const session = cfg ? getSession(cfg.dirs.sessions, name) : null
+  if (
+    !cfg
+    || !session
+    || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
+    || session.state === 'creating'
+  ) return null
+  const owner = ownedSessionBackendForAction(
+    cfg.dirs.sessions,
+    cfg.sessions.prefix,
+    name,
+  )
+  return owner?.state === 'persisted' ? owner.token : null
+}
+
+function authorizePersistedSessionBackendAccess(
+  ctx: RouteContext,
+  name: string,
+): boolean {
+  return persistedSessionBackendGeneration(ctx, name) !== null
+}
+
+interface SessionBackendLease {
+  release: () => void
+}
+
+function acquirePersistedSessionBackendLease(
+  ctx: RouteContext,
+  name: string,
+  expectedToken?: string,
+): SessionBackendLease | null {
+  const cfg = ctx.sessionConfig
+  const session = cfg ? getSession(cfg.dirs.sessions, name) : null
+  if (
+    !cfg
+    || !session
+    || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
+    || session.state === 'creating'
+  ) return null
+  const owner = ownedSessionBackendForAction(
+    cfg.dirs.sessions,
+    cfg.sessions.prefix,
+    name,
+  )
+  if (
+    owner?.state !== 'persisted'
+    || (expectedToken !== undefined && owner.token !== expectedToken)
+  ) return null
+  owner.activeLeases += 1
+  const token = owner.token
+  let released = false
+  return {
+    release: () => {
+      if (released) return
+      released = true
+      const current = sessionBackendOwners.get(`session:${name}`)
+      if (
+        current === owner
+        && current.token === token
+        && current.activeLeases > 0
+      ) {
+        current.activeLeases -= 1
+      }
+    },
+  }
+}
+
+function beginSessionBackendOperation(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+  operation: 'starting' | 'stopping',
+): string | null {
+  if (
+    existsSync(join(sessionsDir, name, '.deleting'))
+    || getSession(sessionsDir, name)?.state === 'creating'
+  ) return null
+  const owner = ownedSessionBackendForAction(sessionsDir, prefix, name)
+  if (owner?.state !== 'persisted' || owner.activeLeases > 0) return null
+  owner.state = operation
+  return owner.token
+}
+
+function finishSessionBackendOperation(
+  sessionsDir: string,
+  name: string,
+  token: string,
+  operation: 'starting' | 'stopping',
+): void {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    owner
+    && owner.sessionsDir === resolve(sessionsDir)
+    && owner.sessionName === name
+    && owner.token === token
+    && owner.state === operation
+  ) {
+    owner.state = 'persisted'
+  }
+}
+
+function markSessionBackendOwnerOrphaned(
+  sessionsDir: string,
+  name: string,
+  token: string | null,
+): void {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    owner
+    && owner.sessionsDir === resolve(sessionsDir)
+    && owner.sessionName === name
+    && token !== null
+    && owner.token === token
+  ) {
+    owner.state = 'orphaned'
+  }
+}
+
+function persistSessionDeletionMarker(sessionsDir: string, name: string): boolean {
+  const marker = join(sessionsDir, name, '.deleting')
+  try {
+    writeFileSync(marker, '')
+    return existsSync(marker)
+  } catch {
+    return false
+  }
+}
+
+export function resetSessionBackendOwnersForTests(): void {
+  sessionBackendOwners.clear()
+  sessionRootRegistrations.clear()
 }
 
 async function createSessionInternal(
@@ -687,21 +1085,40 @@ async function createSessionInternal(
   if (typeof params.name !== 'string' || !params.name) {
     return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   }
-  if (sessionCreatesInFlight.has(params.name)) {
+  const reservation = reserveSessionName(
+    ctx.sessDir,
+    ctx.cfg.sessions.prefix,
+    params.name,
+  )
+  if (reservation.state !== 'reserved') {
     return {
       ok: false,
       error: {
         code: 'SESSION_EXISTS',
-        message: `Session '${params.name}' is already being created`,
+        message: reservation.state === 'in-flight'
+          ? `Session '${params.name}' is already being created`
+          : `Session '${params.name}' already exists`,
       },
     }
   }
 
-  sessionCreatesInFlight.add(params.name)
+  let committed = false
+  let cleanupConfirmed = true
   try {
-    return await createReservedSession(params, ctx)
+    const result = await createReservedSession(params, ctx)
+    committed = result.ok
+    return result
+  } catch (err) {
+    cleanupConfirmed = !(err instanceof SessionProvisioningError)
+      || err.backendCleanupConfirmed
+    throw err
   } finally {
-    sessionCreatesInFlight.delete(params.name)
+    finishSessionNameReservation(
+      ctx.sessDir,
+      params.name,
+      reservation.token,
+      committed ? 'committed' : cleanupConfirmed ? 'aborted' : 'orphaned',
+    )
   }
 }
 
@@ -941,7 +1358,7 @@ async function createReservedSession(
       updateSession(sessDir, name, { ttydPid: newPid })
     })
   } catch (err) {
-    await rollbackFailedSessionProvisioning({
+    const backendCleanupConfirmed = await rollbackFailedSessionProvisioning({
       cfg,
       sessDir,
       docStore,
@@ -956,7 +1373,7 @@ async function createReservedSession(
       createdWorktreeProject,
       worktreeEntityRollback,
     })
-    throw err
+    throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
 
   // Create Run entry
@@ -1024,7 +1441,7 @@ async function createReservedSession(
     if (!updated) throw new Error(`session '${name}' vanished after launch registration`)
     return { ok: true, session: updated }
   } catch (err) {
-    await rollbackFailedSessionProvisioning({
+    const backendCleanupConfirmed = await rollbackFailedSessionProvisioning({
       cfg,
       sessDir,
       docStore,
@@ -1039,7 +1456,7 @@ async function createReservedSession(
       createdWorktreeProject,
       worktreeEntityRollback,
     })
-    throw err
+    throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
 }
 
@@ -1393,15 +1810,24 @@ function serverBase(): string {
  *  failing the request. Never throws. Only a USER-authored injection should reach
  *  here — an agent/process reply must NOT prompt its own session (self-loop guard,
  *  R15); the caller gates on author before calling this. */
-async function deliverSlatePrompt(ctx: RouteContext, runId: string, promptText: string): Promise<boolean> {
+async function deliverSlatePrompt(
+  ctx: RouteContext,
+  runId: string,
+  promptText: string,
+  expectedGeneration: string | null,
+): Promise<boolean> {
   const sessDir = ctx.sessionConfig?.dirs.sessions
-  if (!sessDir || !getSession(sessDir, runId)) return false
+  if (!sessDir || !getSession(sessDir, runId) || expectedGeneration === null) return false
+  const lease = acquirePersistedSessionBackendLease(ctx, runId, expectedGeneration)
+  if (!lease) return false
   try {
     await tmuxBackend.sendPrompt(ctx.sessionConfig!, runId, promptText)
     return true
   } catch (err) {
     log.warn('slate', 'delivery failed', { runId, err: (err as Error).message })
     return false
+  } finally {
+    lease.release()
   }
 }
 
@@ -1502,6 +1928,15 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
 
   const existing = getSession(createCtx.sessDir, MARSHAL_NAME)
   if (existing) {
+    if (!authorizePersistedSessionBackendAccess(ctx, MARSHAL_NAME)) {
+      return {
+        ok: false,
+        error: {
+          code: 'BACKEND_CONFLICT',
+          message: 'Marshal conflicts with a process-wide backend identity',
+        },
+      }
+    }
     return { ok: true, data: { name: existing.name, port: existing.port ?? null, state: existing.state } }
   }
 
@@ -1546,25 +1981,95 @@ export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalR
 
   const existing = getSession(sessDir, MARSHAL_NAME)
   if (existing) {
-    try { writeFileSync(join(sessDir, MARSHAL_NAME, '.deleting'), '') } catch { /* dir may already be gone */ }
+    const backendOwner = ownedSessionBackendForAction(
+      sessDir,
+      cfg.sessions.prefix,
+      MARSHAL_NAME,
+    )
+    if (
+      !backendOwner
+      || (backendOwner.state !== 'persisted' && backendOwner.state !== 'orphaned')
+      || backendOwner.activeLeases > 0
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: 'BACKEND_CONFLICT',
+          message: 'Marshal conflicts with a process-wide backend identity',
+        },
+      }
+    }
+    const deletionOwnerToken = backendOwner.token
+    if (!persistSessionDeletionMarker(sessDir, MARSHAL_NAME)) {
+      return {
+        ok: false,
+        error: {
+          code: 'SESSION_DELETE_FAILED',
+          message: 'Marshal deletion marker could not be persisted',
+        },
+      }
+    }
+    backendOwner.state = 'deleting'
     ctx.docStore.deleteRun(MARSHAL_NAME)
     ctx.readyQueue.onDelete(MARSHAL_NAME)
     ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
     ctx.sse.broadcastReadyQueueUpdate()
     createCtx.emitSessionEvent('managed_session.deleted', { name: MARSHAL_NAME })
 
+    let backendCleanupConfirmed = false
     try {
       await tmuxBackend.deleteTmuxSession(cfg, existing)
-      if (existing.port) tmuxBackend.releasePort(existing.port)
     } catch (err) {
       log.warn('marshal-restart', `backend cleanup: ${(err as Error).message}`)
     }
-    if (!deleteSession(sessDir, MARSHAL_NAME)) {
+    try {
+      backendCleanupConfirmed =
+        await tmuxBackend.getTmuxSessionState(cfg, MARSHAL_NAME) === 'missing'
+    } catch (err) {
+      log.warn('marshal-restart', `backend cleanup verification: ${(err as Error).message}`)
+    }
+    if (!backendCleanupConfirmed) {
+      markSessionBackendOwnerOrphaned(
+        sessDir,
+        MARSHAL_NAME,
+        deletionOwnerToken,
+      )
+      return {
+        ok: false,
+        error: {
+          code: 'BACKEND_CLEANUP_UNCONFIRMED',
+          message: 'Marshal backend cleanup could not be confirmed',
+        },
+      }
+    }
+    if (existing.port) tmuxBackend.releasePort(existing.port)
+
+    let recordDeleted = deleteSession(sessDir, MARSHAL_NAME)
+    if (!recordDeleted) {
       // Disk dir didn't go away — wait briefly then try once more so the
       // following create doesn't trip the SESSION_EXISTS guard.
       await new Promise(r => setTimeout(r, 500))
-      deleteSession(sessDir, MARSHAL_NAME)
+      recordDeleted = deleteSession(sessDir, MARSHAL_NAME)
     }
+    if (!recordDeleted) {
+      markSessionBackendOwnerOrphaned(
+        sessDir,
+        MARSHAL_NAME,
+        deletionOwnerToken,
+      )
+      return {
+        ok: false,
+        error: {
+          code: 'SESSION_DELETE_FAILED',
+          message: 'Marshal session record could not be removed',
+        },
+      }
+    }
+    releasePersistedSessionBackendOwner(
+      sessDir,
+      MARSHAL_NAME,
+      deletionOwnerToken,
+    )
   }
 
   return ensureMarshalSession(ctx)
@@ -2488,6 +2993,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && /^\/api\/notices\/[^/]+\/replies$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const id = decodeURIComponent(path.slice('/api/notices/'.length, -'/replies'.length))
+    const requestNotice = ctx.docStore.getNotice(id)
+    const requestGeneration = requestNotice
+      ? persistedSessionBackendGeneration(ctx, requestNotice.runId)
+      : null
     readBody(req).then(async body => {
       const notice = ctx.docStore.getNotice(id)
       if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
@@ -2564,12 +3073,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (author === 'user') {
         const sessDir = ctx.sessionConfig?.dirs.sessions
         if (sessDir && getSession(sessDir, notice.runId)) {
+          const lease = requestGeneration === null
+            ? null
+            : acquirePersistedSessionBackendLease(ctx, notice.runId, requestGeneration)
+          if (!lease) {
+            ok(res, { notice: updated, reply, delivered })
+            return
+          }
           try {
             await tmuxBackend.sendPrompt(ctx.sessionConfig!, notice.runId,
               followUpPromptText(updated, guidance, serverBase()))
             delivered = true
           } catch (err) {
             log.warn('notices', 'follow-up delivery failed', { id, runId: notice.runId, err: (err as Error).message })
+          } finally {
+            lease.release()
           }
         }
       }
@@ -2721,6 +3239,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && /^\/api\/notices\/[^/]+\/answer$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const id = decodeURIComponent(path.slice('/api/notices/'.length, -'/answer'.length))
+    const requestNotice = ctx.docStore.getNotice(id)
+    const requestGeneration = requestNotice
+      ? persistedSessionBackendGeneration(ctx, requestNotice.runId)
+      : null
     readBody(req).then(async body => {
       const notice = ctx.docStore.getNotice(id)
       if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
@@ -2792,6 +3314,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (sessDir) {
         const session = getSession(sessDir, notice.runId)
         if (session) {
+          const lease = requestGeneration === null
+            ? null
+            : acquirePersistedSessionBackendLease(ctx, notice.runId, requestGeneration)
+          if (!lease) {
+            ok(res, { notice: updated, delivered })
+            return
+          }
           try {
             const labels = collectChoiceOptionLabels(notice.content)
             const prompt = answerPromptText(updated, labels)
@@ -2800,6 +3329,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } catch (err) {
             // The answer is already persisted; delivery is best-effort (KTD1).
             log.warn('notices', 'answer delivery failed', { id, runId: notice.runId, err: (err as Error).message })
+          } finally {
+            lease.release()
           }
         }
       }
@@ -3789,6 +4320,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'PUT' && /^\/api\/runs\/[^/]+\/slate\/objective$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/objective'.length))
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
       if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
       let parsed: { text?: unknown }
@@ -3825,7 +4357,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // one that changed no text, which must not re-nudge an agent mid-turn.
       const changed = objective?.headline !== prior?.headline
       const delivered = changed
-        ? await deliverSlatePrompt(ctx, runId, slateObjectivePromptText(text, serverBase()))
+        ? await deliverSlatePrompt(ctx, runId, slateObjectivePromptText(text, serverBase()), requestGeneration)
         : false
       // delivered:false on an unreachable run is a NOTE, not an error (mirrors compose/
       // refresh) — the objective is persisted either way and the card says as much.
@@ -3890,6 +4422,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const segs = rest.split('/')
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
       const point = ctx.docStore.getSlatePoint(runId, pid)
       if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
@@ -3937,8 +4470,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
-      const delivered = await deliverSlatePrompt(ctx, runId,
-        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()))
+      const delivered = await deliverSlatePrompt(
+        ctx,
+        runId,
+        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()),
+        requestGeneration,
+      )
       ok(res, { point: updated, delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
@@ -3955,6 +4492,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const segs = rest.split('/')
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
       const existing = ctx.docStore.getSlatePoint(runId, pid)
       if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
@@ -3981,7 +4519,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       // Only a USER reply delivers — the anti-loop guard (R15).
       const delivered = author === 'user'
-        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()))
+        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()), requestGeneration)
         : false
       ok(res, { point: updated, reply, delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
@@ -4021,6 +4559,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const segs = rest.split('/') // [runId, 'slate', 'surfaces', pid]
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     const point = ctx.docStore.getSlatePoint(runId, pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
 
@@ -4077,7 +4616,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (dispatched) { ok(res, { dispatched: true }); return true }
       // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
     }
-    const delivered = await deliverSlatePrompt(ctx, runId, slateRefreshPromptText(point, serverBase()))
+    const delivered = await deliverSlatePrompt(
+      ctx,
+      runId,
+      slateRefreshPromptText(point, serverBase()),
+      requestGeneration,
+    )
     ok(res, { delivered })
     return true
   }
@@ -4093,6 +4637,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/compose$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/compose'.length))
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
       let parsed: { prompt?: unknown; freeform?: unknown; recipe?: unknown }
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
@@ -4116,18 +4661,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // The compose instruction IS a recipe for a NEW surface, so it's source-derived:
       // offload to a one-shot author when enabled, else the unchanged main-agent nudge.
       const composePrompt = slateComposePromptText({ prompt, freeform, recipe }, serverBase())
-      if (ctx.sessionConfig?.slate.author.enabled) {
-        const { dispatched } = dispatchSurfaceAuthor({
-          sessionsDir: ctx.sessionConfig.dirs.sessions,
-          config: ctx.sessionConfig.slate.author,
-          runId,
-          prompt: composePrompt,
-          label: 'compose',
-          secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
-        })
-        if (dispatched) { ok(res, { dispatched: true }); return }
+      if (ctx.sessionConfig?.slate.author.enabled && requestGeneration !== null) {
+        const authorLease = acquirePersistedSessionBackendLease(ctx, runId, requestGeneration)
+        if (authorLease) {
+          try {
+            const { dispatched } = dispatchSurfaceAuthor({
+              sessionsDir: ctx.sessionConfig.dirs.sessions,
+              config: ctx.sessionConfig.slate.author,
+              runId,
+              prompt: composePrompt,
+              label: 'compose',
+              secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
+            })
+            if (dispatched) { ok(res, { dispatched: true }); return }
+          } finally {
+            authorLease.release()
+          }
+        }
       }
-      const delivered = await deliverSlatePrompt(ctx, runId, composePrompt)
+      const delivered = await deliverSlatePrompt(ctx, runId, composePrompt, requestGeneration)
       ok(res, { delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
@@ -4142,7 +4694,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/explain$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/explain'.length))
-    const delivered = await deliverSlatePrompt(ctx, runId, slateExplainPromptText(serverBase()))
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
+    const delivered = await deliverSlatePrompt(
+      ctx,
+      runId,
+      slateExplainPromptText(serverBase()),
+      requestGeneration,
+    )
     ok(res, { delivered })
     return true
   }
@@ -4150,6 +4708,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {
     const id = url.slice('/api/runs/'.length)
+    const requestRun = ctx.docStore.getRun(id)
+    const requestSessionsDir = ctx.sessionConfig?.dirs.sessions
+    const requestSessionBacked = !!(
+      requestRun
+      && requestSessionsDir
+      && getSession(requestSessionsDir, requestRun.sessionId)
+    )
+    const requestGeneration = requestRun && requestSessionBacked
+      ? persistedSessionBackendGeneration(ctx, requestRun.sessionId)
+      : null
     readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return fail(res, 'NOT_FOUND', 'not found')
@@ -4213,30 +4781,59 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const backgroundChanged = typeof patch.background === 'boolean' && patch.background !== existing.background
 
       // Attention handling mirrors plugin widgets so clearing a run does not
-      // leave a lingering null payload in the stored run state.
-      let attentionApplied = false
+      // leave a lingering null payload in the stored run state. Validate and
+      // stage it first: a task/NATS generation conflict must reject the whole
+      // patch before any field reaches the replacement incarnation.
+      let applyAttention: (() => void) | undefined
       if ('attention' in patch) {
         const attn = attentionPatch
         if (attn === null) {
-          ctx.docStore.setRunAttention(id, null)
-          attentionApplied = true
+          applyAttention = () => ctx.docStore.setRunAttention(id, null)
         } else if (
           attn && typeof attn === 'object'
           && (attn.level === 'urgent' || attn.level === 'attention' || attn.level === 'info')
           && typeof attn.reason === 'string'
         ) {
-          ctx.docStore.setRunAttention(id, {
+          const nextAttention: AttentionState = {
             level: attn.level,
             reason: attn.reason.slice(0, 200),
             setAt: new Date().toISOString(),
-          })
-          attentionApplied = true
+          }
+          applyAttention = () => ctx.docStore.setRunAttention(id, nextAttention)
         } else {
           return fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
         }
       }
 
       const sessDir = ctx.sessionConfig?.dirs.sessions
+      const taskIdChanged = patchWithoutAttention.taskId !== undefined
+        && patchWithoutAttention.taskId !== existing.taskId
+      const currentSession = sessDir ? getSession(sessDir, existing.sessionId) : null
+      const currentSessionBacked = currentSession !== null
+      const natsPatchSession = taskIdChanged && existing.natsEnabled
+        ? currentSession
+        : null
+      const patchLease = requestSessionBacked !== currentSessionBacked
+        ? null
+        : currentSessionBacked
+          ? requestGeneration === null
+            ? null
+            : acquirePersistedSessionBackendLease(ctx, existing.sessionId, requestGeneration)
+          : undefined
+      if (patchLease === null) {
+        return fail(
+          res,
+          'CONFLICT',
+          `Session '${existing.sessionId}' conflicts with a process-wide backend identity`,
+        )
+      }
+
+      let attentionApplied = false
+      try {
+        if (applyAttention) {
+          applyAttention()
+          attentionApplied = true
+        }
 
       // Persist the background flip to session.json so it survives restarts
       // (R13). A null return is expected for runs with no backing session
@@ -4247,12 +4844,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       // Check if taskId changed and NATS is enabled — need to update subscriptions
-      const taskIdChanged = patchWithoutAttention.taskId !== undefined && patchWithoutAttention.taskId !== existing.taskId
-      if (taskIdChanged && existing.natsEnabled && sessDir) {
-        const session = getSession(sessDir, existing.sessionId)
-        if (session?.nats?.enabled) {
+      if (natsPatchSession?.nats?.enabled && sessDir) {
           // Compute old and new subscriptions
-          const oldSubs = session.nats.subscriptions || []
+          const oldSubs = natsPatchSession.nats.subscriptions || []
           const newSubs = computeNatsSubscriptions({
             sessionName: existing.sessionId,
             spaceId: existing.spaceId,
@@ -4277,7 +4871,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
 
           // Update session file with new subscriptions
-          updateSession(sessDir, existing.sessionId, { nats: { ...session.nats, subscriptions: newSubs } })
+          updateSession(sessDir, existing.sessionId, {
+            nats: { ...natsPatchSession.nats, subscriptions: newSubs },
+          })
 
           // Update run's natsSubject and full subscription list
           patchWithoutAttention.natsSubject = newSubs[1] ?? newSubs[0]
@@ -4294,7 +4890,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
-        }
       }
 
       const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
@@ -4306,6 +4901,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // explicitly set attention.
       if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
       ok(res, ctx.docStore.getRun(id))
+      } finally {
+        patchLease?.release()
+      }
     })
     return true
   }
@@ -4315,6 +4913,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (ctx.sessionConfig) {
     const cfg = ctx.sessionConfig
     const sessDir = cfg.dirs.sessions
+    await registerPersistedSessionRoot(sessDir, cfg.sessions.prefix)
     const secrets = () => loadSecrets(cfg.dirs.secrets)
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
@@ -4332,7 +4931,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
-        getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
+        getTmuxSessionState: async (name) => {
+          const lease = acquirePersistedSessionBackendLease(ctx, name)
+          if (!lease) throw new Error('backend ownership unavailable')
+          try {
+            return await tmuxBackend.getTmuxSessionState(cfg, name)
+          } finally {
+            lease.release()
+          }
+        },
         onStateChanged: (name, state) => {
           emitSessionEvent('managed_session.state_changed', { name, state })
         },
@@ -4627,6 +5234,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async () => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          const operationToken = beginSessionBackendOperation(
+            sessDir,
+            cfg.sessions.prefix,
+            name,
+            'stopping',
+          )
+          if (!operationToken) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' conflicts with a process-wide backend identity`,
+            )
+          }
 
           try {
             const stopTemplate = session.cliTemplate
@@ -4641,11 +5261,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             } catch (err) {
               log.warn('stop', `${session.name}: provider resolution failed during teardown: ${(err as Error).message}`)
             }
-            try {
-              await tmuxBackend.stopTmuxSession(cfg, session)
-            } finally {
-              if (session.port) tmuxBackend.releasePort(session.port)
-            }
+            await tmuxBackend.stopTmuxSession(cfg, session)
+            if (session.port) tmuxBackend.releasePort(session.port)
 
             // Clear port/ttydPid so a later start re-allocates a fresh port via
             // findPort(). Leaving stale values here causes the proxy /s/{name}
@@ -4661,6 +5278,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ok(res, getSession(sessDir, session.name))
           } catch (err) {
             fail(res, 'INTERNAL', (err as Error).message)
+          } finally {
+            finishSessionBackendOperation(
+              sessDir,
+              name,
+              operationToken,
+              'stopping',
+            )
           }
         })
         return true
@@ -4674,54 +5298,68 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         withBody(req, res, async (body) => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
-
-          // Verify workspace directory still exists
-          const wsPath = session.workspace?.path
-          if (wsPath && !existsSync(wsPath)) {
-            return fail(res, 'CONFLICT', `Workspace directory no longer exists: ${wsPath}`)
-          }
-
-          // Require a conversation ID to resume — sessions created before this change won't have one
-          if (!session.conversation?.id) {
-            return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
-          }
-
-          // Switchboard: a per-session token override is spawn-time-only and never
-          // persisted, so it does NOT survive a stop. Accept an optional `token` on
-          // /start to re-establish quota isolation on resume — validated fail-closed
-          // (same guard as create/spawn) and still never persisted. The model override
-          // IS persisted on the session and re-applied by startTmuxSession, so it
-          // survives a restart without being re-supplied. Absent ⇒ global token.
-          let tokenOverride: string | undefined
-          if (body) {
-            try { tokenOverride = (JSON.parse(body) as { token?: string }).token } catch { /* no body / not JSON ⇒ no override */ }
-          }
-          if (tokenOverride != null && tokenOverride !== '') {
-            const check = validateSessionOverride(
-              { token: tokenOverride },
-              cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+          const operationToken = beginSessionBackendOperation(
+            sessDir,
+            cfg.sessions.prefix,
+            name,
+            'starting',
+          )
+          if (!operationToken) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' conflicts with a process-wide backend identity`,
             )
-            if (!check.ok) return fail(res, check.code, check.message)
           }
 
           try {
-            const sec = applyTokenOverride(secrets(), tokenOverride)
-
-            const resumeTemplate = session.cliTemplate
-              ? cfg.cliTemplates.find(t => t.id === session.cliTemplate) ?? null
-              : null
-            if (session.cliTemplate && !resumeTemplate) {
-              throw new ProviderAdapterResolutionError(
-                `CLI template "${session.cliTemplate}" is not configured`,
-              )
+            // Verify workspace directory still exists
+            const wsPath = session.workspace?.path
+            if (wsPath && !existsSync(wsPath)) {
+              return fail(res, 'CONFLICT', `Workspace directory no longer exists: ${wsPath}`)
             }
-            const provider = (ctx.providerRegistry ?? defaultProviderRegistry)
-              .resolveSession(session, resumeTemplate)
-            let resumeSession = session
-            if (
-              session.nats?.enabled
-              && provider.terminal.capabilities.nats.state === 'unsupported'
-            ) {
+
+            // Require a conversation ID to resume — sessions created before this change won't have one
+            if (!session.conversation?.id) {
+              return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
+            }
+
+            // Switchboard: a per-session token override is spawn-time-only and never
+            // persisted, so it does NOT survive a stop. Accept an optional `token` on
+            // /start to re-establish quota isolation on resume — validated fail-closed
+            // (same guard as create/spawn) and still never persisted. The model override
+            // IS persisted on the session and re-applied by startTmuxSession, so it
+            // survives a restart without being re-supplied. Absent ⇒ global token.
+            let tokenOverride: string | undefined
+            if (body) {
+              try { tokenOverride = (JSON.parse(body) as { token?: string }).token } catch { /* no body / not JSON ⇒ no override */ }
+            }
+            if (tokenOverride != null && tokenOverride !== '') {
+              const check = validateSessionOverride(
+                { token: tokenOverride },
+                cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+              )
+              if (!check.ok) return fail(res, check.code, check.message)
+            }
+
+            try {
+              const sec = applyTokenOverride(secrets(), tokenOverride)
+
+              const resumeTemplate = session.cliTemplate
+                ? cfg.cliTemplates.find(t => t.id === session.cliTemplate) ?? null
+                : null
+              if (session.cliTemplate && !resumeTemplate) {
+                throw new ProviderAdapterResolutionError(
+                  `CLI template "${session.cliTemplate}" is not configured`,
+                )
+              }
+              const provider = (ctx.providerRegistry ?? defaultProviderRegistry)
+                .resolveSession(session, resumeTemplate)
+              let resumeSession = session
+              if (
+                session.nats?.enabled
+                && provider.terminal.capabilities.nats.state === 'unsupported'
+              ) {
               // Older task launches persisted nats.enabled=true even for
               // providers whose command line never supported Tinstar's NATS
               // transport. That stale state must not make an otherwise valid
@@ -4732,9 +5370,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 `${session.name}: clearing stale NATS state while resuming provider `
                 + `"${provider.provider.id}"`,
               )
-              updateSession(sessDir, session.name, { nats: disabledNats })
-              unregisterSaloonSubs(ctx.natsTraffic, session.name)
-              ctx.natsHealth?.untrackSession(session.name)
               const run = ctx.docStore.getRun(session.name)
               if (run) {
                 ctx.docStore.upsertRun(session.name, {
@@ -4744,32 +5379,51 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   natsSubscriptions: undefined,
                 })
               }
-              resumeSession = { ...session, nats: disabledNats }
-            } else if (session.nats?.enabled) {
-              requireProviderCapability(provider, 'nats')
-            }
-            providerTelemetryEnabled(provider, resumeTemplate)
-            const claimedPort = session.port == null
-            const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
-            let result: Awaited<ReturnType<typeof tmuxBackend.startTmuxSession>>
-            try {
-              result = await tmuxBackend.startTmuxSession(cfg, {
-                session: resumeSession,
-                secrets: sec,
-                port,
-                provider,
-                template: resumeTemplate,
-                appendSystemPrompt: session.appendSystemPrompt,
-                agent: session.agent,
+              updateSession(sessDir, session.name, { nats: disabledNats })
+              try {
+                unregisterSaloonSubs(ctx.natsTraffic, session.name)
+              } catch (err) {
+                log.warn(
+                  'sessions',
+                  `${session.name}: stale NATS repair could not unregister Saloon subscriptions: `
+                  + `${(err as Error).message}`,
+                )
+              }
+              try {
+                ctx.natsHealth?.untrackSession(session.name)
+              } catch (err) {
+                log.warn(
+                  'sessions',
+                  `${session.name}: stale NATS repair could not stop health tracking: `
+                  + `${(err as Error).message}`,
+                )
+              }
+                resumeSession = { ...session, nats: disabledNats }
+              } else if (session.nats?.enabled) {
+                requireProviderCapability(provider, 'nats')
+              }
+              providerTelemetryEnabled(provider, resumeTemplate)
+              const claimedPort = session.port == null
+              const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
+              let result: Awaited<ReturnType<typeof tmuxBackend.startTmuxSession>>
+              try {
+                result = await tmuxBackend.startTmuxSession(cfg, {
+                  session: resumeSession,
+                  secrets: sec,
+                  port,
+                  provider,
+                  template: resumeTemplate,
+                  appendSystemPrompt: session.appendSystemPrompt,
+                  agent: session.agent,
+                })
+              } catch (err) {
+                if (claimedPort) tmuxBackend.releasePort(port)
+                throw err
+              }
+              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+              tmuxBackend.onTtydRestart(session.name, (newPid) => {
+                updateSession(sessDir, session.name, { ttydPid: newPid })
               })
-            } catch (err) {
-              if (claimedPort) tmuxBackend.releasePort(port)
-              throw err
-            }
-            updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
-            tmuxBackend.onTtydRestart(session.name, (newPid) => {
-              updateSession(sessDir, session.name, { ttydPid: newPid })
-            })
 
             // Re-read session to get updated port
             const updated = getSession(sessDir, session.name)
@@ -4790,15 +5444,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
             }
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
-            ok(res, updated)
-          } catch (err) {
-            if (
-              err instanceof ProviderAdapterResolutionError
-              || err instanceof ProviderCapabilityError
-            ) {
-              return fail(res, 'BAD_REQUEST', err.message)
+              ok(res, updated)
+            } catch (err) {
+              if (
+                err instanceof ProviderAdapterResolutionError
+                || err instanceof ProviderCapabilityError
+              ) {
+                return fail(res, 'BAD_REQUEST', err.message)
+              }
+              fail(res, 'INTERNAL', (err as Error).message)
             }
-            fail(res, 'INTERNAL', (err as Error).message)
+          } finally {
+            finishSessionBackendOperation(
+              sessDir,
+              name,
+              operationToken,
+              'starting',
+            )
           }
         })
         return true
@@ -4813,10 +5475,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const generation = persistedSessionBackendGeneration(ctx, name)
+        if (!generation) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         withBody(req, res, async () => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           if (!session.nats?.enabled) return fail(res, 'BRIDGE_UNAVAILABLE', `NATS is not enabled for session '${name}'`)
+          const lease = acquirePersistedSessionBackendLease(ctx, name, generation)
+          if (!lease) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' conflicts with a process-wide backend identity`,
+            )
+          }
           try {
             const { killed } = await reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
             // Clear the orphan flag; the next health probe re-establishes truth.
@@ -4827,6 +5505,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ok(res, { killed })
           } catch (err) {
             fail(res, 'INTERNAL', (err as Error).message)
+          } finally {
+            lease.release()
           }
         })
         return true
@@ -4837,10 +5517,56 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'DELETE' && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const backendOwner = ownedSessionBackendForAction(
+          sessDir,
+          cfg.sessions.prefix,
+          name,
+        )
+        if (!backendOwner) {
+          if (getSession(sessDir, name) === null) {
+            return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          }
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
+        if (backendOwner?.state === 'in-flight') {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' is still being created and cannot be deleted yet`,
+          )
+        }
+        if (backendOwner?.state === 'deleting') {
+          return fail(res, 'CONFLICT', `Session '${name}' is already being deleted`)
+        }
+        if (backendOwner.activeLeases > 0) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' has an active backend operation`,
+          )
+        }
+        if (backendOwner.state !== 'persisted' && backendOwner.state !== 'orphaned') {
+          return fail(
+            res,
+              'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
+        const deletionOwnerToken = backendOwner.token
         const session = getSession(sessDir, name)
 
         // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
-        try { writeFileSync(join(sessDir, name, '.deleting'), '') } catch { /* dir may already be gone */ }
+        if (session && !persistSessionDeletionMarker(sessDir, name)) {
+          return fail(
+            res,
+            'INTERNAL',
+            `Session '${name}' deletion marker could not be persisted`,
+          )
+        }
 
         // Retire to the Graveyard BEFORE any teardown: capture the convId + recap
         // while the run and session dir still exist. This write is synchronous and
@@ -4916,10 +5642,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
         ctx.sse.broadcastReadyQueueUpdate()
+        backendOwner.state = 'deleting'
         ok(res, null)
 
         // Cleanup: stop backend first (releases bind mounts), then remove session dir
         ;(async () => {
+          let backendCleanupConfirmed = false
           try {
             if (session) {
               // Best-effort delete-durable for every NATS subject this session
@@ -4946,18 +5674,59 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
 
               await tmuxBackend.deleteTmuxSession(cfg, session)
-              if (session.port) tmuxBackend.releasePort(session.port)
-
-
             }
           } catch (err) {
             log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
           }
+          try {
+            backendCleanupConfirmed =
+              await tmuxBackend.getTmuxSessionState(cfg, name) === 'missing'
+          } catch (err) {
+            log.warn(
+              'delete',
+              `${name}: could not verify backend teardown: ${(err as Error).message}`,
+            )
+          }
 
-          // Remove session dir AFTER backend cleanup (bind mounts released)
-          if (!deleteSession(sessDir, name)) {
+          // Keep the marked session record while teardown is uncertain. That
+          // durable evidence lets a later DELETE (including after owner-map
+          // reconstruction) retry cleanup without resurrecting the session.
+          if (!backendCleanupConfirmed) {
+            markSessionBackendOwnerOrphaned(
+              sessDir,
+              name,
+              deletionOwnerToken,
+            )
+            return
+          }
+          if (session?.port) tmuxBackend.releasePort(session.port)
+
+          // Remove session dir AFTER backend cleanup (bind mounts released).
+          const recordDeleted = deleteSession(sessDir, name)
+          if (!recordDeleted) {
             log.warn('delete', `failed to remove session dir for ${name}, retrying...`)
-            setTimeout(() => deleteSession(sessDir, name), 2000)
+            setTimeout(() => {
+              const retryDeleted = deleteSession(sessDir, name)
+              if (retryDeleted) {
+                releasePersistedSessionBackendOwner(
+                  sessDir,
+                  name,
+                  deletionOwnerToken,
+                )
+              } else {
+                markSessionBackendOwnerOrphaned(
+                  sessDir,
+                  name,
+                  deletionOwnerToken,
+                )
+              }
+            }, 2000)
+          } else {
+            releasePersistedSessionBackendOwner(
+              sessDir,
+              name,
+              deletionOwnerToken,
+            )
           }
           // If this was a necro'd session with a fallback cwd, remove its
           // graveyard-revives workdir so revive-then-delete cycles don't leak.
@@ -5046,7 +5815,31 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
               hasSnapshot: (id) => hasGraveyardSnapshot(cfg.dirs.root, id),
-              sessionExists: (n) => sessionNameUnavailable(sessDir, n),
+              sessionExists: (n) => sessionNameUnavailable(
+                sessDir,
+                cfg.sessions.prefix,
+                n,
+              ),
+              nameReservation: {
+                reserve: (n) => {
+                  const reservation = reserveSessionName(
+                    sessDir,
+                    cfg.sessions.prefix,
+                    n,
+                  )
+                  return reservation.state === 'reserved'
+                    ? reservation.token
+                    : null
+                },
+                finish: (n, token, outcome) => {
+                  finishSessionNameReservation(
+                    sessDir,
+                    n,
+                    token,
+                    outcome,
+                  )
+                },
+              },
               pathExists: (p) => existsSync(p),
               // One launch closure: place the transcript, create + resume the session,
               // and wire it as a first-class citizen (NATS + ready queue + full Run).
@@ -5123,6 +5916,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               // dir — otherwise the record is deleted while tmux/ttyd/port leak.
               onLaunchFailed: async (name) => {
                 let stale: Session | null = null
+                let backendCleanupConfirmed = false
                 try {
                   stale = getSession(sessDir, name)
                 } catch (err) {
@@ -5135,16 +5929,30 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                     log.warn('graveyard', `${name}: revive rollback could not stop backend: ${(err as Error).message}`)
                   }
                 }
+                try {
+                  backendCleanupConfirmed =
+                    await tmuxBackend.getTmuxSessionState(cfg, name) === 'missing'
+                } catch (err) {
+                  log.warn(
+                    'graveyard',
+                    `${name}: revive rollback could not verify backend teardown: `
+                    + `${(err as Error).message}`,
+                  )
+                }
                 const rollbackPorts = new Set(
                   [stale?.port, claimedRevivePort]
                     .filter((port): port is number => port != null),
                 )
-                for (const rollbackPort of rollbackPorts) {
-                  try {
-                    tmuxBackend.releasePort(rollbackPort)
-                  } catch (err) {
-                    log.warn('graveyard', `${name}: revive rollback could not release port ${rollbackPort}: ${(err as Error).message}`)
+                if (backendCleanupConfirmed) {
+                  for (const rollbackPort of rollbackPorts) {
+                    try {
+                      tmuxBackend.releasePort(rollbackPort)
+                    } catch (err) {
+                      log.warn('graveyard', `${name}: revive rollback could not release port ${rollbackPort}: ${(err as Error).message}`)
+                    }
                   }
+                } else if (claimedRevivePort != null && stale) {
+                  updateSession(sessDir, name, { port: claimedRevivePort })
                 }
                 claimedRevivePort = null
                 rollbackLaunchedSessionRegistration(
@@ -5164,16 +5972,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   log.warn('graveyard', `${name}: revive rollback could not delete run: ${(err as Error).message}`)
                 }
                 try {
-                  deleteSession(sessDir, name)
+                  if (backendCleanupConfirmed) {
+                    deleteSession(sessDir, name)
+                  } else if (stale && !persistSessionDeletionMarker(sessDir, name)) {
+                    log.error(
+                      'graveyard',
+                      `${name}: revive rollback could not persist its cleanup marker`,
+                    )
+                  }
                 } catch (err) {
                   log.warn('graveyard', `${name}: revive rollback could not delete session record: ${(err as Error).message}`)
                 }
-                try {
-                  deleteReviveWorkdir(cfg.dirs.root, name)
-                } catch (err) {
-                  log.warn('graveyard', `${name}: revive rollback could not remove fallback workdir: ${(err as Error).message}`)
+                if (backendCleanupConfirmed) {
+                  try {
+                    deleteReviveWorkdir(cfg.dirs.root, name)
+                  } catch (err) {
+                    log.warn('graveyard', `${name}: revive rollback could not remove fallback workdir: ${(err as Error).message}`)
+                  }
                 }
                 reviveResolvedNats = null
+                return backendCleanupConfirmed
               },
               // A raised grave leaves Boot Hill — consume the tombstone + snapshot.
               onRevived: (cid) => {
@@ -5330,6 +6148,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       const parentSession = getSession(sessDir, parentName)
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
+      const parentGeneration = persistedSessionBackendGeneration(ctx, parentName)
+      if (!parentGeneration) {
+        return fail(
+          res,
+          'CONFLICT',
+          `Session '${parentName}' conflicts with a process-wide backend identity`,
+        )
+      }
 
       const body = await readBody(req)
       // Guard the parse — the tinstar-hand skill now tells agents to build spawn
@@ -5410,6 +6236,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       } catch (err) {
         return fail(res, 'BRIDGE_UNAVAILABLE', (err as Error).message)
       }
+      const parentLease = acquirePersistedSessionBackendLease(
+        ctx,
+        parentName,
+        parentGeneration,
+      )
+      if (!parentLease) {
+        return fail(
+          res,
+          'CONFLICT',
+          `Session '${parentName}' conflicts with a process-wide backend identity`,
+        )
+      }
+      try {
       const inheritNats = parentSession.nats?.enabled === true
         && provider.terminal.capabilities.nats.state === 'supported'
       let natsInheritanceWarning: string | null = null
@@ -5618,6 +6457,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Resolve effective repo (override or inherit)
       const effectiveRepo = repoOverride ?? parentSession.project
 
+      const spawnReservation = reserveSessionName(
+        sessDir,
+        cfg.sessions.prefix,
+        spawnedName,
+      )
+      if (spawnReservation.state !== 'reserved') {
+        await rollbackParentBreakoutSubscription()
+        return fail(
+          res,
+          'CONFLICT',
+          spawnReservation.state === 'in-flight'
+            ? `Session '${spawnedName}' is already being created`
+            : `Session '${spawnedName}' already exists`,
+        )
+      }
+
       // Create the spawned session
       let spawnedSession: Session
       try {
@@ -5640,6 +6495,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           modelOverride: modelOverride ?? null,
         })
       } catch (err) {
+        finishSessionNameReservation(
+          sessDir,
+          spawnedName,
+          spawnReservation.token,
+          'aborted',
+        )
         await rollbackParentBreakoutSubscription()
         return fail(res, 'INTERNAL', (err as Error).message)
       }
@@ -5785,6 +6646,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
         }
 
+        finishSessionNameReservation(
+          sessDir,
+          spawnedName,
+          spawnReservation.token,
+          'committed',
+        )
         return ok(res, {
           session: spawnedName,
           hand: handName,
@@ -5815,28 +6682,78 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // A failed launch may already have created tmux/ttyd state. Roll back
         // backend resources before releasing the claim so another session
         // cannot be routed onto a still-live process.
+        let backendCleanupConfirmed = false
         try {
-          await tmuxBackend.stopTmuxSession(cfg, spawnedSession)
-        } catch (stopErr) {
-          log.warn('spawn', `${spawnedName}: failed launch rollback could not stop backend: ${(stopErr as Error).message}`)
+          try {
+            await tmuxBackend.stopTmuxSession(cfg, spawnedSession)
+          } catch (stopErr) {
+            log.warn('spawn', `${spawnedName}: failed launch rollback could not stop backend: ${(stopErr as Error).message}`)
+          }
+          try {
+            backendCleanupConfirmed =
+              await tmuxBackend.getTmuxSessionState(cfg, spawnedName) === 'missing'
+          } catch (verifyErr) {
+            log.warn(
+              'spawn',
+              `${spawnedName}: failed launch rollback could not verify backend teardown: `
+              + `${(verifyErr as Error).message}`,
+            )
+          }
+          if (claimedSpawnPort != null && backendCleanupConfirmed) {
+            try { tmuxBackend.releasePort(claimedSpawnPort) } catch { /* best-effort */ }
+          } else if (claimedSpawnPort != null) {
+            try {
+              updateSession(sessDir, spawnedName, { port: claimedSpawnPort })
+            } catch { /* retained marker still protects the backend identity */ }
+          }
+          try {
+            unregisterSaloonSubs(ctx.natsTraffic, spawnedName)
+          } catch (cleanupErr) {
+            log.warn('spawn', `${spawnedName}: failed to unregister Saloon during rollback: ${(cleanupErr as Error).message}`)
+          }
+          try {
+            ctx.natsHealth?.untrackSession(spawnedName)
+          } catch (cleanupErr) {
+            log.warn('spawn', `${spawnedName}: failed to untrack NATS health during rollback: ${(cleanupErr as Error).message}`)
+          }
+          await rollbackParentBreakoutSubscription()
+          try { ctx.docStore.deleteRun(spawnedName) } catch { /* best-effort */ }
+          if (backendCleanupConfirmed) {
+            deleteSession(sessDir, spawnedName)
+          } else if (!persistSessionDeletionMarker(sessDir, spawnedName)) {
+            log.error(
+              'spawn',
+              `${spawnedName}: failed launch rollback could not persist its cleanup marker`,
+            )
+          }
+        } finally {
+          finishSessionNameReservation(
+            sessDir,
+            spawnedName,
+            spawnReservation.token,
+            backendCleanupConfirmed ? 'aborted' : 'orphaned',
+          )
         }
-        if (claimedSpawnPort != null) {
-          try { tmuxBackend.releasePort(claimedSpawnPort) } catch { /* best-effort */ }
-        }
-        unregisterSaloonSubs(ctx.natsTraffic, spawnedName)
-        ctx.natsHealth?.untrackSession(spawnedName)
-        await rollbackParentBreakoutSubscription()
-        ctx.docStore.deleteRun(spawnedName)
-        deleteSession(sessDir, spawnedName)
         return fail(res, 'INTERNAL', (err as Error).message)
       }
       return true
+      } finally {
+        parentLease.release()
+      }
     }
 
     // POST /api/sessions/:name/send-keys — send raw tmux keys to a session
     if (method === 'POST' && url.endsWith('/send-keys') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const generation = persistedSessionBackendGeneration(ctx, name)
+        if (!generation) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         const body = JSON.parse(await readBody(req))
         const keys: string[] = body.keys
         if (!Array.isArray(keys) || keys.length === 0) {
@@ -5845,11 +6762,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         const session = getSession(sessDir, name)
         if (!session) { fail(res, 'NOT_FOUND', 'Session not found'); return true }
+        const lease = acquirePersistedSessionBackendLease(ctx, name, generation)
+        if (!lease) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         try {
           await tmuxBackend.sendKeys(cfg, name, keys)
           ok(res, null)
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
+        } finally {
+          lease.release()
         }
         return true
       }
@@ -5885,10 +6812,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
       const session = getSession(sessDir, name)
       if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
-      const sb = Number(new URL(url, 'http://localhost').searchParams.get('scrollback'))
-      captureScreen(tmuxSessionName(cfg, name), Number.isFinite(sb) && sb > 0 ? sb : undefined)
-        .then((screen) => ok(res, { screen }))
-        .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+      const lease = acquirePersistedSessionBackendLease(ctx, name)
+      if (!lease) {
+        return fail(
+          res,
+          'CONFLICT',
+          `Session '${name}' conflicts with a process-wide backend identity`,
+        )
+      }
+      try {
+        const sb = Number(new URL(url, 'http://localhost').searchParams.get('scrollback'))
+        const screen = await captureScreen(
+          tmuxSessionName(cfg, name),
+          Number.isFinite(sb) && sb > 0 ? sb : undefined,
+        )
+        ok(res, { screen })
+      } catch (err) {
+        fail(res, 'INTERNAL', (err as Error).message)
+      } finally {
+        lease.release()
+      }
       return true
     }
 
@@ -5896,6 +6839,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/enter-prompt') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const generation = persistedSessionBackendGeneration(ctx, name)
+        if (!generation) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         const body = JSON.parse(await readBody(req))
         const prompt: string = body.prompt
         if (!prompt || typeof prompt !== 'string') {
@@ -5904,11 +6855,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         const session = getSession(sessDir, name)
         if (!session) { fail(res, 'NOT_FOUND', 'Session not found'); return true }
+        const lease = acquirePersistedSessionBackendLease(ctx, name, generation)
+        if (!lease) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         try {
           await tmuxBackend.sendPrompt(cfg, name, prompt)
           ok(res, null)
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
+        } finally {
+          lease.release()
         }
         return true
       }
@@ -5924,8 +6885,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'GET' && url.endsWith('/nats-status') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        const status = await probeNatsLiveStatus(natsControlSocketPath(name))
-        ok(res, status)
+        const session = getSession(sessDir, name)
+        if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
+        const lease = acquirePersistedSessionBackendLease(ctx, name)
+        if (!lease) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
+        try {
+          const status = await probeNatsLiveStatus(natsControlSocketPath(name))
+          ok(res, status)
+        } finally {
+          lease.release()
+        }
         return true
       }
     }
@@ -5945,6 +6920,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const generation = persistedSessionBackendGeneration(ctx, name)
+        if (!generation) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
@@ -5953,28 +6936,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const session = getSession(sessDir, name)
           if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
           if (!session.nats?.enabled) { return fail(res, 'BRIDGE_UNAVAILABLE', 'NATS is not enabled for this session') }
-
-          // Add to subscriptions if not already present
-          const subs = session.nats.subscriptions
-          let natsWarning: NatsSocketWarning | null = null
-          if (!subs.includes(subject)) {
-            subs.push(subject)
-            updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
-
-            // Send to channel server via Unix socket. Persisted state is
-            // the source of truth (already written above); if the socket
-            // hot-apply fails we surface it in the response instead of
-            // silently logging so callers can show the error.
-            natsWarning = await trySendNatsSocketCommand(name, { action: 'subscribe', subject })
-
-            // Keep the run's natsSubscriptions in sync
-            const run = ctx.docStore.getRun(name)
-            if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
-
-            // Mirror the updated subscription list into the traffic bridge.
-            registerSaloonSubs(ctx.natsTraffic, name, subs)
+          const lease = acquirePersistedSessionBackendLease(ctx, name, generation)
+          if (!lease) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' conflicts with a process-wide backend identity`,
+            )
           }
-          ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+          try {
+            // Add to subscriptions if not already present
+            const subs = session.nats.subscriptions
+            let natsWarning: NatsSocketWarning | null = null
+            if (!subs.includes(subject)) {
+              subs.push(subject)
+              updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+
+              // Send to channel server via Unix socket. Persisted state is
+              // the source of truth (already written above); if the socket
+              // hot-apply fails we surface it in the response instead of
+              // silently logging so callers can show the error.
+              natsWarning = await trySendNatsSocketCommand(name, { action: 'subscribe', subject })
+
+              // Keep the run's natsSubscriptions in sync
+              const run = ctx.docStore.getRun(name)
+              if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+              // Mirror the updated subscription list into the traffic bridge.
+              registerSaloonSubs(ctx.natsTraffic, name, subs)
+            }
+            ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+          } finally {
+            lease.release()
+          }
         }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
@@ -5984,6 +6978,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'DELETE' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const generation = persistedSessionBackendGeneration(ctx, name)
+        if (!generation) {
+          return fail(
+            res,
+            'CONFLICT',
+            `Session '${name}' conflicts with a process-wide backend identity`,
+          )
+        }
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
@@ -5992,23 +6994,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const session = getSession(sessDir, name)
           if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
           if (!session.nats?.enabled) { return fail(res, 'BRIDGE_UNAVAILABLE', 'NATS is not enabled for this session') }
+          const lease = acquirePersistedSessionBackendLease(ctx, name, generation)
+          if (!lease) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' conflicts with a process-wide backend identity`,
+            )
+          }
+          try {
+            // Remove from subscriptions
+            const subs = session.nats.subscriptions.filter(s => s !== subject)
+            updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
 
-          // Remove from subscriptions
-          const subs = session.nats.subscriptions.filter(s => s !== subject)
-          updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+            // Send to channel server via Unix socket. See POST sibling for
+            // the rationale on surfacing warnings instead of swallowing them.
+            const natsWarning = await trySendNatsSocketCommand(name, { action: 'unsubscribe', subject })
 
-          // Send to channel server via Unix socket. See POST sibling for
-          // the rationale on surfacing warnings instead of swallowing them.
-          const natsWarning = await trySendNatsSocketCommand(name, { action: 'unsubscribe', subject })
+            // Keep the run's natsSubscriptions in sync
+            const run = ctx.docStore.getRun(name)
+            if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
 
-          // Keep the run's natsSubscriptions in sync
-          const run = ctx.docStore.getRun(name)
-          if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+            // Mirror the updated subscription list into the traffic bridge.
+            registerSaloonSubs(ctx.natsTraffic, name, subs)
 
-          // Mirror the updated subscription list into the traffic bridge.
-          registerSaloonSubs(ctx.natsTraffic, name, subs)
-
-          ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+            ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+          } finally {
+            lease.release()
+          }
         }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
@@ -6016,7 +7029,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // GET /api/cli-templates — configured CLI templates for agent backends
     if (method === 'GET' && url === '/api/cli-templates') {
-      ok(res, cfg.cliTemplates)
+      const registry = ctx.providerRegistry ?? defaultProviderRegistry
+      ok(res, cfg.cliTemplates.map(template => discoverCliTemplate(registry, template)))
       return true
     }
 
@@ -6040,10 +7054,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ...(adapter ? { adapter } : {}),
           ...(typeof telemetry === 'boolean' ? { telemetry } : {}),
         }
-        const providerError = validateCliTemplateProvider(
-          ctx.providerRegistry ?? defaultProviderRegistry,
-          entry,
-        )
+        const registry = ctx.providerRegistry ?? defaultProviderRegistry
+        const providerError = validateCliTemplateProvider(registry, entry)
         if (providerError) return fail(res, 'BAD_REQUEST', providerError)
         templates.push(entry)
         data.cliTemplates = templates
@@ -6055,7 +7067,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // snapshot until a server restart — which is why saves appeared to do
         // nothing in the settings modal.
         ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
-        ok(res, entry)
+        ok(res, discoverCliTemplate(registry, entry))
       }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
@@ -6086,10 +7098,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ...(adapter ? { adapter } : {}),
           ...(typeof telemetry === 'boolean' ? { telemetry } : {}),
         }
-        const providerError = validateCliTemplateProvider(
-          ctx.providerRegistry ?? defaultProviderRegistry,
-          entry,
-        )
+        const registry = ctx.providerRegistry ?? defaultProviderRegistry
+        const providerError = validateCliTemplateProvider(registry, entry)
         if (providerError) return fail(res, 'BAD_REQUEST', providerError)
         const idx = templates.findIndex(t => t.id === templateId)
         if (idx >= 0) {
@@ -6107,7 +7117,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // snapshot until a server restart — which is why saves appeared to do
         // nothing in the settings modal.
         ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
-        ok(res, entry)
+        ok(res, discoverCliTemplate(registry, entry))
       }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
@@ -6262,13 +7272,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'SESSION_NOT_FOUND', `Session '${sessionId}' not found`)
         return true
       }
+      const generation = persistedSessionBackendGeneration(ctx, sessionId)
+      if (!generation) {
+        return fail(
+          res,
+          'CONFLICT',
+          `Session '${sessionId}' conflicts with a process-wide backend identity`,
+        )
+      }
       withBody(req, res, async (body) => {
+        const currentSession = getSession(sessDir, sessionId)
+        if (!currentSession) {
+          fail(res, 'SESSION_NOT_FOUND', `Session '${sessionId}' not found`)
+          return
+        }
         const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
-        if (!force && session.state !== 'idle') {
+        if (!force && currentSession.state !== 'idle') {
           fail(res, 'CONFLICT', 'session-not-ready')
           return
         }
         if (!text) { fail(res, 'BAD_REQUEST', 'missing text'); return }
+        const lease = acquirePersistedSessionBackendLease(
+          ctx,
+          sessionId,
+          generation,
+        )
+        if (!lease) {
+          fail(
+            res,
+            'CONFLICT',
+            `Session '${sessionId}' conflicts with a process-wide backend identity`,
+          )
+          return
+        }
         try {
           await tmuxBackend.sendPrompt(cfg, sessionId, text)
           // Track slash usage (fire-and-forget; never blocks response).
@@ -6286,6 +7322,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ok(res, null)
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
+        } finally {
+          lease.release()
         }
       })
       return true
@@ -6297,7 +7335,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ensureMarshalSession(ctx)
         .then(result => result.ok
           ? ok(res, result.data)
-          : fail(res, result.error.code === 'NO_CONFIG' ? 'CONFIG_UNAVAILABLE' : 'INTERNAL', result.error.message))
+          : fail(
+              res,
+              result.error.code === 'NO_CONFIG'
+                ? 'CONFIG_UNAVAILABLE'
+                : result.error.code === 'BACKEND_CONFLICT'
+                  ? 'CONFLICT'
+                  : 'INTERNAL',
+              result.error.message,
+            ))
         .catch(err => fail(res, 'INTERNAL', (err as Error).message))
       return true
     }
@@ -6309,7 +7355,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       restartMarshalSession(ctx)
         .then(result => result.ok
           ? ok(res, result.data)
-          : fail(res, result.error.code === 'NO_CONFIG' ? 'CONFIG_UNAVAILABLE' : 'INTERNAL', result.error.message))
+          : fail(
+              res,
+              result.error.code === 'NO_CONFIG'
+                ? 'CONFIG_UNAVAILABLE'
+                : result.error.code === 'BACKEND_CONFLICT'
+                  ? 'CONFLICT'
+                  : 'INTERNAL',
+              result.error.message,
+            ))
         .catch(err => fail(res, 'INTERNAL', (err as Error).message))
       return true
     }

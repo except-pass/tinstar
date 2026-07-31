@@ -19,8 +19,42 @@ interface CliTemplate {
   icon?: string
   adapter?: string
   telemetry?: boolean
+  telemetryState: 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
   startCmd: string
   resumeCmd: string
+}
+
+function telemetryBadge(template: CliTemplate): {
+  label: string
+  title: string
+  className: string
+} {
+  switch (template.telemetryState) {
+    case 'enabled':
+      return {
+        label: 'telem',
+        title: 'OTLP telemetry enabled',
+        className: 'text-emerald-600',
+      }
+    case 'disabled':
+      return {
+        label: 'no telem',
+        title: 'OTLP telemetry disabled',
+        className: 'text-slate-600',
+      }
+    case 'unsupported':
+      return {
+        label: 'n/a',
+        title: 'This provider does not support OTLP telemetry',
+        className: 'text-slate-600',
+      }
+    default:
+      return {
+        label: 'n/a',
+        title: 'Provider telemetry capability is unavailable',
+        className: 'text-slate-600',
+      }
+  }
 }
 
 type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets' | 'plugins'
@@ -592,26 +626,10 @@ export function SettingsDialog({ onClose }: Props) {
                         <span className="text-2xs text-slate-600 font-mono">{t.adapter}</span>
                       )}
                       <span
-                        className={`text-2xs ${
-                          t.telemetry === true
-                            ? 'text-emerald-600'
-                            : t.telemetry === false
-                              ? 'text-slate-600'
-                              : 'text-amber-600'
-                        }`}
-                        title={
-                          t.telemetry === true
-                            ? 'OTLP telemetry enabled'
-                            : t.telemetry === false
-                              ? 'OTLP telemetry disabled'
-                              : 'OTLP telemetry uses the provider default'
-                        }
+                        className={`text-2xs ${telemetryBadge(t).className}`}
+                        title={telemetryBadge(t).title}
                       >
-                        {t.telemetry === true
-                          ? 'telem'
-                          : t.telemetry === false
-                            ? 'no telem'
-                            : 'provider default'}
+                        {telemetryBadge(t).label}
                       </span>
                       <span className="flex-1" />
                       <button

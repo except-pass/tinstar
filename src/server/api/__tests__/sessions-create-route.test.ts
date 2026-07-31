@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createServer } from 'node:http'
+import { createServer, request as createHttpRequest } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
 
@@ -16,14 +16,22 @@ const {
   releasePortMock,
   startTmuxSessionMock,
   stopTmuxSessionMock,
+  sendPromptMock,
+  getTmuxSessionStateMock,
   createWorktreeMock,
+  dispatchSurfaceAuthorMock,
 } = vi.hoisted(() => ({
   createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
   findPortMock: vi.fn(async () => 6123),
   releasePortMock: vi.fn(),
   startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
   stopTmuxSessionMock: vi.fn(async () => undefined),
+  sendPromptMock: vi.fn(async () => undefined),
+  getTmuxSessionStateMock: vi.fn(
+    async (): Promise<'exists' | 'missing'> => 'missing',
+  ),
   createWorktreeMock: vi.fn(),
+  dispatchSurfaceAuthorMock: vi.fn(() => ({ dispatched: false })),
 }))
 vi.mock('../../sessions', async (importActual) => {
   const actual = await importActual<typeof import('../../sessions')>()
@@ -39,6 +47,8 @@ vi.mock('../../sessions', async (importActual) => {
       startTmuxSession: startTmuxSessionMock,
       stopTmuxSession: stopTmuxSessionMock,
       deleteTmuxSession: stopTmuxSessionMock,
+      sendPrompt: sendPromptMock,
+      getTmuxSessionState: getTmuxSessionStateMock,
       onTtydRestart: vi.fn(),
     },
   }
@@ -59,10 +69,18 @@ vi.mock('../../hands', async (importActual) => {
   }
 })
 
-import { handleRequest, type RouteContext } from '../routes'
-import { createWorktree, getSession, updateSession } from '../../sessions'
+vi.mock('../../sessions/surfaceAuthor', () => ({
+  dispatchSurfaceAuthor: dispatchSurfaceAuthorMock,
+}))
+
+import {
+  handleRequest,
+  resetSessionBackendOwnersForTests,
+  type RouteContext,
+} from '../routes'
+import { createSession, createWorktree, getSession, updateSession } from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
-import type { Run } from '../../../domain/types'
+import type { Notice, Run } from '../../../domain/types'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
 import { natsControlSocketPath } from '../../sessions/backends/tmux'
 import {
@@ -88,6 +106,7 @@ function makeCtx(root: string): RouteContext {
     files: { config: join(root, 'config.json'), projects: join(root, 'projects.json') },
     git: { taskMarkerRegex: '#([A-Za-z0-9_-]+)', reconciliationRepos: [], reconciliationBranchScope: 'local' },
     nats: { channelServerPackage: '', bunPath: '', jetstream: false },
+    slate: { author: { enabled: true, model: 'test-model', timeoutMs: 1000 } },
     uploadMaxBytes: 100 * 1024 * 1024,
     ui: { promptComposerDefault: false, showEmptyEntities: true, layouts: {}, telemetryPanels: { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true } },
     switchboard: { allowedModels: ['opus', 'sonnet'], allowTokenOverride: true },
@@ -119,13 +138,20 @@ interface TestCtx {
   docStore: DocumentStore
   routeContext: RouteContext
   fetch(path: string, init?: RequestInit): Promise<Response>
+  openDelayedRequest(path: string, method: string): Promise<{
+    started: Promise<void>
+    finish(body: string): Promise<Response>
+  }>
   close(): Promise<void>
 }
 
 function createTestServer(root: string): TestCtx {
   const ctx = makeCtx(root)
+  const requestStartedWaiters = new Map<string, Array<() => void>>()
   const server = createServer((req, res) => {
     handleRequest(ctx, req, res).then(handled => {
+      const key = `${req.method ?? 'GET'} ${req.url ?? ''}`
+      requestStartedWaiters.get(key)?.shift()?.()
       if (!handled) { res.statusCode = 404; res.end() }
     })
   })
@@ -142,6 +168,53 @@ function createTestServer(root: string): TestCtx {
       const headers = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> ?? {}) }
       return fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers })
     },
+    async openDelayedRequest(path: string, method: string) {
+      await ready
+      const key = `${method} ${path}`
+      let markStarted!: () => void
+      const started = new Promise<void>(resolve => { markStarted = resolve })
+      const waiters = requestStartedWaiters.get(key) ?? []
+      waiters.push(markStarted)
+      requestStartedWaiters.set(key, waiters)
+
+      let finishRequest!: (body: string) => void
+      const response = new Promise<Response>((resolve, reject) => {
+        const request = createHttpRequest({
+          hostname: '127.0.0.1',
+          port,
+          path,
+          method,
+          headers: { 'Content-Type': 'application/json' },
+        }, incoming => {
+          const chunks: Buffer[] = []
+          incoming.on('data', chunk => chunks.push(Buffer.from(chunk)))
+          incoming.on('end', () => {
+            const headers = new Headers()
+            for (const [name, value] of Object.entries(incoming.headers)) {
+              if (Array.isArray(value)) {
+                for (const item of value) headers.append(name, item)
+              } else if (value !== undefined) {
+                headers.set(name, value)
+              }
+            }
+            resolve(new Response(Buffer.concat(chunks), {
+              status: incoming.statusCode ?? 500,
+              headers,
+            }))
+          })
+        })
+        request.on('error', reject)
+        request.flushHeaders()
+        finishRequest = body => request.end(body)
+      })
+      return {
+        started,
+        finish: async (body: string) => {
+          finishRequest(body)
+          return response
+        },
+      }
+    },
     close(): Promise<void> {
       return new Promise(resolve => server.close(() => resolve()))
     },
@@ -157,13 +230,19 @@ beforeEach(() => {
   releasePortMock.mockClear()
   startTmuxSessionMock.mockClear()
   stopTmuxSessionMock.mockClear()
+  sendPromptMock.mockClear()
+  getTmuxSessionStateMock.mockClear()
+  getTmuxSessionStateMock.mockResolvedValue('missing')
   createWorktreeMock.mockClear()
+  dispatchSurfaceAuthorMock.mockClear()
+  dispatchSurfaceAuthorMock.mockReturnValue({ dispatched: false })
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-create-route-test-'))
   testCtx = createTestServer(tmpRoot)
 })
 
 afterEach(async () => {
   await testCtx.close()
+  resetSessionBackendOwnersForTests()
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
@@ -392,6 +471,735 @@ describe('POST /api/sessions', () => {
     expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects deletion while a create still owns the provisional backend name', async () => {
+    let finishLaunch!: () => void
+    createTmuxSessionMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+      }),
+    )
+    const creating = testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'delete-race' }),
+    })
+    await vi.waitFor(() => expect(createTmuxSessionMock).toHaveBeenCalledTimes(1))
+
+    const deleting = await testCtx.fetch('/api/sessions/delete-race', {
+      method: 'DELETE',
+    })
+    expect(deleting.status).toBe(409)
+
+    const competing = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'delete-race' }),
+    })
+    expect(competing.status).toBe(409)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+
+    finishLaunch()
+    expect((await creating).status).toBe(201)
+  })
+
+  it('retains a failed create name when backend teardown cannot be confirmed', async () => {
+    createTmuxSessionMock.mockRejectedValueOnce(new Error('launch failed'))
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-create' }),
+    })
+    expect(failed.status).toBe(500)
+    const sessionsDir = join(tmpRoot, 'sessions')
+    expect(existsSync(join(sessionsDir, 'orphaned-create', '.deleting'))).toBe(true)
+    resetSessionBackendOwnersForTests()
+
+    const retry = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-create' }),
+    })
+    expect(retry.status).toBe(409)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+    expect((await testCtx.fetch('/api/sessions/orphaned-create/start', {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(409)
+  })
+
+  it('retains a deleted name when backend teardown cannot be confirmed', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-delete' }),
+    })).status).toBe(201)
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+
+    expect((await testCtx.fetch('/api/sessions/orphaned-delete', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+
+    const retry = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-delete' }),
+    })
+    expect(retry.status).toBe(409)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+
+    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
+    expect((await testCtx.fetch('/api/sessions/orphaned-delete', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalledTimes(2))
+
+    const recovered = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-delete' }),
+    })
+    expect(recovered.status).toBe(201)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses deletion before teardown when its durable marker cannot be written', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'marker-write-failure' }),
+    })).status).toBe(201)
+    const sessionDir = join(tmpRoot, 'sessions', 'marker-write-failure')
+    mkdirSync(join(sessionDir, '.deleting'))
+    stopTmuxSessionMock.mockClear()
+    const deleted = await testCtx.fetch('/api/sessions/marker-write-failure', {
+      method: 'DELETE',
+    })
+    expect(deleted.status).toBe(500)
+    expect(stopTmuxSessionMock).not.toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'marker-write-failure')).not.toBeNull()
+  })
+
+  it('rejects start when an orphaned owner still has a persisted record', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-start' }),
+    })).status).toBe(201)
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+    expect((await testCtx.fetch('/api/sessions/orphaned-start', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+
+    createSession(join(tmpRoot, 'sessions'), {
+      name: 'orphaned-start',
+      backend: 'tmux',
+      adapter: 'claude',
+      cliTemplate: 'Claude',
+    })
+    startTmuxSessionMock.mockClear()
+
+    const start = await testCtx.fetch('/api/sessions/orphaned-start/start', {
+      method: 'POST',
+      body: '{}',
+    })
+    expect(start.status).toBe(409)
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects start while deletion still owns the backend cleanup', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'delete-start-race' }),
+    })).status).toBe(201)
+    let finishDelete!: () => void
+    stopTmuxSessionMock.mockImplementationOnce(
+      () => new Promise<undefined>(resolve => {
+        finishDelete = () => resolve(undefined)
+      }),
+    )
+
+    expect((await testCtx.fetch('/api/sessions/delete-start-race', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(stopTmuxSessionMock).toHaveBeenCalled())
+    startTmuxSessionMock.mockClear()
+
+    const start = await testCtx.fetch('/api/sessions/delete-start-race/start', {
+      method: 'POST',
+      body: '{}',
+    })
+    expect(start.status).toBe(409)
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+
+    finishDelete()
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+  })
+
+  it('rejects deletion while start still owns the backend launch', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'start-delete-race' }),
+    })).status).toBe(201)
+    expect((await testCtx.fetch('/api/sessions/start-delete-race/stop', {
+      method: 'POST',
+    })).status).toBe(200)
+
+    let finishStart!: () => void
+    startTmuxSessionMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishStart = () => resolve({ port: 6123, ttydPid: 4242 })
+      }),
+    )
+    const starting = testCtx.fetch('/api/sessions/start-delete-race/start', {
+      method: 'POST',
+      body: '{}',
+    })
+    await vi.waitFor(() => expect(startTmuxSessionMock).toHaveBeenCalled())
+    stopTmuxSessionMock.mockClear()
+
+    const deleting = await testCtx.fetch('/api/sessions/start-delete-race', {
+      method: 'DELETE',
+    })
+    expect(deleting.status).toBe(409)
+    expect(stopTmuxSessionMock).not.toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'start-delete-race')).not.toBeNull()
+
+    finishStart()
+    expect((await starting).status).toBe(200)
+  })
+
+  it('holds a backend lease until a queued prompt settles', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'leased-prompt' }),
+    })).status).toBe(201)
+    let finishPrompt!: () => void
+    sendPromptMock.mockImplementationOnce(
+      () => new Promise<undefined>(resolve => {
+        finishPrompt = () => resolve(undefined)
+      }),
+    )
+
+    const prompting = testCtx.fetch('/api/sessions/leased-prompt/prompt', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'deliver once', force: true }),
+    })
+    await vi.waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(1))
+
+    expect((await testCtx.fetch('/api/sessions/leased-prompt', {
+      method: 'DELETE',
+    })).status).toBe(409)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'leased-prompt' }),
+    })).status).toBe(409)
+
+    finishPrompt()
+    expect((await prompting).status).toBe(200)
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+
+    expect((await testCtx.fetch('/api/sessions/leased-prompt', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => {
+      expect(getSession(join(tmpRoot, 'sessions'), 'leased-prompt')).toBeNull()
+    })
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'leased-prompt' }),
+    })).status).toBe(201)
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not deliver a delayed notice reply to a same-name replacement session', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'notice-generation' }),
+    })).status).toBe(201)
+    const now = Date.now()
+    const notice: Notice = {
+      id: 'notice-generation-race',
+      runId: 'notice-generation',
+      kind: 'fyi',
+      headline: 'Original incarnation',
+      createdAt: now,
+      amendedAt: now,
+    }
+    testCtx.docStore.upsertNotice(notice)
+
+    const delayed = await testCtx.openDelayedRequest(
+      '/api/notices/notice-generation-race/replies',
+      'POST',
+    )
+    await delayed.started
+
+    expect((await testCtx.fetch('/api/sessions/notice-generation', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'notice-generation' }),
+    })).status).toBe(201)
+    testCtx.docStore.upsertNotice({
+      ...notice,
+      headline: 'Replacement incarnation',
+      createdAt: now + 1,
+      amendedAt: now + 1,
+    })
+    sendPromptMock.mockClear()
+
+    const response = await delayed.finish(JSON.stringify({
+      author: 'user',
+      text: 'This belongs to the original session',
+    }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      data: { delivered: false },
+    })
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch a delayed Slate author into a same-name replacement workspace', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'compose-generation' }),
+    })).status).toBe(201)
+
+    const delayed = await testCtx.openDelayedRequest(
+      '/api/runs/compose-generation/slate/compose',
+      'POST',
+    )
+    await delayed.started
+
+    expect((await testCtx.fetch('/api/sessions/compose-generation', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'compose-generation' }),
+    })).status).toBe(201)
+    dispatchSurfaceAuthorMock.mockClear()
+    sendPromptMock.mockClear()
+
+    const response = await delayed.finish(JSON.stringify({
+      freeform: 'Author this in the original workspace',
+    }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      data: { delivered: false },
+    })
+    expect(dispatchSurfaceAuthorMock).not.toHaveBeenCalled()
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects delayed NATS rewiring for a same-name replacement session', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'nats-generation', nats: { enabled: true } }),
+    })).status).toBe(201)
+
+    const delayed = await testCtx.openDelayedRequest('/api/runs/nats-generation', 'PATCH')
+    await delayed.started
+
+    expect((await testCtx.fetch('/api/sessions/nats-generation', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'nats-generation', nats: { enabled: true } }),
+    })).status).toBe(201)
+
+    const response = await delayed.finish(JSON.stringify({
+      taskId: TASK_ID,
+      background: true,
+      attention: { level: 'urgent', reason: 'stale request' },
+      name: 'Stale replacement name',
+    }))
+    expect(response.status).toBe(409)
+    const replacement = testCtx.docStore.getRun('nats-generation')
+    expect(replacement?.background).toBe(false)
+    expect(replacement?.attention).toBeUndefined()
+    expect(replacement?.name).toBeUndefined()
+    expect(replacement?.taskId).not.toBe(TASK_ID)
+    expect(getSession(join(tmpRoot, 'sessions'), 'nats-generation')).toMatchObject({
+      background: false,
+    })
+  })
+
+  it('rejects a delayed background-only patch for a same-name replacement session', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'background-generation' }),
+    })).status).toBe(201)
+
+    const delayed = await testCtx.openDelayedRequest('/api/runs/background-generation', 'PATCH')
+    await delayed.started
+
+    expect((await testCtx.fetch('/api/sessions/background-generation', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'background-generation' }),
+    })).status).toBe(201)
+
+    expect((await delayed.finish(JSON.stringify({ background: true }))).status).toBe(409)
+    expect(testCtx.docStore.getRun('background-generation')?.background).toBe(false)
+    expect(getSession(join(tmpRoot, 'sessions'), 'background-generation')).toMatchObject({
+      background: false,
+    })
+  })
+
+  it('rejects a delayed docstore-only patch when the run becomes a managed session', async () => {
+    const id = 'plugin-to-managed-generation'
+    testCtx.docStore.upsertRun(id, {
+      id,
+      status: 'idle',
+      background: false,
+      blocked: false,
+      sessionId: id,
+      taskId: '',
+      worktreeId: '',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      initiative: '',
+      epic: '',
+      task: '',
+      repo: '',
+      worktree: '',
+      touchedFiles: [],
+      recapEntries: [],
+      rawLogs: '',
+      port: null,
+      backend: null,
+      natsControlOrphanedAt: null,
+    } satisfies Run)
+
+    const delayed = await testCtx.openDelayedRequest(`/api/runs/${id}`, 'PATCH')
+    await delayed.started
+
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: id }),
+    })).status).toBe(201)
+
+    expect((await delayed.finish(JSON.stringify({ background: true }))).status).toBe(409)
+    expect(testCtx.docStore.getRun(id)?.background).toBe(false)
+    expect(getSession(join(tmpRoot, 'sessions'), id)).toMatchObject({
+      background: false,
+    })
+  })
+
+  it('does not reserve a ghost backend owner when a backend route targets a missing session', async () => {
+    expect((await testCtx.fetch('/api/sessions/future-session/send-keys', {
+      method: 'POST',
+      body: JSON.stringify({ keys: ['Enter'] }),
+    })).status).toBe(409)
+
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'future-session' }),
+    })).status).toBe(201)
+  })
+
+  it('preserves session state when reconciliation observes a busy backend owner', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'stopping-reconcile' }),
+    })).status).toBe(201)
+    let finishStop!: () => void
+    stopTmuxSessionMock.mockImplementationOnce(
+      () => new Promise<undefined>(resolve => {
+        finishStop = () => resolve(undefined)
+      }),
+    )
+    const stopping = testCtx.fetch('/api/sessions/stopping-reconcile/stop', {
+      method: 'POST',
+    })
+    await vi.waitFor(() => expect(stopTmuxSessionMock).toHaveBeenCalled())
+    getTmuxSessionStateMock.mockClear()
+
+    const listed = await testCtx.fetch('/api/sessions')
+    expect(listed.status).toBe(200)
+    const sessions = (await listed.json()) as { data: Array<{ name: string; state: string }> }
+    expect(sessions.data.find(session => session.name === 'stopping-reconcile')).toMatchObject({
+      state: 'running',
+    })
+    expect(getTmuxSessionStateMock).not.toHaveBeenCalled()
+
+    finishStop()
+    expect((await stopping).status).toBe(200)
+  })
+
+  it('rejects start and stop for a partially deleted session after owner reset', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-mid-delete' }),
+    })).status).toBe(201)
+    const sessionsDir = join(tmpRoot, 'sessions')
+    writeFileSync(join(sessionsDir, 'restart-mid-delete', '.deleting'), '')
+    resetSessionBackendOwnersForTests()
+    startTmuxSessionMock.mockClear()
+    stopTmuxSessionMock.mockClear()
+
+    const start = await testCtx.fetch('/api/sessions/restart-mid-delete/start', {
+      method: 'POST',
+      body: '{}',
+    })
+    const stop = await testCtx.fetch('/api/sessions/restart-mid-delete/stop', {
+      method: 'POST',
+    })
+    expect(start.status).toBe(409)
+    expect(stop.status).toBe(409)
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+    expect(stopTmuxSessionMock).not.toHaveBeenCalled()
+
+    expect((await testCtx.fetch('/api/sessions/restart-mid-delete', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(stopTmuxSessionMock).toHaveBeenCalled())
+    await vi.waitFor(() => {
+      expect(getSession(sessionsDir, 'restart-mid-delete')).toBeNull()
+    })
+  })
+
+  it('keeps in-flight backend names process-wide across config roots', async () => {
+    let finishFirstLaunch!: () => void
+    createTmuxSessionMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishFirstLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+      }),
+    )
+    const first = testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'shared-backend-name' }),
+    })
+    await vi.waitFor(() => expect(createTmuxSessionMock).toHaveBeenCalledTimes(1))
+
+    const secondRoot = join(tmpRoot, 'other-config-root')
+    mkdirSync(secondRoot, { recursive: true })
+    const secondCtx = createTestServer(secondRoot)
+    try {
+      const second = await secondCtx.fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'shared-backend-name' }),
+      })
+      expect(second.status).toBe(409)
+      expect(await second.json()).toMatchObject({
+        error: { message: expect.stringContaining('already being created') },
+      })
+    } finally {
+      await secondCtx.close()
+      finishFirstLaunch()
+    }
+
+    expect((await first).status).toBe(201)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps successful backend names owned across later cross-root creates', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'owned-backend-name' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'later-config-root')
+    mkdirSync(secondRoot, { recursive: true })
+    const secondCtx = createTestServer(secondRoot)
+    try {
+      const second = await secondCtx.fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'owned-backend-name' }),
+      })
+      expect(second.status).toBe(409)
+      expect(await second.json()).toMatchObject({
+        error: { message: expect.stringContaining('already exists') },
+      })
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects distinct raw names that resolve to the same tmux target', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: '-resolved-collision' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'prefixed-config-root')
+    mkdirSync(secondRoot, { recursive: true })
+    const secondCtx = createTestServer(secondRoot)
+    secondCtx.routeContext.sessionConfig!.sessions.prefix = 'tinstar-'
+    try {
+      const second = await secondCtx.fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'resolved-collision' }),
+      })
+      expect(second.status).toBe(409)
+      expect(await second.json()).toMatchObject({
+        error: { message: expect.stringContaining('already exists') },
+      })
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects resume when another root owns the persisted backend identity', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'resume-owner' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'resume-conflict-root')
+    createSession(join(secondRoot, 'sessions'), {
+      name: 'resume-owner',
+      backend: 'tmux',
+      adapter: 'claude',
+      cliTemplate: 'Claude',
+    })
+    const secondCtx = createTestServer(secondRoot)
+    startTmuxSessionMock.mockClear()
+    try {
+      const resumed = await secondCtx.fetch('/api/sessions/resume-owner/start', {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(resumed.status).toBe(409)
+      expect(await resumed.json()).toMatchObject({
+        error: { message: expect.stringContaining('process-wide backend identity') },
+      })
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects stop when another root owns the resolved tmux target', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: '-protected-stop' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'stop-conflict-root')
+    createSession(join(secondRoot, 'sessions'), {
+      name: 'protected-stop',
+      backend: 'tmux',
+      adapter: 'claude',
+      cliTemplate: 'Claude',
+    })
+    const secondCtx = createTestServer(secondRoot)
+    secondCtx.routeContext.sessionConfig!.sessions.prefix = 'tinstar-'
+    stopTmuxSessionMock.mockClear()
+    try {
+      const stopped = await secondCtx.fetch(
+        '/api/sessions/protected-stop/stop',
+        { method: 'POST' },
+      )
+      expect(stopped.status).toBe(409)
+      expect(await stopped.json()).toMatchObject({
+        error: { message: expect.stringContaining('process-wide backend identity') },
+      })
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(stopTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects delete when another root owns the resolved tmux target', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: '-protected-delete' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'delete-conflict-root')
+    const secondSessionsDir = join(secondRoot, 'sessions')
+    createSession(secondSessionsDir, {
+      name: 'protected-delete',
+      backend: 'tmux',
+      adapter: 'claude',
+      cliTemplate: 'Claude',
+    })
+    const secondCtx = createTestServer(secondRoot)
+    secondCtx.routeContext.sessionConfig!.sessions.prefix = 'tinstar-'
+    stopTmuxSessionMock.mockClear()
+    try {
+      const deleted = await secondCtx.fetch(
+        '/api/sessions/protected-delete',
+        { method: 'DELETE' },
+      )
+      expect(deleted.status).toBe(409)
+      expect(await deleted.json()).toMatchObject({
+        error: { message: expect.stringContaining('process-wide backend identity') },
+      })
+      expect(getSession(secondSessionsDir, 'protected-delete')).not.toBeNull()
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(stopTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects shared tmux and NATS access from a colliding root', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: '-protected-access' }),
+    })).status).toBe(201)
+
+    const secondRoot = join(tmpRoot, 'backend-access-conflict-root')
+    createSession(join(secondRoot, 'sessions'), {
+      name: 'protected-access',
+      backend: 'tmux',
+      adapter: 'claude',
+      cliTemplate: 'Claude',
+      nats: { enabled: true, subscriptions: ['tinstar.dm.protected-access'] },
+    })
+    const secondCtx = createTestServer(secondRoot)
+    secondCtx.routeContext.sessionConfig!.sessions.prefix = 'tinstar-'
+    try {
+      const attempts: Array<[string, RequestInit | undefined]> = [
+        [
+          '/api/sessions/protected-access/send-keys',
+          { method: 'POST', body: JSON.stringify({ keys: ['Enter'] }) },
+        ],
+        ['/api/sessions/protected-access/screen', undefined],
+        [
+          '/api/sessions/protected-access/enter-prompt',
+          { method: 'POST', body: JSON.stringify({ prompt: 'do not deliver' }) },
+        ],
+        [
+          '/api/sessions/protected-access/prompt',
+          { method: 'POST', body: JSON.stringify({ text: 'do not deliver', force: true }) },
+        ],
+        [
+          '/api/sessions/protected-access/nats-reconnect',
+          { method: 'POST', body: '{}' },
+        ],
+        ['/api/sessions/protected-access/nats-status', undefined],
+        [
+          '/api/sessions/protected-access/subscriptions',
+          {
+            method: 'POST',
+            body: JSON.stringify({ subject: 'tinstar.broadcast.forbidden' }),
+          },
+        ],
+        [
+          '/api/sessions/protected-access/spawn',
+          { method: 'POST', body: JSON.stringify({ hand: 'codex-hand' }) },
+        ],
+      ]
+
+      for (const [path, init] of attempts) {
+        const response = await secondCtx.fetch(path, init)
+        expect(response.status, path).toBe(409)
+        expect(await response.json()).toMatchObject({
+          error: { message: expect.stringContaining('process-wide backend identity') },
+        })
+      }
+    } finally {
+      await secondCtx.close()
+    }
+  })
+
   it('keeps graveyard revive names away from direct creates still acquiring a worktree', async () => {
     const repo = join(tmpRoot, 'proj')
     execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
@@ -499,6 +1307,51 @@ describe('POST /api/sessions', () => {
     expect(untrackSession).toHaveBeenCalledWith('generic-resume')
   })
 
+  it('finishes stale NATS repair when auxiliary cleanup throws', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'generic-cleanup', cliTemplate: 'Cursor Agent' }),
+    })).status).toBe(201)
+    expect((await testCtx.fetch(
+      '/api/sessions/generic-cleanup/stop',
+      { method: 'POST' },
+    )).status).toBe(200)
+
+    updateSession(join(tmpRoot, 'sessions'), 'generic-cleanup', {
+      nats: { enabled: true, subscriptions: ['legacy.subject'] },
+    })
+    const run = testCtx.docStore.getRun('generic-cleanup')!
+    testCtx.docStore.upsertRun('generic-cleanup', {
+      ...run,
+      natsEnabled: true,
+      natsSubject: 'legacy.subject',
+      natsSubscriptions: ['legacy.subject'],
+    })
+    testCtx.routeContext.natsTraffic = {
+      updateWidgetSubscriptions: vi.fn(),
+      removeWidget: vi.fn(() => { throw new Error('Saloon unavailable') }),
+    } as never
+    testCtx.routeContext.natsHealth = {
+      trackSession: vi.fn(),
+      untrackSession: vi.fn(() => { throw new Error('health unavailable') }),
+    } as never
+
+    const resumed = await testCtx.fetch(
+      '/api/sessions/generic-cleanup/start',
+      { method: 'POST' },
+    )
+
+    expect(resumed.status).toBe(200)
+    expect(getSession(join(tmpRoot, 'sessions'), 'generic-cleanup')).toMatchObject({
+      nats: { enabled: false, subscriptions: [] },
+    })
+    expect(testCtx.docStore.getRun('generic-cleanup')).toMatchObject({
+      natsEnabled: false,
+    })
+    expect(testCtx.docStore.getRun('generic-cleanup')?.natsSubject).toBeUndefined()
+    expect(testCtx.docStore.getRun('generic-cleanup')?.natsSubscriptions).toBeUndefined()
+  })
+
   it('rejects resume when a persisted named template was deleted', async () => {
     expect((await testCtx.fetch('/api/sessions', {
       method: 'POST',
@@ -569,6 +1422,43 @@ describe('POST /api/sessions', () => {
     expect(findPortMock).toHaveBeenCalledTimes(1)
     expect(releasePortMock).toHaveBeenCalledWith(6123)
     expect(getSession(join(tmpRoot, 'sessions'), 'failed-revive-necro')).toBeNull()
+    expect(testCtx.docStore.getTombstone(convId)).toBeDefined()
+  })
+
+  it('retains an unconfirmed failed revive across owner-map reset', async () => {
+    const convId = 'orphaned-revive-conv'
+    const snapshot = graveyardSnapshotPath(tmpRoot, convId)
+    mkdirSync(dirname(snapshot), { recursive: true })
+    writeFileSync(snapshot, '{"type":"assistant"}\n')
+    testCtx.docStore.upsertTombstone({
+      convId,
+      provider: 'claude',
+      sessionName: 'orphaned-revive',
+      coversSummary: 'A revive with uncertain backend cleanup',
+      retiredAt: new Date().toISOString(),
+      snapshotted: true,
+    })
+    startTmuxSessionMock.mockRejectedValueOnce(new Error('revive failed'))
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+
+    const revived = await testCtx.fetch(`/api/graveyard/${convId}/revive`, {
+      method: 'POST',
+    })
+
+    expect(revived.status).toBe(500)
+    const name = 'orphaned-revive-necro'
+    const sessionsDir = join(tmpRoot, 'sessions')
+    expect(existsSync(join(sessionsDir, name, '.deleting'))).toBe(true)
+    resetSessionBackendOwnersForTests()
+
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })).status).toBe(409)
+    expect((await testCtx.fetch(`/api/sessions/${name}/start`, {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(409)
     expect(testCtx.docStore.getTombstone(convId)).toBeDefined()
   })
 
@@ -999,6 +1889,33 @@ describe('POST /api/sessions', () => {
     expect(opts.appendSystemPrompt).not.toContain('Print a short introduction')
   })
 
+  it('retries an orphaned marshal restart after cleanup becomes confirmable', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'marshal', cliTemplate: 'marshal' }),
+    })).status).toBe(201)
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+
+    const first = await testCtx.fetch('/api/marshal/restart', {
+      method: 'POST',
+      body: '{}',
+    })
+    expect(first.status).toBe(500)
+    expect(existsSync(join(tmpRoot, 'sessions', 'marshal', '.deleting'))).toBe(true)
+
+    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
+    const retried = await testCtx.fetch('/api/marshal/restart', {
+      method: 'POST',
+      body: '{}',
+    })
+    expect(retried.status).toBe(200)
+    expect(await retried.json()).toMatchObject({
+      data: { name: 'marshal' },
+    })
+    expect(getSession(join(tmpRoot, 'sessions'), 'marshal')).not.toBeNull()
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(2)
+  })
+
   it('returns NOT_FOUND for an unknown hand', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
@@ -1197,6 +2114,40 @@ describe('POST /api/sessions', () => {
     expect(testCtx.docStore.getRun(rolledBackChild.name)).toBeUndefined()
   })
 
+  it('retains an unconfirmed failed spawn across owner-map reset', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-spawn-parent', nats: { enabled: false } }),
+    })).status).toBe(201)
+    createTmuxSessionMock.mockClear()
+    createTmuxSessionMock.mockRejectedValueOnce(new Error('child create failed'))
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+
+    const failed = await testCtx.fetch('/api/sessions/orphaned-spawn-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'codex-hand' }),
+    })
+
+    expect(failed.status).toBe(500)
+    const spawnedName = (
+      createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as {
+        session: { name: string }
+      }
+    ).session.name
+    const sessionsDir = join(tmpRoot, 'sessions')
+    expect(existsSync(join(sessionsDir, spawnedName, '.deleting'))).toBe(true)
+    resetSessionBackendOwnersForTests()
+
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: spawnedName }),
+    })).status).toBe(409)
+    expect((await testCtx.fetch(`/api/sessions/${spawnedName}/start`, {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(409)
+  })
+
   it('rolls back every persisted parent breakout surface when spawn fails late', async () => {
     const parentName = 'late-breakout-parent'
     const socketPath = natsControlSocketPath(parentName)
@@ -1326,6 +2277,35 @@ describe('POST /api/sessions', () => {
     // Visible spawn keeps default focus behavior (no forced opt-out).
     expect(childRun.focusOnCreate).toBeUndefined()
     expect(getSession(join(tmpRoot, 'sessions'), childName)?.background).toBe(false)
+  })
+
+  it('keeps a successfully spawned child backend name owned across roots', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'spawn-owner-parent', nats: { enabled: false } }),
+    })).status).toBe(201)
+    const spawned = await testCtx.fetch('/api/sessions/spawn-owner-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal' }),
+    })
+    expect(spawned.status).toBe(201)
+    const childName = (await spawned.json() as { data: { session: string } }).data.session
+    const launchesBeforeCollision = createTmuxSessionMock.mock.calls.length
+
+    const secondRoot = join(tmpRoot, 'spawn-owner-other-root')
+    mkdirSync(secondRoot, { recursive: true })
+    const secondCtx = createTestServer(secondRoot)
+    try {
+      const collision = await secondCtx.fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ name: childName }),
+      })
+      expect(collision.status).toBe(409)
+    } finally {
+      await secondCtx.close()
+    }
+
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(launchesBeforeCollision)
   })
 
   it('spawn with a friendly name sets it on the child run, leaving the generated id intact', async () => {

@@ -899,7 +899,7 @@ export function providerTelemetryEnvironmentCommands(
     // An explicit opt-in is a configuration error and must still fail fast.
     // With telemetry off (explicitly or by provider default), an unsupported
     // provider has no environment to reconcile.
-    if (template?.telemetry === true) providerTelemetryEnabled(provider, template)
+    if (template?.telemetry === true) requireProviderCapability(provider, 'telemetry')
     return []
   }
   const enabled = providerTelemetryEnabled(provider, template)

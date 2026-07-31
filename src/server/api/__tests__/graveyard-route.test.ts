@@ -223,13 +223,13 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
     }
   })
 
-  it('does not tombstone a session with no convId', async () => {
+  it('rejects deletion of a missing session without creating a tombstone', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
     const srv = createTestServer(root)
     try {
       // No session dir created → getSession returns null → no convId → nothing to necro.
       const res = await srv.fetch('/api/sessions/ghost', { method: 'DELETE' })
-      expect(res.status).toBe(200)
+      expect(res.status).toBe(404)
       expect(srv.docStore.getAllTombstones()).toHaveLength(0)
       expect(srv.events.some(e => e.type === 'managed_session.retired')).toBe(false)
     } finally {

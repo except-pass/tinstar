@@ -1204,9 +1204,14 @@ export const spec = {
           { $ref: '#/components/schemas/CliTemplateInput' },
           {
             type: 'object',
-            required: ['id'],
+            required: ['id', 'telemetryState'],
             properties: {
               id: { type: 'string', description: 'Stable reference used by sessions, entity settings, and hand definitions.' },
+              telemetryState: {
+                type: 'string',
+                enum: ['enabled', 'disabled', 'unsupported', 'unavailable'],
+                description: 'Resolved provider telemetry state returned by template discovery.',
+              },
             },
           },
         ],

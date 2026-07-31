@@ -84,6 +84,22 @@ export function sessionNatsProjection(
   }
 }
 
+/** Return only sessions that may rejoin live boot-time services. A durable
+ * deletion marker means the record exists solely so a later DELETE can finish
+ * backend cleanup. Purge any stale Run projection immediately, regardless of
+ * whether the NATS callback or the main rehydration loop observes it first. */
+export function getLiveSessionForBoot(
+  docStore: DocumentStore,
+  sessionsDir: string,
+  name: string,
+): Session | null {
+  if (existsSync(join(sessionsDir, name, '.deleting'))) {
+    docStore.deleteRun(name)
+    return null
+  }
+  return getSession(sessionsDir, name)
+}
+
 export function initBackend(): RouteContext {
   // Instantiate core components
   const bus = new EventBus()
@@ -198,7 +214,7 @@ export function initBackend(): RouteContext {
       const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of sessEntries) {
         if (!entry.isDirectory()) continue
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
         rehydrateSaloonSubs(natsTraffic, sess)
       }
@@ -227,7 +243,7 @@ export function initBackend(): RouteContext {
       const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of healthEntries) {
         if (!entry.isDirectory()) continue
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
         if (sess?.nats?.enabled) natsHealth.trackSession(sess.name)
       }
       natsHealth.start()
@@ -350,12 +366,22 @@ export function initBackend(): RouteContext {
       for (const entry of sessEntries) {
         if (!entry.isDirectory()) continue
         const deletingMarker = join(sessionConfig.dirs.sessions, entry.name, '.deleting')
-        if (existsSync(deletingMarker)) {
-          log.info('rehydrate', `cleaning up partially-deleted session dir: ${entry.name}`)
-          rmSync(join(sessionConfig.dirs.sessions, entry.name), { recursive: true, force: true })
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
+        if (!sess && existsSync(deletingMarker)) {
+          // The marker is durable evidence that backend teardown may still be
+          // incomplete. Do not erase it merely because the server restarted:
+          // hide its Run and NATS projections, retain the record and claimed
+          // port, and let a repeated DELETE retry teardown.
+          log.warn(
+            'rehydrate',
+            `retaining partially-deleted session for cleanup retry: ${entry.name}`,
+          )
+          const deletingSession = getSession(sessionConfig.dirs.sessions, entry.name)
+          if (deletingSession?.backend === 'tmux' && deletingSession.port) {
+            tmuxBackend.claimPort(deletingSession.port)
+          }
           continue
         }
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
         // Reclaim any port already bound to this session so a different session's
         // start path can't grab it via findPort() and trigger a ttyd kill war.

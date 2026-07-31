@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { reviveFromTombstone, reviveName, type NecroDeps } from '../necro'
 import type { Tombstone } from '../../../domain/types'
 
@@ -107,6 +107,78 @@ describe('reviveFromTombstone', () => {
     const d = deps({ sessionExists: (n) => existing.has(n) })
     const res = await reviveFromTombstone(tomb(), d)
     expect(res.sessionName).toBe('askviktor-necro-2')
+  })
+
+  it('retries an atomically rejected name and commits the accepted reservation', async () => {
+    const reserved: string[] = []
+    const finished: Array<{ name: string; token: string; outcome: string }> = []
+    const d = deps({
+      nameReservation: {
+        reserve: (name) => {
+          reserved.push(name)
+          return name === 'askviktor-necro' ? null : 'claim-2'
+        },
+        finish: (name, token, outcome) => { finished.push({ name, token, outcome }) },
+      },
+    })
+
+    const res = await reviveFromTombstone(tomb(), d)
+
+    expect(res.sessionName).toBe('askviktor-necro-2')
+    expect(reserved).toEqual(['askviktor-necro', 'askviktor-necro-2'])
+    expect(finished).toEqual([{
+      name: 'askviktor-necro-2',
+      token: 'claim-2',
+      outcome: 'committed',
+    }])
+  })
+
+  it('aborts the accepted reservation after launch failure and rollback', async () => {
+    const finished: Array<{ name: string; token: string; outcome: string }> = []
+    const d = deps({
+      nameReservation: {
+        reserve: () => 'claim-1',
+        finish: (name, token, outcome) => { finished.push({ name, token, outcome }) },
+      },
+      launch: () => { throw new Error('tmux boom') },
+    })
+
+    await expect(reviveFromTombstone(tomb(), d)).rejects.toThrow('tmux boom')
+    expect(finished).toEqual([{
+      name: 'askviktor-necro',
+      token: 'claim-1',
+      outcome: 'aborted',
+    }])
+  })
+
+  it('retains the accepted reservation as orphaned when rollback also fails', async () => {
+    const finished: Array<{ name: string; token: string; outcome: string }> = []
+    const d = deps({
+      nameReservation: {
+        reserve: () => 'claim-1',
+        finish: (name, token, outcome) => { finished.push({ name, token, outcome }) },
+      },
+      launch: () => { throw new Error('launch boom') },
+      onLaunchFailed: () => { throw new Error('rollback boom') },
+    })
+
+    await expect(reviveFromTombstone(tomb(), d)).rejects.toThrow('rollback boom')
+    expect(finished).toEqual([{
+      name: 'askviktor-necro',
+      token: 'claim-1',
+      outcome: 'orphaned',
+    }])
+  })
+
+  it('does not reserve a name when the workspace probe fails', async () => {
+    const reserve = vi.fn(() => 'claim-1')
+    const d = deps({
+      pathExists: () => { throw new Error('filesystem unavailable') },
+      nameReservation: { reserve, finish: vi.fn() },
+    })
+
+    await expect(reviveFromTombstone(tomb(), d)).rejects.toThrow('filesystem unavailable')
+    expect(reserve).not.toHaveBeenCalled()
   })
 })
 
