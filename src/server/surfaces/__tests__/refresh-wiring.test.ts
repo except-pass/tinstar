@@ -297,6 +297,7 @@ describe('launchRefreshWorker', () => {
       stagingPath: join(root, 'job-1.json'),
       recipe: 'Re-run coverage.',
       headline: 'Coverage',
+      providerAdapter: 'claude',
       secrets: {},
       spaceId: 'spc-a',
       writeFile: (p, d) => writeFileSync(p, d, 'utf8'),
@@ -332,6 +333,7 @@ describe('launchRefreshWorker', () => {
     const session = getSession(cfg.dirs.sessions, 'refresh-job-1')!
     expect(session.state).toBe('running')
     expect(session.background).toBe(true)
+    expect(session.adapter).toBe('claude')
 
     const run = runs.get('refresh-job-1') as Record<string, unknown>
     expect(run.background).toBe(true)

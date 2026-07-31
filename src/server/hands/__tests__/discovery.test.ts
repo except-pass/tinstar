@@ -65,7 +65,7 @@ Prompt.
     expect(marshal).toBeDefined()
     // Marshal uses a dedicated CLI template (claude + sonnet, NATS-enabled);
     // see src/server/hands/builtins/index.ts.
-    expect(marshal!.cliTemplate).toBe('Marshal')
+    expect(marshal!.cliTemplate).toBe('marshal')
   })
 
   it('lets user-defined hands override built-ins by name', () => {

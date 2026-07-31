@@ -6,7 +6,7 @@ describe('parseHandFile', () => {
     const content = `---
 name: reviewer
 description: Reviews code for quality and security
-cliTemplate: Claude (multi-agent)
+cliTemplate: claude-multi-agent
 ---
 
 You are a code reviewer. Focus on edge cases and security.
@@ -19,7 +19,7 @@ When you spawn, announce yourself on the task channel.
     expect(hand).not.toBeNull()
     expect(hand!.name).toBe('reviewer')
     expect(hand!.description).toBe('Reviews code for quality and security')
-    expect(hand!.cliTemplate).toBe('Claude (multi-agent)')
+    expect(hand!.cliTemplate).toBe('claude-multi-agent')
     expect(hand!.prompt).toContain('You are a code reviewer')
     expect(hand!.prompt).toContain('<agent-protocol>')
   })
@@ -39,7 +39,7 @@ Some prompt text.
     expect(parseHandFile(content)).toBeNull()
   })
 
-  it('defaults cliTemplate to Claude (multi-agent)', () => {
+  it('defaults cliTemplate to the stable Claude multi-agent template ID', () => {
     const content = `---
 name: worker
 description: General purpose worker
@@ -48,6 +48,6 @@ description: General purpose worker
 Do work.
 `
     const hand = parseHandFile(content)
-    expect(hand!.cliTemplate).toBe('Claude (multi-agent)')
+    expect(hand!.cliTemplate).toBe('claude-multi-agent')
   })
 })

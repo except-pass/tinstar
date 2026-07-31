@@ -21,9 +21,10 @@ interface SettingRowProps {
   children: (value: EntitySettings[keyof EntitySettings], onChange: (v: EntitySettings[keyof EntitySettings]) => void) => React.ReactNode
   onToggle: (key: keyof EntitySettings, enabled: boolean) => void
   onValueChange: (key: keyof EntitySettings, value: EntitySettings[keyof EntitySettings]) => void
+  formatResolved?: (value: EntitySettings[keyof EntitySettings]) => React.ReactNode
 }
 
-function SettingRow({ label, settingKey, resolved, draft, children, onToggle, onValueChange }: SettingRowProps) {
+function SettingRow({ label, settingKey, resolved, draft, children, onToggle, onValueChange, formatResolved }: SettingRowProps) {
   // Draft takes precedence over server state
   const hasDraft = settingKey in draft
   const draftValue = draft[settingKey]
@@ -58,7 +59,7 @@ function SettingRow({ label, settingKey, resolved, draft, children, onToggle, on
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border"
             style={{ borderColor: 'rgba(255, 170, 0, 0.4)', color: '#ffaa00', background: 'rgba(255, 170, 0, 0.1)' }}
           >
-            {String(resolvedValue)}
+            {formatResolved ? formatResolved(resolvedValue) : String(resolvedValue)}
             <span className="text-2xs opacity-70">
               (set in {source.type.charAt(0).toUpperCase() + source.type.slice(1)} {source.name})
             </span>
@@ -74,7 +75,7 @@ function SettingRow({ label, settingKey, resolved, draft, children, onToggle, on
 export function EntitySettingsDialog({ entityId, entityType, entityName, onClose }: Props) {
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
-  const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
+  const [cliTemplateOptions, setCliTemplateOptions] = useState<{ id: string; name: string; icon?: string }[]>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
@@ -273,6 +274,10 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
+                formatResolved={value =>
+                  cliTemplateOptions.find(template => template.id === value)?.name
+                    ?? String(value)
+                }
               >
                 {(value, onChange) => (
                   <select
@@ -282,7 +287,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                   >
                     <option value="">Default</option>
                     {cliTemplateOptions.map(t => (
-                      <option key={t.name} value={t.name}>
+                      <option key={t.id} value={t.id}>
                         {t.icon ? `${t.icon} ` : ''}{t.name}
                       </option>
                     ))}

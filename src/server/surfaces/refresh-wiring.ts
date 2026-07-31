@@ -23,6 +23,7 @@ import { getSession, loadSecrets, updateSession, deleteSession, createSession } 
 import * as tmuxBackend from '../sessions/backends/tmux'
 import { refreshConfigProblem, type TinstarConfig } from '../sessions/config'
 import { launchRefreshWorker } from '../sessions/surfaceAuthor'
+import { defaultProviderRegistry } from '../providers/lifecycle'
 import type { SurfaceService } from './surface-service'
 import { SurfaceRefreshJobStore } from './surface-refresh-jobs'
 import {
@@ -217,6 +218,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
       if (!worktree) return { ok: false, message: 'no worktree is recorded for this Surface' }
       const recipe = surface.content.recipe
       if (!recipe) return { ok: false, message: 'this Surface declares no refresh recipe' }
+      const provider = defaultProviderRegistry.resolveTemplate(null)
       const result = await launchRefreshWorker({
         config: cfg,
         worktree,
@@ -225,6 +227,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
         stagingPath: job.stagingPath,
         recipe,
         headline: surface.content.headline,
+        providerAdapter: provider.provider.id,
         secrets: loadSecrets(cfg.dirs.secrets),
         spaceId: surface.spaceId,
         writeFile: (path, data) => writeFileSync(path, data, 'utf8'),
@@ -235,7 +238,13 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
         deleteSession,
         updateSession,
         startSession: ({ session, port, secrets }) =>
-          tmuxBackend.createTmuxSession(cfg, { session, secrets, port, template: null }),
+          tmuxBackend.createTmuxSession(cfg, {
+            session,
+            secrets,
+            port,
+            template: null,
+            provider,
+          }),
         stopSession: name => tmuxBackend.stopManagedTtyd(name),
         // A cast, because the launcher takes the run shape as an opaque record —
         // it may not import the Run type without dragging the whole document model

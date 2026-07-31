@@ -6,7 +6,11 @@ import type { ErrorCode } from '../../domain/api'
 
 // --- Types ---
 
-export type AdapterType = 'claude' | 'codex' | 'generic'
+/**
+ * Open provider ID resolved through ProviderAdapterRegistry. The built-ins are
+ * claude/codex/generic, but adding a provider must not require widening a union.
+ */
+export type AdapterType = string
 
 /**
  * A named, explicit range of ttyd ports (plan U6).
@@ -36,6 +40,11 @@ export function portWindowsOverlap(a: PortWindow, b: PortWindow): boolean {
 }
 
 export interface CliTemplate {
+  /**
+   * Stable reference stored by sessions, entity settings, and hand definitions.
+   * The display name is deliberately not an identity and may be renamed.
+   */
+  id: string
   name: string
   icon?: string
   adapter?: AdapterType
@@ -236,6 +245,7 @@ export function deepMerge(target: Record<string, unknown>, source: Record<string
 
 const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   {
+    id: 'claude-multi-agent',
     name: 'Claude (multi-agent)',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
@@ -243,6 +253,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
   },
   {
+    id: 'claude-auto',
     name: 'Claude (auto)',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
@@ -250,6 +261,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
   },
   {
+    id: 'claude-interactive',
     name: 'Claude (interactive)',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
@@ -257,6 +269,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --resume {sessionId}',
   },
   {
+    id: 'codex-full-auto',
     name: 'Codex (full auto)',
     icon: '/agent-icons/openai.svg',
     adapter: 'codex',
@@ -270,8 +283,9 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     // Dedicated template for the in-app marshal (the canvas-sidebar copilot).
     // Runs on Sonnet — the marshal resolves parents, spawns sessions, and drives
     // the viewport, which needs more reasoning than Haiku reliably gives. Users
-    // can override by dropping a same-named entry into
+    // can override by dropping an entry with this template ID into
     // ~/.config/tinstar/config.json's cliTemplates array.
+    id: 'marshal',
     name: 'Marshal',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
@@ -290,6 +304,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model sonnet --append-system-prompt {agentPrompt} --resume {sessionId}',
   },
   {
+    id: 'cursor-agent',
     name: 'Cursor Agent',
     icon: '/agent-icons/cursor.svg',
     adapter: 'generic',
@@ -305,6 +320,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'agent --yolo resume',
   },
   {
+    id: 'shell',
     name: 'shell',
     adapter: 'generic',
     telemetry: false,
@@ -405,13 +421,24 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
 
   const merged = deepMerge(BASE_CONFIG as unknown as Record<string, unknown>, userConfig) as unknown as typeof BASE_CONFIG
 
-  // CLI templates: user list extends defaults (user can override by name)
+  // CLI templates: user list extends defaults by stable ID. Entries written
+  // before IDs were introduced are intentionally ignored: names are labels now,
+  // so guessing identity from a mutable name would recreate the rename bug.
   const userTemplates = Array.isArray(userConfig.cliTemplates)
-    ? userConfig.cliTemplates as CliTemplate[]
+    ? (userConfig.cliTemplates as unknown[]).filter(
+        (entry): entry is CliTemplate =>
+          !!entry
+          && typeof entry === 'object'
+          && typeof (entry as Partial<CliTemplate>).id === 'string'
+          && (entry as Partial<CliTemplate>).id!.length > 0
+          && typeof (entry as Partial<CliTemplate>).name === 'string'
+          && typeof (entry as Partial<CliTemplate>).startCmd === 'string'
+          && typeof (entry as Partial<CliTemplate>).resumeCmd === 'string',
+      )
     : []
   const cliTemplates = [...DEFAULT_CLI_TEMPLATES]
   for (const ut of userTemplates) {
-    const idx = cliTemplates.findIndex(t => t.name === ut.name)
+    const idx = cliTemplates.findIndex(t => t.id === ut.id)
     if (idx >= 0) cliTemplates[idx] = ut
     else cliTemplates.push(ut)
   }

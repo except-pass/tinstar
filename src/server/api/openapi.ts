@@ -16,6 +16,7 @@ export const spec = {
     { name: 'Worktrees', description: 'Git worktree tracking' },
     { name: 'Runs', description: 'Agent run instances' },
     { name: 'Sessions', description: 'Tmux session lifecycle' },
+    { name: 'CLI Templates', description: 'Stable launch-template identities and renameable display metadata' },
     { name: 'Hooks', description: 'Callbacks from Claude Code inside sessions' },
     { name: 'Projects', description: 'Registered project directories' },
     { name: 'Config', description: 'User configuration' },
@@ -198,7 +199,7 @@ export const spec = {
             required: ['name'],
             properties: {
               name: { type: 'string', description: 'Session name (unique identifier)' },
-              cliTemplate: { type: 'string' },
+              cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
               prompt: { type: 'string', description: 'Initial message to send to the agent' },
               project: { type: 'string', description: 'Override the resolved project' },
               color: { type: 'string' },
@@ -264,7 +265,7 @@ export const spec = {
       post: {
         tags: ['Sessions'],
         summary: 'Create a new session',
-        description: 'Starts a tmux session with Claude Code.',
+        description: 'Starts a provider-backed CLI agent in a tmux session.',
         requestBody: {
           required: true,
           content: { 'application/json': { schema: {
@@ -275,8 +276,9 @@ export const spec = {
               project: { type: 'string', description: 'Project name for workspace path' },
               worktree: { type: 'boolean', default: false },
               worktreePath: { type: 'string', description: 'Existing worktree path (if not creating new)' },
-              prompt: { type: 'string', description: 'Initial message to send to Claude' },
+              prompt: { type: 'string', description: 'Initial message to send to the agent' },
               skipPermissions: { type: 'boolean', default: true },
+              cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
               taskId: { type: 'string' },
               epicId: { type: 'string' },
               initiativeId: { type: 'string' },
@@ -395,6 +397,75 @@ export const spec = {
           } } },
         },
         responses: { 200: { description: 'Prompt submitted' }, 400: { description: 'Missing prompt' }, 404: { description: 'Session not found' } },
+      },
+    },
+    '/api/cli-templates': {
+      get: {
+        tags: ['CLI Templates'],
+        summary: 'List configured CLI templates',
+        description: 'Returns stable template IDs together with renameable display names and provider adapter IDs.',
+        responses: {
+          200: {
+            description: 'Template list',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean' },
+                    data: { type: 'array', items: { $ref: '#/components/schemas/CliTemplate' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        tags: ['CLI Templates'],
+        summary: 'Create a CLI template',
+        description: 'Creates a template with a server-generated stable ID.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/CliTemplateInput' },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/CliTemplateResponse' } } } },
+          400: { description: 'Invalid template or unsupported provider capability' },
+        },
+      },
+    },
+    '/api/cli-templates/{id}': {
+      put: {
+        tags: ['CLI Templates'],
+        summary: 'Update a CLI template without changing its stable ID',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/CliTemplateInput' },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/CliTemplateResponse' } } } },
+          400: { description: 'Invalid template or unsupported provider capability' },
+          404: { description: 'Template not found' },
+        },
+      },
+      delete: {
+        tags: ['CLI Templates'],
+        summary: 'Delete a user-defined CLI template',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Deleted', content: { 'application/json': { schema: { $ref: '#/components/schemas/NullResponse' } } } },
+          404: { description: 'Template not found or built-in template has no user override' },
+        },
       },
     },
     // ── Projects ─────────────────────────────────────────
@@ -1051,6 +1122,7 @@ export const spec = {
           tasks: { type: 'array' },
           worktrees: { type: 'array' },
           runs: { type: 'array', items: { $ref: '#/components/schemas/Run' } },
+          sessions: { type: 'array', items: { $ref: '#/components/schemas/Session' } },
         },
       },
       Space: {
@@ -1079,6 +1151,7 @@ export const spec = {
         properties: {
           project: { type: 'string', nullable: true },
           backend: { type: 'string', enum: ['tmux'], nullable: true },
+          cliTemplate: { type: 'string', nullable: true, description: 'Stable CLI template ID; null means inherit from parent.' },
           worktreeMode: { type: 'string', enum: ['none', 'new', 'existing'], nullable: true },
           skipPermissions: { type: 'boolean', nullable: true },
           prompt: { type: 'string', nullable: true },
@@ -1090,6 +1163,8 @@ export const spec = {
         properties: {
           name: { type: 'string' },
           backend: { type: 'string', enum: ['tmux'] },
+          cliTemplate: { type: 'string', nullable: true, description: 'Stable CLI template ID used to launch and resume this session.' },
+          adapter: { type: 'string', nullable: true, description: 'Open provider adapter ID persisted with the session.' },
           state: { type: 'string', enum: ['creating', 'running', 'idle', 'needs_attention', 'stopped'] },
           project: { type: 'string' },
           workspace: {
@@ -1110,6 +1185,46 @@ export const spec = {
           skipPermissions: { type: 'boolean' },
           created: { type: 'string', format: 'date-time' },
           lastActive: { type: 'string', format: 'date-time' },
+        },
+      },
+      CliTemplateInput: {
+        type: 'object',
+        required: ['name', 'startCmd', 'resumeCmd'],
+        properties: {
+          name: { type: 'string', description: 'Renameable display label; not an identity.' },
+          icon: { type: 'string' },
+          adapter: { type: 'string', description: 'Open provider adapter ID, such as claude, codex, generic, or a registered third-party provider.' },
+          telemetry: { type: 'boolean', description: 'Optional override. Omit to inherit the provider default.' },
+          startCmd: { type: 'string' },
+          resumeCmd: { type: 'string' },
+        },
+      },
+      CliTemplate: {
+        allOf: [
+          { $ref: '#/components/schemas/CliTemplateInput' },
+          {
+            type: 'object',
+            required: ['id'],
+            properties: {
+              id: { type: 'string', description: 'Stable reference used by sessions, entity settings, and hand definitions.' },
+            },
+          },
+        ],
+      },
+      CliTemplateResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: { $ref: '#/components/schemas/CliTemplate' },
+        },
+      },
+      NullResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: { nullable: true },
         },
       },
       Run: {

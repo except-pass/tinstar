@@ -2,20 +2,25 @@
 import { httpJson } from '../http.js'
 import { getApiBase } from '../../apiBase.js'
 
+export function renderSessionList(state) {
+  return (state.sessions || [])
+    .map(session => `${session.name}\t${session.state || ''}\t${session.cliTemplate || ''}`)
+    .join('\n')
+}
+
 export async function run(argv) {
   const baseUrl = getApiBase()
   const sub = argv[3]
   if (sub === 'list') {
     const state = await httpJson(`${baseUrl}/api/state`)
-    for (const r of state.runs || []) {
-      console.log(`${r.id}\t${r.status || ''}\t${r.cliTemplate || ''}`)
-    }
+    const output = renderSessionList(state)
+    if (output) console.log(output)
     return
   }
   if (sub === 'create') {
     const name = argv[4]
     const project = argv[5]
-    const cliTemplate = argv[6] || 'claude'
+    const cliTemplate = argv[6] || 'claude-multi-agent'
     if (!name || !project) throw new Error('sessions create: name and project required')
     const res = await httpJson(`${baseUrl}/api/sessions`, {
       method: 'POST',
@@ -33,5 +38,5 @@ export async function run(argv) {
     console.log('ok')
     return
   }
-  console.log('usage: tinstar sessions (list|create <name> <project> [template]|stop <name>)')
+  console.log('usage: tinstar sessions (list|create <name> <project> [template-id]|stop <name>)')
 }

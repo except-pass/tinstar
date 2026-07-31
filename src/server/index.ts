@@ -56,6 +56,7 @@ import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
+import { createDefaultProviderRegistry } from './providers/lifecycle'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -68,6 +69,7 @@ export function initBackend(): RouteContext {
   const bus = new EventBus()
   const docStore = new DocumentStore()
   const otelStore = new OTelStore()
+  const providerRegistry = createDefaultProviderRegistry()
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
@@ -341,7 +343,7 @@ export function initBackend(): RouteContext {
           tmuxBackend.claimPort(sess.port)
         }
         const existingRun = docStore.getRun(sess.name)
-        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
+        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.id === sess.cliTemplate) : null
         if (!existingRun) {
           docStore.upsertRun(sess.name, {
             id: sess.name,
@@ -503,6 +505,7 @@ export function initBackend(): RouteContext {
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
           resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
+          providerRegistry,
         })
         watcher.start()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
@@ -654,6 +657,7 @@ export function initBackend(): RouteContext {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
+    providerRegistry,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
   }

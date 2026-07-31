@@ -1,12 +1,15 @@
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { listSessions, setState, setConversationId, updateSession, type Session, type SessionState } from './session'
-import { readSessionStatusDetailAt, parseNewEntriesAt, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
-import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
-import { exactTmuxPaneTarget } from './backends/tmux'
+import { captureScreen, exactTmuxPaneTarget } from './backends/tmux'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
 import type { RecapEntry } from '../../types'
+import {
+  defaultProviderRegistry,
+  type ProviderAdapterRegistry,
+  type ProviderTranscriptAdapter,
+} from '../providers/lifecycle'
 
 export interface StatusWatcherOpts {
   sessionsDir: string
@@ -25,6 +28,10 @@ export interface StatusWatcherOpts {
   onSessionsListed?: (names: Set<string>) => void
   /** Poll interval in ms (default 3000) */
   intervalMs?: number
+  /** Maximum time for one provider transcript discovery (default 15000ms). */
+  providerPollTimeoutMs?: number
+  /** Maximum time for one tmux/pgrep liveness probe (default 2000ms). */
+  processProbeTimeoutMs?: number
   /**
    * Resolve a session name to its tmux target. Injected so callers can route
    * through the configured `sessions.prefix` (see backends/tmux.ts
@@ -32,6 +39,8 @@ export interface StatusWatcherOpts {
    * callers that don't supply one.
    */
   resolveTmuxName?: (sessionName: string) => string
+  /** Injectable for tests and third-party providers; defaults to built-ins. */
+  providerRegistry?: ProviderAdapterRegistry
 }
 
 /**
@@ -43,93 +52,195 @@ export interface StatusWatcherOpts {
  * (e.g. a permission prompt) and the session is flipped to "idle".
  */
 export class StatusWatcher {
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private running = false
   private readonly opts: StatusWatcherOpts
   private readonly interval: number
+  private readonly providerPollTimeoutMs: number
+  private readonly processProbeTimeoutMs: number
+  private readonly providerRegistry: ProviderAdapterRegistry
   /** Tracks consecutive "no children" polls per session for debouncing */
   private readonly idleStreak = new Map<string, number>()
   /** Sessions where process-tree check has overridden JSONL to idle */
   private readonly processTreeOverride = new Set<string>()
-  /** Cached Codex transcript paths per session */
-  private readonly codexTranscripts = new Map<string, string>()
-  /** Cached Claude transcript paths for sessions without a workspace.path */
-  private readonly claudeTranscripts = new Map<string, string>()
+  /** Provider-neutral discovered transcript paths per managed session. */
+  private readonly transcriptPaths = new Map<string, string>()
+  /** One discovery per session at a time, retained across timeout boundaries. */
+  private readonly transcriptDiscoveries = new Map<string, Promise<string | null>>()
+  /** Retained only so deleted sessions can release provider-owned recap offsets. */
+  private readonly transcriptAdapters = new Map<string, ProviderTranscriptAdapter>()
+  /** Guards all name-keyed caches against session-name reuse. */
+  private readonly sessionIncarnations = new Map<string, string>()
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
     this.interval = opts.intervalMs ?? 3000
+    this.providerPollTimeoutMs = opts.providerPollTimeoutMs ?? 15_000
+    this.processProbeTimeoutMs = opts.processProbeTimeoutMs ?? 2_000
+    this.providerRegistry = opts.providerRegistry ?? defaultProviderRegistry
   }
 
   start(): void {
-    if (this.timer) return
-    this.tick() // run immediately
-    this.timer = setInterval(() => this.tick(), this.interval)
+    if (this.running) return
+    this.running = true
+    void this.runLoop()
   }
 
   stop(): void {
+    this.running = false
     if (this.timer) {
-      clearInterval(this.timer)
+      clearTimeout(this.timer)
       this.timer = null
     }
+  }
+
+  /** Self-scheduling so a slow provider poll can never overlap the next tick. */
+  private async runLoop(): Promise<void> {
+    await this.tick()
+    if (!this.running) return
+    this.timer = setTimeout(() => {
+      this.timer = null
+      void this.runLoop()
+    }, this.interval)
   }
 
   private async tick(): Promise<void> {
     try {
       const sessions = await listSessions(this.opts.sessionsDir)
-      this.opts.onSessionsListed?.(new Set(sessions.map(s => s.name)))
+      const names = new Set(sessions.map(s => s.name))
+      this.opts.onSessionsListed?.(names)
       this.resolveTickConversations(sessions)
-      for (const session of sessions) {
-        // Only check sessions that are actually alive (running or idle)
-        if (session.state !== 'running' && session.state !== 'idle') continue
-        this.checkSession(session)
-      }
+      const liveSessions = sessions.filter(
+        session => session.state === 'running' || session.state === 'idle',
+      )
+      this.pruneInactiveSessions(new Set(liveSessions.map(session => session.name)))
+      const results = await Promise.allSettled(
+        liveSessions.map(session => this.checkSession(session)),
+      )
+      results.forEach((result, index) => {
+        if (result.status !== 'rejected') return
+        log.warn(
+          'status-watcher',
+          `${liveSessions[index]!.name}: provider poll failed: ${String(result.reason)}`,
+        )
+      })
     } catch (err) {
       log.warn('status-watcher', `tick failed: ${(err as Error).message}`)
     }
   }
 
-  private checkSession(session: Session): void {
-    const adapter = (session as Session & { adapter?: string | null }).adapter ?? 'claude'
+  private async checkSession(session: Session): Promise<void> {
+    this.reconcileSessionIncarnation(session)
 
-    // Codex adapter: discover transcript, then parse status from it
-    if (adapter === 'codex' && session.backend === 'tmux') {
-      this.checkCodexSession(session)
+    // Rehydrate the in-memory override after a server restart. Without this,
+    // a persisted blocked:true can survive forever even after evidence clears.
+    if (session.blocked) this.processTreeOverride.add(session.name)
+
+    let transcript: ProviderTranscriptAdapter | null
+    try {
+      transcript = this.providerRegistry.resolveSession(session).terminal.transcript
+    } catch (err) {
+      log.warn(
+        'status-watcher',
+        `${session.name}: ${(err as Error).message}; using process-tree liveness`,
+      )
+      await this.checkProcessTree(session)
       return
     }
 
-    // Generic/unknown adapters: process-tree only
-    if (adapter !== 'claude' && session.backend === 'tmux') {
-      if (this.processTreeOverride.has(session.name)) {
-        return
-      }
-      this.checkProcessTree(session)
+    // Capability-light providers intentionally have no transcript parser.
+    if (!transcript) {
+      this.transcriptAdapters.delete(session.name)
+      // Transcript-less providers rely exclusively on the process tree. Keep
+      // polling even while blocked so returning child processes clear it.
+      await this.checkProcessTree(session)
       return
     }
+    this.transcriptAdapters.set(session.name, transcript)
 
-    const workdir = session.workspace?.path
-    const convId = session.conversation?.id
-    if (!convId) return
-
-    const stateDir = undefined
-
-    // convId resolution (adopt-newer for /clear, repair for shared-workdir
-    // cross-pollination) happens once per tick in resolveTickConversations,
-    // which has already updated session.conversation.id in place. Here we just
-    // read the resolved value.
-    const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, stateDir)
+    let transcriptPath = this.transcriptPaths.get(session.name)
+    if (transcriptPath && !existsSync(transcriptPath)) {
+      this.transcriptPaths.delete(session.name)
+      transcriptPath = undefined
+    }
     if (!transcriptPath) {
-      // No transcript discoverable yet (typical for a freshly-spawned session
-      // before its first turn, or a session with no workspace whose JSONL
-      // hasn't appeared anywhere on disk yet). On tmux we still get a usable
-      // running/idle signal from the process tree.
-      if (!workdir && session.backend === 'tmux') {
-        this.checkProcessTree(session)
+      const tmuxName = this.resolveTmuxName(session.name)
+      let discovery = this.transcriptDiscoveries.get(session.name)
+      if (!discovery) {
+        const discoveryIncarnation = this.sessionIncarnations.get(session.name)
+        try {
+          discovery = Promise.resolve(transcript.discover({
+            session,
+            tmuxName,
+            captureScreen: (name, scrollback) =>
+              captureScreen(name, scrollback, this.providerPollTimeoutMs),
+          }))
+        } catch (err) {
+          discovery = Promise.reject(err)
+        }
+        this.transcriptDiscoveries.set(session.name, discovery)
+
+        // Discovery is intentionally detached from the tick. A provider can
+        // keep looking for its transcript without delaying healthy sessions,
+        // while the map guarantees only one live request per session.
+        void discovery.then(
+          (discovered) => {
+            if (
+              this.transcriptDiscoveries.get(session.name) !== discovery
+              || this.sessionIncarnations.get(session.name) !== discoveryIncarnation
+            ) return
+            if (!discovered) return
+            this.transcriptPaths.set(session.name, discovered)
+            log.info('status-watcher', `${session.name}: provider transcript discovered`)
+          },
+          (err) => {
+            if (
+              this.transcriptDiscoveries.get(session.name) !== discovery
+              || this.sessionIncarnations.get(session.name) !== discoveryIncarnation
+            ) return
+            log.warn(
+              'status-watcher',
+              `${session.name}: transcript discovery failed: ${(err as Error).message}`,
+            )
+          },
+        ).finally(() => {
+          if (this.transcriptDiscoveries.get(session.name) === discovery) {
+            this.transcriptDiscoveries.delete(session.name)
+          }
+        })
+
+        // The provider timeout is observability, not tick backpressure. The
+        // underlying request remains single-flight and may still complete.
+        void this.withProviderTimeout(
+          discovery,
+          `${session.name}: transcript discovery`,
+        ).catch((err) => {
+          if (
+            this.transcriptDiscoveries.get(session.name) === discovery
+            && this.sessionIncarnations.get(session.name) === discoveryIncarnation
+            && (err as Error).message.includes('timed out')
+          ) {
+            log.warn(
+              'status-watcher',
+              `${session.name}: transcript discovery failed: ${(err as Error).message}`,
+            )
+          }
+        })
       }
+
+      // Give already-settled discovery promises one microtask to populate the
+      // cache. This preserves same-tick parsing for cheap providers without
+      // waiting for an I/O-bound provider.
+      await Promise.resolve()
+      transcriptPath = this.transcriptPaths.get(session.name)
+    }
+    if (!transcriptPath) {
+      await this.checkProcessTree(session)
       return
     }
 
-    const detail = readSessionStatusDetailAt(transcriptPath)
-    if (!detail) return // no transcript yet
+    const detail = transcript.readStatus(transcriptPath)
+    if (!detail) return
 
     // When JSONL shows a pending tool_use on a tmux session, use the process
     // tree to determine the real state. This catches both:
@@ -139,7 +250,7 @@ export class StatusWatcher {
       if (this.processTreeOverride.has(session.name)) {
         return // already determined blocked — skip until JSONL changes
       }
-      this.checkProcessTree(session)
+      await this.checkProcessTree(session)
       return
     }
 
@@ -158,47 +269,24 @@ export class StatusWatcher {
     }
 
     if (detail.state !== session.state) {
-      // Debounce running → idle: only transition after 2 consecutive idle polls.
-      // Claude emits text blocks between tool calls while still working —
-      // these briefly look "idle" in the JSONL but the agent isn't waiting for input.
+      // Providers choose their idle debounce. Claude needs two observations
+      // because text blocks between tool calls briefly look idle; Codex lifecycle
+      // events are stable and transition immediately.
       if (session.state === 'running' && detail.state === 'idle') {
         const streak = (this.idleStreak.get(session.name) ?? 0) + 1
         this.idleStreak.set(session.name, streak)
-        if (streak < 2) return // not stable yet
+        if (streak < (transcript.idleDebouncePolls ?? 2)) return
         log.info('status-watcher', `${session.name}: idle confirmed (streak=${streak})`)
       }
       this.idleStreak.delete(session.name)
-      this.transitionState(session, detail.state)
+      this.transitionState(session, detail.state, transcript, transcriptPath)
     } else {
       // State unchanged — reset idle streak
       this.idleStreak.delete(session.name)
+      if (detail.state === 'idle' && transcript.parseRecapWhileIdle) {
+        this.parseRecapEntries(session, transcript, transcriptPath)
+      }
     }
-  }
-
-  /**
-   * Resolve the on-disk transcript path for a Claude session. Prefers
-   * computing from `workspace.path` + convId. When workspace.path is null
-   * (legacy session, or one spawned without a project), scans
-   * `~/.claude/projects/*\/<convId>.jsonl` and caches the result.
-   */
-  private resolveClaudeTranscriptPath(
-    session: Session,
-    workdir: string | null | undefined,
-    convId: string,
-    stateDir: string | undefined,
-  ): string | null {
-    if (workdir) return getTranscriptPath(workdir, convId, stateDir)
-
-    const cached = this.claudeTranscripts.get(session.name)
-    if (cached && existsSync(cached)) return cached
-    if (cached) this.claudeTranscripts.delete(session.name)
-
-    const found = findTranscriptByConvId(convId)
-    if (found) {
-      this.claudeTranscripts.set(session.name, found)
-      log.info('status-watcher', `${session.name}: discovered transcript ${found} (no workspace.path on session)`)
-    }
-    return found
   }
 
   /**
@@ -216,20 +304,43 @@ export class StatusWatcher {
    */
   private resolveTickConversations(sessions: readonly Session[]): void {
     // Group eligible sessions by project dir.
-    const groups = new Map<string, Session[]>()
+    const groups = new Map<
+      string,
+      {
+        projectDir: string
+        sessions: Session[]
+        transcript: ProviderTranscriptAdapter
+      }
+    >()
     for (const s of sessions) {
-      const adapter = (s as Session & { adapter?: string | null }).adapter ?? 'claude'
-      if (adapter !== 'claude' || s.backend !== 'tmux') continue
+      let provider
+      try {
+        provider = this.providerRegistry.resolveSession(s)
+      } catch {
+        continue
+      }
+      const transcript = provider.terminal.transcript
+      if (!transcript?.conversationProjectDir || s.backend !== 'tmux') continue
       if (s.state !== 'running' && s.state !== 'idle') continue
       const workdir = s.workspace?.path
       if (!workdir || !s.conversation?.id) continue
-      const projectDir = getProjectDir(workdir, undefined)
-      const arr = groups.get(projectDir)
-      if (arr) arr.push(s)
-      else groups.set(projectDir, [s])
+      let projectDir: string
+      try {
+        projectDir = transcript.conversationProjectDir(workdir)
+      } catch (err) {
+        log.warn(
+          'status-watcher',
+          `${s.name}: conversation project resolution failed: ${(err as Error).message}`,
+        )
+        continue
+      }
+      const key = JSON.stringify([provider.provider.id, projectDir])
+      const group = groups.get(key)
+      if (group) group.sessions.push(s)
+      else groups.set(key, { projectDir, sessions: [s], transcript })
     }
 
-    for (const [projectDir, group] of groups) {
+    for (const { projectDir, sessions: group, transcript } of groups.values()) {
       const transcripts = listTranscripts(projectDir)
       if (transcripts.length === 0) continue
       const assignment = planSharedDirAssignments(
@@ -245,146 +356,141 @@ export class StatusWatcher {
         const next = assignment.get(s.name)
         if (!next || next === current) continue
         setConversationId(this.opts.sessionsDir, s.name, next)
-        resetOffset(s.name) // recap parser starts fresh on the new file
+        this.transcriptPaths.delete(s.name)
+        this.transcriptDiscoveries.delete(s.name)
         if (s.conversation) s.conversation.id = next // reflect in-tick for checkSession
+        this.sessionIncarnations.set(s.name, this.sessionIncarnationKey(s))
+        try {
+          transcript.resetOffset(s.name)
+        } catch (err) {
+          log.warn(
+            'status-watcher',
+            `${s.name}: provider transcript reset failed: ${(err as Error).message}`,
+          )
+        }
         const shared = group.length > 1 ? ' (shared workdir)' : ''
         log.info('status-watcher', `${s.name}: convId ${current} → ${next}${shared}`)
       }
     }
   }
 
-  private async checkCodexSession(session: Session): Promise<void> {
-    const workdir = session.workspace?.path
-    if (!workdir) return
+  private async checkProcessTree(session: Session): Promise<void> {
+    const tmuxTarget = this.resolveTmuxName(session.name)
 
-    // Try cached path first
-    let transcriptPath = this.codexTranscripts.get(session.name)
-
-    // Validate cache — clear if file doesn't exist
-    if (transcriptPath && !existsSync(transcriptPath)) {
-      this.codexTranscripts.delete(session.name)
-      transcriptPath = undefined
-    }
-
-    // Discover if no cache
-    if (!transcriptPath) {
-      const tmuxTarget = `tinstar-${session.name}`
-      const discovered = await discoverTranscript(
-        session.name,
-        workdir,
-        session.created,
-        tmuxTarget,
-      )
-      if (discovered) {
-        this.codexTranscripts.set(session.name, discovered)
-        transcriptPath = discovered
-        log.info('status-watcher', `${session.name}: codex transcript discovered`)
+    // Get the PID of the process running in the tmux pane
+    const pane = await this.execProcess(
+      'tmux',
+      ['list-panes', '-t', exactTmuxPaneTarget(tmuxTarget), '-F', '#{pane_pid}'],
+    )
+    if (pane.error) {
+      if (this.isProcessProbeTimeout(pane.error)) {
+        log.debug(
+          'status-watcher',
+          `${session.name}: tmux pane lookup timed out; liveness is inconclusive`,
+        )
+        this.idleStreak.delete(session.name)
+        return
       }
-    }
-
-    if (!transcriptPath) {
-      // No transcript found yet — fall back to process-tree
-      if (!this.processTreeOverride.has(session.name)) {
-        this.checkProcessTree(session)
+      log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${pane.error.message}`)
+      this.idleStreak.delete(session.name)
+      // Tmux session is gone — drop any blocked override with it (a dead
+      // session can't be waiting on a permission prompt) and mark stopped.
+      this.processTreeOverride.delete(session.name)
+      if (session.state === 'running' || session.state === 'idle') {
+        this.transitionState(session, 'stopped')
       }
       return
     }
 
-    // Parse status from Codex JSONL
-    const status = readCodexStatus(transcriptPath)
-    if (!status) return
+    const shellPid = pane.stdout.trim().split('\n')[0]
+    if (!shellPid) return
 
-    if (status !== session.state) {
-      this.transitionState(session, status)
+    // Find the agent process (direct child of the shell)
+    const agent = await this.execProcess('pgrep', ['-P', shellPid])
+    if (agent.error && this.isProcessProbeTimeout(agent.error)) {
+      log.debug(
+        'status-watcher',
+        `${session.name}: agent process lookup timed out; liveness is inconclusive`,
+      )
+      this.idleStreak.delete(session.name)
+      return
+    }
+    if (agent.error && !this.isPgrepNoMatch(agent.error)) {
+      log.debug(
+        'status-watcher',
+        `${session.name}: agent process lookup failed; liveness is inconclusive: ${agent.error.message}`,
+      )
+      this.idleStreak.delete(session.name)
+      return
+    }
+    if (agent.error || !agent.stdout.trim()) {
+      log.debug('status-watcher', `${session.name}: no agent process under shell pid ${shellPid}`)
+      this.idleStreak.delete(session.name)
+      return
     }
 
-    // Parse recap entries on idle transitions
-    if (status === 'idle' && this.opts.onRecapEntries) {
-      try {
-        const entries = parseCodexRecapEntries(session.name, transcriptPath)
-        if (entries.length > 0) {
-          this.opts.onRecapEntries(session.name, entries)
+    const agentPid = agent.stdout.trim().split('\n')[0]!
+
+    // Check if the agent has any child processes (tool execution)
+    const children = await this.execProcess('pgrep', ['-P', agentPid])
+    if (children.error && this.isProcessProbeTimeout(children.error)) {
+      log.debug(
+        'status-watcher',
+        `${session.name}: child process lookup timed out; liveness is inconclusive`,
+      )
+      this.idleStreak.delete(session.name)
+      return
+    }
+    if (children.error && !this.isPgrepNoMatch(children.error)) {
+      log.debug(
+        'status-watcher',
+        `${session.name}: child process lookup failed; liveness is inconclusive: ${children.error.message}`,
+      )
+      this.idleStreak.delete(session.name)
+      return
+    }
+    const hasChildren = !children.error && !!children.stdout.trim()
+
+    if (hasChildren) {
+      const childPids = children.stdout.trim().split('\n').filter(Boolean)
+      // Agent has children — tool is genuinely executing
+      if (this.idleStreak.has(session.name) || this.processTreeOverride.has(session.name)) {
+        log.info('status-watcher', `${session.name}: children found (pids ${childPids.join(',')}), agent is working`)
+      }
+      this.idleStreak.delete(session.name)
+      const hadOverride = this.processTreeOverride.delete(session.name)
+      if (hadOverride) this.persistBlocked(session, false)
+      if (session.state !== 'running') {
+        this.transitionState(session, 'running')
+      } else if (hadOverride) {
+        // State string unchanged but the blocked input flipped —
+        // notify so downstream attention re-derives.
+        this.opts.onStatusChanged(session.name, 'running', false)
+      }
+    } else {
+      // No children — agent may be waiting for input
+      const streak = (this.idleStreak.get(session.name) ?? 0) + 1
+      this.idleStreak.set(session.name, streak)
+
+      if (streak >= 2 && !this.processTreeOverride.has(session.name)) {
+        log.info('status-watcher', `${session.name}: tool_use pending but no children (agent pid ${agentPid}), streak=${streak} — blocked on input`)
+        this.processTreeOverride.add(session.name)
+        this.persistBlocked(session, true)
+        if (session.state !== 'idle') {
+          this.transitionState(
+            session,
+            'idle',
+            this.transcriptAdapters.get(session.name),
+            this.transcriptPaths.get(session.name),
+          )
+        } else {
+          // Block began while already idle: no state-string change, but
+          // blocked flipped — notify so attention derives urgent instead
+          // of wedging silently (the verified silent-failure path).
+          this.opts.onStatusChanged(session.name, 'idle', true)
         }
-      } catch (err) {
-        log.warn('status-watcher', `codex recap parse failed for ${session.name}: ${err}`)
       }
     }
-  }
-
-  private checkProcessTree(session: Session): void {
-    const tmuxTarget = this.opts.resolveTmuxName
-      ? this.opts.resolveTmuxName(session.name)
-      : `tinstar-${session.name}`
-
-    // Get the PID of the process running in the tmux pane
-    execFile('tmux', ['list-panes', '-t', exactTmuxPaneTarget(tmuxTarget), '-F', '#{pane_pid}'], (err, stdout) => {
-      if (err) {
-        log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${err.message}`)
-        this.idleStreak.delete(session.name)
-        // Tmux session is gone — drop any blocked override with it (a dead
-        // session can't be waiting on a permission prompt) and mark stopped.
-        this.processTreeOverride.delete(session.name)
-        if (session.state === 'running' || session.state === 'idle') {
-          this.transitionState(session, 'stopped')
-        }
-        return
-      }
-
-      const shellPid = stdout.trim().split('\n')[0]
-      if (!shellPid) return
-
-      // Find the agent process (direct child of the shell)
-      execFile('pgrep', ['-P', shellPid], (err2, agentOut) => {
-        if (err2 || !agentOut.trim()) {
-          log.debug('status-watcher', `${session.name}: no agent process under shell pid ${shellPid}`)
-          this.idleStreak.delete(session.name)
-          return
-        }
-
-        const agentPid = agentOut.trim().split('\n')[0]!
-
-        // Check if the agent has any child processes (tool execution)
-        execFile('pgrep', ['-P', agentPid], (err3, childOut) => {
-          const hasChildren = !err3
-
-          if (hasChildren) {
-            const childPids = childOut.trim().split('\n').filter(Boolean)
-            // Agent has children — tool is genuinely executing
-            if (this.idleStreak.has(session.name) || this.processTreeOverride.has(session.name)) {
-              log.info('status-watcher', `${session.name}: children found (pids ${childPids.join(',')}), agent is working`)
-            }
-            this.idleStreak.delete(session.name)
-            const hadOverride = this.processTreeOverride.delete(session.name)
-            if (hadOverride) this.persistBlocked(session, false)
-            if (session.state !== 'running') {
-              this.transitionState(session, 'running')
-            } else if (hadOverride) {
-              // State string unchanged but the blocked input flipped —
-              // notify so downstream attention re-derives.
-              this.opts.onStatusChanged(session.name, 'running', false)
-            }
-          } else {
-            // No children — agent may be waiting for input
-            const streak = (this.idleStreak.get(session.name) ?? 0) + 1
-            this.idleStreak.set(session.name, streak)
-
-            if (streak >= 2 && !this.processTreeOverride.has(session.name)) {
-              log.info('status-watcher', `${session.name}: tool_use pending but no children (agent pid ${agentPid}), streak=${streak} — blocked on input`)
-              this.processTreeOverride.add(session.name)
-              this.persistBlocked(session, true)
-              if (session.state !== 'idle') {
-                this.transitionState(session, 'idle')
-              } else {
-                // Block began while already idle: no state-string change, but
-                // blocked flipped — notify so attention derives urgent instead
-                // of wedging silently (the verified silent-failure path).
-                this.opts.onStatusChanged(session.name, 'idle', true)
-              }
-            }
-          }
-        })
-      })
-    })
   }
 
   /**
@@ -398,7 +504,12 @@ export class StatusWatcher {
     session.blocked = blocked
   }
 
-  private transitionState(session: Session, newState: SessionState): void {
+  private transitionState(
+    session: Session,
+    newState: SessionState,
+    transcript?: ProviderTranscriptAdapter,
+    transcriptPath?: string,
+  ): void {
     // The blocked signal rides along on every transition: true only while the
     // process-tree override stands (and never for a stopped session — setState
     // clears the persisted flag on stop).
@@ -408,25 +519,115 @@ export class StatusWatcher {
     log.info('status-watcher', `${session.name}: ${session.state} → ${newState}`)
 
     // Parse transcript for recap entries on idle transitions
-    if (newState === 'idle' && this.opts.onRecapEntries) {
-      const convId = session.conversation?.id
-      if (!convId) return
+    if (
+      newState === 'idle'
+      && this.opts.onRecapEntries
+      && transcript
+      && transcriptPath
+    ) {
+      this.parseRecapEntries(session, transcript, transcriptPath)
+    }
+  }
 
-      const workdir = session.workspace?.path
+  private parseRecapEntries(
+    session: Session,
+    transcript: ProviderTranscriptAdapter,
+    transcriptPath: string,
+  ): void {
+    try {
+      const entries = transcript.parseRecapEntries(session.name, transcriptPath)
+      if (entries.length > 0) this.opts.onRecapEntries?.(session.name, entries)
+    } catch (err) {
+      log.warn('status-watcher', `transcript parse failed for ${session.name}: ${err}`)
+    }
+  }
 
-      // Resolve the path the same way the main poll loop does — handles
-      // the marshal/no-workspace case via findTranscriptByConvId.
-      const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, undefined)
-      if (!transcriptPath) return
+  private pruneInactiveSessions(liveNames: ReadonlySet<string>): void {
+    const knownNames = new Set([
+      ...this.transcriptAdapters.keys(),
+      ...this.transcriptPaths.keys(),
+      ...this.transcriptDiscoveries.keys(),
+      ...this.idleStreak.keys(),
+      ...this.processTreeOverride,
+      ...this.sessionIncarnations.keys(),
+    ])
+    for (const name of knownNames) {
+      if (liveNames.has(name)) continue
+      this.clearSessionCaches(name)
+    }
+  }
 
-      try {
-        const entries = parseNewEntriesAt(session.name, transcriptPath)
-        if (entries.length > 0) {
-          this.opts.onRecapEntries(session.name, entries)
-        }
-      } catch (err) {
-        log.warn('status-watcher', `transcript parse failed for ${session.name}: ${err}`)
-      }
+  private reconcileSessionIncarnation(session: Session): void {
+    const next = this.sessionIncarnationKey(session)
+    const previous = this.sessionIncarnations.get(session.name)
+    if (previous && previous !== next) this.clearSessionCaches(session.name)
+    this.sessionIncarnations.set(session.name, next)
+  }
+
+  private sessionIncarnationKey(session: Session): string {
+    return JSON.stringify([
+      session.created,
+      session.adapter ?? null,
+      session.conversation?.id ?? null,
+    ])
+  }
+
+  private clearSessionCaches(name: string): void {
+    try {
+      this.transcriptAdapters.get(name)?.resetOffset(name)
+    } catch (err) {
+      log.warn(
+        'status-watcher',
+        `${name}: provider transcript cleanup failed: ${(err as Error).message}`,
+      )
+    } finally {
+      this.transcriptAdapters.delete(name)
+      this.transcriptPaths.delete(name)
+      this.transcriptDiscoveries.delete(name)
+      this.idleStreak.delete(name)
+      this.processTreeOverride.delete(name)
+      this.sessionIncarnations.delete(name)
+    }
+  }
+
+  private isPgrepNoMatch(error: Error): boolean {
+    const code = (error as Error & { code?: string | number }).code
+    return code === 1 || code === '1'
+  }
+
+  private resolveTmuxName(sessionName: string): string {
+    return this.opts.resolveTmuxName
+      ? this.opts.resolveTmuxName(sessionName)
+      : `tinstar-${sessionName}`
+  }
+
+  private execProcess(
+    command: string,
+    args: string[],
+  ): Promise<{ error: Error | null; stdout: string }> {
+    return new Promise((resolve) => {
+      execFile(command, args, { timeout: this.processProbeTimeoutMs }, (error, stdout) => {
+        resolve({ error, stdout })
+      })
+    })
+  }
+
+  private isProcessProbeTimeout(error: Error): boolean {
+    const probeError = error as Error & { killed?: boolean; signal?: string }
+    return probeError.killed === true || probeError.signal === 'SIGTERM'
+  }
+
+  private async withProviderTimeout<T>(promise: Promise<T>, operation: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${operation} timed out after ${this.providerPollTimeoutMs}ms`))
+      }, this.providerPollTimeoutMs)
+    })
+    try {
+      return await Promise.race([promise, timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 }

@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest'
 
-import { buildAgentCommand } from '../tmux'
+import { buildAgentCommand, providerTelemetryEnvironmentCommands } from '../tmux'
 import type { AgentDef } from '../tmux'
 import type { CliTemplate } from '../../config'
+import {
+  CLAUDE_PROVIDER,
+  type TerminalProviderAdapter,
+} from '../../../providers/lifecycle'
 
 const AGENT: AgentDef = { name: 'marshal', description: 'the marshal', prompt: 'BE THE MARSHAL' }
 
 function tmpl(startCmd: string, resumeCmd: string): CliTemplate {
-  return { name: 'marshal', startCmd, resumeCmd }
+  return { id: 'marshal', name: 'marshal', startCmd, resumeCmd }
 }
 
 describe('buildAgentCommand persona handling', () => {
@@ -51,6 +55,47 @@ describe('buildAgentCommand persona handling', () => {
   })
 })
 
+describe('provider telemetry environment reconciliation', () => {
+  it('removes every provider-owned variable when telemetry is disabled on restart', () => {
+    const commands = providerTelemetryEnvironmentCommands(
+      '=tinstar-worker',
+      'worker',
+      CLAUDE_PROVIDER,
+      { ...tmpl('claude', 'claude'), telemetry: false },
+      'http://otel:4318',
+    )
+
+    expect(commands.length).toBeGreaterThan(0)
+    expect(commands.every(command => command.includes('-r'))).toBe(true)
+    expect(commands).toContainEqual([
+      'set-environment',
+      '-t',
+      '=tinstar-worker',
+      '-r',
+      'CLAUDE_CODE_ENABLE_TELEMETRY',
+    ])
+  })
+
+  it('sets provider-owned variables when telemetry is enabled on restart', () => {
+    const commands = providerTelemetryEnvironmentCommands(
+      '=tinstar-worker',
+      'worker',
+      CLAUDE_PROVIDER,
+      { ...tmpl('claude', 'claude'), telemetry: true },
+      'http://otel:4318',
+    )
+
+    expect(commands.some(command => command.includes('-r'))).toBe(false)
+    expect(commands).toContainEqual([
+      'set-environment',
+      '-t',
+      '=tinstar-worker',
+      'OTEL_EXPORTER_OTLP_ENDPOINT',
+      'http://otel:4318',
+    ])
+  })
+})
+
 describe('buildAgentCommand NATS dev-channel coupling', () => {
   // The default multi-agent template bakes in the dev-channels flag; NATS is
   // only actually provisioned (a .mcp.json is written) for some sessions.
@@ -90,6 +135,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
     expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
     // --mcp-config stays an option, before the prompt separator.
     expect(cmd.indexOf('--mcp-config')).toBeLessThan(cmd.indexOf(' -- '))
@@ -103,6 +149,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
     expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
     expect(cmd).toContain('--resume sid')
   })
@@ -116,27 +163,145 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain('my prompt')
   })
 
-  it('never injects --mcp-config for a non-claude (generic/cursor) template, even when NATS is provisioned', () => {
-    const cursor: CliTemplate = { name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' }
+  it.each([
+    ['auto', 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}'],
+    ['interactive', 'claude --session-id {sessionId} -- {prompt}'],
+  ])('adds the enable flag to a Claude %s template that does not bake it in', (_name, startCmd) => {
     const cmd = buildAgentCommand({
-      template: cursor, sessionId: 'sid', resume: false, initialPrompt: 'do cmsandbox work',
+      template: tmpl(startCmd, 'claude --resume {sessionId}'),
+      sessionId: 'sid', resume: false, initialPrompt: 'my prompt',
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
-    // The Claude-only flag must not reach `agent`, which hard-errors on it.
-    expect(cmd).not.toContain('--mcp-config')
-    expect(cmd).toContain('agent --yolo')
-    expect(cmd).toContain('do cmsandbox work')
+
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
+    expect(cmd.indexOf('--dangerously-load-development-channels')).toBeLessThan(cmd.indexOf('--mcp-config'))
+    expect(cmd.indexOf('--mcp-config')).toBeLessThan(cmd.indexOf(' -- '))
   })
 
-  it('never injects --mcp-config for the codex adapter, even when NATS is provisioned', () => {
-    // codex has no --mcp-config flag and dies to a bare shell on it, same as cursor.
-    const codex: CliTemplate = { name: 'Codex (full auto)', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' }
+  it('adds the enable and config flags to a resume command with no prompt separator', () => {
     const cmd = buildAgentCommand({
-      template: codex, sessionId: 'sid', resume: false, initialPrompt: 'do the work',
+      template: tmpl('claude --session-id {sessionId} -- {prompt}', 'claude --resume {sessionId}'),
+      sessionId: 'sid', resume: true,
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
-    expect(cmd).not.toContain('--mcp-config')
-    expect(cmd).toBe("codex --sandbox workspace-write -- 'do the work'")
+
+    expect(cmd).toBe(
+      "claude --resume sid --dangerously-load-development-channels server:nats --mcp-config '/cfg/nats-mcp.json'",
+    )
+  })
+
+  it('normalizes repeated pre-baked enable flags to one', () => {
+    const cmd = buildAgentCommand({
+      template: tmpl(
+        'claude --dangerously-load-development-channels server:nats --session-id {sessionId} --dangerously-load-development-channels server:nats -- {prompt}',
+        'claude --resume {sessionId}',
+      ),
+      sessionId: 'sid', resume: false, initialPrompt: 'my prompt', nats: { enabled: true },
+    })
+
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
+    expect(cmd).toBe(
+      "claude --session-id sid --dangerously-load-development-channels server:nats -- 'my prompt'",
+    )
+  })
+
+  it('normalizes provider flags without rewriting an opaque user prompt', () => {
+    const prompt = 'explain --dangerously-load-development-channels server:nats please'
+    const cmd = buildAgentCommand({
+      template: tmpl(
+        'claude --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
+        'claude --resume {sessionId}',
+      ),
+      sessionId: 'sid',
+      resume: false,
+      initialPrompt: prompt,
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+
+    expect(cmd).toContain(`-- '${prompt}'`)
+    // One command option plus the prompt's literal mention.
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(2)
+  })
+
+  it('keeps Marshal persona and provider flags single when its template pre-bakes both', () => {
+    const marshal = tmpl(
+      'claude --dangerously-load-development-channels server:nats --append-system-prompt {agentPrompt} --session-id {sessionId} -- {prompt}',
+      'claude --dangerously-load-development-channels server:nats --append-system-prompt {agentPrompt} --resume {sessionId}',
+    )
+    const cmd = buildAgentCommand({
+      template: marshal, sessionId: 'sid', resume: false, initialPrompt: 'marshal this',
+      agent: AGENT, appendSystemPrompt: AGENT.prompt,
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+
+    expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
+    expect(cmd.match(/--append-system-prompt/g)).toHaveLength(1)
+    expect(cmd.match(/BE THE MARSHAL/g)).toHaveLength(1)
+  })
+
+  it('leaves a template without a baked enable flag byte-identical when NATS is disabled', () => {
+    const template = tmpl(
+      'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
+      'claude --dangerously-skip-permissions --resume {sessionId}',
+    )
+    const base = { template, sessionId: 'sid', resume: false, initialPrompt: 'my prompt' } as const
+
+    expect(buildAgentCommand({ ...base, nats: { enabled: false } })).toBe(buildAgentCommand(base))
+  })
+
+  it('uses a supported provider\'s custom enable, config, and disabled-pattern syntax', () => {
+    const provider: TerminalProviderAdapter = {
+      provider: { id: 'forge', label: 'Forge' },
+      sessionLifecycle: 'terminal',
+      terminal: {
+        capabilities: {
+          nats: {
+            state: 'supported',
+            detail: {
+              transport: 'forge-channel',
+              command: {
+                enableFlag: '--channel nats',
+                configFlag: '--channel-config',
+                disabledPattern: /\s*--channel\s+nats/g,
+                autoAcceptWarning: false,
+              },
+            },
+          },
+          telemetry: { state: 'unsupported', reason: 'not needed for this test' },
+        },
+        defaultTelemetry: false,
+        transcript: null,
+      },
+    }
+    const template: CliTemplate = {
+      id: 'forge',
+      name: 'Forge', adapter: 'forge',
+      startCmd: 'forge --channel nats run -- {prompt}',
+      resumeCmd: 'forge resume',
+    }
+    const cmd = buildAgentCommand({
+      provider, template, initialPrompt: 'go',
+      nats: { enabled: true, mcpConfigPath: '/cfg/forge.json' },
+    })
+
+    expect(cmd).toBe("forge run --channel nats --channel-config '/cfg/forge.json' -- 'go'")
+    expect(cmd.match(/--channel nats/g)).toHaveLength(1)
+  })
+
+  it('rejects NATS for a generic/cursor provider instead of silently dropping its config', () => {
+    const cursor: CliTemplate = { id: 'cursor-agent', name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' }
+    expect(() => buildAgentCommand({
+      template: cursor, sessionId: 'sid', resume: false, initialPrompt: 'do cmsandbox work',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })).toThrow('Provider "generic" does not support terminal capability "nats"')
+  })
+
+  it('rejects NATS for Codex instead of silently dropping its config', () => {
+    const codex: CliTemplate = { id: 'codex-full-auto', name: 'Codex (full auto)', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' }
+    expect(() => buildAgentCommand({
+      template: codex, sessionId: 'sid', resume: false, initialPrompt: 'do the work',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })).toThrow('Provider "codex" does not support terminal capability "nats"')
   })
 
   it('legacy fallback (no template) includes both flags when NATS is provisioned', () => {
@@ -170,6 +335,25 @@ describe('buildAgentCommand flag-insertion robustness', () => {
     expect(cmd.indexOf('--append-system-prompt')).toBeGreaterThan(-1)
     expect(cmd.indexOf('--append-system-prompt')).toBeLessThan(sepIdx)
     expect(cmd.indexOf('--model')).toBeLessThan(sepIdx)
+  })
+
+  it("does not mistake ' -- ' inside an interpolated persona for the prompt boundary", () => {
+    const cmd = buildAgentCommand({
+      template: tmpl(
+        'claude --append-system-prompt {agentPrompt} --session-id {sessionId} -- {prompt}',
+        'claude --resume {sessionId}',
+      ),
+      sessionId: 'sid',
+      resume: false,
+      initialPrompt: 'go',
+      agent: { ...AGENT, prompt: 'persona says -- keep this' },
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats.json' },
+    })
+
+    expect(cmd).toContain("--append-system-prompt 'persona says -- keep this'")
+    expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd).toContain("--mcp-config '/cfg/nats.json'")
+    expect(cmd.endsWith("-- 'go'")).toBe(true)
   })
 
   it('single-quotes (escapes) shell metacharacters in the --mcp-config path', () => {

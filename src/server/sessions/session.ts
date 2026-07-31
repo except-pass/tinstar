@@ -51,7 +51,7 @@ export interface Session {
    * relying on the StatusWatcher's in-memory override state.
    */
   blocked: boolean
-  /** CLI template name (from config.cliTemplates). Overrides skipPermissions/backend for command building. */
+  /** Stable CLI template ID (from config.cliTemplates). Overrides skipPermissions/backend for command building. */
   cliTemplate: string | null
   /** Transcript adapter type — determines how to find and parse agent logs */
   adapter: string | null

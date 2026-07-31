@@ -12,9 +12,12 @@ A session is a running CLI agent (claude, marshal, custom) attached to a project
 
 ```
 tinstar sessions list
-tinstar sessions create my-session myapp claude
+tinstar sessions create my-session myapp claude-multi-agent
 tinstar sessions stop my-session
 ```
+
+The optional final argument is the stable template ID shown by
+`tinstar templates list`, not the template's renameable display name.
 
 ## See also
 

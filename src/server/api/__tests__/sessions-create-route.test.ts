@@ -1,17 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
 
 // Stub the tmux backend so POST /api/sessions doesn't spawn real tmux/ttyd.
 // Everything else in the '../../sessions' barrel (createWorktree, loadSecrets,
 // getProject, listSessions, …) stays real so the route exercises its true path.
-const { createTmuxSessionMock, startTmuxSessionMock } = vi.hoisted(() => ({
+const {
+  createTmuxSessionMock,
+  findPortMock,
+  releasePortMock,
+  startTmuxSessionMock,
+  stopTmuxSessionMock,
+} = vi.hoisted(() => ({
   createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
+  findPortMock: vi.fn(async () => 6123),
+  releasePortMock: vi.fn(),
   startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
+  stopTmuxSessionMock: vi.fn(async () => undefined),
 }))
 vi.mock('../../sessions', async (importActual) => {
   const actual = await importActual<typeof import('../../sessions')>()
@@ -19,18 +29,42 @@ vi.mock('../../sessions', async (importActual) => {
     ...actual,
     tmuxBackend: {
       ...actual.tmuxBackend,
-      findPort: vi.fn(async () => 6123),
+      findPort: findPortMock,
+      releasePort: releasePortMock,
       createTmuxSession: createTmuxSessionMock,
       startTmuxSession: startTmuxSessionMock,
+      stopTmuxSession: stopTmuxSessionMock,
+      deleteTmuxSession: stopTmuxSessionMock,
       onTtydRestart: vi.fn(),
     },
   }
 })
 
+vi.mock('../../hands', async (importActual) => {
+  const actual = await importActual<typeof import('../../hands')>()
+  return {
+    ...actual,
+    getHandByName: (name: string) => name === 'codex-hand'
+      ? {
+          name,
+          description: 'A Codex-backed test hand',
+          cliTemplate: 'Codex',
+          prompt: 'Review the task.',
+        }
+      : actual.getHandByName(name),
+  }
+})
+
 import { handleRequest, type RouteContext } from '../routes'
-import { getSession } from '../../sessions'
+import { getSession, updateSession } from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
 import type { Run } from '../../../domain/types'
+import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
+import { natsControlSocketPath } from '../../sessions/backends/tmux'
+import {
+  createDefaultProviderRegistry,
+  type TerminalProviderAdapter,
+} from '../../providers/lifecycle'
 
 const SPACE_ID = 'spc-create-fixture'
 const TASK_ID = 'task-create-fixture'
@@ -39,7 +73,10 @@ function makeCtx(root: string): RouteContext {
   const cfg = {
     sessions: { prefix: 'tinstar' },
     cliTemplates: [
-      { name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' },
+      { id: 'Claude', name: 'Claude', adapter: 'claude', startCmd: 'claude --session-id {sessionId} -- {prompt}', resumeCmd: 'claude --resume {sessionId}' },
+      { id: 'marshal', name: 'Marshal', adapter: 'claude', startCmd: 'claude --session-id {sessionId} -- {prompt}', resumeCmd: 'claude --resume {sessionId}' },
+      { id: 'Cursor Agent', name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' },
+      { id: 'Codex', name: 'Codex', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' },
     ],
     editor: 'vim',
     ports: { ttyd: 7681, hostStart: 5273 },
@@ -67,7 +104,7 @@ function makeCtx(root: string): RouteContext {
     sessionConfig: cfg,
     docStore,
     bus: { emit: vi.fn() },
-    readyQueue: { onStatusChange: vi.fn(), getQueue: () => [] },
+    readyQueue: { onStatusChange: vi.fn(), onDelete: vi.fn(), getQueue: () => [] },
     sse: { setReadyQueue: vi.fn(), broadcastReadyQueueUpdate: vi.fn(), addClient: vi.fn() },
     natsTraffic: undefined,
     natsHealth: undefined,
@@ -76,6 +113,7 @@ function makeCtx(root: string): RouteContext {
 
 interface TestCtx {
   docStore: DocumentStore
+  routeContext: RouteContext
   fetch(path: string, init?: RequestInit): Promise<Response>
   close(): Promise<void>
 }
@@ -94,6 +132,7 @@ function createTestServer(root: string): TestCtx {
   }))
   return {
     docStore: ctx.docStore,
+    routeContext: ctx,
     async fetch(path: string, init?: RequestInit): Promise<Response> {
       await ready
       const headers = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> ?? {}) }
@@ -110,7 +149,10 @@ let testCtx: TestCtx
 
 beforeEach(() => {
   createTmuxSessionMock.mockClear()
+  findPortMock.mockClear()
+  releasePortMock.mockClear()
   startTmuxSessionMock.mockClear()
+  stopTmuxSessionMock.mockClear()
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-create-route-test-'))
   testCtx = createTestServer(tmpRoot)
 })
@@ -186,6 +228,423 @@ describe('POST /api/sessions', () => {
     // And the launch opts carry no NATS, so buildAgentCommand emits no --mcp-config.
     const opts = createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as { session: { nats?: { enabled: boolean } | null } }
     expect(opts.session.nats?.enabled ?? false).toBe(false)
+  })
+
+  it('rejects explicit NATS for a provider that has no NATS launch capability before provisioning', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'codex-with-unsupported-nats',
+        cliTemplate: 'Codex',
+        nats: { enabled: true },
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      error: {
+        message: expect.stringContaining(
+          'Provider "codex" does not support terminal capability "nats"',
+        ),
+      },
+    })
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'codex-with-unsupported-nats')).toBeNull()
+  })
+
+  it('rejects a supplied but missing template name before provisioning', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'missing-template', cliTemplate: 'Does Not Exist' }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      error: { message: 'CLI template "Does Not Exist" is not configured' },
+    })
+    expect(findPortMock).not.toHaveBeenCalled()
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'missing-template')).toBeNull()
+  })
+
+  it('lets the task-scoped route derive NATS from a Codex provider capability', async () => {
+    const res = await testCtx.fetch(`/api/tasks/${TASK_ID}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'task-codex', cliTemplate: 'Codex' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(getSession(join(tmpRoot, 'sessions'), 'task-codex')).toMatchObject({
+      adapter: 'codex',
+      nats: null,
+    })
+    expect((testCtx.docStore.getRun('task-codex') as Run).natsEnabled).toBe(false)
+  })
+
+  it('lets the task-scoped route derive NATS from a runtime provider capability', async () => {
+    const forge: TerminalProviderAdapter = {
+      provider: { id: 'task-forge', label: 'Task Forge' },
+      sessionLifecycle: 'terminal',
+      terminal: {
+        capabilities: {
+          nats: { state: 'unsupported', reason: 'not implemented' },
+          telemetry: { state: 'unsupported', reason: 'not implemented' },
+        },
+        defaultTelemetry: false,
+        transcript: null,
+      },
+    }
+    testCtx.routeContext.providerRegistry = createDefaultProviderRegistry([forge])
+    testCtx.routeContext.sessionConfig!.cliTemplates.push({
+      id: 'task-forge',
+      name: 'Task Forge',
+      adapter: 'task-forge',
+      startCmd: 'task-forge -- {prompt}',
+      resumeCmd: 'task-forge resume',
+    })
+
+    const res = await testCtx.fetch(`/api/tasks/${TASK_ID}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'task-forge-worker', cliTemplate: 'task-forge' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(getSession(join(tmpRoot, 'sessions'), 'task-forge-worker')).toMatchObject({
+      adapter: 'task-forge',
+      nats: null,
+    })
+  })
+
+  it('resolves the same provider adapter for create, resume, and stop', async () => {
+    const registry = createDefaultProviderRegistry()
+    const resolveSession = vi.spyOn(registry, 'resolveSession')
+    testCtx.routeContext.providerRegistry = registry
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'codex-lifecycle', cliTemplate: 'Codex' }),
+    })
+    expect(created.status).toBe(201)
+    expect((createTmuxSessionMock.mock.calls.at(-1)![1] as {
+      provider: { provider: { id: string } }
+    }).provider.provider.id).toBe('codex')
+
+    const stopped = await testCtx.fetch('/api/sessions/codex-lifecycle/stop', {
+      method: 'POST',
+    })
+    expect(stopped.status).toBe(200)
+    expect(resolveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ adapter: 'codex' }),
+      expect.objectContaining({ adapter: 'codex' }),
+    )
+
+    const started = await testCtx.fetch('/api/sessions/codex-lifecycle/start', {
+      method: 'POST',
+    })
+    expect(started.status).toBe(200)
+    expect((startTmuxSessionMock.mock.calls.at(-1)![1] as {
+      provider: { provider: { id: string } }
+    }).provider.provider.id).toBe('codex')
+  })
+
+  it('validates resume capabilities before claiming a new port', async () => {
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'generic-resume', cliTemplate: 'Cursor Agent' }),
+    })
+    expect(created.status).toBe(201)
+    expect((await testCtx.fetch('/api/sessions/generic-resume/stop', { method: 'POST' })).status).toBe(200)
+
+    updateSession(join(tmpRoot, 'sessions'), 'generic-resume', {
+      nats: { enabled: true, subscriptions: [] },
+    })
+    findPortMock.mockClear()
+    releasePortMock.mockClear()
+
+    const resumed = await testCtx.fetch('/api/sessions/generic-resume/start', { method: 'POST' })
+    expect(resumed.status).toBe(400)
+    expect(await resumed.json()).toMatchObject({
+      error: { message: expect.stringContaining('does not support terminal capability "nats"') },
+    })
+    expect(findPortMock).not.toHaveBeenCalled()
+    expect(releasePortMock).not.toHaveBeenCalled()
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects resume when a persisted named template was deleted', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'deleted-template-resume', cliTemplate: 'Codex' }),
+    })).status).toBe(201)
+    expect((await testCtx.fetch(
+      '/api/sessions/deleted-template-resume/stop',
+      { method: 'POST' },
+    )).status).toBe(200)
+
+    const templates = testCtx.routeContext.sessionConfig!.cliTemplates
+    templates.splice(templates.findIndex(template => template.name === 'Codex'), 1)
+    findPortMock.mockClear()
+    startTmuxSessionMock.mockClear()
+
+    const resumed = await testCtx.fetch(
+      '/api/sessions/deleted-template-resume/start',
+      { method: 'POST' },
+    )
+
+    expect(resumed.status).toBe(400)
+    expect(await resumed.json()).toMatchObject({
+      error: { message: 'CLI template "Codex" is not configured' },
+    })
+    expect(findPortMock).not.toHaveBeenCalled()
+    expect(startTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('releases a newly claimed resume port when backend startup fails', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'failed-resume' }),
+    })).status).toBe(201)
+    expect((await testCtx.fetch('/api/sessions/failed-resume/stop', { method: 'POST' })).status).toBe(200)
+
+    findPortMock.mockClear()
+    releasePortMock.mockClear()
+    startTmuxSessionMock.mockRejectedValueOnce(new Error('resume failed'))
+
+    const resumed = await testCtx.fetch('/api/sessions/failed-resume/start', { method: 'POST' })
+    expect(resumed.status).toBe(500)
+    expect(findPortMock).toHaveBeenCalledTimes(1)
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+  })
+
+  it('releases a newly claimed graveyard revive port when backend startup fails', async () => {
+    const convId = 'failed-revive-conv'
+    const snapshot = graveyardSnapshotPath(tmpRoot, convId)
+    mkdirSync(dirname(snapshot), { recursive: true })
+    writeFileSync(snapshot, '{"type":"assistant"}\n')
+    testCtx.docStore.upsertTombstone({
+      convId,
+      provider: 'claude',
+      sessionName: 'failed-revive',
+      coversSummary: 'A revive that should roll back',
+      retiredAt: new Date().toISOString(),
+      snapshotted: true,
+    })
+    findPortMock.mockClear()
+    releasePortMock.mockClear()
+    startTmuxSessionMock.mockRejectedValueOnce(new Error('revive failed'))
+
+    const revived = await testCtx.fetch(`/api/graveyard/${convId}/revive`, {
+      method: 'POST',
+    })
+
+    expect(revived.status).toBe(500)
+    expect(findPortMock).toHaveBeenCalledTimes(1)
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-revive-necro')).toBeNull()
+    expect(testCtx.docStore.getTombstone(convId)).toBeDefined()
+  })
+
+  it('removes partial revive registration when post-launch bookkeeping fails', async () => {
+    const convId = 'failed-revive-registration'
+    const snapshot = graveyardSnapshotPath(tmpRoot, convId)
+    mkdirSync(dirname(snapshot), { recursive: true })
+    writeFileSync(snapshot, '{"type":"assistant"}\n')
+    testCtx.docStore.upsertTombstone({
+      convId,
+      provider: 'claude',
+      sessionName: 'failed-revive-registration',
+      coversSummary: 'A revive whose registration should roll back',
+      retiredAt: new Date().toISOString(),
+      snapshotted: true,
+    })
+    const removeWidget = vi.fn()
+    const untrackSession = vi.fn()
+    testCtx.routeContext.natsTraffic = {
+      updateWidgetSubscriptions: vi.fn(),
+      removeWidget,
+    } as never
+    testCtx.routeContext.natsHealth = {
+      trackSession: vi.fn(),
+      untrackSession,
+    } as never
+    testCtx.routeContext.sse.broadcastReadyQueueUpdate = vi.fn(() => {
+      throw new Error('revive SSE registration failed')
+    })
+    stopTmuxSessionMock.mockClear()
+    releasePortMock.mockClear()
+
+    const revived = await testCtx.fetch(`/api/graveyard/${convId}/revive`, {
+      method: 'POST',
+    })
+
+    expect(revived.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalled()
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(removeWidget).toHaveBeenCalled()
+    expect(untrackSession).toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-revive-registration-necro')).toBeNull()
+    expect(testCtx.docStore.getRun('failed-revive-registration-necro')).toBeUndefined()
+    expect(testCtx.docStore.getAllTopicMetadata()).toEqual([])
+    expect(testCtx.docStore.getTombstone(convId)).toBeDefined()
+  })
+
+  it('rolls back the session, backend, and port when create provisioning fails', async () => {
+    createTmuxSessionMock.mockRejectedValueOnce(new Error('create failed'))
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'failed-create' }),
+    })
+
+    expect(failed.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'failed-create' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-create')).toBeNull()
+    expect(testCtx.docStore.getRun('failed-create')).toBeUndefined()
+  })
+
+  it('rolls back backend and durable state when Run creation fails after launch', async () => {
+    const upsertRun = vi.spyOn(testCtx.docStore, 'upsertRun')
+      .mockImplementationOnce(() => { throw new Error('run projection failed') })
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'failed-run-projection' }),
+    })
+    upsertRun.mockRestore()
+
+    expect(failed.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'failed-run-projection' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-run-projection')).toBeNull()
+    expect(testCtx.docStore.getRun('failed-run-projection')).toBeUndefined()
+  })
+
+  it('continues core rollback when auxiliary registration cleanup also throws', async () => {
+    const removeWidget = vi.fn(() => { throw new Error('Saloon cleanup failed') })
+    const untrackSession = vi.fn(() => { throw new Error('health cleanup failed') })
+    const onDelete = vi.fn(() => { throw new Error('ready cleanup failed') })
+    testCtx.routeContext.natsTraffic = {
+      updateWidgetSubscriptions: vi.fn(),
+      removeWidget,
+    } as never
+    testCtx.routeContext.natsHealth = {
+      trackSession: vi.fn(),
+      untrackSession,
+    } as never
+    testCtx.routeContext.readyQueue.onDelete = onDelete
+    testCtx.routeContext.sse.broadcastReadyQueueUpdate = vi.fn(() => {
+      throw new Error('SSE registration failed')
+    })
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'failed-registration-cleanup',
+        taskId: TASK_ID,
+        nats: { enabled: true },
+      }),
+    })
+
+    expect(failed.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'failed-registration-cleanup' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(removeWidget).toHaveBeenCalled()
+    expect(untrackSession).toHaveBeenCalled()
+    expect(onDelete).toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-registration-cleanup')).toBeNull()
+    expect(testCtx.docStore.getRun('failed-registration-cleanup')).toBeUndefined()
+    // Shared live-set/task metadata is never rollback-owned: another session
+    // may have joined it after this launch created it. Only the failed
+    // session's unique DM metadata is safe to remove.
+    expect(testCtx.docStore.getAllTopicMetadata()).toEqual([
+      expect.objectContaining({ kind: 'broadcast', name: 'Task: Make Widget' }),
+    ])
+    expect(testCtx.docStore.getAllTopicMetadata().some(
+      metadata => metadata.subject.endsWith('.failed-registration-cleanup'),
+    )).toBe(false)
+  })
+
+  it('still deletes durable state when malformed subscription data breaks registration', async () => {
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'malformed-registration-subject',
+        nats: { enabled: true, subscriptions: [123] },
+      }),
+    })
+
+    expect(failed.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'malformed-registration-subject' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'malformed-registration-subject')).toBeNull()
+    expect(testCtx.docStore.getRun('malformed-registration-subject')).toBeUndefined()
+  })
+
+  it('stops and releases the port when a persisted adapter is no longer registered', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'orphaned-provider' }),
+    })).status).toBe(201)
+    updateSession(join(tmpRoot, 'sessions'), 'orphaned-provider', { adapter: 'removed-provider' })
+    releasePortMock.mockClear()
+
+    const stopped = await testCtx.fetch('/api/sessions/orphaned-provider/stop', { method: 'POST' })
+    expect(stopped.status).toBe(200)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ adapter: 'removed-provider' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'orphaned-provider')).toMatchObject({
+      state: 'stopped',
+      port: null,
+    })
+  })
+
+  it('creates a session for a capability-light third provider registered at runtime', async () => {
+    const forge: TerminalProviderAdapter = {
+      provider: { id: 'forge', label: 'Forge CLI' },
+      sessionLifecycle: 'terminal',
+      terminal: {
+        capabilities: {
+          nats: { state: 'unsupported', reason: 'not implemented' },
+          telemetry: { state: 'unsupported', reason: 'not implemented' },
+        },
+        defaultTelemetry: false,
+        transcript: null,
+      },
+    }
+    testCtx.routeContext.providerRegistry = createDefaultProviderRegistry([forge])
+    testCtx.routeContext.sessionConfig!.cliTemplates.push({
+      id: 'forge',
+      name: 'Forge',
+      adapter: 'forge',
+      startCmd: 'forge run -- {prompt}',
+      resumeCmd: 'forge resume',
+    })
+
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'forge-worker', cliTemplate: 'forge' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(getSession(join(tmpRoot, 'sessions'), 'forge-worker')?.adapter).toBe('forge')
+    expect((createTmuxSessionMock.mock.calls.at(-1)![1] as {
+      provider: { provider: { id: string } }
+    }).provider.provider.id).toBe('forge')
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {
@@ -436,6 +895,193 @@ describe('POST /api/sessions', () => {
     const res = await testCtx.fetch('/api/sessions', { method: 'POST', body: '{not valid json' })
     expect(res.status).toBe(400)
     expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('spawns an unsupported child provider without inheriting parent NATS', async () => {
+    const parent = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'nats-parent', nats: { enabled: true } }),
+    })
+    expect(parent.status).toBe(201)
+
+    createTmuxSessionMock.mockClear()
+    const spawned = await testCtx.fetch('/api/sessions/nats-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'codex-hand' }),
+    })
+    expect(spawned.status).toBe(201)
+    const body = await spawned.json() as {
+      data: { session: string; room: string | null }
+      warnings?: { nats?: string[] }
+    }
+    const { data } = body
+    const child = getSession(join(tmpRoot, 'sessions'), data.session)
+    expect(child).toMatchObject({ adapter: 'codex' })
+    expect(child?.nats?.enabled ?? false).toBe(false)
+    expect(data.room).toBeNull()
+    expect(body.warnings?.nats).toEqual([
+      expect.stringContaining('Parent NATS was not inherited'),
+    ])
+
+    const launch = createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as {
+      provider: { provider: { id: string } }
+      session: { adapter?: string | null; nats?: { enabled: boolean } | null }
+    }
+    expect(launch.provider.provider.id).toBe('codex')
+    expect(launch.session.adapter).toBe('codex')
+    expect(launch.session.nats?.enabled ?? false).toBe(false)
+    expect((testCtx.docStore.getRun(data.session) as Run).natsEnabled).toBe(false)
+  })
+
+  it('rejects hand spawn when its named provider template was deleted', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'missing-hand-template-parent', nats: { enabled: false } }),
+    })).status).toBe(201)
+    const templates = testCtx.routeContext.sessionConfig!.cliTemplates
+    templates.splice(templates.findIndex(template => template.name === 'Codex'), 1)
+    createTmuxSessionMock.mockClear()
+
+    const spawned = await testCtx.fetch('/api/sessions/missing-hand-template-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'codex-hand' }),
+    })
+
+    expect(spawned.status).not.toBe(201)
+    expect(await spawned.json()).toMatchObject({
+      error: { message: 'CLI template "Codex" is not configured' },
+    })
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rolls back the child backend, port, session, and run when hand spawn fails', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'failed-spawn-parent', nats: { enabled: false } }),
+    })).status).toBe(201)
+    createTmuxSessionMock.mockClear()
+    stopTmuxSessionMock.mockClear()
+    releasePortMock.mockClear()
+    createTmuxSessionMock.mockRejectedValueOnce(new Error('child create failed'))
+
+    const failed = await testCtx.fetch('/api/sessions/failed-spawn-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'codex-hand' }),
+    })
+
+    expect(failed.status).toBe(500)
+    const stopCall = stopTmuxSessionMock.mock.calls.at(-1) as unknown as [
+      unknown,
+      { name: string },
+    ]
+    const rolledBackChild = stopCall[1]
+    expect(rolledBackChild.name).toContain('failed-spawn-parent-codex-hand-')
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), rolledBackChild.name)).toBeNull()
+    expect(testCtx.docStore.getRun(rolledBackChild.name)).toBeUndefined()
+  })
+
+  it('rolls back every persisted parent breakout surface when spawn fails late', async () => {
+    const parentName = 'late-breakout-parent'
+    const socketPath = natsControlSocketPath(parentName)
+    rmSync(socketPath, { force: true })
+    const commands: Array<{ action: string; subject: string }> = []
+    const controlServer = createNetServer(socket => {
+      socket.on('data', chunk => {
+        for (const line of chunk.toString().trim().split('\n')) {
+          if (line) commands.push(JSON.parse(line))
+        }
+      })
+    })
+    await new Promise<void>((resolve, reject) => {
+      controlServer.once('error', reject)
+      controlServer.listen(socketPath, resolve)
+    })
+
+    try {
+      expect((await testCtx.fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: parentName,
+          taskId: TASK_ID,
+          nats: { enabled: true, subscriptions: ['existing.parent.subject'] },
+        }),
+      })).status).toBe(201)
+      const parentBefore = getSession(join(tmpRoot, 'sessions'), parentName)!
+      const runBefore = testCtx.docStore.getRun(parentName)!
+      const originalUpsertRun = testCtx.docStore.upsertRun.bind(testCtx.docStore)
+      const runSpy = vi.spyOn(testCtx.docStore, 'upsertRun')
+        .mockImplementation((id, run) => {
+          if (id === parentName && run.breakoutRooms?.length) {
+            throw new Error('late parent run failure')
+          }
+          originalUpsertRun(id, run)
+        })
+
+      const failed = await testCtx.fetch(`/api/sessions/${parentName}/spawn`, {
+        method: 'POST',
+        body: JSON.stringify({ hand: 'marshal' }),
+      })
+      runSpy.mockRestore()
+
+      expect(failed.status).toBe(500)
+      const breakout = commands.find(command => command.action === 'subscribe')?.subject
+      expect(breakout).toMatch(/^tinstar\.room\./)
+      await vi.waitFor(() => {
+        expect(commands).toContainEqual({ action: 'unsubscribe', subject: breakout })
+      })
+      expect(getSession(join(tmpRoot, 'sessions'), parentName)?.nats?.subscriptions)
+        .toEqual(parentBefore.nats?.subscriptions)
+      expect(testCtx.docStore.getRun(parentName)?.breakoutRooms)
+        .toEqual(runBefore.breakoutRooms)
+      expect(testCtx.docStore.getTopicMetadata(breakout!)).toBeUndefined()
+      const stoppedChild = (stopTmuxSessionMock.mock.calls.at(-1) as unknown as [
+        unknown,
+        { name: string },
+      ])[1].name
+      expect(testCtx.docStore.getAllTopicMetadata().some(
+        metadata => metadata.subject.split('.').length === 5,
+      )).toBe(true)
+      expect(testCtx.docStore.getAllTopicMetadata().some(
+        metadata => metadata.subject.endsWith(`.${stoppedChild}`),
+      )).toBe(false)
+    } finally {
+      await new Promise<void>(resolve => controlServer.close(() => resolve()))
+      rmSync(socketPath, { force: true })
+    }
+  })
+
+  it('removes child-owned topic metadata after a fallback spawn fails late', async () => {
+    const parentName = 'fallback-breakout-parent'
+    rmSync(natsControlSocketPath(parentName), { force: true })
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: parentName,
+        nats: { enabled: true, subscriptions: ['existing.parent.subject'] },
+      }),
+    })).status).toBe(201)
+    const metadataBefore = testCtx.docStore.getAllTopicMetadata()
+    testCtx.routeContext.natsHealth = {
+      trackSession: vi.fn(() => { throw new Error('late health registration failure') }),
+      untrackSession: vi.fn(),
+    } as never
+
+    const failed = await testCtx.fetch(`/api/sessions/${parentName}/spawn`, {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal' }),
+    })
+
+    expect(failed.status).toBe(500)
+    const stopCall = stopTmuxSessionMock.mock.calls.at(-1) as unknown as [
+      unknown,
+      { name: string },
+    ]
+    const childName = stopCall[1].name
+    expect(testCtx.docStore.getAllTopicMetadata()).toEqual(metadataBefore)
+    expect(testCtx.docStore.getAllTopicMetadata().some(
+      metadata => metadata.subject.endsWith(`.${childName}`),
+    )).toBe(false)
   })
 
   it('spawn from a background parent does NOT inherit background (child born visible)', async () => {

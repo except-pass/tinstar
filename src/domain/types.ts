@@ -144,6 +144,14 @@ export interface Tombstone {
   /** Claude Code conversation.id — the resume handle and the map key. */
   convId: string
   /**
+   * Provider identity at retire-time. Absent on legacy graves and therefore
+   * interpreted as Claude, the only provider graveyard revive originally
+   * supported.
+   */
+  provider?: string
+  /** Stable CLI template ID at retire-time, retained for provider-aware restore. */
+  cliTemplate?: string
+  /**
    * The session's name at retire-time — an IDENTITY handle, not a label.
    * `reviveName()` re-materializes the session from this, so it must stay the
    * real session name. Never overwrite it with a display string; put the
@@ -210,6 +218,7 @@ export interface EntitySettings {
   defaultWorktreePath?: string
   backend?: 'tmux'
   skipPermissions?: boolean
+  /** Stable CLI template ID; the template's visible name may be renamed. */
   cliTemplate?: string
   defaultRunColor?: string
 }

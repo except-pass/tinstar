@@ -18,7 +18,12 @@ export interface NecroResult {
   /** Name of the revived (re-materialized) session, when revivable. */
   sessionName?: string
   /** Why revive was refused, when not revivable. */
-  reason?: 'transcript-unavailable'
+  reason?:
+    | 'transcript-unavailable'
+    | 'provider-unsupported'
+    | 'template-unavailable'
+    | 'provider-unavailable'
+    | 'provider-mismatch'
   /** True when the original worktree was gone and revive fell back to a
    *  substitute cwd — the agent remembers the conversation but its code context
    *  is absent (AE1). */

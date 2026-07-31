@@ -14,10 +14,10 @@ import type { OTelStore } from '../stores/otel-store'
 import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
 import type { BusEvent, BusEventType, PayloadFor } from '../types'
-import { buildAgentSubject, BREAKOUT_PREFIX } from '../nats/subjects'
+import { buildAgentSubject, BREAKOUT_PREFIX, parseSubject } from '../nats/subjects'
 import { ok as okEnvelope, fail as failEnvelope, type OkOpts, type FailOpts } from './envelope'
 import type { ErrorCode } from '../../domain/api'
-import type { TinstarConfig } from '../sessions/config'
+import type { CliTemplate, TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
@@ -40,6 +40,7 @@ import {
   setProjectFlag,
   reorderProjects,
   createWorktree,
+  deleteWorktree,
   WorktreeBranchConflictError,
   listWorktrees,
   listSessions,
@@ -107,9 +108,31 @@ import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import { handleSurfaceRoutes } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
+import {
+  defaultProviderRegistry,
+  ProviderAdapterResolutionError,
+  ProviderCapabilityError,
+  providerTelemetryEnabled,
+  requireProviderCapability,
+  type ProviderAdapterRegistry,
+  type TerminalProviderAdapter,
+} from '../providers/lifecycle'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
+
+function validateCliTemplateProvider(
+  registry: ProviderAdapterRegistry,
+  template: CliTemplate,
+): string | null {
+  try {
+    const provider = registry.resolveTemplate(template)
+    providerTelemetryEnabled(provider, template)
+    return null
+  } catch (err) {
+    return (err as Error).message
+  }
 }
 
 function isConstellationGraph(v: unknown): v is ConstellationGraph {
@@ -474,6 +497,7 @@ export interface CreateSessionContext {
   dashboardUrl: string
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
+  providerRegistry?: ProviderAdapterRegistry
 }
 
 /** convIds with a revive in progress — a single-writer guard so two concurrent
@@ -496,13 +520,133 @@ export function registerLaunchedSession(
   resolvedNats: { enabled: boolean; subscriptions: string[] } | null,
   status: SessionStatus,
 ): void {
-  registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
-  if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
-  deps.readyQueue.onStatusChange(name, status)
-  deps.sse.setReadyQueue(deps.readyQueue.getQueue())
-  deps.sse.broadcastReadyQueueUpdate()
-  deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
+  try {
+    registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+    bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
+    if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
+    deps.readyQueue.onStatusChange(name, status)
+    deps.sse.setReadyQueue(deps.readyQueue.getQueue())
+    deps.sse.broadcastReadyQueueUpdate()
+    deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
+  } catch (err) {
+    rollbackLaunchedSessionRegistration(deps, name, resolvedNats)
+    throw err
+  }
+}
+
+/**
+ * Undo the shared registration side effects for a launch that did not commit.
+ * Every action is isolated so a broken NATS subscription or SSE client cannot
+ * prevent the ready queue and remaining durable state from being cleaned.
+ *
+ * Topic metadata is removed only for the session's unique DM and only when
+ * this session created it. Task/live-set broadcast metadata is shared by
+ * sibling sessions and always survives an unrelated launch rollback.
+ */
+function rollbackLaunchedSessionRegistration(
+  deps: Pick<CreateSessionContext, 'docStore' | 'natsTraffic' | 'natsHealth' | 'readyQueue' | 'sse'>,
+  name: string,
+  resolvedNats: { enabled: boolean; subscriptions: string[] } | null,
+): void {
+  const attempt = (step: string, action: () => void): void => {
+    try {
+      action()
+    } catch (err) {
+      log.warn('sessions', `${name}: launch rollback could not ${step}: ${(err as Error).message}`)
+    }
+  }
+
+  attempt('unregister Saloon subscriptions', () => unregisterSaloonSubs(deps.natsTraffic, name))
+  attempt('untrack NATS health', () => deps.natsHealth?.untrackSession(name))
+  attempt('remove the ready-queue entry', () => deps.readyQueue.onDelete(name))
+  attempt('refresh the ready-queue snapshot', () => deps.sse.setReadyQueue(deps.readyQueue.getQueue()))
+  attempt('broadcast the ready-queue rollback', () => deps.sse.broadcastReadyQueueUpdate())
+
+  const sessionToken = sanitizeSubjectToken(name)
+  const rawSubscriptions: unknown = resolvedNats?.subscriptions
+  const subscriptions = Array.isArray(rawSubscriptions)
+    ? rawSubscriptions.filter((subject): subject is string => typeof subject === 'string')
+    : []
+  for (const subject of new Set(subscriptions)) {
+    attempt(`classify and remove owned topic metadata ${subject}`, () => {
+      const parsed = parseSubject(subject)
+      if (parsed?.kind !== 'dm' || parsed.session !== sessionToken) return
+      const metadata = deps.docStore.getTopicMetadata(subject)
+      if (metadata?.createdBy === name) deps.docStore.deleteTopicMetadata(subject)
+    })
+  }
+}
+
+async function rollbackFailedSessionProvisioning(args: {
+  cfg: TinstarConfig
+  sessDir: string
+  docStore: DocumentStore
+  name: string
+  session: Session | null
+  claimedPort: number | null
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  natsHealth?: import('../nats-health').NatsHealthMonitor
+  readyQueue: ReadyQueue
+  sse: SSEBroadcaster
+  resolvedNats: { enabled: boolean; subscriptions: string[] } | null
+  createdWorktreeProject: string | null
+  worktreeEntityId: string | null
+}): Promise<void> {
+  const {
+    cfg, sessDir, docStore, name, session, claimedPort,
+    natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
+    createdWorktreeProject, worktreeEntityId,
+  } = args
+
+  // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
+  // broken without ever stranding a live process or an allocator claim.
+  if (session) {
+    try {
+      // Safe before, during, or after backend creation: the tmux backend treats
+      // an absent session as already stopped and also tears down managed ttyd.
+      await tmuxBackend.stopTmuxSession(cfg, session)
+    } catch (err) {
+      log.warn('sessions', `${name}: failed provisioning rollback could not stop backend: ${(err as Error).message}`)
+    }
+  }
+  if (claimedPort != null) {
+    try {
+      tmuxBackend.releasePort(claimedPort)
+    } catch (err) {
+      log.warn('sessions', `${name}: failed provisioning rollback could not release port ${claimedPort}: ${(err as Error).message}`)
+    }
+  }
+
+  rollbackLaunchedSessionRegistration(
+    { docStore, natsTraffic, natsHealth, readyQueue, sse },
+    name,
+    resolvedNats,
+  )
+  try {
+    docStore.deleteRun(name)
+  } catch (err) {
+    log.warn('sessions', `${name}: failed provisioning rollback could not delete run: ${(err as Error).message}`)
+  }
+  try {
+    deleteSession(sessDir, name)
+  } catch (err) {
+    log.warn('sessions', `${name}: failed provisioning rollback could not delete session record: ${(err as Error).message}`)
+  }
+
+  if (createdWorktreeProject) {
+    try {
+      await deleteWorktree(createdWorktreeProject, name)
+    } catch (err) {
+      log.warn('sessions', `${name}: failed provisioning rollback could not remove worktree: ${(err as Error).message}`)
+    }
+  }
+  if (worktreeEntityId) {
+    try {
+      docStore.deleteWorktree(worktreeEntityId)
+    } catch (err) {
+      log.warn('sessions', `${name}: failed provisioning rollback could not delete worktree entity: ${(err as Error).message}`)
+    }
+  }
 }
 
 async function createSessionInternal(
@@ -511,13 +655,17 @@ async function createSessionInternal(
 ): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
   const {
     name, project, worktree = false, worktreePath,
-    prompt, skipPermissions = true, cliTemplate: cliTemplateName,
+    prompt, skipPermissions = true, cliTemplate: cliTemplateId,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
     view, viewData, model: modelOverride, token: tokenOverride, focus,
     background = false
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
+  const {
+    cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets,
+    natsTraffic, natsHealth,
+  } = ctx
+  const providerRegistry = ctx.providerRegistry ?? defaultProviderRegistry
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
 
@@ -534,6 +682,38 @@ async function createSessionInternal(
   )
   if (!overrideCheck.ok) {
     return { ok: false, error: { code: overrideCheck.code, message: overrideCheck.message } }
+  }
+
+  // Resolve the provider and validate explicitly requested terminal features
+  // before creating a worktree, session directory, port, or process. A typo or
+  // unsupported capability must never leave half-provisioned lifecycle state.
+  const resolvedTemplate = cliTemplateId
+    ? cfg.cliTemplates.find(t => t.id === cliTemplateId) ?? null
+    : null
+  if (cliTemplateId && !resolvedTemplate) {
+    return {
+      ok: false,
+      error: {
+        code: 'PROVIDER_CAPABILITY_UNAVAILABLE',
+        message: `CLI template "${cliTemplateId}" is not configured`,
+      },
+    }
+  }
+  let provider: TerminalProviderAdapter
+  try {
+    provider = providerRegistry.resolveTemplate(resolvedTemplate)
+    if (nats?.enabled) requireProviderCapability(provider, 'nats')
+    // This is also the fail-fast validation for an explicit telemetry:true on a
+    // provider that cannot supply the environment transport.
+    providerTelemetryEnabled(provider, resolvedTemplate)
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: 'PROVIDER_CAPABILITY_UNAVAILABLE',
+        message: (err as Error).message,
+      },
+    }
   }
 
   // Resolve project
@@ -586,14 +766,6 @@ async function createSessionInternal(
     ?? (epicId ? docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
     ?? (initiativeId ? docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
-  // Resolve CLI template
-  const resolvedTemplate = cliTemplateName
-    ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
-    : null
-  // Missing template ⇒ claude (the built-in claude templates and the legacy
-  // no-template launch path are all claude). NATS wiring is Claude-only.
-  const adapter = resolvedTemplate?.adapter ?? 'claude'
-
   // Compute NATS subscriptions
   let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
   const natsCtx = {
@@ -603,7 +775,11 @@ async function createSessionInternal(
     epicId: epicId || null,
     initiativeId: initiativeId || null,
   }
-  if (!nats && adapter === 'claude' && (taskId || epicId || initiativeId || natsCtx.spaceId)) {
+  if (
+    !nats
+    && provider.terminal.capabilities.nats.state === 'supported'
+    && (taskId || epicId || initiativeId || natsCtx.spaceId)
+  ) {
     // NATS on by default whenever there's *any* hierarchy to root a subject in —
     // including a bare space. Previously the gate omitted spaceId, so a
     // standalone session (created with just an active space and no explicit
@@ -613,54 +789,83 @@ async function createSessionInternal(
     // `nats:{enabled:false}` explicitly still opts out, since this branch only
     // runs when `nats` is absent.
     //
-    // Gated on adapter==='claude': NATS is wired via Claude-only flags
-    // (--mcp-config / --dangerously-load-development-channels), so defaulting it
-    // on for a cursor/codex session would crash the launch on an unknown flag.
-    // Non-claude sessions can still opt in explicitly via `nats:{enabled:true}`
-    // if a future adapter learns the bus.
+    // Gated by the registered provider capability: generic/Codex remain off,
+    // while a future provider can opt in without entering this shared branch.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   }
 
-  const session = createSession(sessDir, {
-    name,
-    backend: 'tmux',
-    project,
-    workspace: {
-      path: workspacePath,
-      worktree: isWorktree,
-      branch,
-      basePath: isWorktree ? projectPath : null,
-    },
-    profile: null,
-    oneshot: false,
-    skipPermissions,
-    background,
-    cliTemplate: cliTemplateName ?? null,
-    adapter: resolvedTemplate?.adapter ?? null,
-    nats: resolvedNats,
-    appendSystemPrompt: appendSystemPrompt ?? null,
-    agent: agent ?? null,
-    modelOverride: modelOverride ?? null,
-  })
+  let session: Session | null = null
+  let claimedPort: number | null = null
+  let sessionPort: number | null = null
+  const createdWorktreeProject = worktree && !worktreePath ? projectPath : null
+  try {
+    session = createSession(sessDir, {
+      name,
+      backend: 'tmux',
+      project,
+      workspace: {
+        path: workspacePath,
+        worktree: isWorktree,
+        branch,
+        basePath: isWorktree ? projectPath : null,
+      },
+      profile: null,
+      oneshot: false,
+      skipPermissions,
+      background,
+      cliTemplate: cliTemplateId ?? null,
+      adapter: provider.provider.id,
+      nats: resolvedNats,
+      appendSystemPrompt: appendSystemPrompt ?? null,
+      agent: agent ?? null,
+      modelOverride: modelOverride ?? null,
+    })
 
-  const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
-  enriched._stateDir = claudeStateDir(sessDir, name)
+    const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
+    enriched._stateDir = claudeStateDir(sessDir, name)
 
-  // Switchboard token override: overlay the per-session OAuth token on top of the
-  // global secrets map for THIS launch only (spawn-time, never persisted). Inert
-  // when unset — the global secrets map is returned unchanged (byte-identical env).
-  const sec = applyTokenOverride(secrets(), tokenOverride)
-  const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
-  if (prompt) enriched.initialPrompt = prompt
+    // Switchboard token override: overlay the per-session OAuth token on top of the
+    // global secrets map for THIS launch only (spawn-time, never persisted). Inert
+    // when unset — the global secrets map is returned unchanged (byte-identical env).
+    const sec = applyTokenOverride(secrets(), tokenOverride)
+    claimedPort = await tmuxBackend.findPort(interactivePortWindow(cfg))
+    const port = claimedPort
+    if (prompt) enriched.initialPrompt = prompt
 
-  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null, appendSystemPrompt: appendSystemPrompt ?? null })
-  const sessionPort = result.port
-  updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-  tmuxBackend.onTtydRestart(name, (newPid) => {
-    updateSession(sessDir, name, { ttydPid: newPid })
-  })
+    const result = await tmuxBackend.createTmuxSession(cfg, {
+      session: enriched,
+      secrets: sec,
+      port,
+      provider,
+      template: resolvedTemplate,
+      agent: agent ?? null,
+      appendSystemPrompt: appendSystemPrompt ?? null,
+    })
+    sessionPort = result.port
+    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    tmuxBackend.onTtydRestart(name, (newPid) => {
+      updateSession(sessDir, name, { ttydPid: newPid })
+    })
+  } catch (err) {
+    await rollbackFailedSessionProvisioning({
+      cfg,
+      sessDir,
+      docStore,
+      name,
+      session,
+      claimedPort,
+      natsTraffic,
+      natsHealth,
+      readyQueue,
+      sse,
+      resolvedNats,
+      createdWorktreeProject,
+      worktreeEntityId: worktreeEntityId || null,
+    })
+    throw err
+  }
 
   // Create Run entry
   const runId = name
@@ -678,52 +883,72 @@ async function createSessionInternal(
     ? (resolvedNats.subscriptions[1] ?? resolvedNats.subscriptions[0])
     : undefined
 
-  docStore.upsertRun(runId, {
-    id: runId,
-    color,
-    status: initialStatus,
-    background,
-    blocked: false,
-    sessionId: name,
-    initiative: initiativeId ?? '',
-    epic: epicId ?? '',
-    task: taskId ?? '',
-    repo: project ?? '',
-    worktree: isWorktree ? (branch ?? name) : '',
-    touchedFiles: [],
-    recapEntries: [],
-    rawLogs: '',
-    port: sessionPort ?? null,
-    backend: 'tmux',
-    backendInfo,
-    agentIcon: resolvedTemplate?.icon ?? undefined,
-    natsEnabled: resolvedNats?.enabled ?? false,
-    natsSubject,
-    natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
-    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
-    taskId: taskId ?? '',
-    worktreeId: worktreeEntityId,
-    createdAt: new Date().toISOString(),
-    spaceId: docStore.activeSpaceId,
-    view,
-    viewData,
-    // Passive spawn: only persist the flag when the caller explicitly opts out
-    // (focus:false). Absent/true keeps the field off the projection so the
-    // client applies its default auto-focus behavior. background:true forces
-    // the opt-out regardless of `focus` — a background session never steals
-    // camera focus (R14), server-side rather than trusting callers.
-    ...(focus === false || background ? { focusOnCreate: false } : {}),
-  })
+  try {
+    docStore.upsertRun(runId, {
+      id: runId,
+      color,
+      status: initialStatus,
+      background,
+      blocked: false,
+      sessionId: name,
+      initiative: initiativeId ?? '',
+      epic: epicId ?? '',
+      task: taskId ?? '',
+      repo: project ?? '',
+      worktree: isWorktree ? (branch ?? name) : '',
+      touchedFiles: [],
+      recapEntries: [],
+      rawLogs: '',
+      port: sessionPort ?? null,
+      backend: 'tmux',
+      backendInfo,
+      agentIcon: resolvedTemplate?.icon ?? undefined,
+      natsEnabled: resolvedNats?.enabled ?? false,
+      natsSubject,
+      natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
+      natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
+      taskId: taskId ?? '',
+      worktreeId: worktreeEntityId,
+      createdAt: new Date().toISOString(),
+      spaceId: docStore.activeSpaceId,
+      view,
+      viewData,
+      // Passive spawn: only persist the flag when the caller explicitly opts out
+      // (focus:false). Absent/true keeps the field off the projection so the
+      // client applies its default auto-focus behavior. background:true forces
+      // the opt-out regardless of `focus` — a background session never steals
+      // camera focus (R14), server-side rather than trusting callers.
+      ...(focus === false || background ? { focusOnCreate: false } : {}),
+    })
 
-  registerLaunchedSession(
-    { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
-    name,
-    resolvedNats,
-    initialStatus,
-  )
+    registerLaunchedSession(
+      { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
+      name,
+      resolvedNats,
+      initialStatus,
+    )
 
-  const updated = getSession(sessDir, name)!
-  return { ok: true, session: updated }
+    const updated = getSession(sessDir, name)
+    if (!updated) throw new Error(`session '${name}' vanished after launch registration`)
+    return { ok: true, session: updated }
+  } catch (err) {
+    await rollbackFailedSessionProvisioning({
+      cfg,
+      sessDir,
+      docStore,
+      name,
+      session,
+      claimedPort,
+      natsTraffic,
+      natsHealth,
+      readyQueue,
+      sse,
+      resolvedNats,
+      createdWorktreeProject,
+      worktreeEntityId: worktreeEntityId || null,
+    })
+    throw err
+  }
 }
 
 export interface RouteContext {
@@ -737,6 +962,7 @@ export interface RouteContext {
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
+  providerRegistry?: ProviderAdapterRegistry
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
   slashRegistry?: SlashCommandRegistry
@@ -1146,6 +1372,7 @@ function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | nu
     dashboardUrl: `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`,
     natsTraffic: ctx.natsTraffic,
     natsHealth: ctx.natsHealth,
+    providerRegistry: ctx.providerRegistry,
   }
 }
 
@@ -4218,6 +4445,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
+              case 'PROVIDER_CAPABILITY_UNAVAILABLE':
+                return fail(res, 'BAD_REQUEST', result.error.message)
               // Switchboard override guard — surface the stable code/status (not INTERNAL).
               case 'OVERRIDE_MODEL_NOT_CONFIGURED':
               case 'OVERRIDE_MODEL_NOT_ALLOWED':
@@ -4262,7 +4491,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const resolvedProject = settings?.resolved?.project
 
           const params: CreateSessionParams = {
-            nats: { enabled: true },
             ...overrides,
             project: overrides.project ?? resolvedProject,
             taskId,
@@ -4280,6 +4508,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             dashboardUrl,
             natsTraffic: ctx.natsTraffic,
             natsHealth: ctx.natsHealth,
+            providerRegistry: ctx.providerRegistry,
           }
 
           const result = await createSessionInternal(params, createCtx)
@@ -4287,6 +4516,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
+            if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
+              return fail(res, 'BAD_REQUEST', result.error.message)
+            }
             return fail(res, 'INTERNAL', result.error.message)
           }
           ok(res, result.session, { status: 201 })
@@ -4304,8 +4536,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
           try {
-            await tmuxBackend.stopTmuxSession(cfg, session)
-            if (session.port) tmuxBackend.releasePort(session.port)
+            const stopTemplate = session.cliTemplate
+              ? cfg.cliTemplates.find(t => t.id === session.cliTemplate) ?? null
+              : null
+            // Provider resolution is diagnostic on stop: teardown is shared and
+            // provider-neutral, so a removed adapter must not strand tmux/ttyd or
+            // its claimed port.
+            const registry = ctx.providerRegistry ?? defaultProviderRegistry
+            try {
+              registry.resolveSession(session, stopTemplate)
+            } catch (err) {
+              log.warn('stop', `${session.name}: provider resolution failed during teardown: ${(err as Error).message}`)
+            }
+            try {
+              await tmuxBackend.stopTmuxSession(cfg, session)
+            } finally {
+              if (session.port) tmuxBackend.releasePort(session.port)
+            }
 
             // Clear port/ttydPid so a later start re-allocates a fresh port via
             // findPort(). Leaving stale values here causes the proxy /s/{name}
@@ -4367,11 +4614,35 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           try {
             const sec = applyTokenOverride(secrets(), tokenOverride)
 
-            const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
             const resumeTemplate = session.cliTemplate
-              ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
+              ? cfg.cliTemplates.find(t => t.id === session.cliTemplate) ?? null
               : null
-            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate, appendSystemPrompt: session.appendSystemPrompt, agent: session.agent })
+            if (session.cliTemplate && !resumeTemplate) {
+              throw new ProviderAdapterResolutionError(
+                `CLI template "${session.cliTemplate}" is not configured`,
+              )
+            }
+            const provider = (ctx.providerRegistry ?? defaultProviderRegistry)
+              .resolveSession(session, resumeTemplate)
+            if (session.nats?.enabled) requireProviderCapability(provider, 'nats')
+            providerTelemetryEnabled(provider, resumeTemplate)
+            const claimedPort = session.port == null
+            const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
+            let result: Awaited<ReturnType<typeof tmuxBackend.startTmuxSession>>
+            try {
+              result = await tmuxBackend.startTmuxSession(cfg, {
+                session,
+                secrets: sec,
+                port,
+                provider,
+                template: resumeTemplate,
+                appendSystemPrompt: session.appendSystemPrompt,
+                agent: session.agent,
+              })
+            } catch (err) {
+              if (claimedPort) tmuxBackend.releasePort(port)
+              throw err
+            }
             updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
             tmuxBackend.onTtydRestart(session.name, (newPid) => {
               updateSession(sessDir, session.name, { ttydPid: newPid })
@@ -4398,6 +4669,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
             ok(res, updated)
           } catch (err) {
+            if (
+              err instanceof ProviderAdapterResolutionError
+              || err instanceof ProviderCapabilityError
+            ) {
+              return fail(res, 'BAD_REQUEST', err.message)
+            }
             fail(res, 'INTERNAL', (err as Error).message)
           }
         })
@@ -4464,8 +4741,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Session.model is a derived, non-persisted field (empty on a disk
             // read), so capture the real last-run model from the transcript.
             const lastModel = snapSource ? readLatestModelAt(snapSource) : null
+            const retiredProvider = session?.adapter
+              ?? (session?.cliTemplate
+                ? cfg.cliTemplates.find(template => template.id === session.cliTemplate)?.adapter
+                : undefined)
+              ?? 'claude'
             ctx.docStore.upsertTombstone({
               convId,
+              provider: retiredProvider,
+              cliTemplate: session?.cliTemplate ?? undefined,
               sessionName: name,
               // Snapshot the friendly name at retire-time — the run is about to
               // be gone, so this is the last chance to keep the graveyard
@@ -4597,6 +4881,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return true
         }
 
+        // Graveyard restore is currently a Claude transcript contract. Retain
+        // non-Claude provider identity on the tombstone and refuse explicitly
+        // instead of launching Claude against a foreign/random conversation id.
+        if ((tombstone.provider ?? 'claude') !== 'claude') {
+          ok(res, { revivable: false, reason: 'provider-unsupported' })
+          return true
+        }
+        const reviveTemplate = tombstone.cliTemplate
+          ? cfg.cliTemplates.find(template => template.id === tombstone.cliTemplate) ?? null
+          : null
+        if (tombstone.cliTemplate && !reviveTemplate) {
+          ok(res, { revivable: false, reason: 'template-unavailable' })
+          return true
+        }
+        let reviveProvider: TerminalProviderAdapter
+        try {
+          reviveProvider = (ctx.providerRegistry ?? defaultProviderRegistry)
+            .resolveTemplate(reviveTemplate)
+          providerTelemetryEnabled(reviveProvider, reviveTemplate)
+        } catch {
+          ok(res, { revivable: false, reason: 'provider-unavailable' })
+          return true
+        }
+        if (reviveProvider.provider.id !== 'claude') {
+          ok(res, { revivable: false, reason: 'provider-mismatch' })
+          return true
+        }
+
         // revive — re-materialize the session from the tombstone and resume it.
         // Single-writer guard: reject a second concurrent revive of the same grave.
         if (revivesInFlight.has(convId)) return fail(res, 'CONFLICT', `Revive already in progress for '${convId}'`)
@@ -4605,6 +4917,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // directly keeps the guard-release `finally` on the same promise — a
         // readBody timeout/abort must never strand the convId at 409 forever.
         void (async () => {
+          let claimedRevivePort: number | null = null
+          let reviveResolvedNats: { enabled: boolean; subscriptions: string[] } | null = null
           try {
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
@@ -4632,10 +4946,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   (tombstone.taskId || natsCtx.spaceId)
                     ? { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
                     : null
+                reviveResolvedNats = nats
                 const color = tombstone.taskId ? ctx.docStore.getTask(tombstone.taskId)?.settings?.defaultRunColor : undefined
                 createSession(sessDir, {
                   name,
                   backend: 'tmux',
+                  adapter: reviveProvider.provider.id,
+                  cliTemplate: reviveTemplate?.id ?? null,
                   workspace: { path: reviveCwd },
                   // Persist NATS on the session so startTmuxSession injects the bus env.
                   nats,
@@ -4645,9 +4962,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 setConversationId(sessDir, name, cid)
                 const session = getSession(sessDir, name)
                 if (!session) throw new Error(`revived session '${name}' vanished before resume`)
-                const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
+                claimedRevivePort = await tmuxBackend.findPort(interactivePortWindow(cfg))
+                const port = claimedRevivePort
                 const startResult = await tmuxBackend.startTmuxSession(cfg, {
-                  session, secrets: secrets(), port, template: null,
+                  session, secrets: secrets(), port, template: reviveTemplate,
+                  provider: reviveProvider,
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
                 })
                 updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
@@ -4680,14 +4999,58 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               // (which startTmuxSession may have already bound) BEFORE removing the
               // dir — otherwise the record is deleted while tmux/ttyd/port leak.
               onLaunchFailed: async (name) => {
-                const stale = getSession(sessDir, name)
-                if (stale) {
-                  try { await tmuxBackend.deleteTmuxSession(cfg, stale) } catch { /* best-effort */ }
-                  if (stale.port) { try { tmuxBackend.releasePort(stale.port) } catch { /* best-effort */ } }
+                let stale: Session | null = null
+                try {
+                  stale = getSession(sessDir, name)
+                } catch (err) {
+                  log.warn('graveyard', `${name}: revive rollback could not read session record: ${(err as Error).message}`)
                 }
-                try { ctx.docStore.deleteRun(name) } catch { /* best-effort */ }
-                try { deleteSession(sessDir, name) } catch { /* best-effort */ }
-                deleteReviveWorkdir(cfg.dirs.root, name)
+                if (stale) {
+                  try {
+                    await tmuxBackend.deleteTmuxSession(cfg, stale)
+                  } catch (err) {
+                    log.warn('graveyard', `${name}: revive rollback could not stop backend: ${(err as Error).message}`)
+                  }
+                }
+                const rollbackPorts = new Set(
+                  [stale?.port, claimedRevivePort]
+                    .filter((port): port is number => port != null),
+                )
+                for (const rollbackPort of rollbackPorts) {
+                  try {
+                    tmuxBackend.releasePort(rollbackPort)
+                  } catch (err) {
+                    log.warn('graveyard', `${name}: revive rollback could not release port ${rollbackPort}: ${(err as Error).message}`)
+                  }
+                }
+                claimedRevivePort = null
+                rollbackLaunchedSessionRegistration(
+                  {
+                    docStore: ctx.docStore,
+                    natsTraffic: ctx.natsTraffic,
+                    natsHealth: ctx.natsHealth,
+                    readyQueue: ctx.readyQueue,
+                    sse: ctx.sse,
+                  },
+                  name,
+                  reviveResolvedNats,
+                )
+                try {
+                  ctx.docStore.deleteRun(name)
+                } catch (err) {
+                  log.warn('graveyard', `${name}: revive rollback could not delete run: ${(err as Error).message}`)
+                }
+                try {
+                  deleteSession(sessDir, name)
+                } catch (err) {
+                  log.warn('graveyard', `${name}: revive rollback could not delete session record: ${(err as Error).message}`)
+                }
+                try {
+                  deleteReviveWorkdir(cfg.dirs.root, name)
+                } catch (err) {
+                  log.warn('graveyard', `${name}: revive rollback could not remove fallback workdir: ${(err as Error).message}`)
+                }
+                reviveResolvedNats = null
               },
               // A raised grave leaves Boot Hill — consume the tombstone + snapshot.
               onRevived: (cid) => {
@@ -4905,6 +5268,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
       }
 
+      // Resolve the child's provider from the hand template before touching
+      // breakout subscriptions or creating session state. A Claude parent may
+      // spawn a Codex/generic hand; provider identity belongs to the child
+      // template, not the parent session.
+      const cliTemplate = hand.cliTemplate
+      const resolvedTemplate = cliTemplate
+        ? cfg.cliTemplates.find(t => t.id === cliTemplate) ?? null
+        : null
+      if (cliTemplate && !resolvedTemplate) {
+        return fail(res, 'BRIDGE_UNAVAILABLE', `CLI template "${cliTemplate}" is not configured`)
+      }
+      let provider: TerminalProviderAdapter
+      try {
+        provider = (ctx.providerRegistry ?? defaultProviderRegistry)
+          .resolveTemplate(resolvedTemplate)
+        providerTelemetryEnabled(provider, resolvedTemplate)
+      } catch (err) {
+        return fail(res, 'BRIDGE_UNAVAILABLE', (err as Error).message)
+      }
+      const inheritNats = parentSession.nats?.enabled === true
+        && provider.terminal.capabilities.nats.state === 'supported'
+      let natsInheritanceWarning: string | null = null
+      if (parentSession.nats?.enabled && !inheritNats) {
+        const support = provider.terminal.capabilities.nats
+        natsInheritanceWarning =
+          `Parent NATS was not inherited by the ${provider.provider.label} child`
+          + (support.state === 'unsupported' ? `: ${support.reason}` : '')
+        log.warn(
+          'spawn',
+          `${parentName}: ${natsInheritanceWarning}`,
+        )
+      }
+
       // Generate unique session name
       const spawnedName = `${parentName}-${handName}-${randomUUID().slice(0, 8)}`
 
@@ -4930,10 +5326,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ? { path: worktreePathOverride, worktree: true, branch: null, basePath: null }
         : parentSession.workspace
 
-      // Build NATS subscriptions for the spawned session
-      // Inherit NATS from parent regardless of taskId — use whatever hierarchy is available
+      // Build NATS subscriptions for the spawned session. Parent NATS is an
+      // inherited convenience, not an explicit child request, so capability-
+      // light providers degrade to a child without NATS instead of failing.
       let natsConfig: { enabled: boolean; subscriptions: string[] } | null = null
-      if (parentSession.nats?.enabled) {
+      if (inheritNats) {
         const natsCtx = {
           sessionName: spawnedName,
           spaceId: ctx.docStore.activeSpaceId || null,
@@ -5008,31 +5405,121 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         natsConfig.subscriptions.push(breakoutRoom)
       }
 
-      // Resolve CLI template from hand definition
-      const cliTemplate = hand.cliTemplate
+      // Snapshot every parent/shared surface that a successful spawn will
+      // mutate. A failure can happen after any one of those writes, so rollback
+      // restores the complete pre-spawn view, not only the hot NATS subscription.
+      const parentNatsBeforeSpawn = parentSession.nats
+        ? {
+            ...parentSession.nats,
+            subscriptions: [...(parentSession.nats.subscriptions ?? [])],
+          }
+        : null
+      const childSessionToken = sanitizeSubjectToken(spawnedName)
+      const spawnOwnedSubjects = [...new Set(
+        (natsConfig?.subscriptions ?? []).filter(subject => {
+          const parsed = parseSubject(subject)
+          return parsed?.kind === 'breakout'
+            || (parsed?.kind === 'dm' && parsed.session === childSessionToken)
+        }),
+      )]
+      const metadataBeforeSpawn = new Map(
+        spawnOwnedSubjects.map(
+          subject => [subject, ctx.docStore.getTopicMetadata(subject)] as const,
+        ),
+      )
+      const rollbackParentBreakoutSubscription = async (): Promise<void> => {
+        if (breakoutRoom && !breakoutFallback) {
+          try {
+            await trySendNatsSocketCommand(parentName, {
+              action: 'unsubscribe',
+              subject: breakoutRoom,
+            })
+            if (cfg.nats.jetstream) {
+              await trySendNatsSocketCommand(parentName, {
+                action: 'delete-durable',
+                subject: breakoutRoom,
+              })
+            }
+          } catch (err) {
+            log.warn('spawn', `${parentName}: failed to remove breakout transport during rollback: ${(err as Error).message}`)
+          }
+          let restoredParentNats = parentNatsBeforeSpawn
+          try {
+            const latestParent = getSession(sessDir, parentName)
+            restoredParentNats = latestParent?.nats
+              ? {
+                  ...latestParent.nats,
+                  subscriptions: (latestParent.nats.subscriptions ?? [])
+                    .filter(subject => subject !== breakoutRoom),
+                }
+              : parentNatsBeforeSpawn
+            updateSession(sessDir, parentName, { nats: restoredParentNats })
+          } catch (err) {
+            log.warn('spawn', `${parentName}: failed to restore parent session during rollback: ${(err as Error).message}`)
+          }
+          try {
+            registerSaloonSubs(
+              ctx.natsTraffic,
+              parentName,
+              restoredParentNats?.subscriptions ?? [],
+            )
+          } catch (err) {
+            log.warn('spawn', `${parentName}: failed to restore Saloon subscriptions during rollback: ${(err as Error).message}`)
+          }
+          try {
+            const latestParentRun = parentRun ? ctx.docStore.getRun(parentRun.id) : undefined
+            if (latestParentRun) {
+              const remainingRooms = (latestParentRun.breakoutRooms ?? [])
+                .filter(room => room !== breakoutRoom)
+              ctx.docStore.upsertRun(latestParentRun.id, {
+                ...latestParentRun,
+                breakoutRooms: remainingRooms.length > 0
+                  ? remainingRooms
+                  : parentRun?.breakoutRooms,
+              })
+            }
+          } catch (err) {
+            log.warn('spawn', `${parentName}: failed to restore parent run during rollback: ${(err as Error).message}`)
+          }
+        }
+        for (const [subject, metadata] of metadataBeforeSpawn) {
+          if (metadata) continue
+          try {
+            ctx.docStore.deleteTopicMetadata(subject)
+          } catch (err) {
+            log.warn('spawn', `${parentName}: failed to restore topic ${subject} during rollback: ${(err as Error).message}`)
+          }
+        }
+      }
 
       // Resolve effective repo (override or inherit)
       const effectiveRepo = repoOverride ?? parentSession.project
 
       // Create the spawned session
-      const spawnedSession = createSession(sessDir, {
-        name: spawnedName,
-        backend: 'tmux',
-        project: effectiveRepo,
-        workspace: {
-          path: workspace?.path ?? null,
-          worktree: workspace?.worktree ?? false,
-          branch: workspace?.branch ?? null,
-          basePath: workspace?.basePath ?? null,
-        },
-        profile: parentSession.profile,
-        skipPermissions: parentSession.skipPermissions,
-        background,
-        cliTemplate: cliTemplate ?? null,
-        adapter: parentSession.adapter,
-        nats: natsConfig,
-        modelOverride: modelOverride ?? null,
-      })
+      let spawnedSession: Session
+      try {
+        spawnedSession = createSession(sessDir, {
+          name: spawnedName,
+          backend: 'tmux',
+          project: effectiveRepo,
+          workspace: {
+            path: workspace?.path ?? null,
+            worktree: workspace?.worktree ?? false,
+            branch: workspace?.branch ?? null,
+            basePath: workspace?.basePath ?? null,
+          },
+          profile: parentSession.profile,
+          skipPermissions: parentSession.skipPermissions,
+          background,
+          cliTemplate: cliTemplate ?? null,
+          adapter: provider.provider.id,
+          nats: natsConfig,
+          modelOverride: modelOverride ?? null,
+        })
+      } catch (err) {
+        await rollbackParentBreakoutSubscription()
+        return fail(res, 'INTERNAL', (err as Error).message)
+      }
 
       emitSessionEvent('managed_session.created', { name: spawnedSession.name, state: spawnedSession.state })
 
@@ -5044,12 +5531,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // OAuth token so it draws from a separate quota pool. Inert when unset.
       const sec = applyTokenOverride(secrets(), tokenOverride)
 
-      const resolvedTemplate = cliTemplate
-        ? cfg.cliTemplates.find(t => t.name === cliTemplate) ?? null
-        : null
-
+      let claimedSpawnPort: number | null = null
       try {
-        const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
+        claimedSpawnPort = await tmuxBackend.findPort(interactivePortWindow(cfg))
+        const port = claimedSpawnPort
         if (fullPrompt) enriched.initialPrompt = fullPrompt
 
         // Build hand system prompt pointing at the effective parent-child
@@ -5062,7 +5547,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             : `${handPersona}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
           : null
 
-        const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
+        const result = await tmuxBackend.createTmuxSession(cfg, {
+          session: enriched,
+          secrets: sec,
+          port,
+          provider,
+          template: resolvedTemplate,
+          appendSystemPrompt: handSystemPrompt,
+        })
         const sessionPort = result.port
         updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
         tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
@@ -5190,9 +5682,28 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
             : {}),
           natsWarning: breakoutWarning ?? undefined,
-        }, { status: 201 })
+        }, {
+          status: 201,
+          ...(natsInheritanceWarning
+            ? { warnings: { nats: [natsInheritanceWarning] } }
+            : {}),
+        })
       } catch (err) {
-        // Clean up on failure
+        // A failed launch may already have created tmux/ttyd state. Roll back
+        // backend resources before releasing the claim so another session
+        // cannot be routed onto a still-live process.
+        try {
+          await tmuxBackend.stopTmuxSession(cfg, spawnedSession)
+        } catch (stopErr) {
+          log.warn('spawn', `${spawnedName}: failed launch rollback could not stop backend: ${(stopErr as Error).message}`)
+        }
+        if (claimedSpawnPort != null) {
+          try { tmuxBackend.releasePort(claimedSpawnPort) } catch { /* best-effort */ }
+        }
+        unregisterSaloonSubs(ctx.natsTraffic, spawnedName)
+        ctx.natsHealth?.untrackSession(spawnedName)
+        await rollbackParentBreakoutSubscription()
+        ctx.docStore.deleteRun(spawnedName)
         deleteSession(sessDir, spawnedName)
         return fail(res, 'INTERNAL', (err as Error).message)
       }
@@ -5386,7 +5897,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // POST /api/cli-templates — add or update a CLI template
+    // POST /api/cli-templates — create a CLI template with a stable ID
     if (method === 'POST' && url === '/api/cli-templates') {
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
@@ -5394,11 +5905,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
-        const idx = templates.findIndex(t => t.name === name)
-        if (idx >= 0) templates[idx] = entry
-        else templates.push(entry)
+        const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry: CliTemplate = {
+          id: randomUUID(),
+          name,
+          startCmd,
+          resumeCmd,
+          ...(icon ? { icon } : {}),
+          ...(adapter ? { adapter } : {}),
+          ...(typeof telemetry === 'boolean' ? { telemetry } : {}),
+        }
+        const providerError = validateCliTemplateProvider(
+          ctx.providerRegistry ?? defaultProviderRegistry,
+          entry,
+        )
+        if (providerError) return fail(res, 'BAD_REQUEST', providerError)
+        templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
         // Refresh the in-memory config so the change is reflected immediately.
@@ -5413,22 +5935,36 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // PUT /api/cli-templates/:name — update a CLI template (supports renaming)
+    // PUT /api/cli-templates/:id — update a template's renameable fields while
+    // retaining the stable ID referenced by sessions, settings, and hands.
     if (method === 'PUT' && url.startsWith('/api/cli-templates/')) {
-      const oldName = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      const templateId = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
         if (!name || !startCmd || !resumeCmd) return fail(res, 'BAD_REQUEST', 'name, startCmd, and resumeCmd are required')
 
         // Check if template exists in merged config (includes defaults)
-        const existsInMerged = cfg.cliTemplates.some(t => t.name === oldName)
-        if (!existsInMerged) return fail(res, 'NOT_FOUND', `Template "${oldName}" not found`)
+        const existsInMerged = cfg.cliTemplates.some(t => t.id === templateId)
+        if (!existsInMerged) return fail(res, 'NOT_FOUND', `Template "${templateId}" not found`)
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
-        const idx = templates.findIndex(t => t.name === oldName)
+        const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry: CliTemplate = {
+          id: templateId,
+          name,
+          startCmd,
+          resumeCmd,
+          ...(icon ? { icon } : {}),
+          ...(adapter ? { adapter } : {}),
+          ...(typeof telemetry === 'boolean' ? { telemetry } : {}),
+        }
+        const providerError = validateCliTemplateProvider(
+          ctx.providerRegistry ?? defaultProviderRegistry,
+          entry,
+        )
+        if (providerError) return fail(res, 'BAD_REQUEST', providerError)
+        const idx = templates.findIndex(t => t.id === templateId)
         if (idx >= 0) {
           templates[idx] = entry
         } else {
@@ -5449,14 +5985,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // DELETE /api/cli-templates/:name — remove a CLI template
+    // DELETE /api/cli-templates/:id — remove a user-defined template
     if (method === 'DELETE' && url.startsWith('/api/cli-templates/')) {
-      const name = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      const templateId = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       let data: Record<string, unknown> = {}
       try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-      const templates: Array<{ name: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-      const idx = templates.findIndex(t => t.name === name)
-      if (idx === -1) return fail(res, 'NOT_FOUND', `Template "${name}" not found`), true
+      const templates: CliTemplate[] = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+      const idx = templates.findIndex(t => t.id === templateId)
+      if (idx === -1) return fail(res, 'NOT_FOUND', `Template "${templateId}" not found`), true
       templates.splice(idx, 1)
       data.cliTemplates = templates
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))

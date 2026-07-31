@@ -318,6 +318,8 @@ export interface RefreshWorkerHost {
   /** The recipe and headline the brief is built from. */
   recipe: string
   headline: string
+  /** Provider identity persisted on the worker session. */
+  providerAdapter: string
   secrets: Record<string, string>
   writeFile(path: string, data: string): void
   removeFile(path: string): void
@@ -370,6 +372,7 @@ export async function launchRefreshWorker(
         session = host.createSession(sessDir, {
           name: host.sessionName,
           backend: 'tmux',
+          adapter: host.providerAdapter,
           workspace: { path: host.worktree },
           background: true,
           oneshot: true,

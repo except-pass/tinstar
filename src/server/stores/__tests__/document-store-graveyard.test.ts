@@ -167,6 +167,8 @@ describe('DocumentStore graveyard — field-drift guards', () => {
   it.each([
     ['project', { project: 'tinstar' }, { project: 'cmsandbox' }],
     ['displayName', { displayName: 'old name' }, { displayName: 'new name' }],
+    ['provider', { provider: 'claude' }, { provider: 'codex' }],
+    ['cliTemplate', { cliTemplate: 'Claude' }, { cliTemplate: 'Claude Auto' }],
   ] as const)('re-emits when only %s changes', (_field, before, after) => {
     const store = new DocumentStore()
     store.upsertTombstone(makeTombstone(before))

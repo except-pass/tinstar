@@ -12,27 +12,53 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { ProviderTranscriptAdapter } from '../../providers/lifecycle'
 import { StatusWatcher } from '../status-watcher'
 import { createSession, getSession, updateSession, type Session, type SessionState } from '../session'
 
 // checkProcessTree shells out to tmux/pgrep via execFile. Script the process
 // tree per test: pane pid 100 → agent pid 200 → children controlled by
-// `hasChildren`. Callbacks fire synchronously so the whole chain completes
-// within the checkProcessTree call.
-const proc = vi.hoisted(() => ({ hasChildren: false, calls: 0, tmuxArgs: [] as string[] }))
+// `hasChildren`.
+const proc = vi.hoisted(() => ({
+  hasChildren: false,
+  childError: false,
+  paneTimeout: false,
+  calls: 0,
+  tmuxArgs: [] as string[],
+}))
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
   return {
     ...actual,
-    execFile: (cmd: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+    execFile: (
+      cmd: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string, stderr: string) => void,
+    ) => {
       proc.calls++
       if (cmd === 'tmux') {
         proc.tmuxArgs = args
+        if (proc.paneTimeout) {
+          return cb(
+            Object.assign(new Error('tmux probe timed out'), {
+              killed: true,
+              signal: 'SIGTERM',
+            }),
+            '',
+            '',
+          )
+        }
         return cb(null, '100\n', '')
       }
       if (cmd === 'pgrep' && args[1] === '100') return cb(null, '200\n', '')
       if (cmd === 'pgrep' && args[1] === '200') {
-        return proc.hasChildren ? cb(null, '300\n', '') : cb(new Error('no children'), '', '')
+        if (proc.childError) {
+          return cb(Object.assign(new Error('pgrep permission denied'), { code: 2 }), '', '')
+        }
+        return proc.hasChildren
+          ? cb(null, '300\n', '')
+          : cb(Object.assign(new Error('no children'), { code: 1 }), '', '')
       }
       return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`), '', '')
     },
@@ -41,15 +67,17 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 let sessionsDir: string
 let onStatusChanged: ReturnType<typeof vi.fn>
+let onRecapEntries: ReturnType<typeof vi.fn>
 let watcher: StatusWatcher
 
 // Test-seam accessor for the watcher's private internals.
 function internals(w: StatusWatcher) {
   return w as unknown as {
-    checkSession(session: Session): void
-    checkProcessTree(session: Session): void
+    checkSession(session: Session): Promise<void>
+    checkProcessTree(session: Session): Promise<void>
     processTreeOverride: Set<string>
-    claudeTranscripts: Map<string, string>
+    transcriptPaths: Map<string, string>
+    transcriptAdapters: Map<string, ProviderTranscriptAdapter>
   }
 }
 
@@ -82,8 +110,11 @@ function writePendingTranscript(): string {
 beforeEach(() => {
   sessionsDir = mkdtempSync(join(tmpdir(), 'tinstar-watcher-blocked-'))
   onStatusChanged = vi.fn()
-  watcher = new StatusWatcher({ sessionsDir, onStatusChanged })
+  onRecapEntries = vi.fn()
+  watcher = new StatusWatcher({ sessionsDir, onStatusChanged, onRecapEntries })
   proc.hasChildren = false
+  proc.childError = false
+  proc.paneTimeout = false
   proc.calls = 0
   proc.tmuxArgs = []
 })
@@ -93,73 +124,136 @@ afterEach(() => {
 })
 
 describe('StatusWatcher blocked signal — override added', () => {
-  it('looks up the exact tmux session so a prefixed hand cannot keep a missing parent live', () => {
+  it('looks up the exact tmux session so a prefixed hand cannot keep a missing parent live', async () => {
     const session = makeSession('s0', 'idle')
-    internals(watcher).checkProcessTree(session)
+    await internals(watcher).checkProcessTree(session)
 
     expect(proc.tmuxArgs).toEqual(['list-panes', '-t', '=tinstar-s0:', '-F', '#{pane_pid}'])
   })
 
-  it('silent-failure path 1: block beginning while already idle notifies with blocked: true', () => {
+  it('treats a timed-out pane probe as inconclusive instead of stopping a live session', async () => {
+    const session = makeSession('slow-pane', 'running')
+    proc.paneTimeout = true
+
+    await internals(watcher).checkProcessTree(session)
+
+    expect(getSession(sessionsDir, session.name)?.state).toBe('running')
+    expect(onStatusChanged).not.toHaveBeenCalled()
+  })
+
+  it('silent-failure path 1: block beginning while already idle notifies with blocked: true', async () => {
     const session = makeSession('s1', 'idle')
     const w = internals(watcher)
-    w.checkProcessTree(session) // streak 1 — debounce, nothing yet
+    await w.checkProcessTree(session) // streak 1 — debounce, nothing yet
     expect(onStatusChanged).not.toHaveBeenCalled()
-    w.checkProcessTree(session) // streak 2 — override added
+    await w.checkProcessTree(session) // streak 2 — override added
     expect(onStatusChanged).toHaveBeenCalledWith('s1', 'idle', true)
   })
 
-  it('silent-failure path 2: blocked is persisted to session.json at override add (restart-safe)', () => {
+  it('silent-failure path 2: blocked is persisted to session.json at override add (restart-safe)', async () => {
     const session = makeSession('s2', 'idle')
     const w = internals(watcher)
-    w.checkProcessTree(session)
-    w.checkProcessTree(session)
+    await w.checkProcessTree(session)
+    await w.checkProcessTree(session)
     // The signal must live on disk, not only in watcher memory — a fresh
     // watcher (server restart) has an empty processTreeOverride set.
     expect(getSession(sessionsDir, 's2')!.blocked).toBe(true)
   })
 
-  it('debounce preserved: a single no-children poll neither notifies nor persists', () => {
+  it('debounce preserved: a single no-children poll neither notifies nor persists', async () => {
     const session = makeSession('s3', 'idle')
-    internals(watcher).checkProcessTree(session)
+    await internals(watcher).checkProcessTree(session)
     expect(onStatusChanged).not.toHaveBeenCalled()
     expect(getSession(sessionsDir, 's3')!.blocked).toBe(false)
   })
 
-  it('block detected while running still transitions to idle, now carrying blocked: true', () => {
+  it('treats an operational pgrep failure as inconclusive, not another no-child poll', async () => {
+    const session = makeSession('pgrep-error', 'idle')
+    const w = internals(watcher)
+    await w.checkProcessTree(session)
+    proc.childError = true
+    await w.checkProcessTree(session)
+    proc.childError = false
+    await w.checkProcessTree(session)
+
+    expect(onStatusChanged).not.toHaveBeenCalled()
+    expect(getSession(sessionsDir, session.name)?.blocked).toBe(false)
+  })
+
+  it('block detected while running still transitions to idle, now carrying blocked: true', async () => {
     const session = makeSession('s4', 'running')
     const w = internals(watcher)
-    w.checkProcessTree(session)
-    w.checkProcessTree(session)
+    await w.checkProcessTree(session)
+    await w.checkProcessTree(session)
     expect(onStatusChanged).toHaveBeenCalledWith('s4', 'idle', true)
     const onDisk = getSession(sessionsDir, 's4')!
     expect(onDisk.state).toBe('idle')
     expect(onDisk.blocked).toBe(true)
   })
+
+  it('parses recap entries when a cached transcript is blocked into idle', async () => {
+    const session = makeSession('s4-recap', 'running')
+    const transcriptPath = writeIdleTranscript()
+    const recapEntries = [{
+      id: 'blocked-recap',
+      type: 'agent' as const,
+      content: 'Finished before waiting for permission',
+      timestamp: '2026-07-31T00:00:00.000Z',
+    }]
+    const transcript: ProviderTranscriptAdapter = {
+      discover: async () => transcriptPath,
+      readStatus: () => ({ state: 'running', toolPending: true }),
+      parseRecapEntries: vi.fn(() => recapEntries),
+      resetOffset: vi.fn(),
+    }
+    const w = internals(watcher)
+    w.transcriptAdapters.set(session.name, transcript)
+    w.transcriptPaths.set(session.name, transcriptPath)
+
+    await w.checkProcessTree(session)
+    await w.checkProcessTree(session)
+
+    expect(onRecapEntries).toHaveBeenCalledWith(session.name, recapEntries)
+  })
 })
 
 describe('StatusWatcher blocked signal — override removed', () => {
-  it('silent-failure path 3: override clearing while status stays idle notifies with blocked: false', () => {
+  it('silent-failure path 3: override clearing while status stays idle notifies with blocked: false', async () => {
     const session = makeSession('s5', 'idle', { blocked: true, conversation: { id: 'conv-s5' } })
     const w = internals(watcher)
-    w.processTreeOverride.add('s5')
-    // Session has no workspace.path — resolveClaudeTranscriptPath serves the
-    // cached path, pointing at a transcript with no pending tool_use.
-    w.claudeTranscripts.set('s5', writeIdleTranscript())
+    // A new watcher starts with no in-memory override. The persisted flag must
+    // rehydrate before transcript evidence clears it.
+    w.transcriptPaths.set('s5', writeIdleTranscript())
 
-    w.checkSession(session)
+    await w.checkSession(session)
 
     expect(onStatusChanged).toHaveBeenCalledWith('s5', 'idle', false)
     expect(getSession(sessionsDir, 's5')!.blocked).toBe(false)
   })
 
-  it('children returning while override is set notifies with blocked: false and persists', () => {
+  it('keeps polling a blocked transcript-less provider until children return', async () => {
+    const session = makeSession('s5-generic', 'idle', {
+      adapter: 'generic',
+      blocked: true,
+    })
+    proc.hasChildren = true
+
+    await internals(watcher).checkSession(session)
+
+    expect(onStatusChanged).toHaveBeenCalledWith('s5-generic', 'running', false)
+    expect(getSession(sessionsDir, 's5-generic')).toMatchObject({
+      state: 'running',
+      blocked: false,
+    })
+  })
+
+  it('children returning while override is set notifies with blocked: false and persists', async () => {
     const session = makeSession('s6', 'idle', { blocked: true })
     const w = internals(watcher)
     w.processTreeOverride.add('s6')
     proc.hasChildren = true
 
-    w.checkProcessTree(session)
+    await w.checkProcessTree(session)
 
     expect(onStatusChanged).toHaveBeenCalledWith('s6', 'running', false)
     const onDisk = getSession(sessionsDir, 's6')!
@@ -167,13 +261,13 @@ describe('StatusWatcher blocked signal — override removed', () => {
     expect(onDisk.blocked).toBe(false)
   })
 
-  it('skip-until-JSONL-changes preserved: pending tool_use with override set does nothing', () => {
+  it('skip-until-JSONL-changes preserved: pending tool_use with override set does nothing', async () => {
     const session = makeSession('s7', 'idle', { blocked: true, conversation: { id: 'conv-s7' } })
     const w = internals(watcher)
     w.processTreeOverride.add('s7')
-    w.claudeTranscripts.set('s7', writePendingTranscript())
+    w.transcriptPaths.set('s7', writePendingTranscript())
 
-    w.checkSession(session)
+    await w.checkSession(session)
 
     // Already determined blocked — no process-tree probe, no notify, no flip.
     expect(proc.calls).toBe(0)

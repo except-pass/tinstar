@@ -245,6 +245,8 @@ function noticeEqual(a: Notice, b: Notice): boolean {
 function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
   return (
     a.convId === b.convId &&
+    a.provider === b.provider &&
+    a.cliTemplate === b.cliTemplate &&
     a.sessionName === b.sessionName &&
     a.displayName === b.displayName &&
     a.coversSummary === b.coversSummary &&

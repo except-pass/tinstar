@@ -62,7 +62,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
-  const [cliTemplates, setCliTemplates] = useState<Array<{ name: string; icon?: string }>>([])
+  const [cliTemplates, setCliTemplates] = useState<Array<{ id: string; name: string; icon?: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
   const [projects, setProjects] = useState<Project[]>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
@@ -106,7 +106,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
           setCliTemplates(d.data)
           // Default to first template if none prefilled
           if (!prefill?.cliTemplate && d.data.length > 0) {
-            setCliTemplate(d.data[0].name)
+            setCliTemplate(d.data[0].id)
           }
         }
       })
@@ -245,7 +245,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
               className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
             >
               {cliTemplates.map(t => (
-                <option key={t.name} value={t.name}>
+                <option key={t.id} value={t.id}>
                   {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
                 </option>
               ))}

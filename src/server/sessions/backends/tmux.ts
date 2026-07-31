@@ -8,6 +8,12 @@ import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-tru
 import { serializeByKey } from './serializeByKey'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { log } from '../../logger'
+import {
+  defaultProviderRegistry,
+  providerTelemetryEnabled,
+  requireProviderCapability,
+  type TerminalProviderAdapter,
+} from '../../providers/lifecycle'
 
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
@@ -400,6 +406,7 @@ function writeIfChanged(path: string, content: string): void {
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
+  provider?: TerminalProviderAdapter
   template?: CliTemplate | null
   skipPermissions?: boolean
   sessionId?: string | null
@@ -416,6 +423,7 @@ export function buildAgentCommand(opts: {
    * leaves the command byte-identical to pre-override behavior. */
   modelOverride?: string | null
 }): string {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveTemplate(opts.template)
   // Option flags that must sit before the ` -- {prompt}` separator. Collected
   // here and spliced in exactly once during assembly below, so a ` -- ` inside
   // any flag *value* — a session-name-derived --mcp-config path, or a prompt /
@@ -427,11 +435,25 @@ export function buildAgentCommand(opts: {
 
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    let cmd = interpolateTemplate(tmpl, {
+    const values = {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
-    })
+    }
+    // Split the template before interpolating opaque persona/prompt values.
+    // Otherwise a literal ` -- ` inside {agentPrompt} looks like the command's
+    // prompt boundary and provider flags get inserted into quoted persona text.
+    const promptPlaceholder = tmpl.indexOf('{prompt}')
+    const separator = promptPlaceholder === -1
+      ? -1
+      : tmpl.lastIndexOf(' -- ', promptPlaceholder)
+    if (separator !== -1) {
+      head = interpolateTemplate(tmpl.slice(0, separator), values)
+      const interpolatedTail = interpolateTemplate(tmpl.slice(separator), values)
+      promptTail = interpolatedTail ? ` ${interpolatedTail}` : ''
+    } else {
+      head = interpolateTemplate(tmpl, values)
+    }
     // Couple the dev-channels flag to the nats-mcp.json that defines the server
     // it names. Templates bake in `--dangerously-load-development-channels
     // server:nats` unconditionally, but the config is only written when NATS is
@@ -442,22 +464,29 @@ export function buildAgentCommand(opts: {
     // NATS wasn't provisioned so the command stays internally consistent, and
     // inject `--mcp-config <path>` when it was so Claude can find the server.
     //
-    // `--mcp-config` / `--dangerously-load-development-channels` are
-    // Claude-specific: a non-Claude adapter (cursor's `agent`, codex) hard-errors
-    // on `--mcp-config` and dies to a bare shell. Only wire NATS for a claude
-    // template. Missing adapter ⇒ claude (built-in claude templates predate the
-    // adapter field, and the legacy no-template path below is always claude).
-    const isClaudeTemplate = (opts.template?.adapter ?? 'claude') === 'claude'
-    if (opts.nats?.enabled && isClaudeTemplate) {
-      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
-    } else {
-      cmd = cmd.replace(/\s*--dangerously-load-development-channels\s+server:nats/g, '')
+    // The provider capability — not its ID — decides whether this transport can
+    // be wired. A future provider can implement a different command strategy
+    // without entering shared command-builder conditionals.
+    if (opts.nats?.enabled) {
+      const nats = requireProviderCapability(provider, 'nats')
+      // Templates are user-editable and may or may not bake in the provider's
+      // enable flag. Normalize both forms to one provider-owned flag so enabled
+      // launches never omit it and legacy multi-agent templates never duplicate
+      // it. The disabledPattern belongs to the provider for the same reason the
+      // inserted flags do: shared assembly must not know provider CLI syntax.
+      head = head.replace(nats.command.disabledPattern, '')
+      preFlags.push(nats.command.enableFlag)
+      if (opts.nats.mcpConfigPath) {
+        preFlags.push(
+          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
+        )
+      }
+    } else if (provider.terminal.capabilities.nats.state === 'supported') {
+      head = head.replace(
+        provider.terminal.capabilities.nats.detail.command.disabledPattern,
+        '',
+      )
     }
-    // Split the prompt separator off once, before any flag text (which may itself
-    // contain ' -- ') is spliced in.
-    const idx = cmd.indexOf(' -- ')
-    if (idx !== -1) { head = cmd.slice(0, idx); promptTail = cmd.slice(idx) }
-    else head = cmd
     // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
@@ -475,8 +504,13 @@ export function buildAgentCommand(opts: {
     // Add NATS channel support — the dev-channels resolver reads the server from
     // the per-session nats-mcp.json passed via --mcp-config.
     if (opts.nats?.enabled) {
-      cmd += ' --dangerously-load-development-channels server:nats'
-      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
+      const nats = requireProviderCapability(provider, 'nats')
+      cmd += ` ${nats.command.enableFlag}`
+      if (opts.nats.mcpConfigPath) {
+        preFlags.push(
+          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
+        )
+      }
     }
     if (opts.appendSystemPrompt) {
       preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
@@ -602,12 +636,14 @@ export async function createTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    provider?: TerminalProviderAdapter
     resume?: boolean
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveTemplate(opts.template)
   const tmuxName = tmuxSessionName(config, opts.session.name)
 
   const tmuxArgs = ['-f', '/dev/null', 'new', '-d', '-s', tmuxName]
@@ -665,23 +701,12 @@ export async function createTmuxSession(
     }
   }
 
-  // Inject OTLP telemetry env vars when telemetry is enabled on the CLI template
-  if (opts.template?.telemetry !== false) {
-    const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318'
-    const telemetryVars: Record<string, string> = {
-      CLAUDE_CODE_ENABLE_TELEMETRY: '1',
-      OTEL_METRICS_EXPORTER: 'otlp',
-      OTEL_LOGS_EXPORTER: 'otlp',
-      OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
-      OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
-      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
-      OTEL_METRIC_EXPORT_INTERVAL: '10000',
-      OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${opts.session.name}`,
-    }
-    for (const [key, value] of Object.entries(telemetryVars)) {
-      await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
-    }
-  }
+  await syncProviderTelemetryEnvironment(
+    tmuxTarget,
+    opts.session.name,
+    provider,
+    opts.template,
+  )
 
   // Scoped env, half 2 of 2: repair for an already-running tmux server. The
   // server is long-lived and SHARED (no -L/-S socket — see the SCOPE note
@@ -702,7 +727,9 @@ export async function createTmuxSession(
   // session config dir (outside any repo) + per-session topics file, passed to
   // Claude via --mcp-config below. No workspace path required.
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
@@ -712,10 +739,12 @@ export async function createTmuxSession(
       jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true, mcpConfigPath }
+    autoAcceptNatsWarning = nats.command.autoAcceptWarning
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
 
   const agentCmd = buildAgentCommand({
+    provider,
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
@@ -739,7 +768,7 @@ export async function createTmuxSession(
 
   // Auto-accept dev channel warning by polling for the prompt and sending Enter
   // More robust than fixed timeout - waits for actual prompt to appear
-  if (natsOpts?.enabled) {
+  if (natsOpts?.enabled && autoAcceptNatsWarning) {
     autoAcceptDevChannelWarning(tmuxName).catch((err) => {
       log.debug('tmux', `dev-channel auto-accept failed: ${(err as Error).message}`)
     })
@@ -757,17 +786,32 @@ export async function startTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    provider?: TerminalProviderAdapter
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveSession(
+    opts.session,
+    opts.template,
+  )
   const tmuxName = tmuxSessionName(config, opts.session.name)
   const exists = await tmuxHasSession(tmuxName)
 
   if (!exists) {
-    return createTmuxSession(config, { ...opts, resume: true })
+    return createTmuxSession(config, { ...opts, provider, resume: true })
   }
+
+  // Existing tmux sessions retain session-scoped variables across agent
+  // restarts. Reconcile both sides of the policy: inject newly enabled
+  // provider telemetry and remove provider-owned variables when disabled.
+  await syncProviderTelemetryEnvironment(
+    exactTmuxSessionTarget(tmuxName),
+    opts.session.name,
+    provider,
+    opts.template,
+  )
 
   // Re-scrub on restart: a session created before guest-env scoping existed
   // still carries Tinstar's env, and restarting its agent is the one moment we
@@ -780,7 +824,9 @@ export async function startTmuxSession(
 
   // Generate NATS channel config if enabled — see createTmuxSession for details.
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
@@ -790,9 +836,11 @@ export async function startTmuxSession(
       jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true, mcpConfigPath }
+    autoAcceptNatsWarning = nats.command.autoAcceptWarning
   }
 
   const agentCmd = buildAgentCommand({
+    provider,
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
@@ -811,7 +859,7 @@ export async function startTmuxSession(
 
   // Same dev-channel auto-accept as createTmuxSession — restarting an exited
   // agent re-shows Claude's NATS warning prompt and must also be accepted.
-  if (natsOpts?.enabled) {
+  if (natsOpts?.enabled && autoAcceptNatsWarning) {
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured (restart)`)
     autoAcceptDevChannelWarning(tmuxName).catch((err) => {
       log.debug('tmux', `dev-channel auto-accept failed (restart): ${(err as Error).message}`)
@@ -823,7 +871,48 @@ export async function startTmuxSession(
   return { port: opts.port, ttydPid }
 }
 
-export async function stopTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
+async function syncProviderTelemetryEnvironment(
+  tmuxTarget: string,
+  sessionName: string,
+  provider: TerminalProviderAdapter,
+  template: CliTemplate | null | undefined,
+): Promise<void> {
+  const commands = providerTelemetryEnvironmentCommands(
+    tmuxTarget,
+    sessionName,
+    provider,
+    template,
+  )
+  for (const args of commands) await execFileAsync('tmux', args)
+}
+
+/** Pure telemetry reconciliation plan shared by create and existing-session start. */
+export function providerTelemetryEnvironmentCommands(
+  tmuxTarget: string,
+  sessionName: string,
+  provider: TerminalProviderAdapter,
+  template: CliTemplate | null | undefined,
+  endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+): string[][] {
+  const enabled = providerTelemetryEnabled(provider, template)
+  const support = provider.terminal.capabilities.telemetry
+  if (support.state === 'unsupported') return []
+
+  const telemetryVars = support.detail.environment({
+    sessionName,
+    endpoint,
+  })
+  return Object.entries(telemetryVars).map(([key, value]) =>
+    enabled
+      ? ['set-environment', '-t', tmuxTarget, key, value]
+      : ['set-environment', '-t', tmuxTarget, '-r', key],
+  )
+}
+
+export async function stopTmuxSession(
+  config: TinstarConfig,
+  session: Session,
+): Promise<void> {
   stopManagedTtyd(session.name)
 
   const tmuxName = tmuxSessionName(config, session.name)
@@ -876,10 +965,16 @@ export async function reattachTmuxSession(
 /** Capture a tmux pane's rendered screen. With `scrollback`, include that many
  *  lines of history (capture-pane -S -<n>). Shared by status detection, the
  *  codex transcript, and the GET /api/sessions/:name/screen endpoint. */
-export async function captureScreen(tmuxName: string, scrollback?: number): Promise<string> {
+export async function captureScreen(
+  tmuxName: string,
+  scrollback?: number,
+  timeoutMs?: number,
+): Promise<string> {
   const args = ['capture-pane', '-t', exactTmuxPaneTarget(tmuxName), '-p']
   if (scrollback && scrollback > 0) args.push('-S', `-${scrollback}`)
-  const { stdout } = await execFileAsync('tmux', args)
+  const { stdout } = timeoutMs === undefined
+    ? await execFileAsync('tmux', args)
+    : await execFileAsync('tmux', args, { timeout: timeoutMs })
   return stdout
 }
 

@@ -5,7 +5,7 @@ description: Worker does the work, orchestrator reviews and iterates until satis
 
 worker:
   backend: tmux
-  cliTemplate: Claude (multi-agent)
+  cliTemplate: claude-multi-agent
   worktree: true
   readiness:
     nats: auto
@@ -25,7 +25,7 @@ worker:
 
 orchestrator:
   backend: tmux
-  cliTemplate: Claude (multi-agent)
+  cliTemplate: claude-multi-agent
   dependsOn:
     worker:
       condition: ready
