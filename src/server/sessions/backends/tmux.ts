@@ -987,7 +987,9 @@ export async function stopTmuxSession(
   config: TinstarConfig,
   session: Session,
 ): Promise<void> {
-  stopManagedTtyd(session.name)
+  stopManagedTtyd(session.name, {
+    cancellationReason: 'session stop requested',
+  })
 
   const tmuxName = tmuxSessionName(config, session.name)
   strictProbeWarnings.delete(tmuxName)
@@ -1002,7 +1004,9 @@ export async function stopTmuxSession(
 }
 
 export async function deleteTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
-  stopManagedTtyd(session.name)
+  stopManagedTtyd(session.name, {
+    cancellationReason: 'session deletion requested',
+  })
 
   const tmuxName = tmuxSessionName(config, session.name)
   strictProbeWarnings.delete(tmuxName)
@@ -1074,6 +1078,11 @@ interface ManagedTtydEntry {
 const managedTtyd = new Map<string, ManagedTtydEntry>()
 const ttydStartTokens = new Map<string, symbol>()
 const ttydStartChains = new Map<string, Promise<unknown>>()
+const pendingTtydStartTokens = new Map<string, Map<symbol, number>>()
+const ttydStartCancellationReasons = new Map<
+  symbol,
+  TtydStartCancellationReason
+>()
 
 // Epoch-ms of recent auto-restarts per session, for the circuit breaker.
 // Kept module-level (not on the entry) so it survives startTtyd's internal
@@ -1166,6 +1175,13 @@ export type TtydStartInterruptionStage =
   | 'post-spawn'
   | 'settlement'
 
+export type TtydStartCancellationReason =
+  | 'terminal stop requested'
+  | 'session stop requested'
+  | 'session deletion requested'
+  | 'terminal ownership cleared without a recorded reason'
+  | `automatic restart abandoned: ${string}`
+
 export class TtydStartSupersededError extends Error {
   constructor(
     sessionName: string,
@@ -1182,6 +1198,8 @@ export class TtydStartCancelledError extends Error {
     sessionName: string,
     /** Boundary stage inherited from the supersession this cancellation replaces. */
     readonly stage: TtydStartInterruptionStage,
+    /** Lifecycle action that removed ownership of this start. */
+    readonly reason: TtydStartCancellationReason,
     /** Primary diagnostic: the original failure, outside `cause` so it cannot imply supersession. */
     readonly interrupted: unknown,
     /** Reserved for an additional failure while cleaning up the interrupted start. */
@@ -1203,6 +1221,19 @@ export function findTtydStartSupersededError(
   let candidate = err
   while (candidate instanceof Error && !seen.has(candidate)) {
     if (candidate instanceof TtydStartSupersededError) return candidate
+    seen.add(candidate)
+    candidate = candidate.cause
+  }
+  return null
+}
+
+export function findTtydStartCancelledError(
+  err: unknown,
+): TtydStartCancelledError | null {
+  const seen = new Set<Error>()
+  let candidate = err
+  while (candidate instanceof Error && !seen.has(candidate)) {
+    if (candidate instanceof TtydStartCancelledError) return candidate
     seen.add(candidate)
     candidate = candidate.cause
   }
@@ -1566,6 +1597,13 @@ function enqueueTtydStart(
   startToken: symbol,
   deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
+  const pendingForSession = pendingTtydStartTokens.get(opts.sessionName)
+    ?? new Map<symbol, number>()
+  pendingForSession.set(
+    startToken,
+    (pendingForSession.get(startToken) ?? 0) + 1,
+  )
+  pendingTtydStartTokens.set(opts.sessionName, pendingForSession)
   const isCurrent = () =>
     ttydStartTokens.get(opts.sessionName) === startToken
   let mutated = false
@@ -1576,7 +1614,7 @@ function enqueueTtydStart(
       return deps.stopManaged(...args)
     },
   }
-  return serializeByKey(ttydStartChains, opts.sessionName, async () => {
+  const attempt = serializeByKey(ttydStartChains, opts.sessionName, async () => {
     try {
       return await startTtydForTokenAttempt(
         opts,
@@ -1629,6 +1667,8 @@ function enqueueTtydStart(
           throw new TtydStartCancelledError(
             opts.sessionName,
             superseded.stage,
+            ttydStartCancellationReasons.get(startToken)
+              ?? 'terminal ownership cleared without a recorded reason',
             err,
             combinedFailure ? { cause: combinedFailure } : undefined,
           )
@@ -1642,6 +1682,19 @@ function enqueueTtydStart(
         superseded?.stage ?? 'settlement',
         { cause: combinedFailure ?? err },
       )
+    }
+  })
+  return attempt.finally(() => {
+    const pending = pendingTtydStartTokens.get(opts.sessionName)
+    const count = pending?.get(startToken)
+    if (pending && count !== undefined) {
+      if (count > 1) {
+        pending.set(startToken, count - 1)
+      } else {
+        pending.delete(startToken)
+        ttydStartCancellationReasons.delete(startToken)
+      }
+      if (pending.size === 0) pendingTtydStartTokens.delete(opts.sessionName)
     }
   })
 }
@@ -1778,7 +1831,10 @@ export async function startTtydForTokenAttempt(
           log.info('ttyd', `${opts.sessionName}: exited (code ${code}), not restarting (${decision.reason})`)
           managedTtyd.delete(opts.sessionName)
           if (ttydStartTokens.get(opts.sessionName) === startToken) {
-            ttydStartTokens.delete(opts.sessionName)
+            invalidateTtydStarts(
+              opts.sessionName,
+              `automatic restart abandoned: ${decision.reason}`,
+            )
           }
           ttydRestartHistory.delete(opts.sessionName)
           return
@@ -1833,9 +1889,18 @@ export function isExpectedTtydStartInterruption(err: unknown): boolean {
 
 export function stopManagedTtyd(
   sessionName: string,
-  opts: { resetHistory?: boolean; invalidateStarts?: boolean } = {},
+  opts: {
+    resetHistory?: boolean
+    invalidateStarts?: boolean
+    cancellationReason?: TtydStartCancellationReason
+  } = {},
 ): void {
-  if (opts.invalidateStarts !== false) ttydStartTokens.delete(sessionName)
+  if (opts.invalidateStarts !== false) {
+    invalidateTtydStarts(
+      sessionName,
+      opts.cancellationReason ?? 'terminal stop requested',
+    )
+  }
   const entry = managedTtyd.get(sessionName)
   if (entry) {
     entry.stopped = true
@@ -1848,6 +1913,19 @@ export function stopManagedTtyd(
   // the top of startTtyd passes resetHistory:false so the circuit breaker
   // still sees the cumulative restart rate across an auto-restart cycle.
   if (opts.resetHistory !== false) ttydRestartHistory.delete(sessionName)
+}
+
+function invalidateTtydStarts(
+  sessionName: string,
+  reason: TtydStartCancellationReason,
+): void {
+  const pending = pendingTtydStartTokens.get(sessionName)
+  if (pending) {
+    for (const token of pending.keys()) {
+      ttydStartCancellationReasons.set(token, reason)
+    }
+  }
+  ttydStartTokens.delete(sessionName)
 }
 
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {

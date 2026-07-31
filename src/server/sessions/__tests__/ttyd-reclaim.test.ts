@@ -7,6 +7,7 @@ import {
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
   isExpectedTtydStartInterruption,
+  findTtydStartCancelledError,
   findTtydStartSupersededError,
   onTtydRestart,
   orphanTtydPidsToReap,
@@ -392,6 +393,7 @@ describe('fenced ttyd start attempts', () => {
     const cancellation = new TtydStartCancelledError(
       opts.sessionName,
       'post-spawn',
+      'session stop requested',
       interrupted,
     )
 
@@ -401,7 +403,11 @@ describe('fenced ttyd start attempts', () => {
     )).toBe(true)
     expect(isExpectedTtydStartInterruption(diagnostic)).toBe(false)
     expect(findTtydStartSupersededError(cancellation)).toBeNull()
+    expect(findTtydStartCancelledError(new Error('wrapped', {
+      cause: cancellation,
+    }))).toBe(cancellation)
     expect(cancellation.cause).toBeUndefined()
+    expect(cancellation.reason).toBe('session stop requested')
     expect(cancellation.interrupted).toBe(interrupted)
   })
 
@@ -558,11 +564,14 @@ describe('fenced ttyd start attempts', () => {
     const rejection = expect(attempt).rejects.toMatchObject({
       name: 'TtydStartCancelledError',
       stage: 'post-spawn',
+      reason: 'session deletion requested',
       interrupted: expect.any(TtydStartSupersededError),
     })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 
-    stopManagedTtyd(opts.sessionName)
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'session deletion requested',
+    })
     scheduled[0]!()
     await rejection
   })

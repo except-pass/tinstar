@@ -335,16 +335,22 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   onTtydRestart: tmuxBackend.onTtydRestart,
 }
 
-function describeTtydFailure(
+export function describeTtydFailure(
   failure: unknown,
   seen: Set<unknown> = new Set(),
 ): string {
   if (!(failure instanceof Error)) return String(failure)
-  if (seen.has(failure)) return `${failure.message}; caused by: [cycle]`
+  if (seen.has(failure)) return `[cycle: ${failure.message}]`
   seen.add(failure)
-  return failure.cause === undefined
-    ? failure.message
-    : `${failure.message}; caused by: ${describeTtydFailure(failure.cause, seen)}`
+  const aggregate = failure instanceof AggregateError
+    ? '; errors: ['
+      + failure.errors.map(error => describeTtydFailure(error, seen)).join(' | ')
+      + ']'
+    : ''
+  const cause = failure.cause === undefined
+    ? ''
+    : `; caused by: ${describeTtydFailure(failure.cause, seen)}`
+  return failure.message + aggregate + cause
 }
 
 /**
@@ -573,9 +579,11 @@ export async function reattachVerifiedSessionTtydAttempt(
         )
       }
     }
-    const failure = err instanceof tmuxBackend.TtydStartCancelledError
-      ? `${err.message}; interrupted failure: `
-        + describeTtydFailure(err.interrupted)
+    const cancelled = tmuxBackend.findTtydStartCancelledError(err)
+    const failure = cancelled
+      ? `${describeTtydFailure(err)}; cancellation reason: `
+        + `${cancelled.reason}; interrupted failure: `
+        + describeTtydFailure(cancelled.interrupted)
       : describeTtydFailure(err)
     log.warn('reattach', `${name}: failed to reattach: ${failure}`)
     return false

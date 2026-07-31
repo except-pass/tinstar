@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   afterBootDeletionCleanups,
   createSessionTtydReattachSingleFlight,
+  describeTtydFailure,
   getLiveSessionForBoot,
   reconcileDeletingSessionOnBoot,
   reattachVerifiedSessionTtydAttempt,
@@ -91,6 +92,31 @@ describe('sessionNatsProjection', () => {
       port: null,
       agentIcon: 'old-icon',
     })
+  })
+})
+
+describe('describeTtydFailure', () => {
+  const cyclic = new Error('cycle')
+  Object.defineProperty(cyclic, 'cause', { value: cyclic })
+
+  it.each([
+    ['non-error', 'plain failure', 'plain failure'],
+    [
+      'cause chain',
+      new Error('outer', { cause: new Error('inner', { cause: 'root' }) }),
+      'outer; caused by: inner; caused by: root',
+    ],
+    [
+      'aggregate',
+      new AggregateError(
+        [new Error('left'), new Error('right', { cause: 'detail' })],
+        'combined',
+      ),
+      'combined; errors: [left | right; caused by: detail]',
+    ],
+    ['cause cycle', cyclic, 'cycle; caused by: [cycle: cycle]'],
+  ])('renders a %s diagnostic', (_case, failure, expected) => {
+    expect(describeTtydFailure(failure)).toBe(expected)
   })
 })
 
@@ -549,7 +575,23 @@ describe('getLiveSessionForBoot', () => {
     const stopTtyd = vi.fn()
     const releasePort = vi.fn()
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
-    const interruptedFailure = new Error('terminal readiness check lost ownership')
+    const cleanupFailure = new Error('stale terminal cleanup failed')
+    const interrupted = new TtydStartSupersededError(
+      session.name,
+      'post-spawn',
+    )
+    const cancellation = new TtydStartCancelledError(
+      session.name,
+      'post-spawn',
+      'session deletion requested',
+      interrupted,
+      {
+        cause: new AggregateError(
+          [interrupted, cleanupFailure],
+          `stale ttyd start cleanup failed for ${session.name}`,
+        ),
+      },
+    )
 
     await expect(reattachVerifiedSessionTtydAttempt(
       { dirs: { sessions: '/sessions' } } as TinstarConfig,
@@ -564,15 +606,7 @@ describe('getLiveSessionForBoot', () => {
         getSession: () => session,
         findPort: async () => 7000,
         reattach: async () => {
-          throw new TtydStartCancelledError(
-            session.name,
-            'post-spawn',
-            new TtydStartSupersededError(
-              session.name,
-              'post-spawn',
-              { cause: interruptedFailure },
-            ),
-          )
+          throw new Error('provider adapter failed', { cause: cancellation })
         },
         isCurrent: () => true,
         verifySurface: async () => 'verified',
@@ -591,9 +625,19 @@ describe('getLiveSessionForBoot', () => {
     expect(warn).toHaveBeenCalledWith(
       'reattach',
       expect.stringContaining(
-        'interrupted failure: ttyd start for cancelled-reattach '
-          + 'was superseded at post-spawn; caused by: '
-          + interruptedFailure.message,
+        'provider adapter failed; caused by: ttyd start for '
+          + 'cancelled-reattach was cancelled at post-spawn; caused by: '
+          + 'stale ttyd start cleanup failed for cancelled-reattach; errors: '
+          + '[ttyd start for cancelled-reattach was superseded at post-spawn '
+          + `| ${cleanupFailure.message}]`,
+      ),
+    )
+    expect(warn).toHaveBeenCalledWith(
+      'reattach',
+      expect.stringContaining(
+        'cancellation reason: session deletion requested; '
+          + 'interrupted failure: ttyd start for cancelled-reattach '
+          + 'was superseded at post-spawn',
       ),
     )
   })
