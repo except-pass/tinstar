@@ -1161,8 +1161,11 @@ export class TtydIdentityInspectionError extends Error {
 }
 
 export class TtydStartSupersededError extends Error {
-  constructor(sessionName: string) {
-    super(`ttyd start for ${sessionName} was superseded`)
+  constructor(
+    sessionName: string,
+    readonly reason: 'replaced' | 'cancelled',
+  ) {
+    super(`ttyd start for ${sessionName} was ${reason}`)
     this.name = 'TtydStartSupersededError'
   }
 }
@@ -1332,7 +1335,7 @@ export function ttydPidsToReclaim(
   return { kill, foreign }
 }
 
-async function inspectAllTtydIncumbents(
+export async function inspectAllTtydIncumbents(
   run: IdentityExec = execFileAsync,
 ): Promise<TtydIncumbent[]> {
   let stdout: string
@@ -1458,7 +1461,10 @@ export async function reapOrphanTtyds(prefix: string): Promise<number> {
   if (live === null) return 0 // liveness unknown — never risk killing live ttyds
   let incumbents: TtydIncumbent[]
   try {
-    incumbents = await allTtydIncumbentsStrict()
+    // GC is best-effort and already fails safe. Keep its probe outside the
+    // shared user-facing cooldown so a background pgrep/ps timeout cannot
+    // reject terminal creation or readiness verification for 30 seconds.
+    incumbents = await inspectAllTtydIncumbents()
   } catch (err) {
     log.warn(
       'ttyd',
@@ -1494,6 +1500,10 @@ export interface StartTtydAttemptDeps {
     opts: StartTtydOptions,
     startToken: symbol,
   ) => Promise<number | undefined>
+  supersessionReason: (
+    opts: StartTtydOptions,
+    startToken: symbol,
+  ) => 'replaced' | 'cancelled'
 }
 
 const startTtydAttemptDeps: StartTtydAttemptDeps = {
@@ -1514,6 +1524,12 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
   schedule: setTimeout,
   tmuxAlive: tmuxHasSession,
   enqueueRestart: enqueueTtydStart,
+  supersessionReason: (opts, startToken) => {
+    const current = ttydStartTokens.get(opts.sessionName)
+    return current !== undefined && current !== startToken
+      ? 'replaced'
+      : 'cancelled'
+  },
 }
 
 function enqueueTtydStart(
@@ -1544,7 +1560,10 @@ export async function startTtydForTokenAttempt(
   deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(opts.sessionName)
+    throw new TtydStartSupersededError(
+      opts.sessionName,
+      deps.supersessionReason(opts, startToken),
+    )
   }
 
   // Resolve both inventories before taking any destructive action. Operational
@@ -1553,8 +1572,10 @@ export async function startTtydForTokenAttempt(
   let portIncumbents: TtydIncumbent[]
   let allIncumbents: TtydIncumbent[]
   try {
-    portIncumbents = await deps.incumbentsOnPort(opts.port)
-    allIncumbents = await deps.allIncumbents()
+    [portIncumbents, allIncumbents] = await Promise.all([
+      deps.incumbentsOnPort(opts.port),
+      deps.allIncumbents(),
+    ])
   } catch (err) {
     if (err instanceof TtydIdentityInspectionError) throw err
     throw new TtydIdentityInspectionError(
@@ -1563,7 +1584,10 @@ export async function startTtydForTokenAttempt(
     )
   }
   if (!isCurrent()) {
-    throw new TtydStartSupersededError(opts.sessionName)
+    throw new TtydStartSupersededError(
+      opts.sessionName,
+      deps.supersessionReason(opts, startToken),
+    )
   }
 
   // resetHistory:false — preserve the restart-rate history across an
@@ -1683,7 +1707,10 @@ export async function startTtydForTokenAttempt(
     // Give ttyd a moment to bind the port
     deps.schedule(() => {
       if (!isCurrent()) {
-        reject(new TtydStartSupersededError(opts.sessionName))
+        reject(new TtydStartSupersededError(
+          opts.sessionName,
+          deps.supersessionReason(opts, startToken),
+        ))
         return
       }
       resolve(child.pid)

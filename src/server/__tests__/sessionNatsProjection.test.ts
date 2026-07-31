@@ -464,6 +464,91 @@ describe('getLiveSessionForBoot', () => {
     expect(releaseLease).toHaveBeenCalledTimes(1)
   })
 
+  it('leaves a newer terminal start untouched when reattach is superseded', async () => {
+    const supersededError = new Error('newer start owns the terminal')
+    const session = {
+      name: 'superseded-reattach',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+    const update = vi.fn(() => session)
+    const releaseLease = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        supersessionReason: err =>
+          err === supersededError ? 'replaced' : null,
+        acquireLease: () => ({ token: 'generation', release: releaseLease }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async () => { throw supersededError },
+        isCurrent: () => true,
+        verifySurface: async () => 'verified',
+        stopTtyd,
+        releasePort,
+        updateSession: update,
+        tmuxName: () => 'tinstar-superseded-reattach',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).not.toHaveBeenCalled()
+    expect(releasePort).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(releaseLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases a fresh port when reattach is cancelled without a replacement', async () => {
+    const cancelledError = new Error('terminal start cancelled')
+    const session = {
+      name: 'cancelled-reattach',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+    const releaseLease = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        supersessionReason: err =>
+          err === cancelledError ? 'cancelled' : null,
+        acquireLease: () => ({ token: 'generation', release: releaseLease }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async () => { throw cancelledError },
+        isCurrent: () => true,
+        verifySurface: async () => 'verified',
+        stopTtyd,
+        releasePort,
+        updateSession: vi.fn(() => session),
+        tmuxName: () => 'tinstar-cancelled-reattach',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).not.toHaveBeenCalled()
+    expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(7000)
+    expect(releaseLease).toHaveBeenCalledTimes(1)
+  })
+
   it('compensates a generic failure after reattach has produced a surface', async () => {
     const session = {
       name: 'post-reattach-failure',

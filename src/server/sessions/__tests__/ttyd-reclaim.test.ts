@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import {
   allTtydIncumbentsStrict,
+  inspectAllTtydIncumbents,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
   onTtydRestart,
@@ -11,7 +12,6 @@ import {
   startTtydForTokenAttempt,
   stopManagedTtyd,
   TtydIdentityInspectionError,
-  TtydStartSupersededError,
   ttydIdentityInspectionUnavailable,
   ttydIncumbentMatchesSession,
   ttydIncumbentsOnPortStrict,
@@ -50,6 +50,7 @@ function fakeStartDeps(
     }) as unknown as typeof setTimeout,
     tmuxAlive: async () => true,
     enqueueRestart: vi.fn(async () => child.pid),
+    supersessionReason: () => 'cancelled',
     ...overrides,
   }
 }
@@ -290,6 +291,20 @@ describe('verified ttyd session surfaces', () => {
     }
   })
 
+  it('keeps best-effort orphan inventory failures out of the shared cooldown', async () => {
+    await expect(inspectAllTtydIncumbents(vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+      })
+    }))).rejects.toThrow('inspection failed')
+
+    expect(ttydIdentityInspectionUnavailable()).toBe(false)
+  })
+
   it('requires the expected PID to attach to the exact tmux target', () => {
     expect(ttydIncumbentMatchesSession(
       [{ pid: 101, tmuxTarget: 'tinstar-other' }],
@@ -359,6 +374,10 @@ describe('fenced ttyd start attempts', () => {
     port: 6123,
   }
 
+  afterEach(() => {
+    stopManagedTtyd(opts.sessionName)
+  })
+
   it('takes no destructive action when preflight inspection fails', async () => {
     const deps = fakeStartDeps({
       incumbentsOnPort: async () => {
@@ -387,11 +406,38 @@ describe('fenced ttyd start attempts', () => {
       Symbol('start'),
       () => ++currentCheck === 1,
       deps,
-    )).rejects.toBeInstanceOf(TtydStartSupersededError)
+    )).rejects.toMatchObject({
+      name: 'TtydStartSupersededError',
+      reason: 'cancelled',
+    })
 
     expect(deps.stopManaged).not.toHaveBeenCalled()
     expect(deps.killProcess).not.toHaveBeenCalled()
     expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('runs both non-destructive inventories concurrently before mutation', async () => {
+    let resolvePortInventory!: (incumbents: []) => void
+    const allIncumbents = vi.fn(async () => [])
+    const deps = fakeStartDeps({
+      incumbentsOnPort: () => new Promise(resolve => {
+        resolvePortInventory = resolve
+      }),
+      allIncumbents,
+    })
+
+    const attempt = startTtydForTokenAttempt(
+      opts,
+      Symbol('start'),
+      () => true,
+      deps,
+    )
+    await vi.waitFor(() => expect(allIncumbents).toHaveBeenCalledTimes(1))
+    expect(deps.stopManaged).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+
+    resolvePortInventory([])
+    await expect(attempt).resolves.toBe(777)
   })
 
   it('kills an incumbent found by both inventories only once', async () => {
@@ -416,7 +462,6 @@ describe('fenced ttyd start attempts', () => {
     expect(deps.killProcess).toHaveBeenNthCalledWith(1, 100)
     expect(deps.killProcess).toHaveBeenNthCalledWith(2, 101)
     expect(deps.spawnProcess).toHaveBeenCalledTimes(1)
-    stopManagedTtyd(opts.sessionName)
   })
 
   it('rejects a start superseded while waiting for ttyd to bind', async () => {
@@ -430,6 +475,7 @@ describe('fenced ttyd start attempts', () => {
         scheduled.push({ callback, delay })
         return {} as NodeJS.Timeout
       }) as unknown as typeof setTimeout,
+      supersessionReason: () => 'replaced',
     })
 
     const attempt = startTtydForTokenAttempt(
@@ -439,14 +485,16 @@ describe('fenced ttyd start attempts', () => {
       deps,
     )
     const rejection = expect(attempt)
-      .rejects.toBeInstanceOf(TtydStartSupersededError)
+      .rejects.toMatchObject({
+        name: 'TtydStartSupersededError',
+        reason: 'replaced',
+      })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 
     current = false
     scheduled[0]!.callback()
     await rejection
     expect(deps.enqueueRestart).not.toHaveBeenCalled()
-    stopManagedTtyd(opts.sessionName)
   })
 
   it('routes a live unexpected exit through the injected restart coordinator', async () => {
@@ -487,7 +535,6 @@ describe('fenced ttyd start attempts', () => {
       startToken,
     ))
     await vi.waitFor(() => expect(onRestart).toHaveBeenCalledWith(888))
-    stopManagedTtyd(opts.sessionName)
   })
 
   it('fences a queued restart when the start is superseded before its timer', async () => {
@@ -524,7 +571,6 @@ describe('fenced ttyd start attempts', () => {
     await Promise.resolve()
 
     expect(enqueueRestart).not.toHaveBeenCalled()
-    stopManagedTtyd(opts.sessionName)
   })
 
   it('fences exit handling after an explicit stop', async () => {
