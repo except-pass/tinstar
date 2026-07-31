@@ -912,15 +912,47 @@ describe('the observation barrier', () => {
     expect(h.get('sf-1').freshness.phase).toBe('failed')
   })
 
-  it('a failure retains the stale reason and the overdue flag', async () => {
+  it('a failure retains the stale reason that scheduled it', async () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!
-    await h.svc.setSchedule('sf-1', { dueAt: 1_000, overdue: true }, ctx(20_500))
     h.staged.set(job.stagingPath, workerJson({ error: 'boom' }))
     await h.coord.sweep()
     const s = h.get('sf-1')
-    expect(s.freshness.overdue).toBe(true)
+    expect(s.freshness.phase).toBe('failed')
+    expect(s.freshness.failure?.message).toMatch(/boom/)
     expect(s.freshness.staleReason?.kind).toBe('git-revision')
+  })
+
+  it('a failure does not clear an EARNED overdue badge', async () => {
+    // Earned rather than injected: this Surface declares a periodic deadline and the
+    // clock is past it, which is the only way a real one arises. `applyDeadlines`
+    // now clears `overdue` when the declaration derives no deadline at all, so a
+    // flag forced onto a deadline-free Surface would be testing a state the host
+    // repairs rather than the invariant that a retry may not look attended-to.
+    const h = harness()
+    await h.seed(withPolicy({ policy: 'automatic', triggers: ['git-revision', 'periodic'], intervalMs: 60_000 }))
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    h.clock.now = 10 * 60_000 // well past the declared interval
+    h.staged.set(job.stagingPath, workerJson({ error: 'boom' }))
+    await h.coord.sweep()
+    const s = h.get('sf-1')
+    expect(s.freshness.phase).toBe('failed')
+    expect(s.freshness.overdue).toBe(true)
+  })
+
+  it('dropping the deadline clears an overdue badge nothing else could ever clear', async () => {
+    // The trap the clause above exists for. `overdue` is only lowered by a
+    // SUCCESSFUL verification — so an author who stops asking for periodic
+    // verification would otherwise leave an amber badge whose only remedy is the
+    // refresh they just turned off.
+    const h = await dispatched()
+    await h.svc.setSchedule('sf-1', { dueAt: 1_000, overdue: true }, ctx(20_500))
+    expect(h.get('sf-1').freshness.overdue).toBe(true)
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.overdue).toBe(false)
+    expect(h.get('sf-1').freshness.dueAt).toBeUndefined()
   })
 })
 
@@ -1019,6 +1051,111 @@ describe('freshness transitions the coordinator relies on', () => {
     const report = await h.coord.sweep()
     expect(report.queued).toHaveLength(1)
     expect(h.get('sf-1').freshness.overdue).toBe(true)
+  })
+})
+
+describe('a source that is GONE', () => {
+  // U2 keeps a Surface whose source file was deleted on purpose — an `rm` or a
+  // `git checkout` must not destroy a thread. U6 never consulted that state, so the
+  // engine kept scheduling refreshes with nowhere to commit them: observed on a real
+  // machine as a Surface stuck in `refreshing` while a background agent ran to its
+  // ten-minute timeout, failed, waited one interval, and did it again, forever.
+  const MISSING: Partial<Surface> = {
+    content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+    source: {
+      adapter: 'slate-file', locator: 'file:cov.json#cov', worktree: WORKTREE,
+      generation: 1, state: 'missing', missingSince: 9_000,
+    },
+  }
+
+  it('fails cleanly with "the source is gone" and creates NO job', async () => {
+    const h = harness()
+    await h.seed(MISSING)
+    const report = await h.coord.note(gitEvent())
+    expect(report.queued).toEqual([])
+    expect(report.blocked[0]?.reason).toMatch(/is gone/)
+    expect(h.jobFor('sf-1')).toBeUndefined()
+    const s = h.get('sf-1')
+    expect(s.freshness.phase).toBe('failed')
+    expect(s.freshness.failure?.message).toMatch(/file:cov\.json#cov.*is gone|is gone.*nowhere to land/)
+  })
+
+  it('stops RESCHEDULING — every later sweep adds no job and burns no revision', async () => {
+    // The half that actually hurt. `dueAt` derives from the last SUCCESSFUL
+    // verification, which a missing source can never produce, so the deadline is
+    // permanently past and every sweep used to schedule another real agent.
+    const h = harness()
+    await h.seed({
+      ...MISSING,
+      content: {
+        headline: 'Coverage', recipe: 'Re-run coverage.',
+        refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
+      },
+    })
+    h.clock.now = 200_000
+    await h.coord.sweep()
+    const settled = h.get('sf-1').rev
+    for (let i = 0; i < 5; i++) {
+      h.clock.now += 60_000
+      await h.coord.sweep()
+    }
+    expect(h.jobs.list()).toEqual([])
+    expect(h.launches).toEqual([])
+    // And no revision storm: a blocker re-derived on every sweep must not rewrite
+    // the record (and re-emit SSE) each time.
+    expect(h.get('sf-1').rev).toBe(settled)
+  })
+
+  it('refuses a HUMAN refresh too, because being asked does not conjure a file back', async () => {
+    const h = harness()
+    await h.seed(MISSING)
+    expect(await h.coord.requestFor('sf-1')).toBeUndefined()
+    expect(h.jobFor('sf-1')).toBeUndefined()
+    expect(h.get('sf-1').freshness.failure?.message).toMatch(/is gone/)
+  })
+
+  it('ends a job whose source vanishes MID-FLIGHT instead of waiting out the timeout', async () => {
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.phase).toBe('refreshing')
+    const job = h.jobFor('sf-1')!
+
+    // The file is deleted while the worker runs. Well inside `workerTimeoutMs`.
+    await h.svc.markSourceMissing(seeded.id, 'slate-file', ctx(25_000))
+    h.clock.now = 30_000
+    const report = await h.coord.sweep()
+
+    expect(report.failed[0]?.reason).toMatch(/is gone/)
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
+    expect(h.jobs.get(job.id)?.state).toBe('failed')
+    // and the worker's session is given back rather than left holding a port
+    expect(h.retired).toContain(`refresh-${job.id}`)
+  })
+
+  it('resumes normally once the source comes back', async () => {
+    const h = harness()
+    const seeded = await h.seed(MISSING)
+    await h.coord.note(gitEvent())
+    expect(h.jobFor('sf-1')).toBeUndefined()
+
+    await h.svc.observeSource({
+      id: seeded.id,
+      spaceId: SPACE,
+      home: seeded.home,
+      adapter: 'slate-file',
+      locator: 'file:cov.json#cov',
+      worktree: WORKTREE,
+      alias: { bucket: { kind: 'run', runId: RUN }, localId: 'cov', visible: true },
+      author: 'agent',
+      content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+      watermark: 'sha256:back',
+    }, ctx(40_000))
+    expect(h.get('sf-1').source?.state).not.toBe('missing')
+
+    await h.coord.note(gitEvent({ evidence: 'sha-2', at: 41_000 }))
+    expect(h.jobFor('sf-1')).toBeDefined()
   })
 })
 

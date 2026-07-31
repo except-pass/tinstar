@@ -46,6 +46,110 @@ const MAX_DECLARED_LEN = 256
  *  queue rather than as an error anyone could see. */
 export const MIN_INTERVAL_MS = 60_000
 
+/** Most changed paths one observation may carry before the host stops trying to
+ *  attribute it. Past this the event goes out with no path list at all, which every
+ *  matcher below reads as "unknown" and therefore matches — a merge of a thousand
+ *  files is not evidence that nothing is affected. */
+export const MAX_EVENT_PATHS = 5_000
+
+// --- Declared sources: repo path globs vs external identifiers ---------------
+
+/**
+ * Does this declared source name something OUTSIDE the repository?
+ *
+ * The whole classification is the `scheme:` prefix, and it is deliberately the only
+ * rule: `mysql://prod/detector` and `jira:KC-1302` are opaque identifiers the host
+ * cannot walk, while `src/server/**` and `docs/plans/2026-*.md` are paths a commit
+ * can touch. A Surface whose sources are ALL external is one no commit can ever make
+ * stale, which is the case that motivated this — a decision surface reading
+ * production MySQL and Jira was refreshing on every commit to a repo it never read.
+ *
+ * `file:x.json#id` — the `slate-file` locator shape — lands on the external side, and
+ * that is correct: it is matched by equality through `source-content`, not walked.
+ */
+export function isExternalSourceId(source: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(source)
+}
+
+/** The declared sources that are repo path globs. */
+export function declaredPathGlobs(decl: SurfaceRefreshDeclaration): string[] {
+  return (decl.sources ?? []).filter(s => !isExternalSourceId(s))
+}
+
+/** Escape a literal run for embedding in a `RegExp`. */
+function escapeLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Compile one author glob to a regex.
+ *
+ * The supported vocabulary is deliberately tiny — `**`, `*`, `?` — because an author
+ * writes these in a JSON file and the failure mode of a richer syntax is a glob that
+ * silently matches nothing, which looks exactly like a Surface that never needed
+ * refreshing.
+ *
+ *   `**`  any run of characters, separators included
+ *   `*`   any run of characters except `/`
+ *   `?`   exactly one character except `/`
+ *
+ * A glob with NO wildcard is a PREFIX: `src/server` matches `src/server/index.ts` as
+ * well as a file of that exact name. Authors write directories far more often than
+ * they write one file, and requiring `src/server/**` for the ordinary case would make
+ * the quiet-by-default failure the common one.
+ *
+ * Every quantifier here is over a single character class and none of them nest, so
+ * there is no input an author can write that makes this backtrack exponentially.
+ */
+function globToRegExp(glob: string): RegExp | null {
+  const trimmed = glob.replace(/^\.\//, '').replace(/\/+$/, '')
+  if (!trimmed) return null
+  const wildcarded = /[*?]/.test(trimmed)
+  let out = ''
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charAt(i)
+    if (c === '*') {
+      if (trimmed[i + 1] === '*') { out += '.*'; i++ } else { out += '[^/]*' }
+    } else if (c === '?') {
+      out += '[^/]'
+    } else {
+      out += escapeLiteral(c)
+    }
+  }
+  // The prefix rule, applied only to a literal path: a wildcarded glob already says
+  // exactly how far it reaches, and widening it would make `docs/*.md` match
+  // `docs/a.md/b` — a path that cannot exist, but also not what was asked for.
+  try {
+    return new RegExp(`^${out}${wildcarded ? '' : '(/.*)?'}$`)
+  } catch {
+    return null
+  }
+}
+
+const globCache = new Map<string, RegExp | null>()
+
+/** Does one repo-relative path match one author glob? */
+export function pathMatchesGlob(glob: string, path: string): boolean {
+  let re = globCache.get(glob)
+  if (re === undefined) {
+    re = globToRegExp(glob)
+    // Bounded by the number of distinct globs any author has ever declared in this
+    // process, which `MAX_DECLARED` bounds per Surface. Cleared wholesale rather
+    // than evicted per entry: there is no access pattern worth modelling here.
+    if (globCache.size > 4_000) globCache.clear()
+    globCache.set(glob, re)
+  }
+  return !!re && re.test(path.replace(/^\.\//, ''))
+}
+
+/** Does any changed path match any declared glob? */
+export function anyPathMatches(globs: readonly string[], paths: readonly string[]): boolean {
+  for (const glob of globs) {
+    for (const path of paths) if (pathMatchesGlob(glob, path)) return true
+  }
+  return false
+}
+
 /**
  * One host observation, normalized (plan U6: "Normalize observations onto the
  * typed local EventBus with stable source identifiers, evidence values, and
@@ -60,6 +164,12 @@ export interface SurfaceTriggerEvent {
   evidence?: string
   /** The named signal, for `semantic-signal`. Ignored for every other kind. */
   signal?: string
+  /** Repo-relative paths this observation touched, when the host could work them
+   *  out. ABSENT MEANS UNKNOWN, never "none" — a diff that failed, a first
+   *  observation with nothing to compare against, and a change set past
+   *  {@link MAX_EVENT_PATHS} all arrive with no list, and every one of those must
+   *  still be able to make a Surface stale. */
+  paths?: string[]
   /** Scope hints, so matching does not have to consider every Surface in the
    *  store. Absent means "unscoped" and only declaration matching applies. */
   runId?: string
@@ -83,6 +193,15 @@ export interface SurfaceTriggerMatch {
 
 // --- Author declarations ---------------------------------------------------
 
+/**
+ * Parse a declared string list.
+ *
+ * AN EMPTY ARRAY SURVIVES, and that is the whole three-state contract `sources`
+ * rests on (see {@link declaredSources}). Collapsing `[]` to `undefined` — which
+ * this used to do — would erase the difference between "the author checked and
+ * nothing in the repo derives this" and "the author never said", and those two must
+ * behave in opposite ways.
+ */
 function strings(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: string[] = []
@@ -93,7 +212,7 @@ function strings(raw: unknown): string[] | undefined {
     out.push(s)
     if (out.length >= MAX_DECLARED) break
   }
-  return out.length > 0 ? out : undefined
+  return out
 }
 
 /**
@@ -149,6 +268,32 @@ export function parseRefreshDeclaration(raw: unknown): SurfaceRefreshDeclaration
 }
 
 /**
+ * What an author DECLARED about where this Surface's answer comes from — three
+ * states, and the third is why this is a function rather than a field read.
+ *
+ *   · `undefined` — the author never said. Every Surface authored before declared
+ *     sources existed is in this state, so it MUST mean "fall back to what the host
+ *     did before": a commit to the bound worktree may make it stale. Silently
+ *     turning those into never-refreshing Surfaces would break freshness for
+ *     everything already on the canvas.
+ *   · `[]` — the author checked and NOTHING in the repository derives this. No
+ *     commit can ever make it stale. This is a real declaration and it is the one
+ *     that has to be writable, or "nothing in the repo" is indistinguishable from
+ *     "did not bother".
+ *   · non-empty — exactly these globs and external ids.
+ *
+ * THE RULE AUTHORS ACTUALLY NEED, from the run that drove six of these end to end:
+ * a path glob captures the CODE that derives the answer, never the DATA the answer
+ * is derived from. A decision surface whose number comes from production MySQL but
+ * whose logic is `scripts/integrity/detect-leftovers.sh` declares that script — and
+ * gets both behaviours right at once, going quiet on unrelated commits while still
+ * rebuilding when the detector itself is edited. That MIXED shape is the common one.
+ */
+export function declaredSources(surface: Surface): string[] | undefined {
+  return surface.content.refreshPolicy?.sources
+}
+
+/**
  * The declaration actually in force for a Surface: what the author asked for,
  * filled in with host defaults.
  *
@@ -162,6 +307,12 @@ export function parseRefreshDeclaration(raw: unknown): SurfaceRefreshDeclaration
  *     observation of a Surface's OWN source is the content ARRIVING, and
  *     `observeSource` already marks that current. Treating it as a stale signal
  *     would make every save queue a refresh that immediately superseded itself.
+ *
+ * `git-revision` STAYS IN THE DEFAULT SET even though it is the trigger that
+ * produced 45 of 57 refreshes in a measured session, because the narrowing that
+ * fixes that lives in `kindMatches` and keys off the DECLARATION, not off the
+ * trigger list. Dropping the default here instead would have made every
+ * already-authored Surface stop refreshing.
  */
 export function effectiveDeclaration(surface: Surface): SurfaceRefreshDeclaration {
   const declared = surface.content.refreshPolicy
@@ -203,6 +354,13 @@ export function normalizeTrigger(raw: unknown, at: number): SurfaceTriggerEvent 
     const s = v.trim()
     return s && s.length <= MAX_DECLARED_LEN ? s : undefined
   }
+  // `paths` is only ever set when the announcement genuinely carried a list. A
+  // non-array — including an announcement that omits it — leaves it undefined, which
+  // every matcher reads as "unknown" and therefore matches.
+  const paths = Array.isArray(obj.paths)
+    ? obj.paths.filter((p): p is string => typeof p === 'string' && !!p.trim() && p.length <= MAX_DECLARED_LEN)
+      .slice(0, MAX_EVENT_PATHS)
+    : undefined
   return {
     kind,
     sourceId,
@@ -210,6 +368,7 @@ export function normalizeTrigger(raw: unknown, at: number): SurfaceTriggerEvent 
     ...(text(obj.signal) ? { signal: text(obj.signal)! } : {}),
     ...(text(obj.runId) ? { runId: text(obj.runId)! } : {}),
     ...(text(obj.worktree) ? { worktree: text(obj.worktree)! } : {}),
+    ...(paths ? { paths } : {}),
     at,
   }
 }
@@ -241,15 +400,41 @@ function scopeMatches(event: SurfaceTriggerEvent, surface: Surface): boolean {
   return true
 }
 
+/**
+ * Does this Surface's declaration accept an event of this kind?
+ *
+ * `git-revision` is the interesting one and the reason this comment exists. A commit
+ * used to reach EVERY Surface bound to the worktree — measured at 45 refreshes in
+ * one session, essentially all of them "no change", including a Surface whose only
+ * repo dependency was a detector script the commits never touched. The narrowing:
+ *
+ *   · sources undeclared        → match (back-compat; the host does not know)
+ *   · sources declared, no path globs in them (`[]`, or purely `external:` ids)
+ *                               → NEVER match. No commit derives this.
+ *   · event carries no path list → match. Unknown is not evidence of irrelevance;
+ *     a diff the host could not compute must not silence a real change.
+ *   · otherwise                 → match only if a changed path hits a declared glob.
+ */
 function kindMatches(event: SurfaceTriggerEvent, decl: SurfaceRefreshDeclaration, surface: Surface): boolean {
   if (!decl.triggers.includes(event.kind)) return false
   switch (event.kind) {
+    case 'git-revision': {
+      const sources = decl.sources
+      if (sources === undefined) return true
+      const globs = declaredPathGlobs(decl)
+      if (globs.length === 0) return false
+      if (!event.paths) return true
+      return anyPathMatches(globs, event.paths)
+    }
     case 'source-content':
       // Only a source the Surface DECLARED it derives from. Its own binding is
       // excluded on purpose (see `effectiveDeclaration`), and a declaration-free
       // Surface therefore matches no source-content event at all.
       if (surface.source && event.sourceId === surface.source.locator) return false
+      // Equality for external ids, glob for repo paths — one list, two shapes, and
+      // an adapter emitting a path-shaped `sourceId` gets glob matching for free.
       return (decl.sources ?? []).includes(event.sourceId)
+        || anyPathMatches(declaredPathGlobs(decl), [event.sourceId])
     case 'semantic-signal':
       return !!event.signal && (decl.signals ?? []).includes(event.signal)
     default:

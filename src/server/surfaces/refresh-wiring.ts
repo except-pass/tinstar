@@ -25,6 +25,7 @@ import { refreshConfigProblem, type TinstarConfig } from '../sessions/config'
 import { launchRefreshWorker } from '../sessions/surfaceAuthor'
 import type { SurfaceService } from './surface-service'
 import { SurfaceRefreshJobStore } from './surface-refresh-jobs'
+import { MAX_EVENT_PATHS } from './surface-trigger-matcher'
 import {
   SurfaceRefreshCoordinator,
   type RefreshCoordinatorDeps,
@@ -40,6 +41,40 @@ export async function headRevision(workdir: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync('git', ['-C', workdir, 'rev-parse', 'HEAD'])
     return stdout.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The repo-relative paths between two revisions, or null when the host cannot say.
+ *
+ * NULL IS NOT "NOTHING CHANGED" and every caller has to treat it that way. An
+ * unknown `from` (the first observation after a restart), a SHA that garbage
+ * collection or a rebase removed, and a diff larger than the host will attribute all
+ * return null — and a Surface whose declared sources might be in that unknown set
+ * must still be allowed to go stale. Silence here would be the worst failure this
+ * feature can have: a Surface that quietly stops refreshing looks exactly like a
+ * Surface that never needed to.
+ *
+ * `--name-only` against the repo root, so the paths line up with the repo-relative
+ * globs an author writes. `-z` because a filename may contain a newline, and a
+ * split on `\n` would attribute half of one path to another Surface.
+ */
+export async function changedPaths(
+  workdir: string, from: string, to: string, max = MAX_EVENT_PATHS,
+): Promise<string[] | null> {
+  if (!from || !to || from === to) return null
+  try {
+    const { stdout } = await execFileAsync(
+      'git', ['-C', workdir, 'diff', '--name-only', '-z', from, to],
+      { maxBuffer: 16 * 1024 * 1024 },
+    )
+    const paths = stdout.split('\0').filter(Boolean)
+    // Past the cap the host stops attributing rather than attributing partially: a
+    // truncated list would make a Surface whose file sits past the cut look
+    // untouched, which is precisely the silent-staleness failure.
+    return paths.length > max ? null : paths
   } catch {
     return null
   }

@@ -5,10 +5,12 @@ import {
   coalesceGeneration,
   deriveDueAt,
   effectiveDeclaration,
+  isExternalSourceId,
   matchTrigger,
   MIN_INTERVAL_MS,
   normalizeTrigger,
   parseRefreshDeclaration,
+  pathMatchesGlob,
   triggerDedupeKey,
   type SurfaceTriggerEvent,
 } from '../surface-trigger-matcher'
@@ -78,6 +80,19 @@ describe('parseRefreshDeclaration', () => {
     })
     expect(d?.sources).toEqual(['a', 'b'])
     expect(d?.signals).toEqual(['deploy-finished'])
+  })
+
+  it('keeps an EMPTY sources array distinct from an absent one', () => {
+    // The three-state contract. `[]` is a real declaration — "I checked, nothing in
+    // the repo derives this" — and collapsing it to undefined would make it
+    // indistinguishable from an author who never said, which behaves the opposite
+    // way.
+    expect(parseRefreshDeclaration({ sources: [] })?.sources).toEqual([])
+    expect(parseRefreshDeclaration({ triggers: ['periodic'] })?.sources).toBeUndefined()
+  })
+
+  it('drops non-string source entries without collapsing the declaration', () => {
+    expect(parseRefreshDeclaration({ sources: [{ exec: 'ls' }, 42] })?.sources).toEqual([])
   })
 })
 
@@ -202,6 +217,120 @@ describe('matchTrigger', () => {
     })
     const e = event({ kind: 'semantic-signal', sourceId: 'agent:alpha', signal: 'deploy-finished', worktree: undefined })
     expect(matchTrigger(e, [listening, deaf]).map(m => m.surface.id)).toEqual(['a'])
+  })
+})
+
+describe('declared source paths narrow a commit (U6 follow-up)', () => {
+  // The measured failure this fixes: one session produced 57 refresh jobs, 45 of
+  // them from commits, essentially all "no change" — because every commit to a
+  // worktree made every Surface bound to it stale regardless of what it touched.
+  function declaring(sources: string[] | undefined, id = 'srf_1'): Surface {
+    return surface({
+      id,
+      content: {
+        headline: 'Decision 6',
+        recipe: 'Re-run the detector and rewrite the surface.',
+        refreshPolicy: { policy: 'automatic', triggers: ['git-revision'], ...(sources ? { sources } : {}) },
+      },
+    })
+  }
+
+  const commit = (paths: string[]) => event({ paths })
+
+  it('an UNDECLARED Surface still matches any commit — absence is not a declaration', () => {
+    // Back-compat, and the reason this is the first assertion: every Surface
+    // authored before declared sources existed carries no `sources` field, and
+    // silently making those never-refreshing would break freshness across the
+    // canvas rather than quieten it.
+    expect(matchTrigger(commit(['README.md']), [declaring(undefined)])).toHaveLength(1)
+  })
+
+  it('an EMPTY declaration is commit-silent — the author checked and said "nothing here"', () => {
+    expect(matchTrigger(commit(['README.md']), [declaring([])])).toEqual([])
+    expect(matchTrigger(commit(['src/anything.ts']), [declaring([])])).toEqual([])
+  })
+
+  it('the mixed shape: repo code declared, data external — quiet on unrelated commits, awake on its own', () => {
+    // The real Decision 6. Its number comes from production MySQL and Jira; its
+    // LOGIC is a detector script in the repo. A path glob captures the code that
+    // derives the answer, never the data the answer is derived from.
+    const d6 = declaring([
+      'scripts/integrity/detect-site-reassignment-leftovers.sh',
+      'external:prod-mysql/ra-physical',
+      'external:jira/CMT-510',
+    ])
+    expect(matchTrigger(commit(['src/server/index.ts', 'docs/readme.md']), [d6])).toEqual([])
+    expect(matchTrigger(commit(['scripts/integrity/detect-site-reassignment-leftovers.sh']), [d6])).toHaveLength(1)
+  })
+
+  it('an all-external declaration can never be woken by a commit', () => {
+    const s = declaring(['external:prod-mysql/ra-physical', 'jira:CMT-510'])
+    expect(matchTrigger(commit(['scripts/anything.sh']), [s])).toEqual([])
+  })
+
+  it('a commit with UNKNOWN paths matches anyway — silence must never be inferred', () => {
+    // No path list means the host could not work out the diff (first poll after a
+    // restart, a garbage-collected SHA, a change set past the cap). A Surface whose
+    // sources might be in that unknown set has to be allowed to go stale.
+    expect(matchTrigger(event({ paths: undefined }), [declaring(['scripts/**'])])).toHaveLength(1)
+  })
+
+  it('matches a glob written for files that do not exist yet', () => {
+    // The authoring case that motivated globs over literal lists: three files
+    // written at different times, and the author should not have to re-edit the
+    // recipe when a fourth lands.
+    const s = declaring(['docs/decisions/SerenaSelfCostCeiling*.md'])
+    expect(matchTrigger(commit(['docs/decisions/SerenaSelfCostCeilingIV.md']), [s])).toHaveLength(1)
+    expect(matchTrigger(commit(['docs/decisions/other.md']), [s])).toEqual([])
+  })
+})
+
+describe('pathMatchesGlob', () => {
+  it('* stops at a separator and ** crosses one', () => {
+    expect(pathMatchesGlob('src/*.ts', 'src/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/*.ts', 'src/server/index.ts')).toBe(false)
+    expect(pathMatchesGlob('src/**/*.ts', 'src/server/api/routes.ts')).toBe(true)
+    expect(pathMatchesGlob('src/**', 'src/server/api/routes.ts')).toBe(true)
+  })
+
+  it('a wildcard-free glob is a PREFIX, because authors name directories', () => {
+    expect(pathMatchesGlob('src/server', 'src/server/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/server', 'src/server')).toBe(true)
+    // and does not leak into a sibling whose name merely starts the same way
+    expect(pathMatchesGlob('src/server', 'src/serverless/x.ts')).toBe(false)
+  })
+
+  it('? is exactly one non-separator character', () => {
+    expect(pathMatchesGlob('bin/serena?', 'bin/serena1')).toBe(true)
+    expect(pathMatchesGlob('bin/serena?', 'bin/serena')).toBe(false)
+    expect(pathMatchesGlob('bin/?', 'bin/a/b')).toBe(false)
+  })
+
+  it('treats regex metacharacters in a glob as literals', () => {
+    // An author writing a filename with a dot must not have it read as "any char".
+    expect(pathMatchesGlob('docs/a.md', 'docs/aXmd')).toBe(false)
+    expect(pathMatchesGlob('docs/a.md', 'docs/a.md')).toBe(true)
+    expect(pathMatchesGlob('docs/a+b.md', 'docs/a+b.md')).toBe(true)
+  })
+
+  it('normalizes a leading ./ and a trailing slash on either side', () => {
+    expect(pathMatchesGlob('./src/server/', 'src/server/index.ts')).toBe(true)
+    expect(pathMatchesGlob('src/server', './src/server/index.ts')).toBe(true)
+  })
+})
+
+describe('isExternalSourceId', () => {
+  it('a scheme prefix marks a source no commit can touch', () => {
+    expect(isExternalSourceId('external:prod-mysql/ra-physical')).toBe(true)
+    expect(isExternalSourceId('mysql://prod/detector')).toBe(true)
+    expect(isExternalSourceId('jira:CMT-510')).toBe(true)
+    expect(isExternalSourceId('file:cov.json#cov')).toBe(true)
+  })
+
+  it('a repo path is not external', () => {
+    expect(isExternalSourceId('src/server/**')).toBe(false)
+    expect(isExternalSourceId('docs/plans/2026-07-24-001-*.md')).toBe(false)
+    expect(isExternalSourceId('bin/serena')).toBe(false)
   })
 })
 
