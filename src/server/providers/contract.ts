@@ -2,6 +2,7 @@ import type {
   ProviderCapabilities,
   ProviderIdentity,
   ProviderObservationKind,
+  ProviderObservationScope,
   ProviderObservationRequestFor,
   ProviderObservationSnapshotFor,
   ProviderSource,
@@ -61,6 +62,15 @@ export type AcceptedProviderDelivery<TDetail extends object = object> = Extract<
   { state: 'accepted' }
 >
 
+/**
+ * Stable attempt identity used for confirmation. Provider-owned detail stays
+ * out of this input so heterogeneous registries can safely erase adapter detail.
+ */
+export type AcceptedProviderDeliveryIdentity = Omit<
+  AcceptedProviderDelivery<object>,
+  'detail'
+>
+
 export interface ProviderDeliveryEvidence {
   source: ProviderSource
   reference?: string
@@ -114,7 +124,7 @@ export interface ProviderConfirmingDeliveryAdapter<
   TDetail extends object = object,
 > extends ProviderDeliveryAcceptanceAdapter<TDetail> {
   confirm: (
-    acceptance: AcceptedProviderDelivery<TDetail>,
+    acceptance: AcceptedProviderDeliveryIdentity,
   ) => Promise<ProviderDeliveryConfirmation<TDetail>>
 }
 
@@ -127,6 +137,8 @@ export type ProviderObservationHandlers<TDetail extends object = object> = {
     request: ProviderObservationRequestFor<K>,
   ) => Promise<ProviderObservationSnapshotFor<K, TDetail>>
 }
+
+const rawObservationHandlerByGuard = new WeakMap<object, object>()
 
 /**
  * Provider-neutral boundary for a managed CLI.
@@ -178,11 +190,31 @@ export function defineProviderAdapter<TDetail extends object = object>(
   return {
     ...adapter,
     observe: {
-      'session-usage': guardObservationHandler(adapter, 'session-usage'),
-      'session-context': guardObservationHandler(adapter, 'session-context'),
-      'provider-quota': guardObservationHandler(adapter, 'provider-quota'),
-      'historical-telemetry': guardObservationHandler(adapter, 'historical-telemetry'),
-      'context-breakdown': guardObservationHandler(adapter, 'context-breakdown'),
+      'session-usage': guardObservationHandler(
+        adapter,
+        'session-usage',
+        adapter.observe['session-usage'],
+      ),
+      'session-context': guardObservationHandler(
+        adapter,
+        'session-context',
+        adapter.observe['session-context'],
+      ),
+      'provider-quota': guardObservationHandler(
+        adapter,
+        'provider-quota',
+        adapter.observe['provider-quota'],
+      ),
+      'historical-telemetry': guardObservationHandler(
+        adapter,
+        'historical-telemetry',
+        adapter.observe['historical-telemetry'],
+      ),
+      'context-breakdown': guardObservationHandler(
+        adapter,
+        'context-breakdown',
+        adapter.observe['context-breakdown'],
+      ),
     },
   }
 }
@@ -193,11 +225,35 @@ function guardObservationHandler<
 >(
   adapter: ProviderAdapter<TDetail>,
   kind: K,
+  handler: (
+    request: ProviderObservationRequestFor<K>,
+  ) => Promise<ProviderObservationSnapshotFor<K, TDetail>>,
 ): (
   request: ProviderObservationRequestFor<K>,
 ) => Promise<ProviderObservationSnapshotFor<K, TDetail>> {
-  return async (request) => {
-    const snapshot = await adapter.observe[kind](request)
+  const rawHandler = (
+    rawObservationHandlerByGuard.get(handler) as typeof handler | undefined
+  ) ?? handler
+  const guardedHandler = async (request: ProviderObservationRequestFor<K>) => {
+    const snapshot = await rawHandler(request)
+    if (snapshot.providerId !== adapter.provider.id) {
+      throw new Error(
+        `Provider "${adapter.provider.id}" observation "${kind}" returned providerId `
+        + `"${snapshot.providerId}"`,
+      )
+    }
+    if (snapshot.kind !== kind) {
+      throw new Error(
+        `Provider "${adapter.provider.id}" observation "${kind}" returned kind `
+        + `"${snapshot.kind}"`,
+      )
+    }
+    if (!observationScopesEqual(snapshot.scope, request.scope)) {
+      throw new Error(
+        `Provider "${adapter.provider.id}" observation "${kind}" returned a scope `
+        + 'that does not match the request',
+      )
+    }
     const capabilitySupported = adapter.capabilities.observations[kind].state === 'supported'
     const observationSupported = snapshot.availability.state !== 'unsupported'
     if (capabilitySupported !== observationSupported) {
@@ -209,4 +265,16 @@ function guardObservationHandler<
     }
     return snapshot
   }
+  rawObservationHandlerByGuard.set(guardedHandler, rawHandler)
+  return guardedHandler
+}
+
+function observationScopesEqual(
+  left: ProviderObservationScope,
+  right: ProviderObservationScope,
+): boolean {
+  if (left.kind === 'session') {
+    return right.kind === 'session' && left.sessionId === right.sessionId
+  }
+  return right.kind === 'provider' && left.accountRef === right.accountRef
 }

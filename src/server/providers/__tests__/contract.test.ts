@@ -222,13 +222,17 @@ const forge = defineProviderAdapter<ForgeDetail>({
 
 describe('provider capability contract', () => {
   it('accepts a fake third provider without a closed provider registry', async () => {
-    const adapter: ProviderAdapter<ForgeDetail> = forge
+    const adapter: ProviderAdapter = forge
+    const registry = new Map<string, ProviderAdapter>([
+      [forge.provider.id, forge],
+    ])
     const snapshot = await adapter.observe['session-usage']({
       kind: 'session-usage',
       scope: { kind: 'session', sessionId: 'run-forge' },
     })
 
     expect(adapter.provider).toEqual({ id: 'forge', label: 'Forge CLI' })
+    expect(registry.get('forge')?.provider.id).toBe('forge')
     expect(adapter.sessionLifecycle).toBe('terminal')
     expect(snapshot).toMatchObject({
       kind: 'session-usage',
@@ -370,7 +374,7 @@ describe('provider capability contract', () => {
 
   it('represents acceptance-only delivery without fabricating confirmation', async () => {
     const acceptanceOnly = defineProviderAdapter({
-      provider: { id: 'boundary', label: 'Boundary CLI' },
+      provider: forge.provider,
       sessionLifecycle: 'terminal',
       capabilities: {
         observations: forge.capabilities.observations,
@@ -411,7 +415,7 @@ describe('provider capability contract', () => {
       attempt: 1,
       acceptedAt: CHECKED_AT,
       senderSessionId: 'run-sender',
-      recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge' },
       text: 'Queued?',
     })
 
@@ -511,6 +515,23 @@ describe('provider capability contract', () => {
 
     expect(() => defineProviderAdapter({
       ...forge,
+      capabilities: {
+        ...forge.capabilities,
+        delivery: {
+          acceptance: {
+            state: 'unsupported',
+            reason: 'This provider is read-only',
+          },
+          confirmation: {
+            state: 'unsupported',
+            reason: 'No messages are accepted',
+          },
+        },
+      },
+    })).toThrow('acceptance is unsupported')
+
+    expect(() => defineProviderAdapter({
+      ...forge,
       delivery: {
         accept: delivery.accept,
       },
@@ -550,5 +571,79 @@ describe('provider capability contract', () => {
       kind: 'session-usage',
       scope: { kind: 'session', sessionId: 'run-forge' },
     })).rejects.toThrow('observation "session-usage" is declared unsupported')
+  })
+
+  it('allows supported observations to be temporarily unavailable', async () => {
+    await expect(forge.observe['provider-quota']({
+      kind: 'provider-quota',
+      scope: { kind: 'provider', accountRef: 'default' },
+    })).resolves.toMatchObject({
+      providerId: 'forge',
+      availability: {
+        state: 'unavailable',
+        reason: 'not-observed',
+      },
+    })
+  })
+
+  it('rejects snapshots attributed to the wrong provider', async () => {
+    const misidentified = defineProviderAdapter({
+      ...forge,
+      observe: {
+        ...forge.observe,
+        async 'session-usage'(request) {
+          return {
+            ...await forge.observe['session-usage'](request),
+            providerId: 'someone-else',
+          }
+        },
+      },
+    })
+
+    await expect(misidentified.observe['session-usage']({
+      kind: 'session-usage',
+      scope: { kind: 'session', sessionId: 'run-forge' },
+    })).rejects.toThrow('returned providerId "someone-else"')
+  })
+
+  it('re-registers derived adapters against raw handlers instead of stale guards', async () => {
+    const unsupportedUsage = defineProviderAdapter({
+      ...forge,
+      observe: {
+        ...forge.observe,
+        async 'session-usage'(request) {
+          return unsupportedSnapshot(
+            'forge',
+            request,
+            'Usage is disabled',
+            { region: 'workstation' },
+          )
+        },
+      },
+    })
+    const derived = defineProviderAdapter({
+      ...unsupportedUsage,
+      capabilities: {
+        ...unsupportedUsage.capabilities,
+        observations: {
+          ...unsupportedUsage.capabilities.observations,
+          'session-usage': {
+            state: 'unsupported',
+            reason: 'Usage is disabled',
+          },
+        },
+      },
+    })
+
+    await expect(derived.observe['session-usage']({
+      kind: 'session-usage',
+      scope: { kind: 'session', sessionId: 'run-forge' },
+    })).resolves.toMatchObject({
+      providerId: 'forge',
+      availability: {
+        state: 'unsupported',
+        reason: 'Usage is disabled',
+      },
+    })
   })
 })

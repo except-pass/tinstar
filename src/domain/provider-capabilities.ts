@@ -65,7 +65,10 @@ export interface DeliveryConfirmationCapabilityDetail {
 
 /**
  * Exhaustive declarations let callers distinguish unsupported behavior from a
- * source that is supported but has not produced data yet.
+ * source that is supported but has not produced data yet. They describe one
+ * concrete adapter instance after CLI-version, account, and environment
+ * discovery. A supported observation may be temporarily unavailable, but a
+ * permanently absent feature is declared unsupported at registration.
  */
 export interface ProviderCapabilities<TDetail extends object = object> {
   observations: Readonly<Record<
@@ -88,9 +91,9 @@ export interface ProviderSessionScope {
 }
 
 /**
- * Account quota is provider-scoped. An optional opaque account reference may
- * distinguish configured accounts within one provider, but consumers must
- * never add quota windows across provider identities.
+ * Account quota is provider-scoped. Every scope names one configured account;
+ * single-account adapters use a stable constant such as `default`. Consumers
+ * must never add quota windows across provider or account identities.
  */
 export interface ProviderScope {
   kind: 'provider'
