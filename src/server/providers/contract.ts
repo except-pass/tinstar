@@ -71,12 +71,12 @@ export interface ProviderDeliveryResultIdentity {
 type ProviderDeliveryResult<TFields extends object> =
   ProviderDeliveryResultIdentity & TFields
 
+// Confirmation only probes provider evidence; a new operation must explicitly
+// decide whether it can perform the final-mile delivery side effect.
 type ProviderDeliveryOperation =
   | { name: 'accept'; sideEffectMayHaveOccurred: true }
   | { name: 'confirm'; sideEffectMayHaveOccurred: false }
 
-// Confirmation only probes provider evidence; a new operation must explicitly
-// decide whether it can perform the final-mile delivery side effect.
 const ACCEPT_OPERATION = {
   name: 'accept',
   sideEffectMayHaveOccurred: true,
@@ -171,6 +171,10 @@ export interface ProviderAcceptanceOnlyDeliveryAdapter<
 export interface ProviderConfirmingDeliveryAdapter<
   TDetail extends object = object,
 > extends ProviderDeliveryAcceptanceAdapter<TDetail> {
+  /**
+   * Read-only evidence probe: implementations must not perform or repeat the
+   * final-mile delivery side effect because confirmation failures are retry-safe.
+   */
   confirm: (
     acceptance: AcceptedProviderDeliveryIdentity,
   ) => Promise<ProviderDeliveryConfirmation<TDetail>>
