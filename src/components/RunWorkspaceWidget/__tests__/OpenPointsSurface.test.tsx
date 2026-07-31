@@ -639,4 +639,155 @@ describe('OpenPointsSurface (U6)', () => {
       expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(true)
     })
   })
+  // --- Claim refusals (plan U6, R3) ----------------------------------------
+  //
+  // Every FILE-AUTHORED surface projects as an `open-point`, so this row is where a
+  // refused claim actually has to appear. A refusal rendered only on the card shell
+  // in SlatePanel would be unreachable for the surfaces that can produce one.
+  describe('a claim the host would not accept', () => {
+    const REFUSAL = 'claim "u1" (witness unit-lands): no such witness kind — this host implements unit-landed, http-status'
+
+    it('shows the refusal, naming the kind, beside the point\'s NEW content', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', {
+            headline: 'Roadmap — 3 of 8 landed',
+            freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL] },
+          })]}
+        />,
+      )
+      const note = screen.getByTestId('claim-refusals-p1')
+      expect(note.textContent).toContain('unit-lands')
+      expect(note.textContent).toMatch(/claim not accepted/i)
+      // KTD5: the claim is dropped, never the surface — so the newest headline is
+      // on screen, not the one from before the author's mistake.
+      expect(screen.getByText('Roadmap — 3 of 8 landed')).toBeTruthy()
+    })
+
+    it('counts them when more than one was refused', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', { freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL, 'claim "u2": params.plan must be a `docs/plans/<file>.md` path'] } })]}
+        />,
+      )
+      expect(screen.getByTestId('claim-refusals-p1').textContent).toMatch(/2 claims not accepted/i)
+    })
+
+    it('renders nothing for a surface with no refusals, and nothing on its siblings', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[
+            point('bad', { freshness: { phase: 'current', overdue: false, claimRefusals: [REFUSAL] } }),
+            point('good', { freshness: { phase: 'current', overdue: false } }),
+            point('silent'),
+          ]}
+        />,
+      )
+      expect(screen.getByTestId('claim-refusals-bad')).toBeTruthy()
+      expect(screen.queryByTestId('claim-refusals-good')).toBeNull()
+      expect(screen.queryByTestId('claim-refusals-silent')).toBeNull()
+    })
+  })
+
+  // --- Honest reporting on the row (plan U7, R18/R19) -----------------------
+  //
+  // THE CALL SITE THAT MATTERS. Every non-objective surface projects as
+  // `kind: 'open-point'` and renders through this component, so a stamp wired only
+  // into SlatePanel's card shell is wired into the surfaces nobody has.
+  describe('the witness stamp', () => {
+    const NOW = 1_000_000_000_000
+    const HOUR = 60 * 60_000
+
+    // AE4. The two timestamps are pulled deliberately far apart: `amendedAt` is what
+    // the row used to read, and it moves on every host bookkeeping commit. If the row
+    // regresses to it the label reads "4h ago" instead of "just now".
+    it('reads the WITNESS time, not the record\'s last-written time', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          now={NOW}
+          points={[point('p1', {
+            amendedAt: NOW - 4 * HOUR,
+            freshness: { phase: 'current', overdue: false, witnessedAt: NOW - 60_000 },
+          })]}
+        />,
+      )
+      const stamp = screen.getByTestId('surface-age')
+      expect(stamp.dataset.witness).toBe('witnessed')
+      expect(stamp.textContent).toBe('checked 1m ago')
+      expect(stamp.textContent).not.toContain('4h')
+    })
+
+    // Scenario 4. The file was saved a moment ago and nobody has checked it — the
+    // honest answer is no age, not the save time wearing an age's clothes.
+    it('shows NO age for a point saved a moment ago but never witnessed', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          now={NOW}
+          points={[point('p1', {
+            amendedAt: NOW - 1_000,
+            freshness: { phase: 'current', overdue: false },
+          })]}
+        />,
+      )
+      const stamp = screen.getByTestId('surface-age')
+      expect(stamp.dataset.witness).toBe('never')
+      expect(stamp.textContent).not.toMatch(/ago|just now/)
+    })
+
+    // AE3. Reporting `unwitnessed` is a label and nothing more: R18 says it gates no
+    // controls and changes no scheduling, so the row stays fully operable and the
+    // render fires no request of its own.
+    it('a claimless point says so, keeps every control usable, and schedules nothing', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          now={NOW}
+          onRefresh={() => {}}
+          points={[point('p1', { unwitnessed: true, freshness: { phase: 'current', overdue: false } })]}
+        />,
+      )
+      expect(screen.getByTestId('surface-age').dataset.witness).toBe('unwitnessed')
+      expect((screen.getByTestId('resolve-p1') as HTMLInputElement).disabled).toBe(false)
+      expect((screen.getByTestId('refresh-surface-p1') as HTMLButtonElement).disabled).toBe(false)
+      expect(screen.getByTestId('hide-surface-p1')).toBeTruthy()
+      expect(screen.getByTestId('thread-toggle-p1')).toBeTruthy()
+      expect(apiFetch).not.toHaveBeenCalled()
+    })
+
+    // Scenario 6. Three rows, three different stamps — the goal of U7 stated as one
+    // assertion. A dead witness must not look like a healthy one.
+    it('gives witnessed, never-witnessed, claimless and unresolved four different looks', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          now={NOW}
+          points={[
+            point('done', { freshness: { phase: 'current', overdue: false, witnessedAt: NOW - 60_000 } }),
+            point('new', { freshness: { phase: 'current', overdue: false } }),
+            point('bare', { unwitnessed: true, freshness: { phase: 'current', overdue: false } }),
+            point('broken', {
+              freshness: {
+                phase: 'current', overdue: false, witnessedAt: NOW - 60_000,
+                claimObservations: { c1: { at: 1, problem: { status: 'unresolved', detail: 'could not reach the remote' } } },
+              },
+            }),
+          ]}
+        />,
+      )
+      const stamps = screen.getAllByTestId('surface-age').map(el => el.dataset.witness)
+      expect(stamps).toEqual(['witnessed', 'never', 'unwitnessed', 'witnessed'])
+      // The fourth row was witnessed a minute ago and would otherwise be
+      // indistinguishable from the first for the fifteen minutes it takes the stamp
+      // to amber. The note is what draws them apart NOW.
+      expect(screen.getByTestId('claim-problems-broken').textContent).toContain('could not reach the remote')
+      expect(screen.queryByTestId('claim-problems-done')).toBeNull()
+      expect(screen.queryByTestId('claim-problems-new')).toBeNull()
+      expect(screen.queryByTestId('claim-problems-bare')).toBeNull()
+    })
+  })
 })

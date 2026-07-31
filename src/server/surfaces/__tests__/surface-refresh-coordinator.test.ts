@@ -13,14 +13,19 @@ import { DocumentStore } from '../../stores/document-store'
 import { SurfaceService, type SurfaceCallContext } from '../surface-service'
 import { SurfaceRefreshJobStore, type JobStoreIo, type SurfaceRefreshJob } from '../surface-refresh-jobs'
 import {
+  OWNER_DELIVERIES_PER_PASS,
   SurfaceRefreshCoordinator,
+  WITNESS_BUDGET_PER_PASS,
   type RefreshCoordinatorConfig,
   type RefreshCoordinatorDeps,
   type WorkerLaunch,
 } from '../surface-refresh-coordinator'
 import { parseStagedResult } from '../refresh-wiring'
-import type { Surface, SurfaceRefreshDeclaration } from '../../../domain/types'
+import type {
+  Surface, SurfaceClaim, SurfaceClaimValue, SurfaceFreshness, SurfaceRefreshDeclaration,
+} from '../../../domain/types'
 import type { SurfaceTriggerEvent } from '../surface-trigger-matcher'
+import type { WitnessOutcome } from '../witness-registry'
 
 const SPACE = 'spc-a'
 const WORKTREE = '/tmp/wt/alpha'
@@ -59,6 +64,13 @@ interface Harness {
   delivered: { sessionName: string; prompt: string }[]
   launchOutcome: (job: SurfaceRefreshJob) => WorkerLaunch
   observe: (surface: Surface) => Promise<void>
+  /** What a claim's witness reports. Stubbed because it is what LEAVES THE PROCESS —
+   *  a `git fetch` and an HTTP request — exactly like `launchWorker` and `readStaged`
+   *  beside it. The three-valued outcome is the registry's own shape, so a test can
+   *  express "nobody could look" as something other than a value. */
+  witness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome> | WitnessOutcome
+  /** Every witness the coordinator actually ran, in order. */
+  witnessRuns: { surfaceId: string; claimId: string }[]
   seed(over?: Partial<Surface>): Promise<Surface>
   get(id: string): Surface
   jobFor(id: string): SurfaceRefreshJob | undefined
@@ -92,6 +104,11 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
     delivered: [],
     launchOutcome: (job) => ({ ok: true, sessionName: `refresh-${job.id}`, incarnation: `conv-${job.id}` }),
     observe: async () => { /* the default barrier finds nothing new */ },
+    witnessRuns: [],
+    // Unresolved by default, which is the safe default for the same reason KTD8 makes
+    // it an outcome: a test that forgot to configure a witness must not accidentally
+    // stamp a Surface verified.
+    witness: () => ({ status: 'unresolved', detail: 'no witness configured for this test' }),
   }
   let n = 0
   const deps: RefreshCoordinatorDeps = {
@@ -129,6 +146,10 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
     },
     clearStaged: async path => { h.staged!.delete(path) },
     observeSources: s => h.observe!(s),
+    runWitness: async ({ surface, claim }) => {
+      h.witnessRuns!.push({ surfaceId: surface.id, claimId: claim.id })
+      return h.witness!({ surface, claim })
+    },
     buildPrompt: ({ surface, stagingPath }) =>
       `${surface.content.recipe ?? 'regenerate'}\nWrite the result to ${stagingPath}`,
   }
@@ -185,6 +206,56 @@ const MANUAL: SurfaceRefreshDeclaration = { policy: 'manual', triggers: ['git-re
 
 function withPolicy(decl: SurfaceRefreshDeclaration): Partial<Surface> {
   return { content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: decl } }
+}
+
+// --- Claims (plan U4) -------------------------------------------------------
+
+const REPO_CLAIM: SurfaceClaim = {
+  id: 'u4', witness: 'unit-landed', locus: 'repo',
+  params: { plan: 'docs/plans/2026-07-29-001-plan.md', unit: 'U4' },
+}
+const INFRA_CLAIM: SurfaceClaim = {
+  id: 'up', witness: 'http-status', locus: 'infra', params: { url: 'https://tinstar.test/health' },
+}
+
+const sawValue = (value: SurfaceClaimValue): WitnessOutcome => ({ status: 'value', value })
+
+/**
+ * A Surface that declares claims.
+ *
+ * `recipe: null` is spelled out rather than omitted, because whether a Surface has one
+ * is the entire difference between R11's rebuild and R12's record-the-delta-and-stop —
+ * a test that meant to drop it and merely forgot to pass it would be indistinguishable.
+ */
+function claiming(over: {
+  id?: string
+  claims?: SurfaceClaim[]
+  recipe?: string | null
+  /** Values the host has ALREADY observed. A claim with none has never been looked at,
+   *  which is a different due-ness (R8) and a different match outcome. */
+  stored?: Record<string, SurfaceClaimValue>
+  freshness?: Partial<SurfaceFreshness>
+} = {}): Partial<Surface> {
+  const recipe = over.recipe === null ? undefined : over.recipe ?? 'Re-derive the roadmap.'
+  const observations = over.stored
+    ? Object.fromEntries(Object.entries(over.stored).map(([id, value]) => [id, { value, at: 5_000 }]))
+    : undefined
+  return {
+    ...(over.id ? { id: over.id } : {}),
+    content: {
+      headline: 'Roadmap',
+      ...(recipe ? { recipe } : {}),
+      claims: over.claims ?? [REPO_CLAIM],
+    },
+    freshness: {
+      phase: 'current',
+      overdue: false,
+      observedGeneration: 1,
+      verifiedAt: 5_000,
+      ...(observations ? { claimObservations: observations } : {}),
+      ...over.freshness,
+    },
+  }
 }
 
 describe('triggers → possibly stale', () => {
@@ -1364,5 +1435,461 @@ describe('the job table', () => {
     // watcher would find it and project it without passing the barrier.
     expect(job.stagingPath.includes('.tinstar/slate')).toBe(false)
     expect(job.stagingPath.startsWith(WORKTREE)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The shared revalidate step (plan U4, R9-R17, KTD3/KTD9).
+//
+// THE HEADLINE CLAIM HERE IS A NEGATIVE — "a matching revalidation does not wake an
+// agent" — and a negative is satisfied by the bug and the fix alike: nothing is
+// dispatched when the witness works, and nothing is dispatched when the scheduler
+// never ran. So every test below that asserts an absence also asserts the POSITIVE
+// that makes the absence mean something: that the witness actually ran, and that the
+// Surface was actually stamped. `h.witnessRuns` and `h.launches`/`h.delivered` are
+// read together for that reason.
+// ---------------------------------------------------------------------------
+
+describe('a trigger reaches the cheap check first', () => {
+  it('revalidates a repo-locus claim on a commit, and schedules nothing when it matches', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' } }))
+    h.witness = () => sawValue('landed')
+
+    const report = await h.coord.note(gitEvent())
+    // The trigger MARKED it — the badge is honest, something did happen — and queued
+    // nothing on the strength of the commit alone.
+    expect(report.marked).toEqual(['sf-1'])
+    expect(report.queued).toEqual([])
+
+    const pass = await h.coord.witnessPass()
+    expect(h.witnessRuns).toEqual([{ surfaceId: 'sf-1', claimId: 'u4' }])
+    expect(pass.witnessed).toEqual(['sf-1'])
+    // 110 of 121 completed refreshes changed nothing, and every one of them was a
+    // background agent in the user's worktree. This is that case, ended.
+    expect(h.jobs.list()).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(h.delivered).toEqual([])
+
+    const s = h.get('sf-1')
+    expect(s.freshness.phase).toBe('current')
+    expect(s.freshness.witnessedAt).toBe(h.clock.now)
+    expect(s.freshness).not.toHaveProperty('staleReason')
+  })
+
+  it('a Surface with NO claims takes the existing path, untouched', async () => {
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    const report = await h.coord.note(gitEvent())
+    await h.coord.witnessPass()
+    // No claims, no narrowing, no witness — a commit still queues the rebuild it
+    // always did. This is the regression guard for every Surface that exists today.
+    expect(report.queued).toHaveLength(1)
+    expect(h.witnessRuns).toEqual([])
+  })
+
+  it('a commit reaches an infra-only Surface not at all — no witness, no mark, no job', async () => {
+    const h = harness()
+    // `infra` is invalidated by time passing and nothing else, so a commit on the
+    // worktree says nothing about whether this card is still right.
+    //
+    // THE RECIPE IS THE HARD HALF. It is what earns this Surface the host's default
+    // `git-revision` trigger, and on `main` that is exactly how a commit reached
+    // every card bound to the worktree. U4 guaranteed only that no WITNESS was spent
+    // here; U5's locus predicate in `matchTrigger` narrows the JOB away too.
+    await h.seed(claiming({ claims: [INFRA_CLAIM], stored: { up: 200 }, freshness: { witnessedAt: 9_000 } }))
+    const report = await h.coord.note(gitEvent())
+    await h.coord.witnessPass()
+    expect(h.witnessRuns).toEqual([])
+    expect(report.marked).toEqual([])
+    expect(report.queued).toEqual([])
+    expect(h.jobs.list()).toEqual([])
+    // And the card is untouched: no badge, no stale reason, still current.
+    const s = h.get('sf-1')
+    expect(s.freshness.phase).toBe('current')
+    expect(s.freshness).not.toHaveProperty('staleReason')
+  })
+})
+
+describe('deadlines a claim earns', () => {
+  it('gives a claim-bearing Surface a deadline with no recipe and no periodic trigger', async () => {
+    const h = harness()
+    // Before this, `effectiveDeclaration` handed a recipe-less Surface an empty
+    // trigger list, so `deriveDueAt` returned undefined, so `overdue` could never
+    // rise and the phase stayed `current` forever. Nothing in the system could doubt
+    // it — which is the hole this plan opened with.
+    await h.seed(claiming({ claims: [INFRA_CLAIM], recipe: null, stored: { up: 200 } }))
+    h.witness = () => ({ status: 'unresolved', detail: 'the host would not answer' })
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(h.get('sf-1').freshness.dueAt).toBe(1_000 + 10 * 60_000)
+
+    // Past the deadline, with a witness that cannot answer — so `overdue` is observed
+    // rising on its own rather than being read in a race with the pass that clears it.
+    h.clock.now = 2_000_000
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(h.get('sf-1').freshness.overdue).toBe(true)
+    expect(h.get('sf-1').freshness).not.toHaveProperty('witnessedAt')
+
+    h.clock.now += 10 * 60_000
+    h.witness = () => sawValue(200)
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+    // And the deadline it earned is answered by the cheap check, not by a job it has
+    // no recipe to run.
+    expect(pass.witnessed).toEqual(['sf-1'])
+    expect(h.get('sf-1').freshness.overdue).toBe(false)
+    expect(h.jobs.list()).toEqual([])
+  })
+
+  it('counts the deadline from witnessedAt, so an author saving the file cannot push it out', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.dueAt).toBe(5_000 + 10 * 60_000)
+
+    // What a file save does: `observeSource` writes `verifiedAt` on every save whose
+    // watermark moved, and touches `witnessedAt` never (KTD7). If the deadline were
+    // based on `verifiedAt`, the more actively a card was edited the less often
+    // anything would check whether it was still TRUE.
+    await h.seed(claiming({
+      stored: { u4: 'landed' },
+      freshness: { witnessedAt: 5_000, verifiedAt: 500_000 },
+    }))
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.dueAt).toBe(5_000 + 10 * 60_000)
+  })
+
+  it('stamps a due Surface witnessed without dispatching anything', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => sawValue('landed')
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+    expect(h.witnessRuns).toEqual([{ surfaceId: 'sf-1', claimId: 'u4' }])
+    expect(pass.witnessed).toEqual(['sf-1'])
+    // The dispatch layer is stubbed precisely so "would have dispatched" is
+    // observable, and the two sweeps below are what make the absence mean something:
+    // a moved value records a debt that the NEXT sweep drains into a job and the one
+    // after that dispatches. Inverting the comparison in `witnessMatches` turns this
+    // Surface's match into a move and lights all four assertions up.
+    const witnessedAt = h.clock.now
+    for (const step of [5_000, 5_000]) {
+      h.clock.now += step
+      await h.coord.sweep()
+    }
+    expect(h.launches).toEqual([])
+    expect(h.delivered).toEqual([])
+    expect(h.jobs.list()).toEqual([])
+
+    const s = h.get('sf-1')
+    expect(s.freshness.witnessedAt).toBe(witnessedAt)
+    expect(s.freshness.overdue).toBe(false)
+    expect(s.freshness.phase).toBe('current')
+  })
+})
+
+describe('witnesses run outside the lock', () => {
+  it('does not delay harvest, dispatch, or a manual refresh press', async () => {
+    const h = harness()
+    await h.seed(claiming({ id: 'sf-claim', stored: { u4: 'landed' } }))
+    await h.seed({ id: 'sf-plain', ...withPolicy(AUTOMATIC) })
+
+    let started: () => void = () => {}
+    const witnessStarted = new Promise<void>(resolve => { started = resolve })
+    let finish: (o: WitnessOutcome) => void = () => {}
+    const blocked = new Promise<WitnessOutcome>(resolve => { finish = resolve })
+    h.witness = () => { started(); return blocked }
+
+    await h.coord.sweep()
+    await witnessStarted
+
+    // THE WHOLE UNIT, IN THREE LINES. A witness is in flight and has not answered.
+    // If it were awaited inside the coordinator's serialization key, neither of the
+    // calls below could resolve — so the failure mode of this test is a TIMEOUT, not
+    // an assertion, and that is the strongest form the guarantee has.
+    const job = await h.coord.requestFor('sf-plain')
+    expect(job).toBeDefined()
+    const second = await h.coord.sweep()
+    expect(second.dispatched).toEqual([job!.id])
+    expect(h.launches).toHaveLength(1)
+
+    finish(sawValue('landed'))
+    const pass = await h.coord.witnessPass()
+    expect(pass.witnessed).toEqual(['sf-claim'])
+  })
+
+  it('bounds how many Surfaces one pass looks at', async () => {
+    const h = harness()
+    for (let i = 0; i < WITNESS_BUDGET_PER_PASS + 4; i++) {
+      await h.seed(claiming({ id: `sf-${i}` }))
+    }
+    h.witness = () => sawValue('landed')
+
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    // A hundred Surfaces going due at once must not become a hundred subprocesses.
+    expect(new Set(h.witnessRuns.map(r => r.surfaceId)).size).toBe(WITNESS_BUDGET_PER_PASS)
+
+    // And the remainder is not lost — it is the next pass's work.
+    h.clock.now += 5_000
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(new Set(h.witnessRuns.map(r => r.surfaceId)).size).toBe(WITNESS_BUDGET_PER_PASS + 4)
+  })
+
+  it('does not commit a result for a Surface deleted while its witness ran', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' } }))
+    // Captured at the instant of the deletion rather than before the sweep: the
+    // locked pass legitimately writes (a schedule, a stale mark), and the claim under
+    // test is that the COMMIT writes nothing after that.
+    let revWhenDeleted = 0
+    h.witness = () => {
+      // Deleted between collect and commit, which is the window the re-check exists
+      // for: `hidden` is how this harness expresses a Surface that is gone.
+      h.hidden.add('sf-1')
+      revWhenDeleted = h.docStore.getSurface('sf-1')!.rev
+      return sawValue('pending')
+    }
+
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+    expect(h.witnessRuns).toHaveLength(1)
+    expect(pass.moved).toEqual([])
+    const s = h.docStore.getSurface('sf-1')!
+    expect(s.rev).toBe(revWhenDeleted)
+    expect(s.freshness).not.toHaveProperty('claimRebuild')
+    expect(s.freshness.claimObservations).toEqual({ u4: { value: 'landed', at: 5_000 } })
+  })
+
+  it('does not store a result computed against a claim the author has since edited', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' } }))
+    h.witness = async () => {
+      // The author retargets the claim at a different unit while the witness runs.
+      // The answer in flight is about the OLD question.
+      await h.seed(claiming({
+        stored: { u4: 'landed' },
+        claims: [{ ...REPO_CLAIM, params: { ...REPO_CLAIM.params, unit: 'U7' } }],
+      }))
+      return sawValue('pending')
+    }
+
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+    expect(pass.moved).toEqual([])
+    // Storing it would have reported a value that moved when nothing in the world did.
+    expect(h.get('sf-1').freshness.claimObservations).toEqual({ u4: { value: 'landed', at: 5_000 } })
+  })
+
+  it('backs a claim nobody can resolve off to the verification interval', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => ({ status: 'unresolved', detail: 'could not fetch origin/main' })
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+
+    await h.coord.sweep()
+    const first = await h.coord.witnessPass()
+    expect(first.unresolved).toEqual([{ surfaceId: 'sf-1', claimId: 'u4' }])
+    expect(first.witnessed).toEqual([])
+
+    // An unresolved outcome never advances `witnessedAt`, so the deadline test says
+    // "due" forever. Without a cooldown that is a `git fetch` every five seconds, on
+    // the same one-interval-of-quiet rule a failed rebuild already gets.
+    for (const step of [5_000, 5_000, 5_000]) {
+      h.clock.now += step
+      await h.coord.sweep()
+      await h.coord.witnessPass()
+    }
+    expect(h.witnessRuns).toHaveLength(1)
+
+    h.clock.now += 10 * 60_000
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(h.witnessRuns).toHaveLength(2)
+    // And at no point did a claim nobody could check wake an agent.
+    expect(h.jobs.list()).toEqual([])
+    expect(h.get('sf-1').freshness.witnessedAt).toBe(5_000)
+  })
+})
+
+describe('a moved value', () => {
+  it('records the delta and queues exactly one rebuild when there is a recipe', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => sawValue('pending')
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+    expect(pass.moved).toEqual([{ surfaceId: 'sf-1', claimId: 'u4' }])
+    // R11: which claim moved and BOTH values, before any rebuild runs.
+    expect(h.get('sf-1').freshness.claimRebuild).toEqual({
+      moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }],
+      at: h.clock.now,
+    })
+    expect(h.get('sf-1').freshness.phase).toBe('possibly-stale')
+    expect(h.get('sf-1').freshness.staleReason?.detail).toMatch(/no longer holds: u4 was landed, now pending/)
+
+    h.clock.now += 5_000
+    const drained = await h.coord.sweep()
+    expect(drained.queued).toHaveLength(1)
+    // And exactly one, however many sweeps run: the marker survives until the rebuild
+    // lands, and the active job is what stops a second being made.
+    h.clock.now += 5_000
+    await h.coord.sweep()
+    h.clock.now += 5_000
+    await h.coord.sweep()
+    expect(h.jobs.list()).toHaveLength(1)
+  })
+
+  it('marks a recipe-LESS Surface stale and queues nothing', async () => {
+    const h = harness()
+    await h.seed(claiming({ recipe: null, stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => sawValue('pending')
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    for (const step of [5_000, 5_000]) {
+      h.clock.now += step
+      await h.coord.sweep()
+    }
+    // `launchWorker` answers a recipe-less Surface with "this Surface declares no
+    // refresh recipe", so a rebuild dispatched here would land it in `failed` and
+    // retry forever. R12: the delta is recorded, the badge is honest, nothing runs.
+    expect(h.jobs.list()).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(h.delivered).toEqual([])
+    const s = h.get('sf-1')
+    expect(s.freshness.claimRebuild!.moves).toEqual([{ claimId: 'u4', from: 'landed', to: 'pending' }])
+    expect(s.freshness.phase).toBe('possibly-stale')
+  })
+
+  it('still rebuilds after a restart between the delta and the job', async () => {
+    const h = harness()
+    // A record as it survived the crash: the delta and the marker committed together,
+    // and no job was ever written. Two commits instead of one would have lost this.
+    await h.seed(claiming({
+      stored: { u4: 'pending' },
+      freshness: {
+        phase: 'possibly-stale',
+        witnessedAt: 5_000,
+        claimRebuild: { moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }], at: 6_000 },
+        staleReason: {
+          kind: 'git-revision', key: 'claim-moved sf-1 u4=pending',
+          detail: 'a claim it makes no longer holds: u4 was landed, now pending',
+          generation: 1, at: 6_000,
+        },
+      },
+    }))
+    // The world now AGREES with the stored value, which is exactly why the marker has
+    // to be durable: every look from here on matches, so nothing about the observation
+    // could ever re-derive that a rebuild is owed.
+    h.witness = () => sawValue('pending')
+
+    await h.coord.recover()
+    const report = await h.coord.sweep()
+    expect(report.queued).toHaveLength(1)
+    expect(h.jobFor('sf-1')!.state).toBe('running')
+  })
+
+  it('holds a debt whose last rebuild FAILED for one verification interval', async () => {
+    const h = harness()
+    await h.seed(claiming({
+      stored: { u4: 'pending' },
+      freshness: {
+        phase: 'failed',
+        witnessedAt: 5_000,
+        failure: { message: 'the recipe exited 1', at: 9_000 },
+        claimRebuild: { moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }], at: 6_000 },
+      },
+    }))
+    h.witness = () => sawValue('pending')
+
+    // A debt that cannot be paid must not retry at sweep cadence: `claimRebuild` sits
+    // there until a rebuild consumes it, so without this the same broken recipe would
+    // launch a real background agent in the user's worktree every five seconds.
+    for (const step of [5_000, 5_000, 5_000]) {
+      h.clock.now += step
+      await h.coord.sweep()
+    }
+    expect(h.jobs.list()).toEqual([])
+
+    h.clock.now = 9_000 + 10 * 60_000
+    const late = await h.coord.sweep()
+    expect(late.queued).toHaveLength(1)
+  })
+
+  it('clears the rebuild debt only when the rebuild itself lands', async () => {
+    const h = harness()
+    await h.seed(claiming({
+      stored: { u4: 'pending' },
+      freshness: {
+        phase: 'possibly-stale',
+        witnessedAt: 5_000,
+        claimRebuild: { moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }], at: 6_000 },
+      },
+    }))
+    h.witness = () => sawValue('pending')
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Roadmap', note: 'unit U4 is pending' }))
+    h.clock.now += 5_000
+    const done = await h.coord.sweep()
+
+    expect(done.completed).toEqual([job.id])
+    const s = h.get('sf-1')
+    expect(s.freshness).not.toHaveProperty('claimRebuild')
+    expect(s.freshness.phase).toBe('current')
+    // The witness state SURVIVES the rebuild. Rebuilding freshness from scratch here
+    // dropped both, so a just-rebuilt card reported no witness age and its claims went
+    // back to never-observed — two more passes before anything could be verified again.
+    expect(s.freshness.witnessedAt).toBe(5_000)
+    expect(s.freshness.claimObservations).toEqual({ u4: { value: 'pending', at: 5_000 } })
+    expect(s.content.claims).toEqual([REPO_CLAIM])
+  })
+})
+
+describe('the owner-delivery budget (KTD9)', () => {
+  it('bounds one pass, and drains the rest on the next', async () => {
+    const h = harness()
+    h.live.add(RUN)
+    for (let i = 0; i < 10; i++) {
+      await h.seed(claiming({
+        id: `sf-${i}`,
+        stored: { u4: 'pending' },
+        freshness: {
+          phase: 'possibly-stale',
+          witnessedAt: 5_000,
+          claimRebuild: { moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }], at: 6_000 },
+        },
+      }))
+    }
+    h.witness = () => sawValue('pending')
+
+    const first = await h.coord.sweep()
+    expect(first.queued).toHaveLength(10)
+    // `runningWorkerCount()` counts only worker dispatches and every one of the 175
+    // jobs in the live table dispatched as `owner`, so the existing cap would have
+    // gated against a constant zero. Ten Surfaces bound to one worktree became ten
+    // prompts into one working session; this is the bound that stops that.
+    expect(first.dispatched).toHaveLength(OWNER_DELIVERIES_PER_PASS)
+    expect(h.delivered).toHaveLength(OWNER_DELIVERIES_PER_PASS)
+    expect(first.heldByCap).toHaveLength(10 - OWNER_DELIVERIES_PER_PASS)
+
+    // Held, not dropped: the queue is durable and the next sweep is five seconds away.
+    h.clock.now += 5_000
+    await h.coord.sweep()
+    expect(h.delivered).toHaveLength(OWNER_DELIVERIES_PER_PASS * 2)
+    // And no background worker was launched for any of them — owner delivery is still
+    // the preferred path, it is just bounded now.
+    expect(h.launches).toEqual([])
   })
 })

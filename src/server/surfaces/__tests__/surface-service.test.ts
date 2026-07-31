@@ -25,7 +25,8 @@ import { SSEBroadcaster, SURFACE_BATCH_EVENT } from '../../api/sse'
 import type { SurfaceBatch } from '../../stores/surfaces'
 import { SurfaceService, type SurfaceCallContext, type SurfaceMutation, type SurfaceResult } from '../surface-service'
 import { surfaceCapabilities, summarizeSurface, resolveContributors } from '../surface-context'
-import type { Surface, SurfacePrincipalRef } from '../../../domain/types'
+import type { Surface, SurfaceClaimValue, SurfacePrincipalRef } from '../../../domain/types'
+import type { WitnessOutcome } from '../witness-registry'
 
 const SPACE = 'spc-a'
 const HUMAN: SurfacePrincipalRef = { kind: 'human', id: 'actor-1' }
@@ -229,6 +230,490 @@ describe('update-content', () => {
     const h = harness()
     await h.create('x')
     expect(err(await h.svc.updateContent('sf-1', { headline: 'y' }, ctx())).message).toMatch(/expectedRev is required/)
+  })
+})
+
+describe('claims (plan U1, R1)', () => {
+  const claim = { id: 'u1', witness: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' }, locus: 'repo' }
+
+  it('accepts a declaration on create and keeps `[]` distinct from absent', async () => {
+    const h = harness()
+    const declared = await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const checked = await h.create('checked', { content: { headline: 'checked', claims: [] } })
+    const silent = await h.create('silent')
+
+    expect(declared.content.claims).toEqual([claim])
+    // `[]` is the author saying they looked and found nothing witnessable; absent is
+    // the author never having said. The two must not collapse into each other.
+    expect(checked.content.claims).toEqual([])
+    expect(silent.content).not.toHaveProperty('claims')
+  })
+
+  it('preserves claims through a headline-only content patch', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const patched = unwrap(await h.svc.updateContent('sf-1', { headline: 'renamed', expectedRev: 1 }, ctx()))
+    // The whole reason the carry-forward exists: this endpoint takes a whitelist, so
+    // omitting `claims` here means "unchanged", never "delete them".
+    expect(patched.surfaces[0]!.surface.content.claims).toEqual([claim])
+    expect(patched.surfaces[0]!.surface.content.headline).toBe('renamed')
+  })
+
+  it('replaces claims when they are named and clears them on an explicit null', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', claims: [claim] } })
+    const replaced = unwrap(await h.svc.updateContent(
+      'sf-1', { claims: [{ id: 'up', witness: 'http-status', params: { url: 'https://x.test' }, locus: 'infra' }], expectedRev: 1 }, ctx(),
+    ))
+    expect(replaced.surfaces[0]!.surface.content.claims)
+      .toEqual([{ id: 'up', witness: 'http-status', params: { url: 'https://x.test' }, locus: 'infra' }])
+    const emptied = unwrap(await h.svc.updateContent('sf-1', { claims: [], expectedRev: 2 }, ctx()))
+    expect(emptied.surfaces[0]!.surface.content.claims).toEqual([])
+    const cleared = unwrap(await h.svc.updateContent('sf-1', { claims: null, expectedRev: 3 }, ctx()))
+    expect(cleared.surfaces[0]!.surface.content).not.toHaveProperty('claims')
+  })
+
+  it('REFUSES an oversized claims list whole rather than truncating it', async () => {
+    const h = harness()
+    const many = Array.from({ length: 33 }, (_, i) => ({ id: `c${i}`, witness: 'http-status', locus: 'infra' }))
+    // Truncating would persist a Surface declaring fewer claims than its author sent,
+    // and the caller would read back something it did not write with no way to tell
+    // that from its own bug — the same argument the headline cap is documented with.
+    const created = await h.svc.create(
+      { spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'big', claims: many } }, ctx(),
+    )
+    expect(err(created).code).toBe('invalid')
+    expect(err(created).message).toMatch(/more than 32 claims/)
+
+    await h.create('ok')
+    const patched = await h.svc.updateContent('sf-1', { claims: many, expectedRev: 1 }, ctx())
+    expect(err(patched).message).toMatch(/more than 32 claims/)
+    expect(h.docStore.getSurface('sf-1')!.rev).toBe(1)
+  })
+
+  it('names the claim it will not accept instead of dropping it in silence', async () => {
+    const h = harness()
+    await h.create('x')
+    const cases: Array<[unknown, RegExp]> = [
+      [{ id: 'u1', witness: 'unit-landed' }, /must declare a locus/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'slate' }, /must declare a locus/],
+      [{ id: 'u1', locus: 'repo' }, /needs a witness kind/],
+      [{ witness: 'unit-landed', locus: 'repo' }, /needs a non-empty id/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'repo', params: { nested: { a: 1 } } }, /must be a string, number, or boolean/],
+      ['not an object', /a claim must be an object/],
+      // The registry gate (U2's `validateClaim`, wired into the parser by U6). This
+      // door REFUSES where the file door drops — same check, opposite disposition —
+      // and the message has to name the kind, or a typo leaves the author with
+      // nothing to look up.
+      [{ id: 'u1', witness: 'unit-lands', locus: 'repo', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        /no such witness kind — this host implements unit-landed, http-status/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'repo' }, /params\.plan must be a `docs\/plans\/<file>\.md` path/],
+      [{ id: 'u1', witness: 'unit-landed', locus: 'infra', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        /this kind observes repo, not infra/],
+    ]
+    for (const [bad, expected] of cases) {
+      const r = await h.svc.updateContent('sf-1', { claims: [bad], expectedRev: 1 }, ctx())
+      expect(err(r).code).toBe('invalid')
+      expect(err(r).message).toMatch(expected)
+    }
+    // Both claims are individually VALID here, deliberately: the registry gate above
+    // runs per claim and would otherwise refuse the first one before the duplicate
+    // check was ever reached, and this case exists to prove the duplicate check.
+    const dup = await h.svc.updateContent('sf-1', {
+      claims: [
+        { id: 'u1', witness: 'unit-landed', locus: 'repo', params: { plan: 'docs/plans/x.md', unit: 'U1' } },
+        { id: 'u1', witness: 'http-status', locus: 'infra', params: { url: 'https://x.test/' } },
+      ],
+      expectedRev: 1,
+    }, ctx())
+    expect(err(dup).message).toMatch(/declares "u1" twice/)
+    expect(h.docStore.getSurface('sf-1')!.content).not.toHaveProperty('claims')
+  })
+
+  it('preserves claims through a successful rebuild', async () => {
+    const h = harness()
+    await h.create('declared', { content: { headline: 'declared', recipe: 'rebuild me', claims: [claim] } })
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at: 2_000 }))
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: h.docStore.getSurface('sf-1')!.rev }, ctx({ at: 2_100 }))
+    // A worker restates the OUTPUT only — `parseStagedResult` cannot even express a
+    // claims list — so the barrier has to carry the declaration itself.
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1',
+      expectedRev: h.docStore.getSurface('sf-1')!.rev,
+      observedGeneration: 0,
+      content: { headline: 'rebuilt' },
+    }, ctx({ at: 3_000 })))
+    expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
+    expect(done.surfaces[0]!.surface.content.claims).toEqual([claim])
+    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+  })
+
+  it('sorts params so reordering keys is not an edit', async () => {
+    const h = harness()
+    // A REAL witness kind with its required parameters present, plus two spare keys
+    // whose order is what this asserts. `witness: 'w'` used to do here, and U6's
+    // registry gate refuses it — a claim naming a kind this host does not implement
+    // no longer reaches the record through this door at all.
+    const params = { z: 1, a: 2, plan: 'docs/plans/x.md', unit: 'U1' }
+    const a = await h.create('a', { content: { headline: 'a', claims: [{ id: 'c', witness: 'unit-landed', locus: 'repo', params }] } })
+    const b = await h.create('b', {
+      content: { headline: 'b', claims: [{ id: 'c', witness: 'unit-landed', locus: 'repo', params: { unit: 'U1', plan: 'docs/plans/x.md', a: 2, z: 1 } }] },
+    })
+    // Digests over content are what the refresh barrier compares, and the entry
+    // watermark hashes the same structure — a key reorder must not read as a move.
+    expect(JSON.stringify(a.content.claims)).toBe(JSON.stringify(b.content.claims))
+  })
+})
+
+describe('witness results (plan U3, R8/R10/R11/R19)', () => {
+  const repo = { id: 'u3', witness: 'unit-landed', params: { plan: 'docs/plans/p.md', unit: 'U3' }, locus: 'repo' as const }
+  const infra = { id: 'up', witness: 'http-status', params: { url: 'https://x.test/' }, locus: 'infra' as const }
+
+  const saw = (value: SurfaceClaimValue): WitnessOutcome => ({ status: 'value', value })
+  const unresolved = (detail = 'could not fetch origin/main'): WitnessOutcome => ({ status: 'unresolved', detail })
+  const broke = (detail = 'witness exceeded its budget'): WitnessOutcome => ({ status: 'failed', detail })
+
+  /** A Surface carrying `claims`, plus a helper that records one outcome per claim. */
+  function claimed(claims: unknown[], over: Record<string, unknown> = {}) {
+    const h = harness()
+    const record = (
+      observations: Array<{ claimId: string; outcome: WitnessOutcome }>, at: number,
+    ) => h.svc.recordWitnessResult('sf-1', { observations }, ctx({ at }))
+    return {
+      ...h,
+      record,
+      /** Seed then confirm: the first look can never MATCH (nothing was stored to
+       *  match against), so a witnessed Surface always takes two runs. */
+      async settle(observations: Array<{ claimId: string; outcome: WitnessOutcome }>) {
+        await record(observations, 2_000)
+        return record(observations, 3_000)
+      },
+      surface: () => h.docStore.getSurface('sf-1')!,
+      ready: h.create('claimed', {
+        content: { headline: 'claimed', ...over, claims },
+      }),
+    }
+  }
+
+  const staleFrom = (kind: string, key: string) => ({ kind: kind as never, key, detail: `${kind} moved`, at: 1_500 })
+
+  it('stamps witnessedAt and clears the claim-derived stale reason when every value matches', async () => {
+    const h = claimed([repo])
+    await h.ready
+    await h.svc.markPossiblyStale('sf-1', staleFrom('git-revision', 'sha-1'), ctx({ at: 1_500 }))
+    expect(h.surface().freshness.phase).toBe('possibly-stale')
+
+    // THE FIRST LOOK IS NOT A VERIFICATION. Nothing was stored, so there was nothing
+    // the witness could have agreed with — stamping here would let a Surface be
+    // "verified" against a value it invented one millisecond earlier.
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 2_000))
+    expect(h.surface().freshness.witnessedAt).toBeUndefined()
+    expect(h.surface().freshness.claimObservations).toEqual({ u3: { value: 'landed', at: 2_000 } })
+    expect(h.surface().freshness.phase).toBe('possibly-stale')
+
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 3_000))
+    const f = h.surface().freshness
+    expect(f.witnessedAt).toBe(3_000)
+    expect(f.phase).toBe('current')
+    expect(f.overdue).toBe(false)
+    expect(f).not.toHaveProperty('staleReason')
+    // The observation itself did not MOVE, so its own timestamp did not either.
+    expect(f.claimObservations).toEqual({ u3: { value: 'landed', at: 2_000 } })
+  })
+
+  it('leaves verifiedAt alone — the witness stamp is its own field (KTD7)', async () => {
+    const h = claimed([repo])
+    await h.ready
+    // `observeSource` writes `verifiedAt` on creation and on every file save whose
+    // watermark moved, so it already means "content last arrived or was rebuilt".
+    // If a witness pass wrote it too, an author's save would reset the host's
+    // claim-check deadline and no Surface could ever be honestly never-witnessed.
+    const before = h.surface().freshness.verifiedAt
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    expect(h.surface().freshness.verifiedAt).toBe(before)
+    expect(h.surface().freshness.witnessedAt).toBe(3_000)
+  })
+
+  it('counts a stored absence re-observed as still absent (covers AE1)', async () => {
+    const h = claimed([infra])
+    await h.ready
+    // `null` is an absence a lookup COMPLETED and reported (R7) — the one absence
+    // allowed to match. The three-valued outcome is what keeps this honest: a
+    // witness that could not look reports `unresolved`, never `null`.
+    unwrap(await h.settle([{ claimId: 'up', outcome: saw(null) }]))
+    expect(h.surface().freshness.witnessedAt).toBe(3_000)
+    expect(h.surface().freshness.claimObservations).toEqual({ up: { value: null, at: 2_000 } })
+  })
+
+  it('never advances witnessedAt on an unresolved or failed outcome (KTD8)', async () => {
+    for (const outcome of [unresolved(), broke()]) {
+      const h = claimed([repo])
+      await h.ready
+      await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+      expect(h.surface().freshness.witnessedAt).toBe(3_000)
+
+      unwrap(await h.record([{ claimId: 'u3', outcome }], 4_000))
+      const f = h.surface().freshness
+      // Not advanced, and — this is the half a two-valued contract would get wrong —
+      // the last known value SURVIVES rather than being erased into a fake change.
+      expect(f.witnessedAt).toBe(3_000)
+      expect(f.claimObservations!.u3).toEqual({
+        value: 'landed',
+        problem: { status: outcome.status, detail: (outcome as { detail: string }).detail },
+        at: 4_000,
+      })
+    }
+  })
+
+  it('never matches an unresolved outcome against a stored absence', async () => {
+    const h = claimed([infra])
+    await h.ready
+    await h.settle([{ claimId: 'up', outcome: saw(null) }])
+    unwrap(await h.record([{ claimId: 'up', outcome: unresolved('host unreachable') }], 4_000))
+    // The exact failure KTD8 exists for: a witness broken for a week keeps agreeing
+    // with its stored absence and keeps stamping the card verified.
+    expect(h.surface().freshness.witnessedAt).toBe(3_000)
+  })
+
+  it('leaves a pending human-requested refresh entirely alone', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at: 1_500 })))
+
+    unwrap(await h.settle([{ claimId: 'u3', outcome: saw('landed') }]))
+    const f = h.surface().freshness
+    // Clearing `jobId` orphans the queued rebuild, and `dispatch` then cancels it
+    // with "another refresh (none) took this Surface over" — so a deadline pass
+    // would silently swallow a human pressing ⟳.
+    expect(f.jobId).toBe('job-1')
+    expect(f.phase).toBe('queued')
+    expect(f.witnessedAt).toBe(3_000)
+  })
+
+  it('leaves a stale reason at a kind no claim observes', async () => {
+    const h = claimed([infra])
+    await h.ready
+    // `infra` is only invalidated by time passing, so a commit on the worktree is
+    // not something this Surface's witness can answer.
+    await h.svc.markPossiblyStale('sf-1', staleFrom('git-revision', 'sha-1'), ctx({ at: 1_500 }))
+
+    unwrap(await h.settle([{ claimId: 'up', outcome: saw(200) }]))
+    const f = h.surface().freshness
+    expect(f.staleReason).toMatchObject({ kind: 'git-revision', key: 'sha-1' })
+    // And the phase does not contradict the reason still sitting on the record.
+    expect(f.phase).toBe('possibly-stale')
+    expect(f.witnessedAt).toBe(3_000)
+    expect(f.overdue).toBe(false)
+  })
+
+  it('answers a periodic reason at either locus, because time invalidates both', async () => {
+    for (const claim of [repo, infra]) {
+      const h = claimed([claim])
+      await h.ready
+      await h.svc.markPossiblyStale('sf-1', staleFrom('periodic', 'due-1'), ctx({ at: 1_500 }))
+      unwrap(await h.settle([{ claimId: claim.id, outcome: saw('x') }]))
+      expect(h.surface().freshness).not.toHaveProperty('staleReason')
+      expect(h.surface().freshness.phase).toBe('current')
+    }
+  })
+
+  it('carries lastReasonKeys forward, so the next unchanged trigger re-stales nothing', async () => {
+    const h = claimed([repo])
+    await h.ready
+    await h.svc.markPossiblyStale('sf-1', staleFrom('git-revision', 'sha-1'), ctx({ at: 1_500 }))
+    unwrap(await h.settle([{ claimId: 'u3', outcome: saw('landed') }]))
+    expect(h.surface().freshness.lastReasonKeys).toEqual({ 'git-revision': 'sha-1' })
+
+    const revBefore = h.surface().rev
+    const batchesBefore = h.batches.length
+    // The measured incident behind the field: without the carry-forward the very
+    // next poll of the same SHA re-stales what was just witnessed against it, and
+    // each cycle launched a real background agent in the user's worktree.
+    unwrap(await h.svc.markPossiblyStale('sf-1', staleFrom('git-revision', 'sha-1'), ctx({ at: 4_000 })))
+    expect(h.surface().rev).toBe(revBefore)
+    expect(h.surface().freshness.phase).toBe('current')
+    expect(h.batches).toHaveLength(batchesBefore)
+  })
+
+  it('writes nothing when an unchanged observation is recorded twice', async () => {
+    const h = claimed([repo])
+    await h.ready
+    unwrap(await h.record([{ claimId: 'u3', outcome: unresolved('no such remote') }], 2_000))
+    const revBefore = h.surface().rev
+    const batchesBefore = h.batches.length
+
+    // The storm case, and the one the sweep actually produces: an unresolved claim
+    // is retried on every deadline and nothing about it moves. Nothing stored here
+    // records a mere LOOK, so a steady state reads as steady however long it lasts.
+    unwrap(await h.record([{ claimId: 'u3', outcome: unresolved('no such remote') }], 9_000))
+    unwrap(await h.record([{ claimId: 'u3', outcome: unresolved('no such remote') }], 99_000))
+    expect(h.surface().rev).toBe(revBefore)
+    expect(h.batches).toHaveLength(batchesBefore)
+    expect(h.surface().freshness.claimObservations!.u3!.at).toBe(2_000)
+  })
+
+  it('writes once for a passing result recorded twice at the same instant', async () => {
+    const h = claimed([repo])
+    await h.ready
+    await h.record([{ claimId: 'u3', outcome: saw('landed') }], 2_000)
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 3_000))
+    const revBefore = h.surface().rev
+    const batchesBefore = h.batches.length
+
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 3_000))
+    expect(h.surface().rev).toBe(revBefore)
+    expect(h.batches).toHaveLength(batchesBefore)
+  })
+
+  it('DOES write when a later pass moves the witness age, which is the product', async () => {
+    const h = claimed([repo])
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    const revBefore = h.surface().rev
+
+    // Deliberately asserted, because the opposite is the tempting bug: freezing
+    // `witnessedAt` would make every no-op run free, and would also make the card
+    // report "witnessed six hours ago" one second after a passing check, and pin
+    // `dueAt` to a deadline that has already passed — so the sweep would re-run the
+    // witnesses forever. The write cadence here is the verification interval
+    // (floored at a minute), not the five-second sweep.
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 9_000))
+    expect(h.surface().rev).toBe(revBefore + 1)
+    expect(h.surface().freshness.witnessedAt).toBe(9_000)
+  })
+
+  it('records a partial run without stamping the Surface witnessed', async () => {
+    const h = claimed([repo, infra])
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }, { claimId: 'up', outcome: saw(200) }])
+    expect(h.surface().freshness.witnessedAt).toBe(3_000)
+
+    // Only the repo claim re-run — a commit's locus. The infra claim was not
+    // checked, so this run cannot say the Surface as a whole still holds.
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 4_000))
+    expect(h.surface().freshness.witnessedAt).toBe(3_000)
+  })
+
+  it('drops a result for a claim the author has since deleted, and prunes its value', async () => {
+    const h = claimed([repo, infra])
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }, { claimId: 'up', outcome: saw(200) }])
+    unwrap(await h.svc.updateContent('sf-1', { claims: [repo], expectedRev: h.surface().rev }, ctx({ at: 4_000 })))
+
+    // The re-check the collect/run/commit split needs: witnesses were collected
+    // against a declaration the author edited while they ran.
+    unwrap(await h.record([
+      { claimId: 'u3', outcome: saw('landed') }, { claimId: 'up', outcome: saw(500) },
+    ], 5_000))
+    expect(h.surface().freshness.claimObservations).toEqual({ u3: { value: 'landed', at: 2_000 } })
+    expect(h.surface().freshness.witnessedAt).toBe(5_000)
+  })
+
+  it('records a moved value, its delta, and the rebuild debt in ONE commit (plan U4)', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    const rev = h.surface().rev
+
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 4_000))
+    const f = h.surface().freshness
+    // ONE revision, not two. Splitting the new value from the debt it creates is how
+    // a rebuild is lost: a host that stored `pending` and then died would compare the
+    // world against `pending` on its next look, agree with itself, and stamp the card
+    // witnessed with nothing owed.
+    expect(h.surface().rev).toBe(rev + 1)
+    expect(f.claimObservations).toEqual({ u3: { value: 'pending', at: 4_000 } })
+    expect(f.claimRebuild).toEqual({ moves: [{ claimId: 'u3', from: 'landed', to: 'pending' }], at: 4_000 })
+    expect(f.phase).toBe('possibly-stale')
+    expect(f.staleReason).toMatchObject({
+      kind: 'git-revision',
+      detail: 'a claim it makes no longer holds: u3 was landed, now pending',
+    })
+    // R11 wants both values reported BEFORE any rebuild runs, and this mutator queues
+    // nothing — three different callers reach it and none of them asked for an agent.
+    expect(f.witnessedAt).toBe(3_000)
+  })
+
+  it('does not treat a FIRST look as a move', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('landed') }], 2_000))
+    // Nothing was stored to contradict. Counting this as a move would queue a rebuild
+    // for every claim the moment its author wrote it.
+    expect(h.surface().freshness).not.toHaveProperty('claimRebuild')
+    expect(h.surface().freshness.phase).not.toBe('possibly-stale')
+  })
+
+  it('does not treat an unresolved outcome as a move', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    unwrap(await h.record([{ claimId: 'u3', outcome: unresolved('host unreachable') }], 4_000))
+    // Nobody could look, so nothing was contradicted. A rebuild queued here would be
+    // an agent woken by an outage.
+    expect(h.surface().freshness).not.toHaveProperty('claimRebuild')
+  })
+
+  it('keeps a rebuild debt through every later pass that agrees with the new value', async () => {
+    const h = claimed([repo], { recipe: 'rebuild me' })
+    await h.ready
+    await h.settle([{ claimId: 'u3', outcome: saw('landed') }])
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 4_000))
+
+    // From here the world and the record agree, so every look matches. Without the
+    // marker the pass below would retire the badge for a change no rebuild consumed —
+    // and a recipe-less Surface, which never gets one, would settle back to `current`
+    // while its card still showed the old value.
+    unwrap(await h.record([{ claimId: 'u3', outcome: saw('pending') }], 5_000))
+    const f = h.surface().freshness
+    expect(f.claimRebuild!.moves).toEqual([{ claimId: 'u3', from: 'landed', to: 'pending' }])
+    expect(f.phase).toBe('possibly-stale')
+    expect(f.staleReason).toBeDefined()
+    // The host DID look and was not contradicted, and that much is still recorded.
+    expect(f.witnessedAt).toBe(5_000)
+  })
+
+  it('refuses to stamp a Surface that declares no claims', async () => {
+    const h = harness()
+    await h.create('silent')
+    await h.create('checked', { content: { headline: 'checked', claims: [] } })
+    for (const id of ['sf-1', 'sf-2']) {
+      const r = await h.svc.recordWitnessResult(id, { observations: [{ claimId: 'u3', outcome: saw('landed') }] }, ctx())
+      // `unwitnessed` has to be UNREACHABLE from the witness path, not merely
+      // unwritten — one stray call would otherwise have a claimless Surface
+      // asserting a verification that never happened.
+      expect(err(r).code).toBe('invalid')
+      expect(err(r).message).toMatch(/declares no claims/)
+      expect(h.docStore.getSurface(id)!.freshness).not.toHaveProperty('witnessedAt')
+    }
+    expect(err(await h.svc.recordWitnessResult('sf-99', { observations: [] }, ctx())).code).toBe('not-found')
+  })
+
+  it('is not settable through the content-update path', async () => {
+    const h = claimed([repo])
+    await h.ready
+    const rev = () => h.surface().rev
+
+    // Host-owned, and blocked on every operation rather than on this one.
+    const viaFreshness = await h.svc.updateContent(
+      'sf-1', { freshness: { phase: 'current', overdue: false, witnessedAt: 9_000 }, expectedRev: rev() }, ctx(),
+    )
+    expect(err(viaFreshness).code).toBe('invalid')
+    expect(err(viaFreshness).message).toMatch(/freshness is host-owned/)
+
+    // And smuggling a value onto the DECLARATION does not work either: the claim
+    // parser is a whitelist, so the observed value is simply not a thing an author
+    // can write. This is KTD2's split enforced from the ingress side — and the
+    // refusal is `no-change`, which is the strongest form of the claim: the smuggled
+    // keys did not merely fail to reach `freshness`, they did not survive the parse
+    // at all, so the record the request would produce is the one already stored.
+    const smuggled = await h.svc.updateContent('sf-1', {
+      claims: [{ ...repo, value: 'landed', observedAt: 9_000 }], expectedRev: rev(),
+    }, ctx({ at: 4_000 }))
+    expect(err(smuggled).reason).toBe('no-change')
+    expect(h.surface().content.claims).toEqual([repo])
+    expect(h.surface().freshness).not.toHaveProperty('witnessedAt')
+    expect(h.surface().freshness).not.toHaveProperty('claimObservations')
   })
 })
 
@@ -1075,6 +1560,7 @@ describe('parity coverage', () => {
       'complete-refresh': 'completeRefresh',
       'fail-refresh': 'failRefresh',
       'set-refresh-schedule': 'setSchedule',
+      'record-witness-result': 'recordWitnessResult',
       'delete': 'delete',
       'restore': 'restore',
       'purge': 'purge',

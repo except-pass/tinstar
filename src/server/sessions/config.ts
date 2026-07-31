@@ -391,11 +391,15 @@ export const BASE_CONFIG = {
     // that drifts WEEKLY. A thirty-minute floor against a weekly-drifting answer is
     // roughly three hundred wasted background agents per real change.
     //
+    // The periodic tick is an AUDIT of whether a declaration is still complete, not a
+    // sampling of the world — the world is sampled by triggers and by witnesses.
+    //
     // This is the interval for an author who declared a policy and no number. An
     // author who knows their cadence should say so — `intervalMs: 86400000` for a
-    // daily check — and one whose sources are all in the repo needs no periodic
-    // trigger at all, because `git-revision` already covers exactly the moments
-    // their answer can change.
+    // daily check. A Surface whose sources are all in the repo is already covered by
+    // `git-revision` for the moments its answer can change; the deadline is the
+    // backstop for the trigger that never arrived, which is why a claim-bearing
+    // Surface earns one regardless of where its claims look.
     defaultIntervalMs: 6 * 60 * 60_000,
   },
 }

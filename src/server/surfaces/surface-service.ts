@@ -34,6 +34,10 @@ import type {
   PointAuthor,
   Surface,
   SurfaceCapabilities,
+  SurfaceClaim,
+  SurfaceClaimObservation,
+  SurfaceClaimRebuild,
+  SurfaceClaimValue,
   SurfaceCompatAlias,
   SurfaceContent,
   SurfaceContentAuthority,
@@ -48,6 +52,10 @@ import type {
   SurfaceStaleReason,
 } from '../../domain/types'
 import { createHash } from 'node:crypto'
+import {
+  CLAIM_LOCUS_TRIGGER_KINDS, claimsObserveTriggerKind, MAX_SURFACE_CLAIMS, parseSurfaceClaim,
+} from './surface-trigger-matcher'
+import { witnessMatches, type WitnessOutcome } from './witness-registry'
 import type { DocumentStore } from '../stores/document-store'
 import type {
   JsonValue,
@@ -108,6 +116,10 @@ export type SurfaceOperation =
   | 'complete-refresh'
   | 'fail-refresh'
   | 'set-refresh-schedule'
+  /** U3's claim check: a witness ran outside the coordinator's lock and this is
+   *  what it saw. The cheap half of the split — it stamps a Surface witnessed
+   *  without waking an agent, and it is NOT a refresh. */
+  | 'record-witness-result'
   | 'delete'
   | 'restore'
   | 'purge'
@@ -280,6 +292,21 @@ export interface SurfaceSourceObservation {
   /** Evidence for THIS observation. Compared for equality against the binding's
    *  stored watermark to decide whether anything actually moved. */
   watermark: string
+  /**
+   * Claims the source declared that the host would not accept (R3, plan U6).
+   *
+   * WRITTEN INDEPENDENTLY OF THE WATERMARK, and that is the point of it being here
+   * rather than derived from `content`. Two successive versions of an entry can drop
+   * DIFFERENT bad claims and hash identically — a mistyped `unit-lands` corrected to
+   * a mistyped `unit-landd` leaves the accepted list empty both times — so a refusal
+   * gated on `evidenceMoved` would keep naming the kind the author has already
+   * stopped writing.
+   *
+   * An empty array is the CLEAR: it is what a now-clean entry sends, and it takes an
+   * old refusal off the record. Absent means the caller has nothing to say about
+   * claims at all and whatever is on the record stays.
+   */
+  claimRefusals?: string[]
   order?: number
   createdAt?: number
 }
@@ -494,7 +521,7 @@ export function isSafePrincipalId(id: string): boolean {
 /** Everything a content PATCH may name. Enforced exhaustively — see
  *  {@link SurfaceService.updateContent}. */
 const CONTENT_PATCH_FIELDS: readonly string[] =
-  ['headline', 'body', 'recipe', 'expectedRev', 'expectedWatermark']
+  ['headline', 'body', 'recipe', 'claims', 'expectedRev', 'expectedWatermark']
 
 /**
  * Who a mutation is attributed to, derived from WHO IS CALLING and never from the
@@ -523,6 +550,97 @@ function omitJob(freshness: SurfaceFreshness): SurfaceFreshness {
   const next = { ...freshness }
   delete next.jobId
   return next
+}
+
+// --- Claim observation (plan U3) -------------------------------------------
+
+/** One claim's outcome, exactly as the caller's witness runner produced it. The
+ *  three-valued outcome is carried WHOLE rather than pre-reduced to a boolean: the
+ *  reduction is `witnessMatches`', and doing it at the call site is how a caller
+ *  would eventually let an `unresolved` count as a match (KTD8). */
+export interface WitnessObservationInput {
+  claimId: string
+  outcome: WitnessOutcome
+}
+
+/** What to store for one claim after a run, or the stored observation UNCHANGED
+ *  when the run saw exactly what was already there.
+ *
+ *  Returning the prior object on a no-op is not a micro-optimisation — it is what
+ *  keeps `at` a moved-at rather than a looked-at timestamp, and therefore what keeps
+ *  the whole-record no-change guard able to see a steady state as steady. */
+function observationFrom(
+  stored: SurfaceClaimObservation | undefined, outcome: WitnessOutcome, now: number,
+): SurfaceClaimObservation {
+  const candidate: SurfaceClaimObservation = outcome.status === 'value'
+    ? { value: outcome.value, at: now }
+    : {
+      // The last known value SURVIVES an outcome that produced none. A fetch that
+      // failed says nothing about whether the world moved, and dropping the value
+      // would turn an outage into a fabricated change on the next successful run.
+      ...(stored && 'value' in stored ? { value: stored.value } : {}),
+      problem: { status: outcome.status, detail: outcome.detail },
+      at: now,
+    }
+  return stored && sameObservation(stored, candidate) ? stored : candidate
+}
+
+/** Semantic equality for an observation — everything except when it was recorded. */
+function sameObservation(a: SurfaceClaimObservation, b: SurfaceClaimObservation): boolean {
+  // `'value' in` rather than `!== undefined`, because `null` is a genuine absence a
+  // completed lookup reported (R7) and is the one value allowed to match itself.
+  return ('value' in a) === ('value' in b)
+    && Object.is(a.value, b.value)
+    && a.problem?.status === b.problem?.status
+    && a.problem?.detail === b.problem?.detail
+}
+
+/** Declared claims with no stored value — never looked at, or looked at and never
+ *  answered. R8's "a claim's first observed value is recorded before any deadline
+ *  elapses" is what this is for: a claim in this list is due NOW rather than a full
+ *  interval from now, so a fresh card is never left asserting anything on the
+ *  strength of a check that has not happened. The refresh coordinator's witness
+ *  collector is the caller, and it is the ONLY thing that decides when a witness
+ *  runs (plan U4). */
+export function claimsWithoutStoredValue(surface: Surface): SurfaceClaim[] {
+  const stored = surface.freshness.claimObservations
+  return (surface.content.claims ?? []).filter(c => {
+    const was = stored?.[c.id]
+    return !was || !('value' in was)
+  })
+}
+
+/** The trigger kind a claim move is recorded UNDER: the primary kind of the locus
+ *  the moved claim observes, so the reason names where the movement was seen rather
+ *  than inventing a kind outside the closed vocabulary. Falls back to `periodic`,
+ *  which every locus observes. */
+function claimMoveKind(
+  declared: readonly SurfaceClaim[], moves: SurfaceClaimRebuild['moves'],
+): SurfaceStaleReason['kind'] {
+  const first = moves[0] ? declared.find(c => c.id === moves[0]!.claimId) : undefined
+  return (first && CLAIM_LOCUS_TRIGGER_KINDS[first.locus]?.[0]) ?? 'periodic'
+}
+
+/** One sentence naming what moved, for the badge, the audit entry, and the prompt a
+ *  rebuild is dispatched with.
+ *
+ *  COLLAPSED TO ONE LINE AND BOUNDED, because every part of it is author-controlled:
+ *  claim ids come from an agent-authored file and values come from a witness reading
+ *  the world. `refreshDispatchPrompt` embeds this string in a prompt delivered to a
+ *  live session, and a multi-line "SYSTEM: …" value would otherwise plant a directive
+ *  past the standing guardrail — the same reason every other Slate prompt builder
+ *  runs its inputs through a one-liner. */
+function claimMoveDetail(moves: SurfaceClaimRebuild['moves']): string {
+  const one = (m: SurfaceClaimRebuild['moves'][number]): string =>
+    `${flatText(m.claimId, 80)} was ${flatText(String(m.from), 80)}, now ${flatText(String(m.to), 80)}`
+  const head = moves.slice(0, 3).map(one).join('; ')
+  const rest = moves.length > 3 ? ` (and ${moves.length - 3} more)` : ''
+  return `a claim it makes no longer holds: ${head}${rest}`
+}
+
+function flatText(s: string, max: number): string {
+  const one = s.replace(/\s+/g, ' ').trim()
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
 
 function asObject(body: unknown): Record<string, unknown> | null {
@@ -598,11 +716,50 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
   }
   const recipeTooLong = oversize('content.recipe', typeof raw.recipe === 'string' ? raw.recipe : undefined, TEXT_MAX)
   if (recipeTooLong) return recipeTooLong
+  // Claims are settable here so an agent can author through this door what it can
+  // author through a file (plan U1/R1). `[]` is kept as `[]`: the author checked and
+  // found nothing witnessable, which is a different answer from never having said.
+  let claims: SurfaceClaim[] | undefined
+  if (raw.claims !== undefined && raw.claims !== null) {
+    const parsed = parseClaimsField(raw.claims, 'content.claims')
+    if (typeof parsed === 'string') return parsed
+    claims = parsed
+  }
   return {
     headline: raw.headline.trim(),
     ...(body ? { body } : {}),
     ...(typeof raw.recipe === 'string' && raw.recipe ? { recipe: raw.recipe } : {}),
+    ...(claims !== undefined ? { claims } : {}),
   }
+}
+
+/**
+ * A claims declaration from a REQUEST, or the refusal message.
+ *
+ * REFUSES where the file door drops (plan U1/KTD5), and the difference is the error
+ * channel rather than a difference of opinion about what a valid claim is — both
+ * doors call the same `parseSurfaceClaim`. A file has nowhere to report a mistyped
+ * witness kind, so it drops the claim and keeps the surface; this endpoint already
+ * names every field it will not accept back to the caller, and a claim silently
+ * missing from a 200 response is the failure that whitelist enforcement exists to
+ * prevent.
+ *
+ * An empty array is a VALUE, not an absence — see `SurfaceContent.claims`.
+ */
+function parseClaimsField(value: unknown, field: string): SurfaceClaim[] | string {
+  if (!Array.isArray(value)) return `${field} must be an array of claims`
+  if (value.length > MAX_SURFACE_CLAIMS) {
+    // Refused whole, never truncated, for the reason the size caps above give.
+    return `${field} declares more than ${MAX_SURFACE_CLAIMS} claims`
+  }
+  const out: SurfaceClaim[] = []
+  for (const entry of value) {
+    const claim = parseSurfaceClaim(entry)
+    if (typeof claim === 'string') return `${field}: ${claim}`
+    if (out.some(c => c.id === claim.id)) return `${field} declares ${JSON.stringify(claim.id)} twice`
+    out.push(claim)
+  }
+  return out
 }
 
 function parseIdList(value: unknown, field: string): string[] | string {
@@ -936,11 +1093,11 @@ export class SurfaceService {
   /**
    * Replace authored content behind a revision gate.
    *
-   * The whitelist is `headline`, `body`, and `recipe` — nothing else on the record
-   * is authored content, and a caller that names anything else is told so rather
-   * than having it quietly ignored. `null` clears `body` or `recipe`; omitting
-   * them keeps what is there, which is the distinction a PATCH has to make and a
-   * PUT cannot.
+   * The whitelist is `headline`, `body`, `recipe`, and `claims` — nothing else on
+   * the record is authored content, and a caller that names anything else is told so
+   * rather than having it quietly ignored. `null` clears `body`, `recipe`, or
+   * `claims`; omitting them keeps what is there, which is the distinction a PATCH
+   * has to make and a PUT cannot.
    *
    * The whitelist is ENFORCED, exhaustively, which it was not: every field outside
    * the set below used to be dropped in silence, so a caller that believed it had
@@ -998,6 +1155,18 @@ export class SurfaceService {
       if (recipeTooLong) return invalid(recipeTooLong)
       recipe = raw.recipe || undefined
     }
+    // PATCH semantics, exactly as `body` and `recipe` have them: `null` clears the
+    // declaration, omitting it keeps what is there. The omission case is the
+    // load-bearing one — this endpoint is where a headline edit arrives, and without
+    // the carry-forward every such edit would silently delete the Surface's claims
+    // from the record and, through the egress adapter, from the author's own file.
+    let claims: SurfaceClaim[] | undefined = prior.content.claims
+    if (raw.claims === null) claims = undefined
+    else if (raw.claims !== undefined) {
+      const parsed = parseClaimsField(raw.claims, 'claims')
+      if (typeof parsed === 'string') return invalid(parsed)
+      claims = parsed
+    }
 
     const content: SurfaceContent = {
       headline: typeof headline === 'string' ? headline.trim() : prior.content.headline,
@@ -1008,6 +1177,13 @@ export class SurfaceService {
       // it here would make every headline edit silently delete the Surface's
       // triggers and put it back on the host defaults.
       ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+      // LAST, matching the key order every other content builder uses (the source
+      // entry, and the refresh barrier below). The store's storm guard compares
+      // records with `JSON.stringify`, so two builders that emit the same fields in
+      // different orders make a semantically identical record look like a change —
+      // one spurious revision and one SSE fan-out per API edit of a file-bound
+      // Surface. `!== undefined`, not truthiness: `[]` is a declaration and survives.
+      ...(claims !== undefined ? { claims } : {}),
     }
 
     // Source-bound content does not belong to the API (KTD4). Either an adapter
@@ -1142,6 +1318,7 @@ export class SurfaceService {
    */
   async observeSource(obs: SurfaceSourceObservation, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
     const now = ctx.at ?? Date.now()
+    const refused = obs.claimRefusals && obs.claimRefusals.length > 0 ? obs.claimRefusals : undefined
     const prior = this.docStore.getSurface(obs.id)
     if (!prior) {
       const plan = this.docStore.planSurfaceCreate({
@@ -1163,7 +1340,10 @@ export class SurfaceService {
         ...(obs.order != null ? { order: obs.order } : {}),
         ...(obs.createdAt != null ? { createdAt: obs.createdAt } : {}),
         aliases: [obs.alias],
-        freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: now },
+        freshness: {
+          phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: now,
+          ...(refused ? { claimRefusals: refused } : {}),
+        },
       }, { at: now })
       return this.commitPlan('observe-source', plan, ctx, [obs.id, ...homeIds(obs.home)])
     }
@@ -1207,20 +1387,41 @@ export class SurfaceService {
       ...(!authoritative && evidenceMoved ? { divergedWatermark: obs.watermark } : {}),
     }
 
+    // The refusal the record should carry after this observation (plan U6, R3).
+    //
+    // Only under SOURCE-BINDING authority. Once the record owns its content the
+    // file's claims are not in force — and they cannot be refused anyway, since the
+    // API door rejects a bad claim outright rather than storing one — so a refusal
+    // surviving the transfer would point at a declaration the card is not rendering.
+    //
+    // An ABSENT `claimRefusals` is "no opinion": a caller that says nothing about
+    // claims leaves whatever is on the record. An EMPTY ARRAY is the clear.
+    const claimRefusals = !authoritative
+      ? undefined
+      : obs.claimRefusals === undefined ? prior.freshness.claimRefusals : refused
+    const freshness: SurfaceFreshness = {
+      // Spread FIRST so every key keeps the position it already had. The store's
+      // no-change guard is `JSON.stringify` equality, which compares key order, and
+      // an undefined-valued key is dropped by `JSON.stringify` entirely — so an
+      // unchanged clear still compares equal and burns no revision on the poll floor.
+      ...prior.freshness,
+      ...(authoritative && evidenceMoved
+        ? { phase: 'current' as const, observedGeneration: binding.generation, verifiedAt: now }
+        : {}),
+      claimRefusals,
+    }
+
     const next: Surface = {
       ...prior,
       ...(authoritative ? { content: obs.content, author: obs.author } : {}),
       source: binding,
-      ...(authoritative && evidenceMoved
-        ? {
-          freshness: {
-            ...prior.freshness,
-            phase: 'current',
-            observedGeneration: binding.generation,
-            verifiedAt: now,
-          },
-        }
-        : {}),
+      // Written on EVERY observation, not only when the watermark moved. Two entries
+      // that drop different bad claims hash identically (the accepted list is empty
+      // either way), so a refusal gated on `evidenceMoved` would keep naming a
+      // witness kind the author has already corrected. The gate stays on the two
+      // fields that mean "new content arrived" — `observedGeneration` and
+      // `verifiedAt` — which is what keeps this a host write the watermark cannot see.
+      freshness,
       rev: prior.rev + 1,
       amendedAt: now,
     }
@@ -1800,8 +2001,8 @@ export class SurfaceService {
     let source = prior.source
     let content = prior.content
     if (input.content) {
-      // A refresh result replaces authored OUTPUT. The recipe and the freshness
-      // declaration are authored INPUT — a worker restates neither, and
+      // A refresh result replaces authored OUTPUT. The recipe, the freshness
+      // declaration, and the claims are authored INPUT — a worker restates none, and
       // `parseStagedResult` cannot even express them (it emits `headline` or
       // `headline` + `body`, nothing else). Assigning `input.content` wholesale
       // therefore DELETED both on the first successful refresh: from the record,
@@ -1817,6 +2018,11 @@ export class SurfaceService {
           ? { recipe: input.content.recipe ?? prior.content.recipe }
           : {}),
         ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+        // The same hazard for the same reason (U1): a rebuild that dropped the
+        // claims would leave a Surface that had just been rebuilt with nothing left
+        // saying what would prove it wrong — and would delete them from the author's
+        // file on the write-back below. `!== undefined` so `[]` survives too.
+        ...(prior.content.claims !== undefined ? { claims: prior.content.claims } : {}),
       }
       if (prior.contentAuthority === 'source-binding') {
         const adapter = prior.source ? this.adapters[prior.source.adapter] : undefined
@@ -1885,6 +2091,19 @@ export class SurfaceService {
         ...(prior.freshness.lastReasonKeys
           ? { lastReasonKeys: prior.freshness.lastReasonKeys }
           : {}),
+        // THE WITNESS STATE SURVIVES A REBUILD, and `claimRebuild` is the one part of
+        // it that does not (plan U4). The rebuild is what the moved value was FOR, so
+        // the debt is paid here and nowhere else — while the observations themselves
+        // are still the host's best knowledge of the world and `witnessedAt` is still
+        // the last time every claim held. Dropping them (which rebuilding freshness
+        // from scratch did) cost two things that both look like bugs from outside: a
+        // just-rebuilt card reported no witness age at all, and its claims went back
+        // to never-observed, so the next pass could only re-seed them and the pass
+        // after that was the earliest anything could be witnessed again.
+        ...(prior.freshness.witnessedAt !== undefined ? { witnessedAt: prior.freshness.witnessedAt } : {}),
+        ...(prior.freshness.claimObservations
+          ? { claimObservations: prior.freshness.claimObservations }
+          : {}),
         observedGeneration: hostGeneration,
         verifiedAt: now,
       },
@@ -1952,6 +2171,172 @@ export class SurfaceService {
       amendedAt: ctx.at ?? Date.now(),
     }
     return this.commitContent('set-refresh-schedule', prior, next, ctx)
+  }
+
+  /**
+   * Record what a witness saw, and stamp the Surface witnessed when every claim
+   * held (R9/R10/R11/R19, plan U3).
+   *
+   * THE CHEAP HALF OF THE SPLIT. Detection is generous and costs nothing; repair is
+   * expensive and rare. A revalidation in which every claim returns its stored value
+   * ends HERE — no job, no agent session, no worker — and the only thing it writes is
+   * the fact that the host looked and was not contradicted.
+   *
+   * THE BARRIER IS DELIBERATELY NARROWER THAN `completeRefresh`'s, in three places
+   * that each cost something real if widened:
+   *
+   *   · `jobId` IS NOT CLEARED. Clearing it orphans a queued rebuild, and `dispatch`
+   *     then cancels that job with "another refresh (none) took this Surface over" —
+   *     so a deadline pass would silently swallow a human pressing ⟳.
+   *   · A FOREIGN `staleReason` SURVIVES. Only a reason whose kind some claim's locus
+   *     observes is answered by this pass; a `human-intent` or `semantic-signal`
+   *     reason is not something a claim witness can speak to, and clearing it would
+   *     make an unattended Surface look attended to.
+   *   · A `queued`, `refreshing`, or `failed` phase IS KEPT. Work in flight is not
+   *     answered by a claim check, and a failed rebuild is a fact about the rebuild.
+   *     Only `possibly-stale` — the state a trigger or a deadline put it in — is
+   *     resolved back to `current`.
+   *
+   * `lastReasonKeys` is carried forward verbatim, for exactly the reason its own
+   * docstring records: without it the next unchanged poll of the same Git SHA
+   * re-stales the Surface that was just witnessed against that SHA, and the measured
+   * result was a fresh background agent every fifteen seconds on an idle repo.
+   *
+   * `verifiedAt` IS NOT TOUCHED (KTD7). It means "content last arrived or was
+   * rebuilt", which a claim check does not do.
+   *
+   * WRITES NOTHING WHEN NOTHING MOVED, which is the property that makes this safe to
+   * call on a sweep. See {@link SurfaceClaimObservation} for why whole-record
+   * equality is a sufficient comparator here: no field this operation writes records
+   * a mere LOOK, so "the record is byte-identical" and "the world did not move" are
+   * the same statement.
+   */
+  async recordWitnessResult(
+    id: string, input: { observations: readonly WitnessObservationInput[] }, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'recording a witness result')
+    if (guard) return guard
+
+    // A Surface that declares nothing may not be stamped witnessed by anybody. This
+    // is the record-level half of the `unwitnessed` contract (R18): the state has to
+    // be UNREACHABLE rather than merely unwritten, or one stray call would make a
+    // claimless Surface assert a verification that never happened.
+    const declared = prior.content.claims
+    if (!declared?.length) {
+      return invalid(`Surface ${id} declares no claims, so there is nothing a witness could have checked`)
+    }
+
+    const now = ctx.at ?? Date.now()
+    const stored = prior.freshness.claimObservations
+    const observations: Record<string, SurfaceClaimObservation> = {}
+    const moves: SurfaceClaimRebuild['moves'] = []
+    let observedEvery = true
+    let matchedEvery = true
+
+    // Driven by the DECLARATION, not by the input. That is the "still holds the same
+    // claims" re-check the collect/run/commit split needs (KTD3): the author may have
+    // edited the file while the witnesses were running, and a result for a claim that
+    // no longer exists must neither be stored nor counted. It is also what prunes a
+    // deleted claim's observation instead of leaving a ghost value nothing renders.
+    // Sorted so the stored key order is a function of the ids alone — a reordered
+    // declaration must not read as moved observation state.
+    for (const claim of [...declared].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      const was = stored?.[claim.id]
+      const seen = input.observations.find(o => o.claimId === claim.id)
+      if (!seen) {
+        observedEvery = false
+        if (was) observations[claim.id] = was
+        continue
+      }
+      // `witnessMatches` is U2's and is the SINGLE place a three-valued outcome
+      // becomes a yes or a no. Re-deriving it here is how `unresolved` would quietly
+      // start counting as a match against a stored absence (KTD8).
+      if (!witnessMatches(was?.value, seen.outcome)) {
+        matchedEvery = false
+        // A MOVE IS A CONTRADICTION, NOT A FIRST LOOK. Three different things fail
+        // `witnessMatches` and only one of them is news: an unresolved outcome (nobody
+        // could look), a completed lookup with NOTHING STORED to disagree with (the
+        // first look — which is why a witnessed Surface always takes two runs), and a
+        // completed lookup that contradicts a value the host held. Counting the first
+        // look as a move would queue a rebuild for every claim the moment it was
+        // authored, which is a background agent per new card.
+        if (seen.outcome.status === 'value' && was && 'value' in was) {
+          moves.push({ claimId: claim.id, from: was.value as SurfaceClaimValue, to: seen.outcome.value })
+        }
+      }
+      observations[claim.id] = observationFrom(was, seen.outcome, now)
+    }
+
+    const freshness: SurfaceFreshness = { ...prior.freshness }
+    if (Object.keys(observations).length) freshness.claimObservations = observations
+    else delete freshness.claimObservations
+
+    // A MOVED VALUE, IN THE SAME COMMIT AS THE VALUE THAT MOVED (R11/R12/R17). The
+    // delta, the stale mark, and the durable rebuild-pending marker are one write
+    // because splitting them loses rebuilds: a host that stored the new value and
+    // then died would, on its next look, compare the world against the value it had
+    // just adopted, agree with itself, and stamp the Surface witnessed. The debt has
+    // to become durable at the same instant the evidence for it does.
+    //
+    // NOTHING IS QUEUED HERE. Whether a rebuild is possible at all is a question
+    // about the recipe and the worktree that the coordinator owns (R12), and this
+    // method is called from the deadline sweep, the trigger path, and — in tests —
+    // directly. A mutator that dispatched work would put a background agent behind
+    // three callers that did not ask for one.
+    if (moves.length) {
+      freshness.claimRebuild = { moves, at: now }
+      // `queued` and `refreshing` are kept for the same reason `markPossiblyStale`
+      // keeps them: work in flight is a fact this observation does not answer.
+      if (freshness.phase !== 'queued' && freshness.phase !== 'refreshing') {
+        freshness.phase = 'possibly-stale'
+      }
+      freshness.staleReason = {
+        kind: claimMoveKind(declared, moves),
+        key: `claim-moved ${id} ${moves.map(m => `${m.claimId}=${String(m.to)}`).join(' ')}`.slice(0, 400),
+        detail: claimMoveDetail(moves),
+        // NOT ADVANCED. The generation orders HOST OBSERVATIONS OF THE SOURCE, and
+        // the source did not move — the world the source describes did. Advancing it
+        // would supersede an in-flight rebuild that is computing against exactly the
+        // source revision this Surface still stands at.
+        generation: prior.source?.generation ?? 0,
+        at: now,
+      }
+    }
+
+    // R10 in full: EVERY declared claim observed in THIS run, and every one matched.
+    // A partial run — one trigger's locus, say — records what it saw and stamps
+    // nothing, because a Surface cannot be verified against claims nobody checked.
+    if (observedEvery && matchedEvery) {
+      freshness.witnessedAt = now
+      // A successful verification is the one thing allowed to clear the overdue
+      // badge (R18), and this is one.
+      freshness.overdue = false
+      // A MOVE NOTHING HAS REBUILT YET IS NOT ANSWERED BY A LATER AGREEMENT, and this
+      // guard is the whole reason the marker is a field rather than an inference. Once
+      // the moved value is stored, every subsequent look agrees with it — so without
+      // this, the pass one interval later would retire the badge for a change no
+      // rebuild ever consumed, and a recipe-less Surface (R12: it never gets one)
+      // would settle back to `current` while its card still showed the old value.
+      if (!freshness.claimRebuild) {
+        if (freshness.staleReason && claimsObserveTriggerKind(declared, freshness.staleReason.kind)) {
+          delete freshness.staleReason
+        }
+        // ONLY once the reason is actually gone. A Surface holding a `human-intent`
+        // reason this pass could not answer is still possibly-stale, and committing it
+        // `current` with the reason still attached would put two contradictory
+        // statements on one record — which is exactly how a badge starts disagreeing
+        // with the sentence under it.
+        if (freshness.phase === 'possibly-stale' && !freshness.staleReason) freshness.phase = 'current'
+      }
+    }
+
+    const next: Surface = { ...prior, freshness, rev: prior.rev + 1, amendedAt: now }
+    if (this.docStore.checkSurfaceUpsert(next) === 'no-change') {
+      return this.unchanged('record-witness-result', prior)
+    }
+    return this.commitContent('record-witness-result', prior, next, ctx)
   }
 
   // --- Topology ---

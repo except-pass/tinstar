@@ -25,7 +25,7 @@ import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
-import { FreshnessBadge } from './FreshnessBadge'
+import { ClaimProblemNote, ClaimRefusalNote, FreshnessBadge } from './FreshnessBadge'
 import { moveItem } from './reorderUtil'
 import { usePointAnswerForm } from './usePointAnswerForm'
 import { WorkbenchSurface, partitionWorkbenches } from './WorkbenchSurface'
@@ -134,7 +134,10 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   refreshing?: boolean
   unreachable?: boolean
   onRefresh?: (surface: SlateSurface) => void
-  /** Ticking clock from the panel — drives the row's "updated Xm ago" freshness. */
+  /** Ticking clock from the panel — drives the row's "checked Xm ago" witness stamp.
+   *  Threaded down rather than read here so every row agrees and the interval lives
+   *  in ONE place; a stamp that computed its own `now` at render would freeze on a
+   *  card nobody touches, and a test that pins `now` cannot catch that. */
   now: number
   /** S6 U2 — reorder controls. Absent on rows that don't participate (a resolved or
    *  dismissed point sinks by rank, so nudging it would be a lie). */
@@ -411,15 +414,33 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             </div>
           )}
 
+          {/* A claim this row DECLARED and the host would not accept (U6). Below the
+              body rather than beside the pills: it is a sentence about the file, not
+              a state of the point, and every file-authored surface projects as an
+              open-point — so a refusal that only rendered on the card shell below
+              would never be seen at all. */}
+          <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />
+          {/* And one the host accepted but could not resolve (U7). Same placement
+              argument, and the same reason it has to be HERE rather than only on the
+              card shell: every file-authored surface projects as an open-point. */}
+          <ClaimProblemNote id={surface.id} freshness={surface.freshness} />
           {unreachable && (
             <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 font-sans text-[11px] leading-snug text-ink-low">
               Sent — but that session isn’t reachable right now.
             </div>
           )}
           {shownError && <div className="mt-1 text-[11px] text-hue-error">{shownError}</div>}
-          {/* Freshness: "updated Xm ago", ambering when the point has gone untended. */}
+          {/* The witness stamp (U7): when every declared claim was last checked and
+              held, or that none has been / that there is nothing to check. Reads
+              `witnessedAt`, never `amendedAt` — the record's last-written time moves
+              on host bookkeeping and would report the host's activity as if it were
+              somebody tending the point. */}
           <div className="mt-1 flex justify-end">
-            <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+            <SurfaceAge
+              witnessedAt={surface.freshness?.witnessedAt}
+              unwitnessed={surface.unwitnessed}
+              now={now}
+            />
           </div>
         </div>
       </div>
