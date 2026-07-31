@@ -65,6 +65,8 @@ export type AcceptedProviderDelivery<TDetail extends object = object> = Extract<
 /**
  * Stable attempt identity used for confirmation. Provider-owned detail stays
  * out of this input so heterogeneous registries can safely erase adapter detail.
+ * An adapter that needs provider-owned lookup state sets `attemptRef`; adapters
+ * that can derive state from `messageId` and `attempt` may omit it.
  */
 export type AcceptedProviderDeliveryIdentity = Omit<
   AcceptedProviderDelivery<object>,
@@ -138,7 +140,12 @@ export type ProviderObservationHandlers<TDetail extends object = object> = {
   ) => Promise<ProviderObservationSnapshotFor<K, TDetail>>
 }
 
-const rawObservationHandlerByGuard = new WeakMap<object, object>()
+interface RawGuardedHandler {
+  kind: string
+  handler: object
+}
+
+const rawHandlerByGuard = new WeakMap<object, RawGuardedHandler>()
 
 /**
  * Provider-neutral boundary for a managed CLI.
@@ -164,7 +171,9 @@ export interface ProviderAdapter<TDetail extends object = object> {
 /**
  * Registration boundary that preserves provider-specific detail while rejecting
  * capability drift. Observation results are checked when their handlers run
- * because availability can change between observations.
+ * because availability can change between observations. Handlers must stamp
+ * snapshots with the registering adapter's provider ID. Re-registering an
+ * adapter unwraps earlier guards before applying the new manifest.
  */
 export function defineProviderAdapter<TDetail extends object = object>(
   adapter: ProviderAdapter<TDetail>,
@@ -189,6 +198,9 @@ export function defineProviderAdapter<TDetail extends object = object>(
 
   return {
     ...adapter,
+    delivery: adapter.delivery === null
+      ? null
+      : guardDeliveryAdapter(adapter.provider.id, adapter.delivery),
     observe: {
       'session-usage': guardObservationHandler(
         adapter,
@@ -219,6 +231,50 @@ export function defineProviderAdapter<TDetail extends object = object>(
   }
 }
 
+function guardDeliveryAdapter<TDetail extends object>(
+  providerId: string,
+  delivery: ProviderDeliveryAdapter<TDetail>,
+): ProviderDeliveryAdapter<TDetail> {
+  const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
+  const accept = async (request: ProviderDeliveryRequest) => {
+    const result = await rawAccept(request)
+    assertDeliveryIdentity(providerId, 'accept', result, request)
+    return result
+  }
+  rememberGuardedHandler(accept, rawAccept, 'delivery:accept')
+
+  if (!delivery.confirm) return { accept }
+
+  const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
+  const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
+    const result = await rawConfirm(acceptance)
+    assertDeliveryIdentity(providerId, 'confirm', result, acceptance)
+    return result
+  }
+  rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
+  return { accept, confirm }
+}
+
+function assertDeliveryIdentity(
+  providerId: string,
+  operation: 'accept' | 'confirm',
+  actual: { messageId: string; attempt: number },
+  expected: { messageId: string; attempt: number },
+): void {
+  if (actual.messageId !== expected.messageId) {
+    throw new Error(
+      `Provider "${providerId}" delivery ${operation} returned messageId `
+      + `"${actual.messageId}", expected "${expected.messageId}"`,
+    )
+  }
+  if (actual.attempt !== expected.attempt) {
+    throw new Error(
+      `Provider "${providerId}" delivery ${operation} returned attempt `
+      + `${actual.attempt}, expected ${expected.attempt}`,
+    )
+  }
+}
+
 function guardObservationHandler<
   K extends ProviderObservationKind,
   TDetail extends object,
@@ -231,9 +287,8 @@ function guardObservationHandler<
 ): (
   request: ProviderObservationRequestFor<K>,
 ) => Promise<ProviderObservationSnapshotFor<K, TDetail>> {
-  const rawHandler = (
-    rawObservationHandlerByGuard.get(handler) as typeof handler | undefined
-  ) ?? handler
+  const guardKind = `observation:${kind}`
+  const rawHandler = unwrapGuardedHandler(handler, guardKind)
   const guardedHandler = async (request: ProviderObservationRequestFor<K>) => {
     const snapshot = await rawHandler(request)
     if (snapshot.providerId !== adapter.provider.id) {
@@ -265,8 +320,26 @@ function guardObservationHandler<
     }
     return snapshot
   }
-  rawObservationHandlerByGuard.set(guardedHandler, rawHandler)
+  rememberGuardedHandler(guardedHandler, rawHandler, guardKind)
   return guardedHandler
+}
+
+function unwrapGuardedHandler<THandler extends object>(
+  handler: THandler,
+  kind: string,
+): THandler {
+  const entry = rawHandlerByGuard.get(handler)
+  return entry?.kind === kind
+    ? entry.handler as THandler
+    : handler
+}
+
+function rememberGuardedHandler<THandler extends object>(
+  guard: THandler,
+  rawHandler: THandler,
+  kind: string,
+): void {
+  rawHandlerByGuard.set(guard, { kind, handler: rawHandler })
 }
 
 function observationScopesEqual(

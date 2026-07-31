@@ -14,6 +14,7 @@ import {
   type ProviderAdapter,
   type ProviderDeliveryAcceptance,
   type ProviderDeliveryConfirmation,
+  type ProviderObservationHandlers,
 } from '../contract'
 
 interface ForgeDetail {
@@ -126,6 +127,29 @@ function notObserved<
       reason: 'not-observed',
     },
     detail: { region: 'workstation' },
+  }
+}
+
+function handlersForProvider<TDetail extends object>(
+  providerId: string,
+  handlers: ProviderObservationHandlers<TDetail>,
+): ProviderObservationHandlers<TDetail> {
+  return {
+    async 'session-usage'(request) {
+      return { ...await handlers['session-usage'](request), providerId }
+    },
+    async 'session-context'(request) {
+      return { ...await handlers['session-context'](request), providerId }
+    },
+    async 'provider-quota'(request) {
+      return { ...await handlers['provider-quota'](request), providerId }
+    },
+    async 'historical-telemetry'(request) {
+      return { ...await handlers['historical-telemetry'](request), providerId }
+    },
+    async 'context-breakdown'(request) {
+      return { ...await handlers['context-breakdown'](request), providerId }
+    },
   }
 }
 
@@ -374,7 +398,7 @@ describe('provider capability contract', () => {
 
   it('represents acceptance-only delivery without fabricating confirmation', async () => {
     const acceptanceOnly = defineProviderAdapter({
-      provider: forge.provider,
+      provider: { id: 'boundary', label: 'Boundary CLI' },
       sessionLifecycle: 'terminal',
       capabilities: {
         observations: forge.capabilities.observations,
@@ -397,7 +421,7 @@ describe('provider capability contract', () => {
           },
         },
       },
-      observe: forge.observe,
+      observe: handlersForProvider('boundary', forge.observe),
       delivery: {
         async accept(request) {
           return {
@@ -415,7 +439,7 @@ describe('provider capability contract', () => {
       attempt: 1,
       acceptedAt: CHECKED_AT,
       senderSessionId: 'run-sender',
-      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
       text: 'Queued?',
     })
 
@@ -604,6 +628,81 @@ describe('provider capability contract', () => {
       kind: 'session-usage',
       scope: { kind: 'session', sessionId: 'run-forge' },
     })).rejects.toThrow('returned providerId "someone-else"')
+  })
+
+  it('rejects snapshots with the wrong kind or scope', async () => {
+    const wrongKind = defineProviderAdapter({
+      ...forge,
+      observe: {
+        ...forge.observe,
+        async 'session-usage'(request) {
+          const snapshot = await forge.observe['session-usage'](request)
+          Reflect.set(snapshot, 'kind', 'provider-quota')
+          return snapshot
+        },
+      },
+    })
+    const wrongScope = defineProviderAdapter({
+      ...forge,
+      observe: {
+        ...forge.observe,
+        async 'session-usage'(request) {
+          return {
+            ...await forge.observe['session-usage'](request),
+            scope: { kind: 'session', sessionId: 'some-other-run' },
+          }
+        },
+      },
+    })
+    const request = {
+      kind: 'session-usage',
+      scope: { kind: 'session', sessionId: 'run-forge' },
+    } as const
+
+    await expect(wrongKind.observe['session-usage'](request))
+      .rejects.toThrow('returned kind "provider-quota"')
+    await expect(wrongScope.observe['session-usage'](request))
+      .rejects.toThrow('scope that does not match the request')
+  })
+
+  it('rejects delivery results that change the stable message identity', async () => {
+    const delivery = forge.delivery
+    if (!delivery?.confirm) throw new Error('expected confirmation-capable delivery')
+    const mismatched = defineProviderAdapter({
+      ...forge,
+      delivery: {
+        async accept(request) {
+          return {
+            ...await delivery.accept(request),
+            messageId: 'some-other-message',
+          }
+        },
+        async confirm(acceptance) {
+          return {
+            ...await delivery.confirm(acceptance),
+            attempt: acceptance.attempt + 1,
+          }
+        },
+      },
+    })
+    const request = {
+      messageId: 'msg-stable',
+      attempt: 3,
+      acceptedAt: CHECKED_AT,
+      senderSessionId: 'run-sender',
+      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      text: 'Still there?',
+    }
+
+    await expect(mismatched.delivery!.accept(request))
+      .rejects.toThrow('returned messageId "some-other-message"')
+
+    const acceptance = await delivery.accept(request)
+    if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')
+    const confirming = mismatched.delivery
+    if (!confirming?.confirm) throw new Error('expected confirmation-capable delivery')
+    await expect(confirming.confirm(acceptance))
+      .rejects.toThrow('returned attempt 4')
   })
 
   it('re-registers derived adapters against raw handlers instead of stale guards', async () => {
