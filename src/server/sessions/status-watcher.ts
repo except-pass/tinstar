@@ -1,7 +1,11 @@
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { listSessions, setState, setConversationId, updateSession, type Session, type SessionState } from './session'
-import { captureScreen, exactTmuxPaneTarget } from './backends/tmux'
+import {
+  captureScreen,
+  exactTmuxPaneTarget,
+  isOrdinaryTmuxSessionMiss,
+} from './backends/tmux'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
 import type { RecapEntry } from '../../types'
@@ -39,6 +43,12 @@ export interface StatusWatcherOpts {
    * callers that don't supply one.
    */
   resolveTmuxName?: (sessionName: string) => string
+  /** Optional lifecycle-generation fence for async process-tree probes. */
+  captureBackendGeneration?: (sessionName: string) => string | null
+  isBackendGenerationCurrent?: (
+    sessionName: string,
+    generation: string,
+  ) => boolean
   /** Injectable for tests and third-party providers; defaults to built-ins. */
   providerRegistry?: ProviderAdapterRegistry
 }
@@ -378,6 +388,14 @@ export class StatusWatcher {
   }
 
   private async checkProcessTree(session: Session): Promise<void> {
+    const backendGeneration = this.opts.captureBackendGeneration?.(session.name)
+    if (this.opts.captureBackendGeneration && backendGeneration === null) return
+    const generationIsCurrent = (): boolean =>
+      backendGeneration === undefined
+      || backendGeneration === null
+      || !this.opts.isBackendGenerationCurrent
+      || this.opts.isBackendGenerationCurrent(session.name, backendGeneration)
+
     const tmuxTarget = this.resolveTmuxName(session.name)
 
     // Get the PID of the process running in the tmux pane
@@ -385,11 +403,21 @@ export class StatusWatcher {
       'tmux',
       ['list-panes', '-t', exactTmuxPaneTarget(tmuxTarget), '-F', '#{pane_pid}'],
     )
+    if (!generationIsCurrent()) return
     if (pane.error) {
       if (this.isProcessProbeTimeout(pane.error)) {
         log.debug(
           'status-watcher',
           `${session.name}: tmux pane lookup timed out; liveness is inconclusive`,
+        )
+        this.idleStreak.delete(session.name)
+        return
+      }
+      if (!isOrdinaryTmuxSessionMiss(pane.error, pane.stderr)) {
+        log.debug(
+          'status-watcher',
+          `${session.name}: tmux pane lookup failed; liveness is inconclusive: `
+          + `${pane.error.message}`,
         )
         this.idleStreak.delete(session.name)
         return
@@ -410,6 +438,7 @@ export class StatusWatcher {
 
     // Find the agent process (direct child of the shell)
     const agent = await this.execProcess('pgrep', ['-P', shellPid])
+    if (!generationIsCurrent()) return
     if (agent.error && this.isProcessProbeTimeout(agent.error)) {
       log.debug(
         'status-watcher',
@@ -436,6 +465,7 @@ export class StatusWatcher {
 
     // Check if the agent has any child processes (tool execution)
     const children = await this.execProcess('pgrep', ['-P', agentPid])
+    if (!generationIsCurrent()) return
     if (children.error && this.isProcessProbeTimeout(children.error)) {
       log.debug(
         'status-watcher',
@@ -623,10 +653,10 @@ export class StatusWatcher {
   private execProcess(
     command: string,
     args: string[],
-  ): Promise<{ error: Error | null; stdout: string }> {
+  ): Promise<{ error: Error | null; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
-      execFile(command, args, { timeout: this.processProbeTimeoutMs }, (error, stdout) => {
-        resolve({ error, stdout })
+      execFile(command, args, { timeout: this.processProbeTimeoutMs }, (error, stdout, stderr) => {
+        resolve({ error, stdout, stderr })
       })
     })
   }

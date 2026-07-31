@@ -237,6 +237,47 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('deletes a docstore-only run without requiring a terminal session record', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      seedRun(srv.docStore, 'plugin-run', recap())
+
+      const res = await srv.fetch('/api/sessions/plugin-run', { method: 'DELETE' })
+
+      expect(res.status).toBe(200)
+      expect(srv.docStore.getRun('plugin-run')).toBeUndefined()
+      expect(srv.events).toContainEqual(expect.objectContaining({
+        type: 'managed_session.deleted',
+        payload: { name: 'plugin-run' },
+      }))
+      expect(srv.docStore.getAllTombstones()).toHaveLength(0)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('deletes a simulator run addressed by its differing session id', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      seedRun(srv.docStore, 'R-242', recap())
+      srv.docStore.upsertRun('R-242', {
+        ...srv.docStore.getRun('R-242')!,
+        sessionId: 'CLD-4093',
+      })
+
+      const res = await srv.fetch('/api/sessions/CLD-4093', { method: 'DELETE' })
+
+      expect(res.status).toBe(200)
+      expect(srv.docStore.getRun('R-242')).toBeUndefined()
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 function makeTomb(convId: string, summary: string): Tombstone {

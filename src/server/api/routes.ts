@@ -771,6 +771,108 @@ function clearSessionBackendOwner(owner: SessionBackendOwner): void {
   }
 }
 
+export function reserveBootSessionDeletion(
+  sessionsDir: string,
+  prefix: string,
+  name: string,
+): string | null {
+  const normalizedDir = resolve(sessionsDir)
+  const keys = sessionBackendOwnershipKeys(prefix, name)
+  if (keys.some(key => sessionBackendOwners.has(key))) return null
+  const owner: SessionBackendOwner = {
+    sessionsDir: normalizedDir,
+    sessionName: name,
+    state: 'deleting',
+    token: randomUUID(),
+    keys,
+    activeLeases: 0,
+  }
+  for (const key of keys) sessionBackendOwners.set(key, owner)
+  return owner.token
+}
+
+export function finishBootSessionDeletion(
+  sessionsDir: string,
+  name: string,
+  token: string,
+  outcome: 'deleted' | 'retained',
+): void {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    !owner
+    || owner.sessionsDir !== resolve(sessionsDir)
+    || owner.sessionName !== name
+    || owner.token !== token
+    || owner.state !== 'deleting'
+  ) return
+  if (outcome === 'deleted') {
+    clearSessionBackendOwner(owner)
+  } else {
+    owner.state = 'orphaned'
+  }
+}
+
+export function clearStoppedSessionPort(
+  config: TinstarConfig,
+  docStore: DocumentStore,
+  name: string,
+  releasePort: (port: number) => void = tmuxBackend.releasePort,
+): void {
+  const session = getSession(config.dirs.sessions, name)
+  if (!session || (session.port == null && session.ttydPid == null)) return
+  const claimedPort = session.port
+  const updated = updateSession(
+    config.dirs.sessions,
+    name,
+    { port: null, ttydPid: null },
+  )
+  if (!updated) return
+  if (claimedPort != null) releasePort(claimedPort)
+  const run = docStore.getRun(name)
+    ?? docStore.getAllRuns().find(candidate => candidate.sessionId === name)
+  if (run && run.port != null) {
+    docStore.upsertRun(run.id, { ...run, port: null })
+  }
+}
+
+export function persistTtydRestartForSessionIncarnation(
+  sessionsDir: string,
+  name: string,
+  created: string,
+  backendGeneration: string | null,
+  ttydPid: number,
+): boolean {
+  const current = getSession(sessionsDir, name)
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    !current
+    || current.created !== created
+    || current.state === 'stopped'
+    || current.state === 'creating'
+    || existsSync(join(sessionsDir, name, '.deleting'))
+    || !owner
+    || owner.sessionsDir !== resolve(sessionsDir)
+    || owner.sessionName !== name
+    || owner.state !== 'persisted'
+    || backendGeneration === null
+    || owner.token !== backendGeneration
+  ) return false
+  return updateSession(sessionsDir, name, { ttydPid }) !== null
+}
+
+function currentSessionBackendGeneration(
+  sessionsDir: string,
+  name: string,
+): string | null {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    !owner
+    || owner.sessionsDir !== resolve(sessionsDir)
+    || owner.sessionName !== name
+  ) return null
+  return owner.token
+}
+
 function liveSessionBackendOwner(key: string): SessionBackendOwner | undefined {
   return sessionBackendOwners.get(key)
 }
@@ -924,7 +1026,10 @@ function ownedSessionBackendForAction(
   const keys = sessionBackendOwnershipKeys(prefix, name)
   let owners = keys.map(key => liveSessionBackendOwner(key))
   if (owners.every(owner => owner === undefined)) {
-    if (getSession(sessionsDir, name) === null) return null
+    if (
+      getSession(sessionsDir, name) === null
+      && !existsSync(join(sessionsDir, name, '.deleting'))
+    ) return null
     if (!registerPersistedSessionName(sessionsDir, prefix, name)) return null
     owners = keys.map(key => liveSessionBackendOwner(key))
   }
@@ -940,15 +1045,13 @@ function ownedSessionBackendForAction(
   return owner
 }
 
-function persistedSessionBackendGeneration(
-  ctx: RouteContext,
+export function persistedSessionBackendGenerationForConfig(
+  cfg: TinstarConfig,
   name: string,
 ): string | null {
-  const cfg = ctx.sessionConfig
-  const session = cfg ? getSession(cfg.dirs.sessions, name) : null
+  const session = getSession(cfg.dirs.sessions, name)
   if (
-    !cfg
-    || !session
+    !session
     || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
     || session.state === 'creating'
   ) return null
@@ -960,6 +1063,16 @@ function persistedSessionBackendGeneration(
   return owner?.state === 'persisted' ? owner.token : null
 }
 
+function persistedSessionBackendGeneration(
+  ctx: RouteContext,
+  name: string,
+): string | null {
+  const cfg = ctx.sessionConfig
+  return cfg
+    ? persistedSessionBackendGenerationForConfig(cfg, name)
+    : null
+}
+
 function authorizePersistedSessionBackendAccess(
   ctx: RouteContext,
   name: string,
@@ -967,20 +1080,19 @@ function authorizePersistedSessionBackendAccess(
   return persistedSessionBackendGeneration(ctx, name) !== null
 }
 
-interface SessionBackendLease {
+export interface SessionBackendLease {
+  token: string
   release: () => void
 }
 
-function acquirePersistedSessionBackendLease(
-  ctx: RouteContext,
+export function acquirePersistedSessionBackendLeaseForConfig(
+  cfg: TinstarConfig,
   name: string,
   expectedToken?: string,
 ): SessionBackendLease | null {
-  const cfg = ctx.sessionConfig
-  const session = cfg ? getSession(cfg.dirs.sessions, name) : null
+  const session = getSession(cfg.dirs.sessions, name)
   if (
-    !cfg
-    || !session
+    !session
     || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
     || session.state === 'creating'
   ) return null
@@ -997,19 +1109,85 @@ function acquirePersistedSessionBackendLease(
   const token = owner.token
   let released = false
   return {
+    token,
     release: () => {
       if (released) return
       released = true
       const current = sessionBackendOwners.get(`session:${name}`)
       if (
         current === owner
-        && current.token === token
         && current.activeLeases > 0
       ) {
         current.activeLeases -= 1
       }
     },
   }
+}
+
+function acquirePersistedSessionBackendLease(
+  ctx: RouteContext,
+  name: string,
+  expectedToken?: string,
+): SessionBackendLease | null {
+  const cfg = ctx.sessionConfig
+  return cfg
+    ? acquirePersistedSessionBackendLeaseForConfig(cfg, name, expectedToken)
+    : null
+}
+
+export async function probePersistedSessionBackendForReconcile(
+  cfg: TinstarConfig,
+  name: string,
+): Promise<{
+  state: 'exists' | 'missing'
+  generation: string
+}> {
+  const session = getSession(cfg.dirs.sessions, name)
+  if (
+    !session
+    || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
+    || session.state === 'creating'
+  ) {
+    throw new Error('backend ownership unavailable')
+  }
+  const owner = ownedSessionBackendForAction(
+    cfg.dirs.sessions,
+    cfg.sessions.prefix,
+    name,
+  )
+  if (owner?.state !== 'persisted') {
+    throw new Error('backend ownership unavailable')
+  }
+
+  const token = owner.token
+  const state = await tmuxBackend.getTmuxSessionState(cfg, name)
+  const current = sessionBackendOwners.get(`session:${name}`)
+  if (
+    current !== owner
+    || current.token !== token
+    || current.state !== 'persisted'
+    || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
+  ) {
+    throw new Error('backend ownership changed during reconciliation')
+  }
+  return { state, generation: token }
+}
+
+export function invalidatePersistedSessionBackendGenerationForConfig(
+  cfg: TinstarConfig,
+  name: string,
+  expectedGeneration: string,
+): boolean {
+  const owner = sessionBackendOwners.get(`session:${name}`)
+  if (
+    !owner
+    || owner.sessionsDir !== resolve(cfg.dirs.sessions)
+    || owner.sessionName !== name
+    || owner.state !== 'persisted'
+    || owner.token !== expectedGeneration
+  ) return false
+  owner.token = randomUUID()
+  return true
 }
 
 function beginSessionBackendOperation(
@@ -1023,8 +1201,19 @@ function beginSessionBackendOperation(
     || getSession(sessionsDir, name)?.state === 'creating'
   ) return null
   const owner = ownedSessionBackendForAction(sessionsDir, prefix, name)
-  if (owner?.state !== 'persisted' || owner.activeLeases > 0) return null
+  if (
+    !owner
+    || owner.activeLeases > 0
+    || (
+      owner.state !== 'persisted'
+      && !(operation === 'stopping' && owner.state === 'orphaned')
+    )
+  ) return null
   owner.state = operation
+  // Each lifecycle transition is a new observable backend generation. A
+  // non-blocking reconciliation probe that spans a complete stop/start cycle
+  // must fail its postcheck instead of applying stale liveness to the new run.
+  owner.token = randomUUID()
   return owner.token
 }
 
@@ -1354,8 +1543,15 @@ async function createReservedSession(
     })
     sessionPort = result.port
     updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    const ttydGeneration = currentSessionBackendGeneration(sessDir, name)
     tmuxBackend.onTtydRestart(name, (newPid) => {
-      updateSession(sessDir, name, { ttydPid: newPid })
+      persistTtydRestartForSessionIncarnation(
+        sessDir,
+        name,
+        enriched.created,
+        ttydGeneration,
+        newPid,
+      )
     })
   } catch (err) {
     const backendCleanupConfirmed = await rollbackFailedSessionProvisioning({
@@ -2042,8 +2238,6 @@ export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalR
         },
       }
     }
-    if (existing.port) tmuxBackend.releasePort(existing.port)
-
     let recordDeleted = deleteSession(sessDir, MARSHAL_NAME)
     if (!recordDeleted) {
       // Disk dir didn't go away — wait briefly then try once more so the
@@ -2065,6 +2259,7 @@ export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalR
         },
       }
     }
+    if (existing.port) tmuxBackend.releasePort(existing.port)
     releasePersistedSessionBackendOwner(
       sessDir,
       MARSHAL_NAME,
@@ -4931,19 +5126,28 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
-        getTmuxSessionState: async (name) => {
-          const lease = acquirePersistedSessionBackendLease(ctx, name)
-          if (!lease) throw new Error('backend ownership unavailable')
-          try {
-            return await tmuxBackend.getTmuxSessionState(cfg, name)
-          } finally {
-            lease.release()
-          }
-        },
+        // Listing is observational: it verifies the generation before and
+        // after the probe but never takes a lease that can reject a concurrent
+        // user start/stop/delete operation.
+        getTmuxSessionState: name =>
+          probePersistedSessionBackendForReconcile(cfg, name),
+        beforeStateChanged: (name, _state, observation) =>
+          invalidatePersistedSessionBackendGenerationForConfig(
+            cfg,
+            name,
+            observation.generation,
+          ),
         onStateChanged: (name, state) => {
+          if (state === 'stopped') {
+            clearStoppedSessionPort(cfg, ctx.docStore, name)
+          }
           emitSessionEvent('managed_session.state_changed', { name, state })
         },
-      }).then(sessions => ok(res, sessions))
+      })
+        // Re-read after the observational probes so a concurrent stop/delete
+        // cannot leak the pre-operation snapshot into the response.
+        .then(() => listSessions(sessDir))
+        .then(sessions => ok(res, sessions))
         .catch(err => fail(res, 'LIST_FAILED', (err as Error).message))
       return true
     }
@@ -4955,7 +5159,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
-        if (!session) {
+        if (
+          !session
+          || existsSync(join(sessDir, name, '.deleting'))
+        ) {
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
         } else {
           ok(res, session)
@@ -5261,14 +5468,61 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             } catch (err) {
               log.warn('stop', `${session.name}: provider resolution failed during teardown: ${(err as Error).message}`)
             }
-            await tmuxBackend.stopTmuxSession(cfg, session)
-            if (session.port) tmuxBackend.releasePort(session.port)
+            let stopError: Error | null = null
+            try {
+              await tmuxBackend.stopTmuxSession(cfg, session)
+            } catch (err) {
+              stopError = err as Error
+              log.warn(
+                'stop',
+                `${session.name}: backend stop failed: ${stopError.message}`,
+              )
+            }
 
+            let backendCleanupConfirmed = false
+            try {
+              backendCleanupConfirmed =
+                await tmuxBackend.getTmuxSessionState(cfg, session.name) === 'missing'
+            } catch (err) {
+              log.warn(
+                'stop',
+                `${session.name}: could not verify backend teardown: ${(err as Error).message}`,
+              )
+            }
+            if (!backendCleanupConfirmed) {
+              markSessionBackendOwnerOrphaned(
+                sessDir,
+                session.name,
+                operationToken,
+              )
+              return fail(
+                res,
+                'INTERNAL',
+                stopError?.message
+                  ?? `Session '${session.name}' backend teardown could not be confirmed`,
+              )
+            }
+            if (stopError) {
+              log.warn(
+                'stop',
+                `${session.name}: treating failed stop as complete after confirming backend absence`,
+              )
+            }
             // Clear port/ttydPid so a later start re-allocates a fresh port via
             // findPort(). Leaving stale values here causes the proxy /s/{name}
             // to route to whichever ttyd later wins port 8703, and lets two
             // managed-ttyd auto-restart handlers war over the same port.
-            updateSession(sessDir, session.name, { port: null, ttydPid: null })
+            const clearedSession = updateSession(
+              sessDir,
+              session.name,
+              { port: null, ttydPid: null },
+            )
+            if (!clearedSession) {
+              throw new Error(
+                `Session '${session.name}' disappeared while persisting stopped state`,
+              )
+            }
+            if (session.port) tmuxBackend.releasePort(session.port)
             const run = ctx.docStore.getRun(session.name)
             if (run) ctx.docStore.upsertRun(session.name, { ...run, port: null })
 
@@ -5421,8 +5675,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 throw err
               }
               updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+              const ttydGeneration = currentSessionBackendGeneration(
+                sessDir,
+                session.name,
+              )
               tmuxBackend.onTtydRestart(session.name, (newPid) => {
-                updateSession(sessDir, session.name, { ttydPid: newPid })
+                persistTtydRestartForSessionIncarnation(
+                  sessDir,
+                  session.name,
+                  session.created,
+                  ttydGeneration,
+                  newPid,
+                )
               })
 
             // Re-read session to get updated port
@@ -5517,15 +5781,77 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'DELETE' && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
+        const deletingMarkerExists = existsSync(join(sessDir, name, '.deleting'))
+        const storedSession = getSession(sessDir, name)
+        if (!storedSession && !deletingMarkerExists) {
+          const backendIdentityInUse = sessionBackendOwnershipKeys(
+            cfg.sessions.prefix,
+            name,
+          ).some(key => liveSessionBackendOwner(key) !== undefined)
+          if (backendIdentityInUse) {
+            return fail(
+              res,
+              'CONFLICT',
+              `Session '${name}' has an active process-wide backend identity`,
+            )
+          }
+          // Simulator and plugin-created runs can intentionally exist without
+          // a managed terminal record. They have no backend identity to fence,
+          // but deleting their canvas run must still clear every shared live
+          // projection. A truly unknown name remains a 404.
+          const docstoreOnlyRun = ctx.docStore.getRun(name)
+            ?? ctx.docStore.getAllRuns().find(run => run.sessionId === name)
+          if (!docstoreOnlyRun) {
+            return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          }
+          ctx.docStore.deleteRun(name)
+          unregisterSaloonSubs(ctx.natsTraffic, name)
+          ctx.natsHealth?.untrackSession(name)
+          emitSessionEvent('managed_session.deleted', { name })
+          ctx.readyQueue.onDelete(name)
+          ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+          ctx.sse.broadcastReadyQueueUpdate()
+          ok(res, null)
+          return true
+        }
+        // A crash can leave the durable marker while session.json is partial
+        // or unreadable. Backend teardown only needs the exact session name;
+        // the synthetic record keeps that recovery path available.
+        const session = storedSession ?? {
+          name,
+          backend: 'tmux',
+          state: 'stopped',
+          project: null,
+          workspace: {
+            path: null,
+            worktree: false,
+            branch: null,
+            basePath: null,
+          },
+          conversation: { id: null },
+          profile: null,
+          oneshot: false,
+          skipPermissions: true,
+          background: false,
+          blocked: false,
+          cliTemplate: null,
+          adapter: null,
+          nats: null,
+          port: tmuxBackend.managedTtydPort(name),
+          ttydPid: null,
+          natsControlOrphanedAt: null,
+          appendSystemPrompt: null,
+          agent: null,
+          modelOverride: null,
+          created: new Date().toISOString(),
+          lastActive: new Date().toISOString(),
+        } satisfies Session
         const backendOwner = ownedSessionBackendForAction(
           sessDir,
           cfg.sessions.prefix,
           name,
         )
         if (!backendOwner) {
-          if (getSession(sessDir, name) === null) {
-            return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
-          }
           return fail(
             res,
             'CONFLICT',
@@ -5557,10 +5883,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           )
         }
         const deletionOwnerToken = backendOwner.token
-        const session = getSession(sessDir, name)
 
         // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
-        if (session && !persistSessionDeletionMarker(sessDir, name)) {
+        if (!persistSessionDeletionMarker(sessDir, name)) {
           return fail(
             res,
             'INTERNAL',
@@ -5699,7 +6024,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             )
             return
           }
-          if (session?.port) tmuxBackend.releasePort(session.port)
 
           // Remove session dir AFTER backend cleanup (bind mounts released).
           const recordDeleted = deleteSession(sessDir, name)
@@ -5708,6 +6032,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             setTimeout(() => {
               const retryDeleted = deleteSession(sessDir, name)
               if (retryDeleted) {
+                if (session.port) tmuxBackend.releasePort(session.port)
                 releasePersistedSessionBackendOwner(
                   sessDir,
                   name,
@@ -5722,6 +6047,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
             }, 2000)
           } else {
+            if (session.port) tmuxBackend.releasePort(session.port)
             releasePersistedSessionBackendOwner(
               sessDir,
               name,
@@ -5886,7 +6212,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
                 })
                 updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
-                tmuxBackend.onTtydRestart(name, (pid) => updateSession(sessDir, name, { ttydPid: pid }))
+                const ttydGeneration = currentSessionBackendGeneration(
+                  sessDir,
+                  name,
+                )
+                tmuxBackend.onTtydRestart(name, (pid) => {
+                  persistTtydRestartForSessionIncarnation(
+                    sessDir,
+                    name,
+                    session.created,
+                    ttydGeneration,
+                    pid,
+                  )
+                })
                 setState(sessDir, name, 'running')
                 const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
                 ctx.docStore.upsertRun(name, {
@@ -6541,8 +6879,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         })
         const sessionPort = result.port
         updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
+        const ttydGeneration = currentSessionBackendGeneration(
+          sessDir,
+          spawnedName,
+        )
         tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
-          updateSession(sessDir, spawnedName, { ttydPid: newPid })
+          persistTtydRestartForSessionIncarnation(
+            sessDir,
+            spawnedName,
+            enriched.created,
+            ttydGeneration,
+            newPid,
+          )
         })
 
         emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })

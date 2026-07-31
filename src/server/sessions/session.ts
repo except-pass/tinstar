@@ -277,18 +277,37 @@ export async function listSessions(sessionsDir: string): Promise<Session[]> {
   const sessions: Session[] = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    if (existsSync(join(sessionsDir, entry.name, '.deleting'))) continue
+    const deletingMarker = join(sessionsDir, entry.name, '.deleting')
+    if (existsSync(deletingMarker)) continue
     const session = getSession(sessionsDir, entry.name)
     if (session) {
+      const observedCreated = session.created
+      const observedWorkspacePath = session.workspace?.path ?? null
+      let observedBranch: string | null | undefined
+      let observedWorkspaceMissing = false
       if (session.workspace?.path) {
         if (!existsSync(session.workspace.path)) {
-          session.workspace.path = null
-          session.workspace.branch = null
+          observedWorkspaceMissing = true
         } else {
-          session.workspace.branch = await detectBranch(session.workspace.path)
+          observedBranch = await detectBranch(session.workspace.path)
         }
       }
-      sessions.push(session)
+
+      // Branch detection yields to git. A stop, delete, or same-name
+      // replacement can complete while it is in flight, so never return the
+      // object read before that await.
+      if (existsSync(deletingMarker)) continue
+      const current = getSession(sessionsDir, entry.name)
+      if (!current || current.created !== observedCreated) continue
+      if ((current.workspace?.path ?? null) === observedWorkspacePath) {
+        if (observedWorkspaceMissing) {
+          current.workspace.path = null
+          current.workspace.branch = null
+        } else if (observedBranch !== undefined) {
+          current.workspace.branch = observedBranch
+        }
+      }
+      sessions.push(current)
     }
   }
   return sessions

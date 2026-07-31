@@ -1,8 +1,30 @@
 
 import { listSessions, setState, type Session, type SessionState } from './session'
 
+export interface TmuxSessionObservation {
+  state: 'exists' | 'missing'
+  generation: string
+}
+
 export interface ReconcileOpts {
-  getTmuxSessionState: (sessionName: string) => Promise<'exists' | 'missing'>
+  getTmuxSessionState: (
+    sessionName: string,
+  ) => Promise<TmuxSessionObservation>
+  /** Called only when a backend probe completed with a definite answer. */
+  onTmuxSessionStateObserved?: (
+    name: string,
+    observation: TmuxSessionObservation,
+  ) => void
+  /**
+   * Compare-and-swap guard before committing a corrected state. Return false
+   * when ownership changed after the probe so reconciliation drops its stale
+   * result instead of overwriting the new lifecycle.
+   */
+  beforeStateChanged?: (
+    name: string,
+    state: SessionState,
+    observation: TmuxSessionObservation,
+  ) => boolean
   onStateChanged?: (name: string, state: SessionState) => void
 }
 
@@ -28,9 +50,11 @@ export async function reconcileSessionStates(
     }
 
     let newState: SessionState | null = null
+    let observation: TmuxSessionObservation | null = null
     try {
-      const tmuxState = await opts.getTmuxSessionState(session.name)
-      if (tmuxState === 'exists') {
+      observation = await opts.getTmuxSessionState(session.name)
+      opts.onTmuxSessionStateObserved?.(session.name, observation)
+      if (observation.state === 'exists') {
         // Tmux alive
       } else if (session.state === 'running' || session.state === 'idle' || session.state === 'needs_attention') {
         newState = 'stopped'
@@ -39,7 +63,14 @@ export async function reconcileSessionStates(
       // If we can't check, assume current state is fine
     }
 
-    if (newState) {
+    if (newState && observation) {
+      if (
+        opts.beforeStateChanged
+        && !opts.beforeStateChanged(session.name, newState, observation)
+      ) {
+        updated.push(session)
+        continue
+      }
       setState(sessionsDir, session.name, newState)
       session.state = newState
       if (opts.onStateChanged) opts.onStateChanged(session.name, newState)

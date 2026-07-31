@@ -143,6 +143,58 @@ export async function tmuxHasSession(tmuxName: string): Promise<boolean> {
   }
 }
 
+/** Return true only for tmux's known, ordinary "session is absent" failures. */
+export function isOrdinaryTmuxSessionMiss(
+  error: unknown,
+  stderr: string | Buffer | undefined,
+): boolean {
+  const failure = error as {
+    code?: string | number
+    killed?: boolean
+    signal?: NodeJS.Signals | string | null
+  }
+  if (
+    (failure.code !== 1 && failure.code !== '1')
+    || failure.killed === true
+    || failure.signal != null
+  ) {
+    return false
+  }
+
+  const message = (
+    typeof stderr === 'string' ? stderr : stderr?.toString('utf8') ?? ''
+  ).trim()
+  return (
+    /^can't find session:.*$/i.test(message)
+    || /^no server running on.*$/i.test(message)
+  )
+}
+
+/**
+ * Probe tmux without collapsing transport/process failures into "not found".
+ *
+ * `tmux has-session` uses exit 1 for a normal miss. Spawn failures, timeouts,
+ * and signals mean we could not establish backend absence and must propagate
+ * so lifecycle cleanup retains its durable recovery evidence.
+ */
+export async function tmuxHasSessionStrict(tmuxName: string): Promise<boolean> {
+  try {
+    await execFileAsync('tmux', ['has-session', '-t', exactTmuxSessionTarget(tmuxName)])
+    return true
+  } catch (err) {
+    const failure = err as {
+      code?: string | number
+      killed?: boolean
+      signal?: NodeJS.Signals | null
+      stderr?: string | Buffer
+    }
+    if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) {
+      return false
+    }
+    throw err
+  }
+}
+
 /**
  * Poll tmux pane for dev channel warning and auto-accept it.
  * More robust than fixed timeout - waits for the actual prompt to appear.
@@ -986,7 +1038,7 @@ export async function captureScreen(
 
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
   const tmuxName = tmuxSessionName(config, sessionName)
-  const exists = await tmuxHasSession(tmuxName)
+  const exists = await tmuxHasSessionStrict(tmuxName)
   return exists ? 'exists' : 'missing'
 }
 
@@ -1348,6 +1400,10 @@ export function stopManagedTtyd(sessionName: string, opts: { resetHistory?: bool
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {
   const entry = managedTtyd.get(sessionName)
   if (entry) entry.onRestart = callback
+}
+
+export function managedTtydPort(sessionName: string): number | null {
+  return managedTtyd.get(sessionName)?.port ?? null
 }
 
 /**

@@ -23,6 +23,9 @@ const proc = vi.hoisted(() => ({
   hasChildren: false,
   childError: false,
   paneTimeout: false,
+  paneFailure: null as null | 'missing' | 'permission' | 'enoent',
+  deferPane: false,
+  finishPane: null as null | (() => void),
   calls: 0,
   tmuxArgs: [] as string[],
 }))
@@ -39,12 +42,41 @@ vi.mock('node:child_process', async (importOriginal) => {
       proc.calls++
       if (cmd === 'tmux') {
         proc.tmuxArgs = args
+        if (proc.deferPane) {
+          proc.finishPane = () => cb(
+            Object.assign(new Error('missing tmux pane'), { code: 1 }),
+            '',
+            'can\'t find session: tinstar-delayed',
+          )
+          return
+        }
         if (proc.paneTimeout) {
           return cb(
             Object.assign(new Error('tmux probe timed out'), {
               killed: true,
               signal: 'SIGTERM',
             }),
+            '',
+            '',
+          )
+        }
+        if (proc.paneFailure === 'missing') {
+          return cb(
+            Object.assign(new Error('missing tmux pane'), { code: 1 }),
+            '',
+            'can\'t find session: tinstar-missing',
+          )
+        }
+        if (proc.paneFailure === 'permission') {
+          return cb(
+            Object.assign(new Error('tmux permission denied'), { code: 1 }),
+            '',
+            'error connecting to /tmp/tmux-1000/default (Permission denied)',
+          )
+        }
+        if (proc.paneFailure === 'enoent') {
+          return cb(
+            Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' }),
             '',
             '',
           )
@@ -115,6 +147,9 @@ beforeEach(() => {
   proc.hasChildren = false
   proc.childError = false
   proc.paneTimeout = false
+  proc.paneFailure = null
+  proc.deferPane = false
+  proc.finishPane = null
   proc.calls = 0
   proc.tmuxArgs = []
 })
@@ -136,6 +171,56 @@ describe('StatusWatcher blocked signal — override added', () => {
     proc.paneTimeout = true
 
     await internals(watcher).checkProcessTree(session)
+
+    expect(getSession(sessionsDir, session.name)?.state).toBe('running')
+    expect(onStatusChanged).not.toHaveBeenCalled()
+  })
+
+  it.each(['permission', 'enoent'] as const)(
+    'treats a %s pane probe failure as inconclusive',
+    async (failure) => {
+      const session = makeSession(`pane-${failure}`, 'running')
+      proc.paneFailure = failure
+
+      await internals(watcher).checkProcessTree(session)
+
+      expect(getSession(sessionsDir, session.name)?.state).toBe('running')
+      expect(onStatusChanged).not.toHaveBeenCalled()
+    },
+  )
+
+  it('marks stopped only when tmux reports an ordinary missing target', async () => {
+    const session = makeSession('pane-missing', 'running')
+    proc.paneFailure = 'missing'
+
+    await internals(watcher).checkProcessTree(session)
+
+    expect(getSession(sessionsDir, session.name)?.state).toBe('stopped')
+    expect(onStatusChanged).toHaveBeenCalledWith(
+      session.name,
+      'stopped',
+      false,
+    )
+  })
+
+  it('does not apply a delayed pane miss to a newer backend generation', async () => {
+    const session = makeSession('pane-generation', 'running')
+    let generation = 'generation-1'
+    watcher = new StatusWatcher({
+      sessionsDir,
+      onStatusChanged,
+      onRecapEntries,
+      captureBackendGeneration: () => generation,
+      isBackendGenerationCurrent: (_name, captured) =>
+        captured === generation,
+    })
+    proc.deferPane = true
+
+    const checking = internals(watcher).checkProcessTree(session)
+    await vi.waitFor(() => expect(proc.finishPane).not.toBeNull())
+    generation = 'generation-2'
+    proc.finishPane!()
+    await checking
 
     expect(getSession(sessionsDir, session.name)?.state).toBe('running')
     expect(onStatusChanged).not.toHaveBeenCalled()

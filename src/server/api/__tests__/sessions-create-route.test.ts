@@ -18,6 +18,8 @@ const {
   stopTmuxSessionMock,
   sendPromptMock,
   getTmuxSessionStateMock,
+  managedTtydPortMock,
+  onTtydRestartMock,
   createWorktreeMock,
   dispatchSurfaceAuthorMock,
 } = vi.hoisted(() => ({
@@ -30,6 +32,8 @@ const {
   getTmuxSessionStateMock: vi.fn(
     async (): Promise<'exists' | 'missing'> => 'missing',
   ),
+  managedTtydPortMock: vi.fn((): number | null => null),
+  onTtydRestartMock: vi.fn(),
   createWorktreeMock: vi.fn(),
   dispatchSurfaceAuthorMock: vi.fn(() => ({ dispatched: false })),
 }))
@@ -49,7 +53,8 @@ vi.mock('../../sessions', async (importActual) => {
       deleteTmuxSession: stopTmuxSessionMock,
       sendPrompt: sendPromptMock,
       getTmuxSessionState: getTmuxSessionStateMock,
-      onTtydRestart: vi.fn(),
+      managedTtydPort: managedTtydPortMock,
+      onTtydRestart: onTtydRestartMock,
     },
   }
 })
@@ -74,11 +79,23 @@ vi.mock('../../sessions/surfaceAuthor', () => ({
 }))
 
 import {
+  acquirePersistedSessionBackendLeaseForConfig,
+  finishBootSessionDeletion,
   handleRequest,
+  persistedSessionBackendGenerationForConfig,
+  persistTtydRestartForSessionIncarnation,
+  reserveBootSessionDeletion,
   resetSessionBackendOwnersForTests,
   type RouteContext,
 } from '../routes'
-import { createSession, createWorktree, getSession, updateSession } from '../../sessions'
+import {
+  createSession,
+  createWorktree,
+  deleteSession,
+  getSession,
+  setState,
+  updateSession,
+} from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
 import type { Notice, Run } from '../../../domain/types'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
@@ -233,6 +250,9 @@ beforeEach(() => {
   sendPromptMock.mockClear()
   getTmuxSessionStateMock.mockClear()
   getTmuxSessionStateMock.mockResolvedValue('missing')
+  managedTtydPortMock.mockReset()
+  managedTtydPortMock.mockReturnValue(null)
+  onTtydRestartMock.mockClear()
   createWorktreeMock.mockClear()
   dispatchSurfaceAuthorMock.mockClear()
   dispatchSurfaceAuthorMock.mockReturnValue({ dispatched: false })
@@ -617,6 +637,18 @@ describe('POST /api/sessions', () => {
       method: 'DELETE',
     })).status).toBe(200)
     await vi.waitFor(() => expect(stopTmuxSessionMock).toHaveBeenCalled())
+
+    const listedWhileDeleting = await testCtx.fetch('/api/sessions')
+    expect(listedWhileDeleting.status).toBe(200)
+    expect(
+      ((await listedWhileDeleting.json()) as {
+        data: Array<{ name: string }>
+      }).data.some(session => session.name === 'delete-start-race'),
+    ).toBe(false)
+    expect(
+      (await testCtx.fetch('/api/sessions/delete-start-race')).status,
+    ).toBe(404)
+
     startTmuxSessionMock.mockClear()
 
     const start = await testCtx.fetch('/api/sessions/delete-start-race/start', {
@@ -896,6 +928,44 @@ describe('POST /api/sessions', () => {
     })).status).toBe(201)
   })
 
+  it('rejects docstore-only deletion while the same backend identity is being created', async () => {
+    const name = 'inflight-docstore-delete'
+    const repo = join(tmpRoot, 'proj')
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+    testCtx.docStore.upsertRun(name, {
+      id: name,
+      sessionId: name,
+      status: 'running',
+      port: null,
+      backend: null,
+    } as Run)
+    let finishWorktree!: () => void
+    createWorktreeMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        finishWorktree = () => resolve({
+          path: join(`${repo}-worktrees`, name),
+          created: false,
+        })
+      }),
+    )
+
+    const creating = testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name, project: 'proj', worktree: true }),
+    })
+    await vi.waitFor(() => expect(createWorktreeMock).toHaveBeenCalled())
+    expect(getSession(join(tmpRoot, 'sessions'), name)).toBeNull()
+
+    expect((await testCtx.fetch(`/api/sessions/${name}`, {
+      method: 'DELETE',
+    })).status).toBe(409)
+    expect(testCtx.docStore.getRun(name)).toBeDefined()
+
+    finishWorktree()
+    expect((await creating).status).toBe(201)
+  })
+
   it('preserves session state when reconciliation observes a busy backend owner', async () => {
     expect((await testCtx.fetch('/api/sessions', {
       method: 'POST',
@@ -923,6 +993,91 @@ describe('POST /api/sessions', () => {
 
     finishStop()
     expect((await stopping).status).toBe(200)
+  })
+
+  it('does not let read-only reconciliation block a user stop', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'reconcile-stop' }),
+    })).status).toBe(201)
+    let finishProbe!: (state: 'exists' | 'missing') => void
+    getTmuxSessionStateMock.mockImplementationOnce(
+      () => new Promise<'exists' | 'missing'>(resolve => {
+        finishProbe = resolve
+      }),
+    )
+
+    const listing = testCtx.fetch('/api/sessions')
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+
+    const stopped = await testCtx.fetch('/api/sessions/reconcile-stop/stop', {
+      method: 'POST',
+    })
+    expect(stopped.status).toBe(200)
+
+    finishProbe('exists')
+    const listed = await listing
+    expect(listed.status).toBe(200)
+    const sessions = (await listed.json()) as { data: Array<{ name: string; state: string }> }
+    expect(sessions.data.find(session => session.name === 'reconcile-stop')).toMatchObject({
+      state: 'stopped',
+    })
+  })
+
+  it('omits a session deleted while read-only reconciliation is pending', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'reconcile-delete' }),
+    })).status).toBe(201)
+    let finishProbe!: (state: 'exists' | 'missing') => void
+    getTmuxSessionStateMock.mockImplementationOnce(
+      () => new Promise<'exists' | 'missing'>(resolve => {
+        finishProbe = resolve
+      }),
+    )
+
+    const listing = testCtx.fetch('/api/sessions')
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+    expect((await testCtx.fetch('/api/sessions/reconcile-delete', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() =>
+      expect(getSession(join(tmpRoot, 'sessions'), 'reconcile-delete')).toBeNull())
+
+    finishProbe('exists')
+    const listed = await listing
+    const sessions = (await listed.json()) as { data: Array<{ name: string }> }
+    expect(sessions.data.some(session => session.name === 'reconcile-delete')).toBe(false)
+  })
+
+  it('does not apply a missing probe across a complete stop and start generation', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'reconcile-restart' }),
+    })).status).toBe(201)
+    let finishProbe!: (state: 'exists' | 'missing') => void
+    getTmuxSessionStateMock.mockImplementationOnce(
+      () => new Promise<'exists' | 'missing'>(resolve => {
+        finishProbe = resolve
+      }),
+    )
+
+    const listing = testCtx.fetch('/api/sessions')
+    await vi.waitFor(() => expect(getTmuxSessionStateMock).toHaveBeenCalled())
+    expect((await testCtx.fetch('/api/sessions/reconcile-restart/stop', {
+      method: 'POST',
+    })).status).toBe(200)
+    expect((await testCtx.fetch('/api/sessions/reconcile-restart/start', {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(200)
+
+    finishProbe('missing')
+    const listed = await listing
+    const sessions = (await listed.json()) as { data: Array<{ name: string; state: string }> }
+    expect(sessions.data.find(session => session.name === 'reconcile-restart')).toMatchObject({
+      state: 'running',
+    })
   })
 
   it('rejects start and stop for a partially deleted session after owner reset', async () => {
@@ -955,6 +1110,194 @@ describe('POST /api/sessions', () => {
     await vi.waitFor(() => {
       expect(getSession(sessionsDir, 'restart-mid-delete')).toBeNull()
     })
+  })
+
+  it('fences HTTP delete and recreate while boot owns deletion cleanup', async () => {
+    const sessionsDir = join(tmpRoot, 'sessions')
+    createSession(sessionsDir, {
+      name: 'boot-delete-fence',
+      backend: 'tmux',
+    })
+    writeFileSync(join(sessionsDir, 'boot-delete-fence', '.deleting'), '')
+    const token = reserveBootSessionDeletion(
+      sessionsDir,
+      'tinstar',
+      'boot-delete-fence',
+    )
+    expect(token).not.toBeNull()
+
+    expect((await testCtx.fetch('/api/sessions/boot-delete-fence', {
+      method: 'DELETE',
+    })).status).toBe(409)
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'boot-delete-fence' }),
+    })).status).toBe(409)
+
+    expect(deleteSession(sessionsDir, 'boot-delete-fence')).toBe(true)
+    finishBootSessionDeletion(
+      sessionsDir,
+      'boot-delete-fence',
+      token!,
+      'deleted',
+    )
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'boot-delete-fence' }),
+    })).status).toBe(201)
+  })
+
+  it('fences lifecycle mutation while startup reattach holds its generation lease', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'startup-reattach' }),
+    })).status).toBe(201)
+    const lease = acquirePersistedSessionBackendLeaseForConfig(
+      testCtx.routeContext.sessionConfig!,
+      'startup-reattach',
+    )
+    expect(lease).not.toBeNull()
+
+    expect((await testCtx.fetch('/api/sessions/startup-reattach', {
+      method: 'DELETE',
+    })).status).toBe(409)
+    expect((await testCtx.fetch('/api/sessions/startup-reattach/stop', {
+      method: 'POST',
+    })).status).toBe(409)
+
+    lease!.release()
+    expect((await testCtx.fetch('/api/sessions/startup-reattach', {
+      method: 'DELETE',
+    })).status).toBe(200)
+  })
+
+  it('ignores a stale ttyd restart callback after same-name replacement', () => {
+    const sessionsDir = join(tmpRoot, 'sessions')
+    createSession(sessionsDir, {
+      name: 'ttyd-incarnation',
+      backend: 'tmux',
+    })
+    updateSession(sessionsDir, 'ttyd-incarnation', {
+      created: '2026-07-30T00:00:00.000Z',
+    })
+    const oldCreated = getSession(sessionsDir, 'ttyd-incarnation')!.created
+    setState(sessionsDir, 'ttyd-incarnation', 'running')
+    const oldGeneration = persistedSessionBackendGenerationForConfig(
+      testCtx.routeContext.sessionConfig!,
+      'ttyd-incarnation',
+    )
+    expect(deleteSession(sessionsDir, 'ttyd-incarnation')).toBe(true)
+    createSession(sessionsDir, {
+      name: 'ttyd-incarnation',
+      backend: 'tmux',
+    })
+    updateSession(sessionsDir, 'ttyd-incarnation', {
+      created: '2026-07-31T00:00:00.000Z',
+      ttydPid: null,
+    })
+
+    expect(persistTtydRestartForSessionIncarnation(
+      sessionsDir,
+      'ttyd-incarnation',
+      oldCreated,
+      oldGeneration,
+      9999,
+    )).toBe(false)
+    expect(getSession(sessionsDir, 'ttyd-incarnation')?.ttydPid).toBeNull()
+  })
+
+  it('ignores an old ttyd restart callback across stop and stop-start', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'ttyd-lifecycle' }),
+    })).status).toBe(201)
+    const oldCallback = onTtydRestartMock.mock.calls.at(-1)?.[1] as
+      | ((pid: number) => void)
+      | undefined
+    expect(oldCallback).toBeTypeOf('function')
+
+    expect((await testCtx.fetch('/api/sessions/ttyd-lifecycle/stop', {
+      method: 'POST',
+    })).status).toBe(200)
+    oldCallback!(9001)
+    expect(
+      getSession(join(tmpRoot, 'sessions'), 'ttyd-lifecycle')?.ttydPid,
+    ).toBeNull()
+
+    expect((await testCtx.fetch('/api/sessions/ttyd-lifecycle/start', {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(200)
+    const currentCallback = onTtydRestartMock.mock.calls.at(-1)?.[1] as
+      | ((pid: number) => void)
+      | undefined
+    oldCallback!(9002)
+    expect(
+      getSession(join(tmpRoot, 'sessions'), 'ttyd-lifecycle')?.ttydPid,
+    ).toBe(4242)
+
+    currentCallback!(9003)
+    expect(
+      getSession(join(tmpRoot, 'sessions'), 'ttyd-lifecycle')?.ttydPid,
+    ).toBe(9003)
+  })
+
+  it('invalidates stale probes when reconciliation commits stopped', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'reconcile-generation' }),
+    })).status).toBe(201)
+    const cfg = testCtx.routeContext.sessionConfig!
+    const oldGeneration = persistedSessionBackendGenerationForConfig(
+      cfg,
+      'reconcile-generation',
+    )
+    const lease = acquirePersistedSessionBackendLeaseForConfig(
+      cfg,
+      'reconcile-generation',
+      oldGeneration!,
+    )
+    expect(lease).not.toBeNull()
+
+    const listed = await testCtx.fetch('/api/sessions')
+    expect(listed.status).toBe(200)
+    expect(
+      getSession(join(tmpRoot, 'sessions'), 'reconcile-generation')?.state,
+    ).toBe('stopped')
+    expect(
+      persistedSessionBackendGenerationForConfig(cfg, 'reconcile-generation'),
+    ).not.toBe(oldGeneration)
+
+    lease!.release()
+    expect((await testCtx.fetch('/api/sessions/reconcile-generation/start', {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(200)
+  })
+
+  it('retries marked deletion even when the durable session record is unreadable', async () => {
+    const sessionsDir = join(tmpRoot, 'sessions')
+    createSession(sessionsDir, {
+      name: 'unreadable-delete',
+      backend: 'tmux',
+    })
+    writeFileSync(join(sessionsDir, 'unreadable-delete', '.deleting'), '')
+    writeFileSync(join(sessionsDir, 'unreadable-delete', 'session.json'), '{')
+    resetSessionBackendOwnersForTests()
+    stopTmuxSessionMock.mockClear()
+    releasePortMock.mockClear()
+    managedTtydPortMock.mockReturnValueOnce(6123)
+
+    expect((await testCtx.fetch('/api/sessions/unreadable-delete', {
+      method: 'DELETE',
+    })).status).toBe(200)
+    await vi.waitFor(() => expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'unreadable-delete' }),
+    ))
+    await vi.waitFor(() =>
+      expect(existsSync(join(sessionsDir, 'unreadable-delete'))).toBe(false))
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
   })
 
   it('keeps in-flight backend names process-wide across config roots', async () => {
@@ -1717,6 +2060,82 @@ describe('POST /api/sessions', () => {
       state: 'stopped',
       port: null,
     })
+  })
+
+  it('retains the port and orphans ownership when stop teardown is unconfirmed', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'uncertain-stop' }),
+    })).status).toBe(201)
+    stopTmuxSessionMock.mockRejectedValueOnce(new Error('stop failed'))
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+    releasePortMock.mockClear()
+
+    const stopped = await testCtx.fetch('/api/sessions/uncertain-stop/stop', {
+      method: 'POST',
+    })
+
+    expect(stopped.status).toBe(500)
+    expect(releasePortMock).not.toHaveBeenCalled()
+    expect(getSession(join(tmpRoot, 'sessions'), 'uncertain-stop')).toMatchObject({
+      state: 'running',
+      port: 6123,
+    })
+    expect((await testCtx.fetch('/api/sessions/uncertain-stop/start', {
+      method: 'POST',
+      body: '{}',
+    })).status).toBe(409)
+
+    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
+    expect((await testCtx.fetch('/api/sessions/uncertain-stop/stop', {
+      method: 'POST',
+    })).status).toBe(200)
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'uncertain-stop')).toMatchObject({
+      state: 'stopped',
+      port: null,
+    })
+  })
+
+  it('finishes stop when the command fails but strict probing confirms absence', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'already-gone-stop' }),
+    })).status).toBe(201)
+    stopTmuxSessionMock.mockRejectedValueOnce(new Error('kill raced with exit'))
+    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
+    releasePortMock.mockClear()
+
+    const stopped = await testCtx.fetch('/api/sessions/already-gone-stop/stop', {
+      method: 'POST',
+    })
+
+    expect(stopped.status).toBe(200)
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'already-gone-stop')).toMatchObject({
+      state: 'stopped',
+      port: null,
+    })
+  })
+
+  it('does not release a stopped port until clearing the durable record succeeds', async () => {
+    expect((await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'stop-persist-failure' }),
+    })).status).toBe(201)
+    const sessionsDir = join(tmpRoot, 'sessions')
+    getTmuxSessionStateMock.mockImplementationOnce(async () => {
+      deleteSession(sessionsDir, 'stop-persist-failure')
+      return 'missing'
+    })
+    releasePortMock.mockClear()
+
+    const stopped = await testCtx.fetch('/api/sessions/stop-persist-failure/stop', {
+      method: 'POST',
+    })
+
+    expect(stopped.status).toBe(500)
+    expect(releasePortMock).not.toHaveBeenCalled()
   })
 
   it('creates a session for a capability-light third provider registered at runtime', async () => {
