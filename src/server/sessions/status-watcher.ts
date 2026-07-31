@@ -81,6 +81,8 @@ export class StatusWatcher {
   private readonly transcriptAdapters = new Map<string, ProviderTranscriptAdapter>()
   /** Guards all name-keyed caches against session-name reuse. */
   private readonly sessionIncarnations = new Map<string, string>()
+  /** Rate-limit diagnostics while lifecycle ownership is intentionally fenced. */
+  private readonly backendOwnershipWarnings = new Set<string>()
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
@@ -389,7 +391,17 @@ export class StatusWatcher {
 
   private async checkProcessTree(session: Session): Promise<void> {
     const backendGeneration = this.opts.captureBackendGeneration?.(session.name)
-    if (this.opts.captureBackendGeneration && backendGeneration === null) return
+    if (this.opts.captureBackendGeneration && backendGeneration === null) {
+      if (!this.backendOwnershipWarnings.has(session.name)) {
+        this.backendOwnershipWarnings.add(session.name)
+        log.warn(
+          'status-watcher',
+          `${session.name}: skipping liveness probe while backend ownership is unavailable`,
+        )
+      }
+      return
+    }
+    this.backendOwnershipWarnings.delete(session.name)
     const generationIsCurrent = (): boolean =>
       backendGeneration === undefined
       || backendGeneration === null
@@ -586,6 +598,7 @@ export class StatusWatcher {
       ...this.idleStreak.keys(),
       ...this.processTreeOverride,
       ...this.sessionIncarnations.keys(),
+      ...this.backendOwnershipWarnings,
     ])
     for (const name of knownNames) {
       if (liveNames.has(name)) continue
@@ -637,6 +650,7 @@ export class StatusWatcher {
     this.transcriptDiscoveries.delete(name)
     this.idleStreak.delete(name)
     this.processTreeOverride.delete(name)
+    this.backendOwnershipWarnings.delete(name)
   }
 
   private isPgrepNoMatch(error: Error): boolean {

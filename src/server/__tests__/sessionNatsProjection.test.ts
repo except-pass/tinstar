@@ -6,13 +6,17 @@ import {
   afterBootDeletionCleanups,
   getLiveSessionForBoot,
   reconcileDeletingSessionOnBoot,
+  rehydrateDeletingSessionOnBoot,
   sessionNatsProjection,
   startupReattachStillCurrent,
 } from '../index'
 import {
   clearStoppedSessionPort,
+  finishBootSessionDeletion,
   invalidatePersistedSessionBackendGenerationForConfig,
   persistedSessionBackendGenerationForConfig,
+  reserveBootSessionDeletion,
+  resetSessionBackendOwnersForTests,
 } from '../api/routes'
 import {
   createSession,
@@ -56,6 +60,7 @@ describe('sessionNatsProjection', () => {
 })
 
 afterEach(() => {
+  resetSessionBackendOwnersForTests()
   for (const root of scratchRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true })
   }
@@ -218,6 +223,47 @@ describe('getLiveSessionForBoot', () => {
     expect(getSession(sessionsDir, session.name)).not.toBeNull()
   })
 
+  it('wires a deleting boot record through port claim, cleanup, and owner release', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'tinstar-deleting-boot-wiring-'))
+    scratchRoots.push(root)
+    const sessionsDir = join(root, 'sessions')
+    const config = {
+      dirs: { sessions: sessionsDir },
+      sessions: { prefix: 'tinstar-' },
+    } as TinstarConfig
+    const session = createSession(sessionsDir, {
+      name: 'wired-boot-delete',
+      backend: 'tmux',
+    })
+    updateSession(sessionsDir, session.name, { port: 6123 })
+    writeFileSync(join(sessionsDir, session.name, '.deleting'), '')
+    const claimPort = vi.fn()
+    const releasePort = vi.fn()
+
+    await expect(rehydrateDeletingSessionOnBoot(config, session.name, {
+      claimPort,
+      releasePort,
+      reserveBootSessionDeletion,
+      finishBootSessionDeletion,
+      deleteTmuxSession: vi.fn(async () => undefined),
+      getTmuxSessionState: vi.fn(async () => 'missing' as const),
+      deleteSession,
+    })).resolves.toBe('deleted')
+
+    expect(claimPort).toHaveBeenCalledWith(6123)
+    expect(releasePort).toHaveBeenCalledWith(6123)
+    expect(getSession(sessionsDir, session.name)).toBeNull()
+    // A new reservation proves the boot owner was released rather than left
+    // invisibly fencing this process-wide name.
+    const nextToken = reserveBootSessionDeletion(
+      sessionsDir,
+      config.sessions.prefix,
+      session.name,
+    )
+    expect(nextToken).not.toBeNull()
+    finishBootSessionDeletion(sessionsDir, session.name, nextToken!, 'deleted')
+  })
+
   it('clears a stale claimed port when reconciliation confirms the backend stopped', () => {
     const root = mkdtempSync(join(tmpdir(), 'tinstar-stopped-port-'))
     scratchRoots.push(root)
@@ -298,6 +344,16 @@ describe('getLiveSessionForBoot', () => {
 
     finishCleanup()
     await expect(ensuring).resolves.toBe('ready')
+    expect(ensureMarshal).toHaveBeenCalledTimes(1)
+  })
+
+  it('attempts marshal auto-ensure after a boot cleanup rejects', async () => {
+    const ensureMarshal = vi.fn(async () => 'ready')
+
+    await expect(afterBootDeletionCleanups(
+      [Promise.reject(new Error('cleanup crashed'))],
+      ensureMarshal,
+    )).resolves.toBe('ready')
     expect(ensureMarshal).toHaveBeenCalledTimes(1)
   })
 })

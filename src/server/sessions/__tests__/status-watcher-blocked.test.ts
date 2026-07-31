@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ProviderTranscriptAdapter } from '../../providers/lifecycle'
+import { log } from '../../logger'
 import { StatusWatcher } from '../status-watcher'
 import { createSession, getSession, updateSession, type Session, type SessionState } from '../session'
 
@@ -224,6 +225,28 @@ describe('StatusWatcher blocked signal — override added', () => {
 
     expect(getSession(sessionsDir, session.name)?.state).toBe('running')
     expect(onStatusChanged).not.toHaveBeenCalled()
+  })
+
+  it('warns once while backend ownership is unavailable for liveness', async () => {
+    const session = makeSession('owner-unavailable', 'running')
+    watcher = new StatusWatcher({
+      sessionsDir,
+      onStatusChanged,
+      onRecapEntries,
+      captureBackendGeneration: () => null,
+    })
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+
+    await internals(watcher).checkProcessTree(session)
+    await internals(watcher).checkProcessTree(session)
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      'status-watcher',
+      expect.stringContaining('backend ownership is unavailable'),
+    )
+    expect(proc.tmuxArgs).toEqual([])
+    warn.mockRestore()
   })
 
   it('silent-failure path 1: block beginning while already idle notifies with blocked: true', async () => {

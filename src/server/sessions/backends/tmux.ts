@@ -29,6 +29,7 @@ const rawExecFileAsync = promisify(execFile)
 // that run no tmux commands stay responsive throughout, which is exactly the reported
 // symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
 const TMUX_EXEC_TIMEOUT_MS = 10_000
+const strictProbeWarnings = new Set<string>()
 function execFileAsync(
   file: string,
   args: readonly string[],
@@ -180,6 +181,7 @@ export function isOrdinaryTmuxSessionMiss(
 export async function tmuxHasSessionStrict(tmuxName: string): Promise<boolean> {
   try {
     await execFileAsync('tmux', ['has-session', '-t', exactTmuxSessionTarget(tmuxName)])
+    strictProbeWarnings.delete(tmuxName)
     return true
   } catch (err) {
     const failure = err as {
@@ -189,7 +191,21 @@ export async function tmuxHasSessionStrict(tmuxName: string): Promise<boolean> {
       stderr?: string | Buffer
     }
     if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) {
+      strictProbeWarnings.delete(tmuxName)
       return false
+    }
+    if (!strictProbeWarnings.has(tmuxName)) {
+      strictProbeWarnings.add(tmuxName)
+      const stderr = (
+        typeof failure.stderr === 'string'
+          ? failure.stderr
+          : failure.stderr?.toString('utf8') ?? ''
+      ).trim()
+      log.warn(
+        'tmux',
+        `${tmuxName}: strict liveness probe was inconclusive`
+        + `${stderr ? `: ${stderr}` : `: ${(err as Error).message}`}`,
+      )
     }
     throw err
   }
@@ -978,8 +994,9 @@ export async function stopTmuxSession(
   log.info('tmux', `${session.name}: stopping tmux session`, { target })
   try {
     await execFileAsync('tmux', ['kill-session', '-t', target])
-  } catch {
-    // Already gone
+  } catch (err) {
+    const failure = err as { stderr?: string | Buffer }
+    if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
 }
 
@@ -991,8 +1008,9 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   log.info('tmux', `${session.name}: deleting tmux session`, { target })
   try {
     await execFileAsync('tmux', ['kill-session', '-t', target])
-  } catch {
-    // Already gone
+  } catch (err) {
+    const failure = err as { stderr?: string | Buffer }
+    if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
 }
 
@@ -1001,20 +1019,17 @@ export async function reattachTmuxSession(
   opts: { session: Session; port: number },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
-  claimedPorts.add(opts.port)
+  // The boot rehydration path has already reclaimed persisted ports, while a
+  // freshly allocated port is claimed by findPort(). Do not claim again here:
+  // if the lifecycle becomes stale during this await, the caller must be able
+  // to release its claim without this helper silently recreating it.
 
-  // If ttyd is already running on this port (e.g. another server instance owns it),
-  // adopt it rather than killing and restarting — avoids a kill/restart cycle when
-  // npx tinstar and npm run dev share the same config dir.
-  try {
-    const lsof = execSync(
-      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
-      { encoding: 'utf-8' },
-    ).trim()
-    if (lsof) {
-      return { port: opts.port, ttydPid: Number(lsof.split('\n')[0]) }
-    }
-  } catch { /* no ttyd running — proceed to start */ }
+  // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
+  // any unrelated HTTP listener) must never make this session look healthy.
+  const incumbent = ttydIncumbentsOnPort(opts.port).find(
+    candidate => candidate.tmuxTarget === tmuxName,
+  )
+  if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
 
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
   return { port: opts.port, ttydPid }
@@ -1096,6 +1111,18 @@ export interface TtydIncumbent {
   pid: number
   /** tmux session this ttyd attaches (e.g. "tinstar-foo"), or null if unknown. */
   tmuxTarget: string | null
+}
+
+/** Exact process/target identity required before publishing a terminal port. */
+export function ttydIncumbentMatchesSession(
+  incumbents: readonly TtydIncumbent[],
+  pid: number | undefined,
+  tmuxName: string,
+): boolean {
+  return pid !== undefined
+    && incumbents.some(
+      incumbent => incumbent.pid === pid && incumbent.tmuxTarget === tmuxName,
+    )
 }
 
 /**
@@ -1490,15 +1517,61 @@ async function doSendPrompt(tmuxName: string, prompt: string): Promise<void> {
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {
   const { timeout = 5000, interval = 500 } = opts
-  const start = Date.now()
-  while (Date.now() - start < timeout) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now()
+    const controller = new AbortController()
+    const abortTimer = setTimeout(() => controller.abort(), remaining)
     try {
-      const response = await fetch(`http://localhost:${port}/`)
+      const response = await fetch(
+        `http://localhost:${port}/`,
+        { signal: controller.signal },
+      )
       if (response.ok) return true
     } catch {
       // Not ready yet
+    } finally {
+      clearTimeout(abortTimer)
     }
-    await new Promise(r => setTimeout(r, interval))
+    const delay = Math.min(interval, Math.max(0, deadline - Date.now()))
+    if (delay > 0) await new Promise(r => setTimeout(r, delay))
   }
   return false
+}
+
+interface TtydSurfaceVerificationDeps {
+  incumbentsOnPort: (port: number) => TtydIncumbent[]
+  healthCheck: typeof healthCheck
+}
+
+/**
+ * Prove both sides of the terminal surface: the listening process is the
+ * expected PID attached to the exact tmux session, and its HTTP endpoint is
+ * ready. Recheck process identity after the await so an exit/rebind cannot
+ * smuggle a foreign listener through the readiness gate.
+ */
+export async function verifyTtydSessionSurface(
+  opts: {
+    port: number
+    pid: number | undefined
+    tmuxName: string
+    timeout?: number
+    interval?: number
+  },
+  deps: TtydSurfaceVerificationDeps = {
+    incumbentsOnPort: ttydIncumbentsOnPort,
+    healthCheck,
+  },
+): Promise<boolean> {
+  const matches = (): boolean => ttydIncumbentMatchesSession(
+    deps.incumbentsOnPort(opts.port),
+    opts.pid,
+    opts.tmuxName,
+  )
+  if (!matches()) return false
+  if (!await deps.healthCheck(
+    opts.port,
+    { timeout: opts.timeout, interval: opts.interval },
+  )) return false
+  return matches()
 }

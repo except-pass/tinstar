@@ -179,6 +179,11 @@ async function main() {
     return null
   })
 
+  allPassed &= check('lsof installed', () => {
+    execSync('which lsof', { encoding: 'utf-8' })
+    return null
+  })
+
   if (!allPassed) {
     console.log(`\n${DIM}Fix the issues above and re-run: npx tinstar${RESET}\n`)
     process.exit(1)

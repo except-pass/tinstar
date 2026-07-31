@@ -2086,10 +2086,22 @@ describe('POST /api/sessions', () => {
       body: '{}',
     })).status).toBe(409)
 
-    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
-    expect((await testCtx.fetch('/api/sessions/uncertain-stop/stop', {
+    // A live answer keeps the owner fenced and automatically retries the
+    // original stop rather than declaring a ttyd-less backend healthy.
+    getTmuxSessionStateMock.mockResolvedValueOnce('exists')
+    expect((await testCtx.fetch('/api/sessions')).status).toBe(200)
+    expect(stopTmuxSessionMock).toHaveBeenCalledTimes(2)
+    expect((await testCtx.fetch('/api/sessions/uncertain-stop/start', {
       method: 'POST',
-    })).status).toBe(200)
+      body: '{}',
+    })).status).toBe(409)
+    expect(releasePortMock).not.toHaveBeenCalled()
+
+    // The next confirmed miss completes reconciliation without another
+    // user-issued stop.
+    getTmuxSessionStateMock.mockResolvedValueOnce('missing')
+    expect((await testCtx.fetch('/api/sessions')).status).toBe(200)
+    expect(stopTmuxSessionMock).toHaveBeenCalledTimes(3)
     expect(releasePortMock).toHaveBeenCalledWith(6123)
     expect(getSession(join(tmpRoot, 'sessions'), 'uncertain-stop')).toMatchObject({
       state: 'stopped',

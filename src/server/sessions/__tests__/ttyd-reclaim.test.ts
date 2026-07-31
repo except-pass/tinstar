@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { ttydPidsToReclaim, ttydPidsForSession, tmuxTargetFromArgs, orphanTtydPidsToReap } from '../backends/tmux'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  orphanTtydPidsToReap,
+  tmuxTargetFromArgs,
+  ttydIncumbentMatchesSession,
+  ttydPidsForSession,
+  ttydPidsToReclaim,
+  verifyTtydSessionSurface,
+} from '../backends/tmux'
 
 describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
   it('parses the exact form startTtyd spawns', () => {
@@ -60,6 +67,49 @@ describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
     )
     expect(r.kill.sort()).toEqual([1, 3])
     expect(r.foreign).toEqual([{ pid: 2, tmuxTarget: 'tinstar-other' }])
+  })
+})
+
+describe('verified ttyd session surfaces', () => {
+  it('requires the expected PID to attach to the exact tmux target', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+      101,
+      'tinstar-ours',
+    )).toBe(true)
+  })
+
+  it('rejects a healthy foreign HTTP listener with no matching ttyd', async () => {
+    const httpHealthy = vi.fn(async () => true)
+
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: () => [],
+        healthCheck: httpHealthy,
+      },
+    )).resolves.toBe(false)
+
+    expect(httpHealthy).not.toHaveBeenCalled()
+  })
+
+  it('rejects a target that changes while readiness is awaited', async () => {
+    let observation = 0
+
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: () => observation++ === 0
+          ? [{ pid: 101, tmuxTarget: 'tinstar-ours' }]
+          : [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+        healthCheck: async () => true,
+      },
+    )).resolves.toBe(false)
   })
 })
 

@@ -1155,22 +1155,65 @@ export async function probePersistedSessionBackendForReconcile(
     cfg.sessions.prefix,
     name,
   )
-  if (owner?.state !== 'persisted') {
+  if (owner?.state !== 'persisted' && owner?.state !== 'orphaned') {
     throw new Error('backend ownership unavailable')
   }
 
-  const token = owner.token
-  const state = await tmuxBackend.getTmuxSessionState(cfg, name)
-  const current = sessionBackendOwners.get(`session:${name}`)
-  if (
-    current !== owner
-    || current.token !== token
-    || current.state !== 'persisted'
-    || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
-  ) {
-    throw new Error('backend ownership changed during reconciliation')
+  const recoveringOrphan = owner.state === 'orphaned'
+  if (recoveringOrphan) {
+    // Preserve the user's original stop intent. The first attempt killed ttyd
+    // before tmux teardown became uncertain, so treating a later live probe as
+    // ordinary health would expose a running session with no terminal surface.
+    // Serialize one automatic teardown retry instead.
+    owner.state = 'stopping'
+    owner.token = randomUUID()
   }
-  return { state, generation: token }
+  const token = owner.token
+  const expectedState = owner.state
+  try {
+    if (recoveringOrphan) {
+      const currentSession = getSession(cfg.dirs.sessions, name)
+      if (!currentSession) throw new Error('backend ownership unavailable')
+      try {
+        await tmuxBackend.stopTmuxSession(cfg, currentSession)
+      } catch (err) {
+        log.warn(
+          'reconcile',
+          `${name}: orphaned backend teardown retry failed: ${(err as Error).message}`,
+        )
+      }
+    }
+
+    const state = await tmuxBackend.getTmuxSessionState(cfg, name)
+    const current = sessionBackendOwners.get(`session:${name}`)
+    if (
+      current !== owner
+      || current.token !== token
+      || current.state !== expectedState
+      || existsSync(join(cfg.dirs.sessions, name, '.deleting'))
+    ) {
+      throw new Error('backend ownership changed during reconciliation')
+    }
+    if (recoveringOrphan) {
+      if (state !== 'missing') {
+        current.state = 'orphaned'
+        throw new Error('orphaned backend teardown remains unconfirmed')
+      }
+      current.state = 'persisted'
+    }
+    return { state, generation: token }
+  } catch (err) {
+    const current = sessionBackendOwners.get(`session:${name}`)
+    if (
+      recoveringOrphan
+      && current === owner
+      && current.token === token
+      && current.state === expectedState
+    ) {
+      current.state = 'orphaned'
+    }
+    throw err
+  }
 }
 
 export function invalidatePersistedSessionBackendGenerationForConfig(
