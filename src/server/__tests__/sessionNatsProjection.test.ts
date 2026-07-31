@@ -548,6 +548,8 @@ describe('getLiveSessionForBoot', () => {
     } as Session
     const stopTtyd = vi.fn()
     const releasePort = vi.fn()
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    const interruptedFailure = new Error('terminal readiness check lost ownership')
 
     await expect(reattachVerifiedSessionTtydAttempt(
       { dirs: { sessions: '/sessions' } } as TinstarConfig,
@@ -565,7 +567,11 @@ describe('getLiveSessionForBoot', () => {
           throw new TtydStartCancelledError(
             session.name,
             'post-spawn',
-            new TtydStartSupersededError(session.name, 'post-spawn'),
+            new TtydStartSupersededError(
+              session.name,
+              'post-spawn',
+              { cause: interruptedFailure },
+            ),
           )
         },
         isCurrent: () => true,
@@ -582,6 +588,14 @@ describe('getLiveSessionForBoot', () => {
     expect(stopTtyd).toHaveBeenCalledWith(session.name)
     expect(releasePort).toHaveBeenCalledTimes(1)
     expect(releasePort).toHaveBeenCalledWith(7000)
+    expect(warn).toHaveBeenCalledWith(
+      'reattach',
+      expect.stringContaining(
+        'interrupted failure: ttyd start for cancelled-reattach '
+          + 'was superseded at post-spawn; caused by: '
+          + interruptedFailure.message,
+      ),
+    )
   })
 
   it('respects an injected negative supersession classifier', async () => {

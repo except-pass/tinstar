@@ -1182,8 +1182,9 @@ export class TtydStartCancelledError extends Error {
     sessionName: string,
     /** Boundary stage inherited from the supersession this cancellation replaces. */
     readonly stage: TtydStartInterruptionStage,
-    /** Original failure, retained outside `cause` so it cannot imply supersession. */
+    /** Primary diagnostic: the original failure, outside `cause` so it cannot imply supersession. */
     readonly interrupted: unknown,
+    /** Reserved for an additional failure while cleaning up the interrupted start. */
     options?: ErrorOptions,
   ) {
     super(`ttyd start for ${sessionName} was cancelled at ${stage}`, options)
@@ -1625,14 +1626,11 @@ function enqueueTtydStart(
           )
       if (!replacementPending) {
         if (superseded) {
-          const cancellationCause = combinedFailure ?? superseded.cause
           throw new TtydStartCancelledError(
             opts.sessionName,
             superseded.stage,
             err,
-            cancellationCause === undefined
-              ? undefined
-              : { cause: cancellationCause },
+            combinedFailure ? { cause: combinedFailure } : undefined,
           )
         }
         if (combinedFailure) throw combinedFailure

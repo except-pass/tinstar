@@ -393,7 +393,6 @@ describe('fenced ttyd start attempts', () => {
       opts.sessionName,
       'post-spawn',
       interrupted,
-      { cause: diagnostic },
     )
 
     expect(isExpectedTtydStartInterruption(cancellation)).toBe(true)
@@ -402,7 +401,7 @@ describe('fenced ttyd start attempts', () => {
     )).toBe(true)
     expect(isExpectedTtydStartInterruption(diagnostic)).toBe(false)
     expect(findTtydStartSupersededError(cancellation)).toBeNull()
-    expect(cancellation.cause).toBe(diagnostic)
+    expect(cancellation.cause).toBeUndefined()
     expect(cancellation.interrupted).toBe(interrupted)
   })
 
@@ -559,6 +558,7 @@ describe('fenced ttyd start attempts', () => {
     const rejection = expect(attempt).rejects.toMatchObject({
       name: 'TtydStartCancelledError',
       stage: 'post-spawn',
+      interrupted: expect.any(TtydStartSupersededError),
     })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 

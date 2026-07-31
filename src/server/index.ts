@@ -335,6 +335,18 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   onTtydRestart: tmuxBackend.onTtydRestart,
 }
 
+function describeTtydFailure(
+  failure: unknown,
+  seen: Set<unknown> = new Set(),
+): string {
+  if (!(failure instanceof Error)) return String(failure)
+  if (seen.has(failure)) return `${failure.message}; caused by: [cycle]`
+  seen.add(failure)
+  return failure.cause === undefined
+    ? failure.message
+    : `${failure.message}; caused by: ${describeTtydFailure(failure.cause, seen)}`
+}
+
 /**
  * Restore one strictly observed live session's terminal surface.
  *
@@ -561,10 +573,11 @@ export async function reattachVerifiedSessionTtydAttempt(
         )
       }
     }
-    log.warn(
-      'reattach',
-      `${name}: failed to reattach: ${(err as Error).message}`,
-    )
+    const failure = err instanceof tmuxBackend.TtydStartCancelledError
+      ? `${err.message}; interrupted failure: `
+        + describeTtydFailure(err.interrupted)
+      : describeTtydFailure(err)
+    log.warn('reattach', `${name}: failed to reattach: ${failure}`)
     return false
   } finally {
     lease.release()
