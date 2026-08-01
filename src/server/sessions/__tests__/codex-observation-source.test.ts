@@ -86,6 +86,14 @@ function line(record: object): string {
   return `${JSON.stringify(record)}\n`
 }
 
+function turnContext(model: string): Record<string, unknown> {
+  return {
+    timestamp: '2026-08-01T11:59:59.000Z',
+    type: 'turn_context',
+    payload: { model },
+  }
+}
+
 describe('parseCodexObservationLine', () => {
   it('normalizes usage, context, quota, resets, credits, and plan fields', () => {
     const parsed = parseCodexObservationLine(JSON.stringify(
@@ -173,6 +181,61 @@ describe('parseCodexObservationLine', () => {
 })
 
 describe('CodexRolloutObservationSource', () => {
+  it('retains the active model across incremental reads without treating replay as new history', () => {
+    const source = new CodexRolloutObservationSource()
+    const path = join(scratch, 'rollout.jsonl')
+    writeFileSync(
+      path,
+      line(turnContext('gpt-5.4'))
+        + line(tokenCountRecord('2026-08-01T12:00:00.000Z', 8_000)),
+    )
+
+    const replay = source.read('session-a', path)
+    expect(replay).toHaveLength(1)
+    expect(replay[0]).toMatchObject({
+      replayed: true,
+      sessionUsage: { model: 'gpt-5.4' },
+    })
+
+    appendFileSync(
+      path,
+      line(tokenCountRecord('2026-08-01T12:01:00.000Z', 9_000)),
+    )
+    const incremental = source.read('session-a', path)
+    expect(incremental).toHaveLength(1)
+    expect(incremental[0]).toMatchObject({
+      replayed: false,
+      sessionUsage: { model: 'gpt-5.4' },
+    })
+  })
+
+  it('drops retained model state on rotation, truncation, and incarnation reset', () => {
+    const source = new CodexRolloutObservationSource()
+    const path = join(scratch, 'rollout.jsonl')
+    const rotatedPath = join(scratch, 'rollout.old.jsonl')
+    writeFileSync(
+      path,
+      line(turnContext('gpt-old'))
+        + line(tokenCountRecord('2026-08-01T12:00:00.000Z', 8_000)),
+    )
+    expect(source.read('session-a', path)[0]?.sessionUsage?.model).toBe('gpt-old')
+
+    renameSync(path, rotatedPath)
+    writeFileSync(path, line(tokenCountRecord('2026-08-01T12:01:00.000Z', 9_000)))
+    expect(source.read('session-a', path)[0]?.sessionUsage).not.toHaveProperty('model')
+
+    writeFileSync(
+      path,
+      line(turnContext('gpt-truncated'))
+        + line(tokenCountRecord('2026-08-01T12:02:00.000Z', 10_000)),
+    )
+    expect(source.read('session-a', path)[0]?.sessionUsage?.model).toBe('gpt-truncated')
+
+    source.reset('session-a')
+    writeFileSync(path, line(tokenCountRecord('2026-08-01T12:03:00.000Z', 11_000)))
+    expect(source.read('session-a', path)[0]?.sessionUsage).not.toHaveProperty('model')
+  })
+
   it('waits for a newline-terminated JSON record and emits it exactly once', () => {
     const source = new CodexRolloutObservationSource()
     const path = join(scratch, 'rollout.jsonl')
@@ -202,9 +265,15 @@ describe('CodexRolloutObservationSource', () => {
 
     const afterRotation = source.read('session-a', path)
     expect(afterRotation).toHaveLength(1)
-    expect(afterRotation[0]?.sessionUsage?.cumulativeTokens?.total).toBe(9_000)
+    expect(afterRotation[0]).toMatchObject({
+      replayed: false,
+      sessionUsage: { cumulativeTokens: { total: 9_000 } },
+    })
 
-    expect(source.read('session-b', path)).toHaveLength(2)
+    expect(source.read('session-b', path)).toEqual([
+      expect.objectContaining({ replayed: true }),
+      expect.objectContaining({ replayed: true }),
+    ])
   })
 
   it('detects same-path truncate-and-regrow replacement without losing new events', () => {
@@ -223,7 +292,10 @@ describe('CodexRolloutObservationSource', () => {
 
     const afterReplacement = source.read('session-a', path)
     expect(afterReplacement).toHaveLength(1)
-    expect(afterReplacement[0]?.sessionUsage?.cumulativeTokens?.total).toBe(9_000)
+    expect(afterReplacement[0]).toMatchObject({
+      replayed: false,
+      sessionUsage: { cumulativeTokens: { total: 9_000 } },
+    })
   })
 
   it('discards an oversized partial record and resumes at the next newline', () => {

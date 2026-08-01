@@ -214,6 +214,11 @@ export interface CodexObservationEvent {
   detail?: CodexObservationDetail
 }
 
+export interface CodexRolloutObservationEvent extends CodexObservationEvent {
+  /** Existing-file replay rebuilds current state but is not new historical data. */
+  replayed: boolean
+}
+
 interface CodexFileCursor {
   path: string
   device: number
@@ -228,6 +233,8 @@ interface CodexFileCursor {
 
 interface CodexObservationSessionState {
   cursor?: CodexFileCursor
+  initialized: boolean
+  model?: string
   /** Recent replay IDs; older replays retain the same stable ID for downstream dedupe. */
   seenIds: Set<string>
 }
@@ -411,7 +418,10 @@ function parseObservationDetail(
 }
 
 /** Parse only the documented, non-message projection from one rollout line. */
-export function parseCodexObservationLine(line: string): CodexObservationEvent | null {
+export function parseCodexObservationLine(
+  line: string,
+  model?: string,
+): CodexObservationEvent | null {
   let record: UnknownRecord | null
   try {
     record = asRecord(JSON.parse(line))
@@ -426,7 +436,10 @@ export function parseCodexObservationLine(line: string): CodexObservationEvent |
   const observedAt = asTimestamp(record.timestamp)
   const info = asRecord(payload.info)
   const rateLimits = asRecord(payload.rate_limits)
-  const sessionUsage = parseSessionUsage(info)
+  const parsedSessionUsage = parseSessionUsage(info)
+  const sessionUsage = parsedSessionUsage
+    ? { ...parsedSessionUsage, ...(model ? { model } : {}) }
+    : undefined
   const sessionContext = parseSessionContext(info, sessionUsage)
   const providerQuota = parseProviderQuota(rateLimits, observedAt)
   const detail = parseObservationDetail(rateLimits)
@@ -443,6 +456,20 @@ export function parseCodexObservationLine(line: string): CodexObservationEvent |
   return { id, ...projection }
 }
 
+function parseTurnContextModel(line: string):
+  | { matched: false }
+  | { matched: true; model: string | undefined } {
+  let record: UnknownRecord | null
+  try {
+    record = asRecord(JSON.parse(line))
+  } catch {
+    return { matched: false }
+  }
+  if (record?.type !== 'turn_context') return { matched: false }
+  const payload = asRecord(record.payload)
+  return { matched: true, model: asNonEmptyString(payload?.model) }
+}
+
 function readAnchor(fd: number, offset: number): string {
   const length = Math.min(128, offset)
   if (length === 0) return ''
@@ -457,7 +484,7 @@ function readAnchor(fd: number, offset: number): string {
 export class CodexRolloutObservationSource {
   private readonly sessions = new Map<string, CodexObservationSessionState>()
 
-  read(sessionName: string, transcriptPath: string): CodexObservationEvent[] {
+  read(sessionName: string, transcriptPath: string): CodexRolloutObservationEvent[] {
     let fd: number
     try {
       fd = openSync(transcriptPath, 'r')
@@ -469,7 +496,7 @@ export class CodexRolloutObservationSource {
       const stats = fstatSync(fd)
       let state = this.sessions.get(sessionName)
       if (!state) {
-        state = { seenIds: new Set() }
+        state = { initialized: false, seenIds: new Set() }
         this.sessions.set(sessionName, state)
       }
 
@@ -488,7 +515,15 @@ export class CodexRolloutObservationSource {
         continuingSameFile = false
       }
 
-      const events: CodexObservationEvent[] = []
+      // Only the first scan for this session incarnation is hydration. Once
+      // initialized, unseen stable IDs are new to Tinstar even if the rollout
+      // file rotated or was replaced; suppressing them would create a silent
+      // hole in historical telemetry. Reincarnation cleanup resets the source
+      // and therefore makes the next scan hydration again.
+      const replayed = !state.initialized
+      if (!continuingSameFile) state.model = undefined
+
+      const events: CodexRolloutObservationEvent[] = []
       const emittedIds = new Set<string>()
       const chunkSize = 256 * 1024
       const buffer = Buffer.alloc(chunkSize)
@@ -544,10 +579,15 @@ export class CodexRolloutObservationSource {
           pendingBytes = 0
           cursor = newline + 1
           if (!rawLine.trim()) continue
-          const event = parseCodexObservationLine(rawLine)
+          const modelRecord = parseTurnContextModel(rawLine)
+          if (modelRecord.matched) {
+            state.model = modelRecord.model
+            continue
+          }
+          const event = parseCodexObservationLine(rawLine, state.model)
           if (!event || state.seenIds.has(event.id) || emittedIds.has(event.id)) continue
           emittedIds.add(event.id)
-          events.push(event)
+          events.push({ ...event, replayed })
         }
       }
 
@@ -560,6 +600,7 @@ export class CodexRolloutObservationSource {
         anchor: readAnchor(fd, offset),
         discardingOversizedLine,
       }
+      state.initialized = true
       for (const id of emittedIds) {
         state.seenIds.add(id)
         if (state.seenIds.size > MAX_SEEN_OBSERVATION_IDS) {

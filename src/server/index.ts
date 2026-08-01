@@ -75,6 +75,8 @@ import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
+import { ProviderCurrentObservationStores } from './providers/observation-stores'
+import { ProviderObservationIngestor } from './providers/observation-ingestor'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -675,7 +677,15 @@ export function initBackend(): RouteContext {
   const slashUsage = new SlashUsage(resolveSlashUsagePath())
   // Debounced flush every 5s while dirty
   setInterval(() => { void slashUsage.flush() }, 5_000).unref()
-  const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
+  const providerObservationStores = new ProviderCurrentObservationStores()
+  const providerObservationIngestor = new ProviderObservationIngestor({
+    stores: providerObservationStores,
+    sink: otlpExporter,
+  })
+  const ccQuotaService = new CcQuotaService({
+    sink: otlpExporter,
+    observationStores: providerObservationStores,
+  })
   new OTelProcessor(bus, otelStore, otlpExporter)
 
   // Wire SSE
@@ -1126,6 +1136,20 @@ export function initBackend(): RouteContext {
             if (session) observeFromRecapEntries(name, entries, session)
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
+          onObservations: (providerId, sessionId, accountRef, source, observations) => {
+            for (const event of observations) {
+              providerObservationIngestor.ingest({
+                providerId,
+                sessionId,
+                accountRef,
+                source,
+                event,
+              })
+            }
+          },
+          onSessionObservationsCleared: (providerId, sessionId) => {
+            providerObservationIngestor.clearSession(providerId, sessionId)
+          },
           resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
           captureBackendGeneration: name =>
             persistedSessionBackendGenerationForConfig(cfg, name),
@@ -1320,7 +1344,8 @@ export function initBackend(): RouteContext {
 
   const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
-    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    providerObservationStores, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     providerRegistry,
     get natsTraffic() { return natsTraffic },

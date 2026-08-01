@@ -282,6 +282,70 @@ describe('StatusWatcher provider transcripts', () => {
     )
   })
 
+  it('polls observations even when status is unavailable and isolates observer failures', async () => {
+    const transcriptPath = join(scratch, 'observations.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const readObservations = vi.fn(() => [{
+      id: 'observation-1',
+      observedAt: '2026-08-01T12:00:00.000Z',
+      replayed: false,
+      sessionUsage: { cumulativeTokens: { total: 10 } },
+    }])
+    const readStatus = vi.fn(() => null)
+    const provider: TerminalProviderAdapter = {
+      provider: { id: 'observable', label: 'Observable CLI' },
+      sessionLifecycle: 'terminal',
+      terminal: {
+        capabilities: {
+          nats: { state: 'unsupported', reason: 'not implemented' },
+          telemetry: { state: 'unsupported', reason: 'not implemented' },
+        },
+        defaultTelemetry: false,
+        transcript: {
+          discover: async () => transcriptPath,
+          readStatus,
+          observations: {
+            source: { id: 'native-events', label: 'Native events' },
+            accountRef: 'default',
+            read: readObservations,
+          },
+          parseRecapEntries: () => [],
+          resetOffset: vi.fn(),
+        },
+      },
+    }
+    const sessionsDir = join(scratch, 'observation-sessions')
+    createSession(sessionsDir, {
+      name: 'observable-worker',
+      backend: 'tmux',
+      adapter: 'observable',
+      workspace: { path: scratch },
+    })
+    setState(sessionsDir, 'observable-worker', 'running')
+    const onObservations = vi.fn(() => {
+      throw new Error('ingestor unavailable')
+    })
+    const watcher = new StatusWatcher({
+      sessionsDir,
+      providerRegistry: new ProviderAdapterRegistry([provider]),
+      onStatusChanged: vi.fn(),
+      onObservations,
+    })
+
+    await (watcher as unknown as { tick(): Promise<void> }).tick()
+
+    expect(readObservations).toHaveBeenCalledWith('observable-worker', transcriptPath)
+    expect(onObservations).toHaveBeenCalledWith(
+      'observable',
+      'observable-worker',
+      'default',
+      { id: 'native-events', label: 'Native events' },
+      expect.arrayContaining([expect.objectContaining({ id: 'observation-1' })]),
+    )
+    expect(readStatus).toHaveBeenCalledWith(transcriptPath)
+    expect(getSession(sessionsDir, 'observable-worker')?.state).toBe('running')
+  })
+
   it('starts a fresh discovery generation after a stalled session stops and restarts', async () => {
     const transcriptPath = join(scratch, 'restart.jsonl')
     writeFileSync(transcriptPath, '{}\n')
@@ -368,10 +432,12 @@ describe('StatusWatcher provider transcripts', () => {
       workspace: { path: scratch },
     })
     const first = getSession(sessionsDir, 'reused-name')!
+    const onSessionObservationsCleared = vi.fn()
     const watcher = new StatusWatcher({
       sessionsDir,
       providerRegistry: new ProviderAdapterRegistry([provider]),
       onStatusChanged: vi.fn(),
+      onSessionObservationsCleared,
     })
     const checkSession = (watcher as unknown as {
       checkSession(session: Session): Promise<void>
@@ -387,6 +453,10 @@ describe('StatusWatcher provider transcripts', () => {
     expect(discover).toHaveBeenCalledTimes(2)
     expect(readStatus).toHaveBeenNthCalledWith(1, firstPath)
     expect(readStatus).toHaveBeenNthCalledWith(2, secondPath)
+    expect(onSessionObservationsCleared).toHaveBeenCalledWith(
+      'incarnated',
+      'reused-name',
+    )
   })
 
   it('drops all deleted-session caches even when provider cleanup throws', () => {
