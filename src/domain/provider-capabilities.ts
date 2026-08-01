@@ -178,7 +178,7 @@ export type ProviderSessionUsage = {
     }
 )
 
-export interface ProviderSessionContext {
+interface ProviderSessionContextFields {
   /**
    * Shared normalized names intentionally differ from the Claude-specific
    * `SessionContextSnapshot` fields in `src/server/cc-quota/types.ts`.
@@ -188,6 +188,9 @@ export interface ProviderSessionContext {
   windowTokens?: number
   usedPercent?: number
 }
+
+/** A context observation always contains at least one real measurement. */
+export type ProviderSessionContext = RequireAtLeastOne<ProviderSessionContextFields>
 
 export interface ProviderQuotaWindow {
   /** Provider-native stable key; no shared 5-hour/7-day vocabulary is assumed. */
