@@ -6,6 +6,7 @@ import {
   afterBootDeletionCleanups,
   createSessionTtydReattachSingleFlight,
   describeTtydFailure,
+  describeTtydReattachFailure,
   getLiveSessionForBoot,
   reconcileDeletingSessionOnBoot,
   reattachVerifiedSessionTtydAttempt,
@@ -98,6 +99,7 @@ describe('sessionNatsProjection', () => {
 describe('describeTtydFailure', () => {
   const cyclic = new Error('cycle')
   Object.defineProperty(cyclic, 'cause', { value: cyclic })
+  const shared = new Error('shared')
 
   it.each([
     ['non-error', 'plain failure', 'plain failure'],
@@ -114,9 +116,54 @@ describe('describeTtydFailure', () => {
       ),
       'combined; errors: [left | right; caused by: detail]',
     ],
+    [
+      'shared-node diamond',
+      new AggregateError(
+        [shared, new Error('branch', { cause: shared })],
+        'diamond',
+      ),
+      'diamond; errors: [shared | branch; caused by: shared]',
+    ],
     ['cause cycle', cyclic, 'cycle; caused by: [cycle: cycle]'],
   ])('renders a %s diagnostic', (_case, failure, expected) => {
     expect(describeTtydFailure(failure)).toBe(expected)
+  })
+
+  it('adds the non-causal interruption only when cleanup did not carry it', () => {
+    const interrupted = new TtydStartSupersededError(
+      'diagnostic-session',
+      'post-spawn',
+    )
+    const cancellation = new TtydStartCancelledError(
+      'diagnostic-session',
+      'post-spawn',
+      'session stop requested',
+      interrupted,
+    )
+
+    expect(describeTtydReattachFailure(cancellation)).toContain(
+      '; interrupted failure: ttyd start for diagnostic-session '
+        + 'was superseded at post-spawn',
+    )
+
+    const withCleanup = new TtydStartCancelledError(
+      'diagnostic-session',
+      'post-spawn',
+      'session stop requested',
+      interrupted,
+      {
+        cause: new AggregateError(
+          [interrupted, new Error('cleanup failed')],
+          'cleanup aggregate',
+        ),
+      },
+    )
+    const described = describeTtydReattachFailure(withCleanup)
+    expect(described).toContain(
+      'cleanup aggregate; errors: [ttyd start for diagnostic-session '
+        + 'was superseded at post-spawn | cleanup failed]',
+    )
+    expect(described).not.toContain('interrupted failure:')
   })
 })
 
@@ -619,7 +666,9 @@ describe('getLiveSessionForBoot', () => {
     )).resolves.toBe(false)
 
     expect(stopTtyd).toHaveBeenCalledTimes(1)
-    expect(stopTtyd).toHaveBeenCalledWith(session.name)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach failure compensation',
+    })
     expect(releasePort).toHaveBeenCalledTimes(1)
     expect(releasePort).toHaveBeenCalledWith(7000)
     expect(warn).toHaveBeenCalledWith(
@@ -635,11 +684,15 @@ describe('getLiveSessionForBoot', () => {
     expect(warn).toHaveBeenCalledWith(
       'reattach',
       expect.stringContaining(
-        'cancellation reason: session deletion requested; '
-          + 'interrupted failure: ttyd start for cancelled-reattach '
-          + 'was superseded at post-spawn',
+        'cancellation reason: session deletion requested',
       ),
     )
+    const failureLog = warn.mock.calls.find(
+      ([scope, message]) =>
+        scope === 'reattach'
+        && String(message).includes('provider adapter failed'),
+    )?.[1]
+    expect(failureLog).not.toContain('interrupted failure:')
   })
 
   it('respects an injected negative supersession classifier', async () => {
@@ -678,7 +731,9 @@ describe('getLiveSessionForBoot', () => {
     )).resolves.toBe(false)
 
     expect(stopTtyd).toHaveBeenCalledTimes(1)
-    expect(stopTtyd).toHaveBeenCalledWith(session.name)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach failure compensation',
+    })
   })
 
   it('compensates a generic failure after reattach has produced a surface', async () => {
@@ -717,7 +772,9 @@ describe('getLiveSessionForBoot', () => {
     )).resolves.toBe(false)
 
     expect(stopTtyd).toHaveBeenCalledTimes(1)
-    expect(stopTtyd).toHaveBeenCalledWith(session.name)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach failure compensation',
+    })
     expect(releasePort).not.toHaveBeenCalled()
     expect(update).not.toHaveBeenCalled()
   })

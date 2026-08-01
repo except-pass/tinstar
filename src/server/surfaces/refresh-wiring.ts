@@ -245,7 +245,9 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
             template: null,
             provider,
           }),
-        stopSession: name => tmuxBackend.stopManagedTtyd(name),
+        stopSession: name => tmuxBackend.stopManagedTtyd(name, {
+          cancellationReason: 'surface refresh launch compensation',
+        }),
         // A cast, because the launcher takes the run shape as an opaque record —
         // it may not import the Run type without dragging the whole document model
         // into the sessions layer. The fields it actually builds are asserted by
@@ -268,7 +270,9 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
     retireWorker: name => retireRefreshWorker({
       name,
       getSession: () => getSession(cfg.dirs.sessions, name),
-      stopTtyd: () => tmuxBackend.stopManagedTtyd(name),
+      stopTtyd: () => tmuxBackend.stopManagedTtyd(name, {
+        cancellationReason: 'surface refresh retirement',
+      }),
       deleteTmux: session => tmuxBackend.deleteTmuxSession(cfg, session as Session),
       deleteRun: () => docStore.deleteRun(name),
       deleteSession: () => { deleteSession(cfg.dirs.sessions, name) },

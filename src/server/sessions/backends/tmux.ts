@@ -1078,7 +1078,7 @@ interface ManagedTtydEntry {
 const managedTtyd = new Map<string, ManagedTtydEntry>()
 const ttydStartTokens = new Map<string, symbol>()
 const ttydStartChains = new Map<string, Promise<unknown>>()
-const pendingTtydStartTokens = new Map<string, Map<symbol, number>>()
+const pendingTtydStartTokens = new Map<string, Set<symbol>>()
 const ttydStartCancellationReasons = new Map<
   symbol,
   TtydStartCancellationReason
@@ -1176,10 +1176,17 @@ export type TtydStartInterruptionStage =
   | 'settlement'
 
 export type TtydStartCancellationReason =
-  | 'terminal stop requested'
+  | 'terminal ownership cleared'
   | 'session stop requested'
   | 'session deletion requested'
-  | 'terminal ownership cleared without a recorded reason'
+  | 'reattach inconclusive-surface compensation'
+  | 'reattach lifecycle ownership lost'
+  | 'reattach unhealthy-surface retirement'
+  | 'reattach verification compensation'
+  | 'reattach publication compensation'
+  | 'reattach failure compensation'
+  | 'surface refresh launch compensation'
+  | 'surface refresh retirement'
   | `automatic restart abandoned: ${string}`
 
 export class TtydStartSupersededError extends Error {
@@ -1213,14 +1220,26 @@ export class TtydStartCancelledError extends Error {
 export function findTtydStartSupersededError(
   err: unknown,
 ): TtydStartSupersededError | null {
+  return findTtydStartCause(
+    err,
+    (candidate): candidate is TtydStartSupersededError =>
+      candidate instanceof TtydStartSupersededError,
+  )
+}
+
+function findTtydStartCause<T extends Error>(
+  err: unknown,
+  matches: (candidate: Error) => candidate is T,
+): T | null {
   // Adapter and lifecycle boundaries may each preserve a failure as `cause`,
   // so walk the complete native cause chain. The Set deliberately terminates
   // malformed cycles. AggregateError siblings are not causal wrappers and are
-  // intentionally outside this classifier.
+  // intentionally outside both interruption classifiers: cancellation cleanup
+  // aggregates contain a supersession sibling that must stay non-causal.
   const seen = new Set<Error>()
   let candidate = err
   while (candidate instanceof Error && !seen.has(candidate)) {
-    if (candidate instanceof TtydStartSupersededError) return candidate
+    if (matches(candidate)) return candidate
     seen.add(candidate)
     candidate = candidate.cause
   }
@@ -1230,14 +1249,11 @@ export function findTtydStartSupersededError(
 export function findTtydStartCancelledError(
   err: unknown,
 ): TtydStartCancelledError | null {
-  const seen = new Set<Error>()
-  let candidate = err
-  while (candidate instanceof Error && !seen.has(candidate)) {
-    if (candidate instanceof TtydStartCancelledError) return candidate
-    seen.add(candidate)
-    candidate = candidate.cause
-  }
-  return null
+  return findTtydStartCause(
+    err,
+    (candidate): candidate is TtydStartCancelledError =>
+      candidate instanceof TtydStartCancelledError,
+  )
 }
 
 function markTtydIdentityInspectionAvailable(
@@ -1598,11 +1614,8 @@ function enqueueTtydStart(
   deps: StartTtydAttemptDeps = startTtydAttemptDeps,
 ): Promise<number | undefined> {
   const pendingForSession = pendingTtydStartTokens.get(opts.sessionName)
-    ?? new Map<symbol, number>()
-  pendingForSession.set(
-    startToken,
-    (pendingForSession.get(startToken) ?? 0) + 1,
-  )
+    ?? new Set<symbol>()
+  pendingForSession.add(startToken)
   pendingTtydStartTokens.set(opts.sessionName, pendingForSession)
   const isCurrent = () =>
     ttydStartTokens.get(opts.sessionName) === startToken
@@ -1667,8 +1680,10 @@ function enqueueTtydStart(
           throw new TtydStartCancelledError(
             opts.sessionName,
             superseded.stage,
+            // Defensive fallback: every in-tree invalidation stamps all
+            // pending tokens before clearing ownership.
             ttydStartCancellationReasons.get(startToken)
-              ?? 'terminal ownership cleared without a recorded reason',
+              ?? 'terminal ownership cleared',
             err,
             combinedFailure ? { cause: combinedFailure } : undefined,
           )
@@ -1686,14 +1701,8 @@ function enqueueTtydStart(
   })
   return attempt.finally(() => {
     const pending = pendingTtydStartTokens.get(opts.sessionName)
-    const count = pending?.get(startToken)
-    if (pending && count !== undefined) {
-      if (count > 1) {
-        pending.set(startToken, count - 1)
-      } else {
-        pending.delete(startToken)
-        ttydStartCancellationReasons.delete(startToken)
-      }
+    if (pending?.delete(startToken)) {
+      ttydStartCancellationReasons.delete(startToken)
       if (pending.size === 0) pendingTtydStartTokens.delete(opts.sessionName)
     }
   })
@@ -1898,7 +1907,7 @@ export function stopManagedTtyd(
   if (opts.invalidateStarts !== false) {
     invalidateTtydStarts(
       sessionName,
-      opts.cancellationReason ?? 'terminal stop requested',
+      opts.cancellationReason ?? 'terminal ownership cleared',
     )
   }
   const entry = managedTtyd.get(sessionName)

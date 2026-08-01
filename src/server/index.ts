@@ -337,20 +337,48 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
 
 export function describeTtydFailure(
   failure: unknown,
-  seen: Set<unknown> = new Set(),
+  path: Set<unknown> = new Set(),
 ): string {
   if (!(failure instanceof Error)) return String(failure)
-  if (seen.has(failure)) return `[cycle: ${failure.message}]`
+  if (path.has(failure)) return `[cycle: ${failure.message}]`
+  path.add(failure)
+  try {
+    const aggregate = failure instanceof AggregateError
+      ? '; errors: ['
+        + failure.errors.map(error => describeTtydFailure(error, path)).join(' | ')
+        + ']'
+      : ''
+    const cause = failure.cause === undefined
+      ? ''
+      : `; caused by: ${describeTtydFailure(failure.cause, path)}`
+    return failure.message + aggregate + cause
+  } finally {
+    path.delete(failure)
+  }
+}
+
+function ttydFailureContains(
+  failure: unknown,
+  target: unknown,
+  seen: Set<unknown> = new Set(),
+): boolean {
+  if (failure === target) return true
+  if (!(failure instanceof Error) || seen.has(failure)) return false
   seen.add(failure)
-  const aggregate = failure instanceof AggregateError
-    ? '; errors: ['
-      + failure.errors.map(error => describeTtydFailure(error, seen)).join(' | ')
-      + ']'
-    : ''
-  const cause = failure.cause === undefined
+  if (ttydFailureContains(failure.cause, target, seen)) return true
+  return failure instanceof AggregateError
+    && failure.errors.some(error => ttydFailureContains(error, target, seen))
+}
+
+export function describeTtydReattachFailure(failure: unknown): string {
+  const cancelled = tmuxBackend.findTtydStartCancelledError(failure)
+  if (!cancelled) return describeTtydFailure(failure)
+  const interrupted = ttydFailureContains(failure, cancelled.interrupted)
     ? ''
-    : `; caused by: ${describeTtydFailure(failure.cause, seen)}`
-  return failure.message + aggregate + cause
+    : `; interrupted failure: ${describeTtydFailure(cancelled.interrupted)}`
+  return `${describeTtydFailure(failure)}; cancellation reason: `
+    + cancelled.reason
+    + interrupted
 }
 
 /**
@@ -377,7 +405,9 @@ export async function reattachVerifiedSessionTtydAttempt(
   let runPublicationAttempted = false
   const abandonInconclusiveSurface = (): false => {
     if (freshPort != null) {
-      deps.stopTtyd(session?.name ?? name)
+      deps.stopTtyd(session?.name ?? name, {
+        cancellationReason: 'reattach inconclusive-surface compensation',
+      })
       deps.releasePort(freshPort)
     }
     return false
@@ -393,7 +423,9 @@ export async function reattachVerifiedSessionTtydAttempt(
     if (session.port == null) freshPort = port
     let result = await deps.reattach(config, { session, port })
     if (!deps.isCurrent(config, session, lease.token)) {
-      deps.stopTtyd(session.name)
+      deps.stopTtyd(session.name, {
+        cancellationReason: 'reattach lifecycle ownership lost',
+      })
       if (freshPort != null) deps.releasePort(freshPort)
       return false
     }
@@ -410,7 +442,9 @@ export async function reattachVerifiedSessionTtydAttempt(
       && session.port != null
       && deps.isCurrent(config, session, lease.token)
     ) {
-      deps.stopTtyd(session.name)
+      deps.stopTtyd(session.name, {
+        cancellationReason: 'reattach unhealthy-surface retirement',
+      })
       const staleSession = session
       const stalePort = session.port
       const staleRun = docStore.getRun(session.name)
@@ -454,7 +488,9 @@ export async function reattachVerifiedSessionTtydAttempt(
       freshPort = port
       result = await deps.reattach(config, { session, port })
       if (!deps.isCurrent(config, session, lease.token)) {
-        deps.stopTtyd(session.name)
+        deps.stopTtyd(session.name, {
+          cancellationReason: 'reattach lifecycle ownership lost',
+        })
         deps.releasePort(port)
         return false
       }
@@ -471,7 +507,9 @@ export async function reattachVerifiedSessionTtydAttempt(
       surfaceState !== 'verified'
       || !deps.isCurrent(config, session, lease.token)
     ) {
-      deps.stopTtyd(session.name)
+      deps.stopTtyd(session.name, {
+        cancellationReason: 'reattach verification compensation',
+      })
       if (surfaceState === 'verified') {
         if (freshPort != null) deps.releasePort(freshPort)
         return false
@@ -484,7 +522,9 @@ export async function reattachVerifiedSessionTtydAttempt(
       { port: result.port, ttydPid: result.ttydPid ?? null },
     )
     if (!updated) {
-      deps.stopTtyd(session.name)
+      deps.stopTtyd(session.name, {
+        cancellationReason: 'reattach publication compensation',
+      })
       if (freshPort != null) deps.releasePort(freshPort)
       return false
     }
@@ -536,7 +576,11 @@ export async function reattachVerifiedSessionTtydAttempt(
     // has not created a replacement, so tearing down the incumbent would turn
     // an observation outage into a terminal outage.
     const inspectionInconclusive = deps.isIdentityInspectionError(err)
-    if (!inspectionInconclusive) deps.stopTtyd(name)
+    if (!inspectionInconclusive) {
+      deps.stopTtyd(name, {
+        cancellationReason: 'reattach failure compensation',
+      })
+    }
     let rollbackComplete = true
     if (sessionPublished && session) {
       try {
@@ -579,13 +623,10 @@ export async function reattachVerifiedSessionTtydAttempt(
         )
       }
     }
-    const cancelled = tmuxBackend.findTtydStartCancelledError(err)
-    const failure = cancelled
-      ? `${describeTtydFailure(err)}; cancellation reason: `
-        + `${cancelled.reason}; interrupted failure: `
-        + describeTtydFailure(cancelled.interrupted)
-      : describeTtydFailure(err)
-    log.warn('reattach', `${name}: failed to reattach: ${failure}`)
+    log.warn(
+      'reattach',
+      `${name}: failed to reattach: ${describeTtydReattachFailure(err)}`,
+    )
     return false
   } finally {
     lease.release()

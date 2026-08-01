@@ -576,6 +576,39 @@ describe('fenced ttyd start attempts', () => {
     await rejection
   })
 
+  it('records why an in-flight start is abandoned after its child exits', async () => {
+    const child = fakeChild(779)
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const tmuxAlive = vi.fn(async () => false)
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn(() => child),
+      tmuxAlive,
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const attempt = startTtydWithDeps(opts, deps)
+    const rejection = expect(attempt).rejects.toMatchObject({
+      name: 'TtydStartCancelledError',
+      stage: 'post-spawn',
+      reason: 'automatic restart abandoned: tmux-gone',
+    })
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(500))
+
+    child.emit('exit', 1)
+    await vi.waitFor(() => expect(tmuxAlive).toHaveBeenCalledTimes(1))
+    await Promise.resolve()
+    scheduled.shift()!.callback()
+
+    await rejection
+    expect(deps.enqueueRestart).not.toHaveBeenCalled()
+  })
+
   it('lets a queued newer start survive a stale generic child error', async () => {
     const firstChild = fakeChild(701)
     const secondChild = fakeChild(702)
