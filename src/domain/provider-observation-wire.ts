@@ -21,7 +21,10 @@ export type ProviderAccountQuotaObservationWire = Omit<
   'detail'
 >
 
-const nonEmptyString = z.string().trim().min(1)
+const nonEmptyString = z.string().min(1).refine(
+  value => value.trim().length > 0,
+  { message: 'string must contain a non-whitespace character' },
+)
 const isoTimestamp = z.string().datetime({ offset: true })
 const nonNegativeNumber = z.number().finite().nonnegative()
 const percent = z.number().finite().min(0).max(100)
@@ -214,19 +217,28 @@ export const providerCurrentObservationsWireSchema: z.ZodType<
 }).strict().superRefine((wire, ctx) => {
   reportDuplicateIdentities(
     wire.sessionUsage,
-    observation => `${observation.providerId}\u0000${observation.scope.sessionId}`,
+    observation => JSON.stringify([
+      observation.providerId,
+      observation.scope.sessionId,
+    ]),
     'session usage observation',
     ctx,
   )
   reportDuplicateIdentities(
     wire.sessionContext,
-    observation => `${observation.providerId}\u0000${observation.scope.sessionId}`,
+    observation => JSON.stringify([
+      observation.providerId,
+      observation.scope.sessionId,
+    ]),
     'session context observation',
     ctx,
   )
   reportDuplicateIdentities(
     wire.providerQuota,
-    observation => `${observation.providerId}\u0000${observation.scope.accountRef}`,
+    observation => JSON.stringify([
+      observation.providerId,
+      observation.scope.accountRef,
+    ]),
     'provider quota observation',
     ctx,
   )

@@ -167,12 +167,20 @@ export class CcQuotaService {
       if (!(error instanceof ZodError)) throw error
       // Legacy statusline consumers historically accept any numeric values.
       // A malformed native reading must not make that compatibility API throw.
+      const previous = this.observationStores.sessions.getContext(
+        CLAUDE_PROVIDER_ID,
+        sessionId,
+      )
       this.observationStores.sessions.setContext({
         kind: 'session-context',
         providerId: CLAUDE_PROVIDER_ID,
         scope: { kind: 'session', sessionId },
         source: CLAUDE_STATUSLINE_SOURCE,
-        freshness: { state: 'unknown', observedAt: null, checkedAt: observedAt },
+        freshness: {
+          state: 'unknown',
+          observedAt: previous?.freshness.observedAt ?? null,
+          checkedAt: observedAt,
+        },
         availability: {
           state: 'unavailable',
           reason: 'source-error',
@@ -220,9 +228,13 @@ export class CcQuotaService {
       })
     } catch (error) {
       if (!(error instanceof ZodError)) throw error
+      const previous = this.observationStores.quotas.get(
+        CLAUDE_PROVIDER_ID,
+        CLAUDE_ACCOUNT_REF,
+      )
       this.setQuotaUnavailable(
         'source-error',
-        null,
+        previous?.freshness.observedAt ?? null,
         observedAt,
         'Claude quota values failed shared-wire validation',
       )
@@ -278,7 +290,7 @@ function normalizeStatuslinePayload(payload: unknown): NormalizeResult {
 function extractSessionContext(payload: unknown): { sessionId: string; snap: Omit<SessionContextSnapshot, 'fetchedAt'> } | null {
   if (!payload || typeof payload !== 'object') return null
   const p = payload as { session_id?: unknown; context_window?: unknown }
-  if (typeof p.session_id !== 'string' || !p.session_id) return null
+  if (typeof p.session_id !== 'string' || p.session_id.trim().length === 0) return null
   if (!p.context_window || typeof p.context_window !== 'object') return null
   const cw = p.context_window as { used_percentage?: unknown; context_window_size?: unknown }
   if (typeof cw.used_percentage !== 'number' || typeof cw.context_window_size !== 'number') return null
@@ -297,7 +309,10 @@ function extractSessionUsage(
     model?: unknown
     context_window?: unknown
   }
-  if (typeof candidate.session_id !== 'string' || !candidate.session_id) return null
+  if (
+    typeof candidate.session_id !== 'string'
+    || candidate.session_id.trim().length === 0
+  ) return null
   if (!candidate.context_window || typeof candidate.context_window !== 'object') return null
   const context = candidate.context_window as {
     total_input_tokens?: unknown

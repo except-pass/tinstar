@@ -260,4 +260,27 @@ describe('ProviderCurrentObservationStores', () => {
       observation: undefined,
     })
   })
+
+  it('preserves opaque identity bytes instead of silently canonicalizing them', () => {
+    const stores = new ProviderCurrentObservationStores()
+    stores.quotas.set(quota('codex', 'work ', 25))
+
+    expect(stores.quotas.get('codex', 'work ')).toBeDefined()
+    expect(stores.quotas.get('codex', 'work')).toBeUndefined()
+    expect(stores.toWire().providerQuota[0]?.scope.accountRef).toBe('work ')
+  })
+
+  it('does not collide distinct identity tuples containing NUL bytes', () => {
+    const restored = ProviderCurrentObservationStores.fromWire({
+      version: 1,
+      sessionUsage: [],
+      sessionContext: [],
+      providerQuota: [
+        quota('a\u0000b', 'c', 10),
+        quota('a', 'b\u0000c', 20),
+      ],
+    })
+
+    expect(restored.quotas.list()).toHaveLength(2)
+  })
 })

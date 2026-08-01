@@ -226,4 +226,58 @@ describe('CcQuotaService', () => {
       },
     })
   })
+
+  it('ignores blank session identities without throwing from shared projection', () => {
+    const svc = new CcQuotaService({ sink, now: () => now })
+
+    expect(() => svc.ingest(samplePayload({
+      session_id: '   ',
+      context_window: {
+        context_window_size: 200_000,
+        used_percentage: 42,
+      },
+    }))).not.toThrow()
+    expect(svc.getSessionContext('   ')).toBeNull()
+    expect(svc.observationStores.sessions.listContext()).toEqual([])
+  })
+
+  it('preserves last valid observation times when shared validation rejects new values', () => {
+    const svc = new CcQuotaService({ sink, now: () => now })
+    svc.ingest(samplePayload({
+      context_window: {
+        context_window_size: 200_000,
+        used_percentage: 42,
+      },
+    }))
+    now += 10_000
+
+    expect(() => svc.ingest(samplePayload({
+      context_window: {
+        context_window_size: 200_000,
+        used_percentage: 101,
+      },
+      rate_limits: {
+        five_hour: { used_percentage: 101, resets_at: 1776981600 },
+      },
+    }))).not.toThrow()
+
+    expect(svc.observationStores.sessions.getContext('claude', 'abc-123'))
+      .toMatchObject({
+        freshness: {
+          state: 'unknown',
+          observedAt: '2026-04-23T10:00:00.000Z',
+          checkedAt: '2026-04-23T10:00:10.000Z',
+        },
+        availability: { state: 'unavailable', reason: 'source-error' },
+      })
+    expect(svc.observationStores.quotas.get('claude', 'default'))
+      .toMatchObject({
+        freshness: {
+          state: 'unknown',
+          observedAt: '2026-04-23T10:00:00.000Z',
+          checkedAt: '2026-04-23T10:00:10.000Z',
+        },
+        availability: { state: 'unavailable', reason: 'source-error' },
+      })
+  })
 })
