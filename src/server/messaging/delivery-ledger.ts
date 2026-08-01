@@ -20,6 +20,22 @@ const MAX_TERMINAL_MESSAGES = 2_048
 const MAX_OUTSTANDING_DELIVERIES = 10_000
 const MAX_HISTORY_ENTRIES = 64
 const MESSAGE_ID_ATTEMPTS = 16
+const SESSION_REF_KEYS = new Set(['sessionId', 'incarnation'])
+const RECIPIENT_KEYS = new Set(['providerId', 'sessionId', 'incarnation'])
+const EVIDENCE_KEYS = new Set(['source', 'reference'])
+const EVIDENCE_SOURCE_KEYS = new Set(['id', 'label'])
+const STATE_EVENT_KEYS = new Set([
+  'state', 'attempt', 'at', 'reason', 'retryAt', 'retryable', 'attemptRef', 'evidence',
+])
+const MESSAGE_KEYS = new Set([
+  'id', 'requestId', 'requestFingerprint', 'acceptedAt',
+  'sender', 'destination', 'text', 'deliveryIds',
+])
+const DESTINATION_KEYS = new Set(['subject'])
+const DELIVERY_KEYS = new Set([
+  'id', 'messageId', 'recipient', 'state', 'attempt', 'acceptedAt',
+  'updatedAt', 'history', 'historyTruncated',
+])
 
 export interface DeliveryLedgerPaths {
   dir: string
@@ -127,12 +143,6 @@ export interface DeliveryAcceptanceReceipt {
   deliveryIds: string[]
 }
 
-export interface DeliveryAcceptanceRecord extends DeliveryAcceptanceReceipt {
-  requestFingerprint: string
-  /** Present only after all terminal delivery detail was intentionally pruned. */
-  detailsPrunedAt?: string
-}
-
 export type DeliveryAcceptRejection =
   | 'invalid-request'
   | 'request-id-reuse'
@@ -150,13 +160,6 @@ export type DeliveryAcceptResult =
     details: 'retained'
     receipt: DeliveryAcceptanceReceipt
   } & DeliveryEnvelope)
-  | {
-    accepted: true
-    replayed: true
-    wrote: boolean
-    details: 'pruned'
-    receipt: DeliveryAcceptanceReceipt
-  }
   | { accepted: false; reason: DeliveryAcceptRejection; detail?: string }
 
 export interface DeliveryTransitionInput {
@@ -191,14 +194,13 @@ export interface DeliverySnapshotProblem {
 }
 
 export interface DeliveryLedgerFault {
-  primary: DeliverySnapshotProblem
-  backup: DeliverySnapshotProblem
+  primary?: DeliverySnapshotProblem
+  backup?: DeliverySnapshotProblem
 }
 
 export interface DeliveryLedgerLoadOutcome {
   health: Exclude<DeliveryLedgerHealth, 'write-uncertain'>
   from: 'primary' | 'backup' | 'empty' | 'none'
-  acceptances: DeliveryAcceptanceRecord[]
   messages: DeliveryMessage[]
   deliveries: DeliveryRecord[]
   fault?: DeliveryLedgerFault
@@ -207,8 +209,9 @@ export interface DeliveryLedgerLoadOutcome {
 export type DeliveryLedgerWriteStep =
   | 'write-temp'
   | 'fsync-temp'
-  | 'rotate-backup'
+  | 'write-backup-temp'
   | 'rename-primary'
+  | 'rename-backup'
   | 'fsync-dir'
 
 export interface DeliveryLedgerIo {
@@ -248,7 +251,6 @@ export interface DeliveryLedgerOptions {
 
 interface DeliveryLedgerSnapshot {
   version: typeof DELIVERY_LEDGER_SCHEMA_VERSION
-  acceptances: DeliveryAcceptanceRecord[]
   messages: DeliveryMessage[]
   deliveries: DeliveryRecord[]
 }
@@ -259,7 +261,7 @@ type SnapshotRead =
 
 interface HydratedLedger {
   outcome: DeliveryLedgerLoadOutcome
-  primaryIsKnownGood: boolean
+  copiesSynchronized: boolean
 }
 
 class AtomicWriteFailure extends Error {
@@ -275,8 +277,25 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+function safeErrorMessage(error: unknown): string {
+  try {
+    if (error && typeof error === 'object' && 'message' in error) {
+      const message = String((error as { message: unknown }).message)
+      if (message.length > 0) return message
+    }
+    const rendered = String(error)
+    return rendered.length > 0 ? rendered : 'unknown capture failure'
+  } catch {
+    return 'unknown capture failure'
+  }
+}
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasOnlyKeys(value: object, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every(key => allowed.has(key))
 }
 
 function isIsoTimestamp(value: unknown): value is string {
@@ -293,13 +312,18 @@ function isState(value: unknown): value is DeliveryState {
     || value === 'failed'
 }
 
-function isSessionRef(value: unknown): value is DeliverySessionRef {
+function hasSessionRefFields(value: unknown): value is DeliverySessionRef {
   if (!value || typeof value !== 'object') return false
   const ref = value as Partial<DeliverySessionRef>
   return nonEmpty(ref.sessionId) && nonEmpty(ref.incarnation)
 }
 
-function isRecipient(value: unknown): value is DeliveryLedgerRecipient {
+function isSessionRef(value: unknown): value is DeliverySessionRef {
+  return hasSessionRefFields(value)
+    && hasOnlyKeys(value, SESSION_REF_KEYS)
+}
+
+function hasRecipientFields(value: unknown): value is DeliveryLedgerRecipient {
   if (!value || typeof value !== 'object') return false
   const recipient = value as Partial<DeliveryLedgerRecipient>
   return nonEmpty(recipient.providerId)
@@ -307,7 +331,12 @@ function isRecipient(value: unknown): value is DeliveryLedgerRecipient {
     && nonEmpty(recipient.incarnation)
 }
 
-function isEvidence(value: unknown): value is DeliveryEvidence {
+function isRecipient(value: unknown): value is DeliveryLedgerRecipient {
+  return hasRecipientFields(value)
+    && hasOnlyKeys(value, RECIPIENT_KEYS)
+}
+
+function hasEvidenceFields(value: unknown): value is DeliveryEvidence {
   if (!value || typeof value !== 'object') return false
   const evidence = value as Partial<DeliveryEvidence>
   if (!evidence.source || typeof evidence.source !== 'object') return false
@@ -317,8 +346,15 @@ function isEvidence(value: unknown): value is DeliveryEvidence {
     && (evidence.reference === undefined || typeof evidence.reference === 'string')
 }
 
+function isEvidence(value: unknown): value is DeliveryEvidence {
+  return hasEvidenceFields(value)
+    && hasOnlyKeys(value, EVIDENCE_KEYS)
+    && hasOnlyKeys(value.source, EVIDENCE_SOURCE_KEYS)
+}
+
 function isStateEvent(value: unknown): value is DeliveryStateEvent {
   if (!value || typeof value !== 'object') return false
+  if (!hasOnlyKeys(value, STATE_EVENT_KEYS)) return false
   const event = value as Partial<DeliveryStateEvent>
   if (!isState(event.state)
     || !Number.isInteger(event.attempt)
@@ -337,7 +373,11 @@ function isStateEvent(value: unknown): value is DeliveryStateEvent {
 
 function isMessage(value: unknown): value is DeliveryMessage {
   if (!value || typeof value !== 'object') return false
+  if (!hasOnlyKeys(value, MESSAGE_KEYS)) return false
   const message = value as Partial<DeliveryMessage>
+  if (message.destination
+    && typeof message.destination === 'object'
+    && !hasOnlyKeys(message.destination, DESTINATION_KEYS)) return false
   return nonEmpty(message.id)
     && nonEmpty(message.requestId)
     && typeof message.requestFingerprint === 'string'
@@ -355,24 +395,9 @@ function isMessage(value: unknown): value is DeliveryMessage {
     && new Set(message.deliveryIds).size === message.deliveryIds.length
 }
 
-function isAcceptance(value: unknown): value is DeliveryAcceptanceRecord {
-  if (!value || typeof value !== 'object') return false
-  const acceptance = value as Partial<DeliveryAcceptanceRecord>
-  return nonEmpty(acceptance.requestId)
-    && nonEmpty(acceptance.messageId)
-    && typeof acceptance.requestFingerprint === 'string'
-    && /^[a-f0-9]{64}$/.test(acceptance.requestFingerprint)
-    && isIsoTimestamp(acceptance.acceptedAt)
-    && Array.isArray(acceptance.deliveryIds)
-    && acceptance.deliveryIds.length > 0
-    && acceptance.deliveryIds.every(nonEmpty)
-    && new Set(acceptance.deliveryIds).size === acceptance.deliveryIds.length
-    && (acceptance.detailsPrunedAt === undefined
-      || isIsoTimestamp(acceptance.detailsPrunedAt))
-}
-
 function isDelivery(value: unknown): value is DeliveryRecord {
   if (!value || typeof value !== 'object') return false
+  if (!hasOnlyKeys(value, DELIVERY_KEYS)) return false
   const delivery = value as Partial<DeliveryRecord>
   if (!nonEmpty(delivery.id)
     || !nonEmpty(delivery.messageId)
@@ -412,24 +437,10 @@ function isDelivery(value: unknown): value is DeliveryRecord {
 function validateSnapshotRelations(
   snapshot: DeliveryLedgerSnapshot,
 ): string | null {
-  const acceptanceRequestIds = new Set<string>()
-  const acceptanceMessageIds = new Set<string>()
-  const acceptancesByMessageId = new Map<string, DeliveryAcceptanceRecord>()
   const messageIds = new Set<string>()
   const requestIds = new Set<string>()
   const deliveryIds = new Set<string>()
   const deliveriesById = new Map<string, DeliveryRecord>()
-  for (const acceptance of snapshot.acceptances) {
-    if (acceptanceRequestIds.has(acceptance.requestId)) {
-      return `duplicate acceptance request id: ${acceptance.requestId}`
-    }
-    if (acceptanceMessageIds.has(acceptance.messageId)) {
-      return `duplicate acceptance message id: ${acceptance.messageId}`
-    }
-    acceptanceRequestIds.add(acceptance.requestId)
-    acceptanceMessageIds.add(acceptance.messageId)
-    acceptancesByMessageId.set(acceptance.messageId, acceptance)
-  }
   for (const message of snapshot.messages) {
     if (messageIds.has(message.id)) return `duplicate message id: ${message.id}`
     if (requestIds.has(message.requestId)) {
@@ -437,15 +448,6 @@ function validateSnapshotRelations(
     }
     messageIds.add(message.id)
     requestIds.add(message.requestId)
-    const acceptance = acceptancesByMessageId.get(message.id)
-    if (!acceptance
-      || acceptance.requestId !== message.requestId
-      || acceptance.requestFingerprint !== message.requestFingerprint
-      || acceptance.acceptedAt !== message.acceptedAt
-      || acceptance.deliveryIds.length !== message.deliveryIds.length
-      || acceptance.deliveryIds.some((id, index) => id !== message.deliveryIds[index])) {
-      return `message ${message.id} does not match its acceptance record`
-    }
   }
   for (const delivery of snapshot.deliveries) {
     if (deliveryIds.has(delivery.id)) {
@@ -463,21 +465,29 @@ function validateSnapshotRelations(
       if (delivery.messageId !== message.id) {
         return `delivery ${id} belongs to ${delivery.messageId}, not ${message.id}`
       }
+      if (delivery.acceptedAt !== message.acceptedAt) {
+        return `delivery ${id} has a different acceptance time than ${message.id}`
+      }
       if (referenced.has(id)) return `delivery ${id} is referenced more than once`
       referenced.add(id)
+    }
+    const recipients = message.deliveryIds.map(id => deliveriesById.get(id)!.recipient)
+    const fingerprint = requestFingerprint({
+      requestId: message.requestId,
+      sender: {
+        sessionId: message.sender.sessionId,
+        incarnation: message.sender.incarnation,
+      },
+      destination: { subject: message.destination.subject },
+      text: message.text,
+      recipients: normalizeRecipients(recipients),
+    })
+    if (fingerprint !== message.requestFingerprint) {
+      return `message ${message.id} does not match its request fingerprint`
     }
   }
   if (referenced.size !== snapshot.deliveries.length) {
     return 'snapshot contains an orphan delivery'
-  }
-  for (const acceptance of snapshot.acceptances) {
-    const messageRetained = messageIds.has(acceptance.messageId)
-    if (messageRetained && acceptance.detailsPrunedAt !== undefined) {
-      return `retained message ${acceptance.messageId} is marked as pruned`
-    }
-    if (!messageRetained && acceptance.detailsPrunedAt === undefined) {
-      return `acceptance ${acceptance.requestId} lost unpruned delivery detail`
-    }
   }
   return null
 }
@@ -513,10 +523,8 @@ function parseSnapshot(raw: string, path: string): SnapshotRead {
       },
     }
   }
-  if (!Array.isArray(candidate.acceptances)
-    || !Array.isArray(candidate.messages)
+  if (!Array.isArray(candidate.messages)
     || !Array.isArray(candidate.deliveries)
-    || !candidate.acceptances.every(isAcceptance)
     || !candidate.messages.every(isMessage)
     || !candidate.deliveries.every(isDelivery)) {
     return {
@@ -530,7 +538,6 @@ function parseSnapshot(raw: string, path: string): SnapshotRead {
   }
   const snapshot: DeliveryLedgerSnapshot = {
     version: DELIVERY_LEDGER_SCHEMA_VERSION,
-    acceptances: candidate.acceptances,
     messages: candidate.messages,
     deliveries: candidate.deliveries,
   }
@@ -570,26 +577,42 @@ function hydrate(
   io: DeliveryLedgerIo,
 ): HydratedLedger {
   const primary = readSnapshot(paths.primary, io)
-  if (primary.ok) {
+  const backup = readSnapshot(paths.backup, io)
+  if ((!primary.ok && primary.problem.kind === 'unknown-version')
+    || (!backup.ok && backup.problem.kind === 'unknown-version')) {
     return {
-      primaryIsKnownGood: true,
+      copiesSynchronized: false,
       outcome: {
-        health: 'healthy',
+        health: 'faulted-read-only',
+        from: 'none',
+        messages: [],
+        deliveries: [],
+        fault: {
+          ...(!primary.ok ? { primary: primary.problem } : {}),
+          ...(!backup.ok ? { backup: backup.problem } : {}),
+        },
+      },
+    }
+  }
+  if (primary.ok) {
+    const copiesSynchronized = backup.ok
+      && serialize(primary.snapshot) === serialize(backup.snapshot)
+    return {
+      copiesSynchronized,
+      outcome: {
+        health: copiesSynchronized ? 'healthy' : 'recovered',
         from: 'primary',
-        acceptances: primary.snapshot.acceptances,
         messages: primary.snapshot.messages,
         deliveries: primary.snapshot.deliveries,
       },
     }
   }
-  const backup = readSnapshot(paths.backup, io)
   if (backup.ok) {
     return {
-      primaryIsKnownGood: false,
+      copiesSynchronized: false,
       outcome: {
         health: 'recovered',
         from: 'backup',
-        acceptances: backup.snapshot.acceptances,
         messages: backup.snapshot.messages,
         deliveries: backup.snapshot.deliveries,
       },
@@ -597,22 +620,20 @@ function hydrate(
   }
   if (primary.problem.kind === 'missing' && backup.problem.kind === 'missing') {
     return {
-      primaryIsKnownGood: false,
+      copiesSynchronized: false,
       outcome: {
         health: 'healthy',
         from: 'empty',
-        acceptances: [],
         messages: [],
         deliveries: [],
       },
     }
   }
   return {
-    primaryIsKnownGood: false,
+    copiesSynchronized: false,
     outcome: {
       health: 'faulted-read-only',
       from: 'none',
-      acceptances: [],
       messages: [],
       deliveries: [],
       fault: { primary: primary.problem, backup: backup.problem },
@@ -655,20 +676,21 @@ function requestFingerprint(
     .digest('hex')
 }
 
-function acceptanceReceipt(
-  acceptance: DeliveryAcceptanceRecord,
-): DeliveryAcceptanceReceipt {
+function acceptanceReceipt(message: DeliveryMessage): DeliveryAcceptanceReceipt {
   return {
-    requestId: acceptance.requestId,
-    messageId: acceptance.messageId,
-    acceptedAt: acceptance.acceptedAt,
-    deliveryIds: [...acceptance.deliveryIds],
+    requestId: message.requestId,
+    messageId: message.id,
+    acceptedAt: message.acceptedAt,
+    deliveryIds: [...message.deliveryIds],
   }
 }
 
 function validateAcceptInput(input: DeliveryAcceptInput): string | null {
+  if (!input || typeof input !== 'object') return 'request must be an object'
   if (!nonEmpty(input.requestId)) return 'requestId must not be empty'
-  if (!isSessionRef(input.sender)) return 'sender must name a session and incarnation'
+  if (!hasSessionRefFields(input.sender)) {
+    return 'sender must name a session and incarnation'
+  }
   if (!input.destination || !nonEmpty(input.destination.subject)) {
     return 'destination subject must not be empty'
   }
@@ -678,10 +700,29 @@ function validateAcceptInput(input: DeliveryAcceptInput): string | null {
   if (!Array.isArray(input.recipients) || input.recipients.length < 1) {
     return 'at least one recipient is required'
   }
-  if (!input.recipients.every(isRecipient)) return 'every recipient must be complete'
+  if (!input.recipients.every(hasRecipientFields)) {
+    return 'every recipient must be complete'
+  }
   const keys = input.recipients.map(recipientKey)
   if (new Set(keys).size !== keys.length) {
     return 'recipient provider/session pairs must be unique'
+  }
+  return null
+}
+
+function validateTransitionInput(input: DeliveryTransitionInput): string | null {
+  if (!input || typeof input !== 'object') return 'transition must be an object'
+  if (!nonEmpty(input.deliveryId)) return 'deliveryId must not be empty'
+  if (!input.expected || typeof input.expected !== 'object'
+    || !isState(input.expected.state)
+    || !Number.isInteger(input.expected.attempt)
+    || input.expected.attempt < 0) return 'expected state or attempt is invalid'
+  if (!input.next || typeof input.next !== 'object') return 'next event is required'
+  if (input.next.reason !== undefined && typeof input.next.reason !== 'string') {
+    return 'reason must be a string'
+  }
+  if (input.next.evidence !== undefined && !hasEvidenceFields(input.next.evidence)) {
+    return 'evidence is malformed'
   }
   return null
 }
@@ -755,7 +796,6 @@ function terminalUpdatedAt(
 function pruneTerminal(
   messages: Map<string, DeliveryMessage>,
   deliveries: Map<string, DeliveryRecord>,
-  acceptances: Map<string, DeliveryAcceptanceRecord>,
   now: number,
   retentionMs: number,
   maxTerminalMessages: number,
@@ -785,13 +825,59 @@ function pruneTerminal(
     if (!message) continue
     for (const deliveryId of message.deliveryIds) deliveries.delete(deliveryId)
     messages.delete(messageId)
-    const acceptance = acceptances.get(message.requestId)
-    if (acceptance) {
-      acceptances.set(message.requestId, {
-        ...acceptance,
-        detailsPrunedAt: new Date(now).toISOString(),
-      })
+  }
+}
+
+function copyTransitionNext(
+  next: Omit<DeliveryStateEvent, 'at'>,
+): Omit<DeliveryStateEvent, 'at'> {
+  const owned: Omit<DeliveryStateEvent, 'at'> = {
+    state: next.state,
+    attempt: next.attempt,
+  }
+  if (next.reason !== undefined) owned.reason = next.reason
+  if (next.retryAt !== undefined) owned.retryAt = next.retryAt
+  if (next.retryable !== undefined) owned.retryable = next.retryable
+  if (next.attemptRef !== undefined) owned.attemptRef = next.attemptRef
+  if (next.evidence !== undefined) {
+    owned.evidence = {
+      source: {
+        id: next.evidence.source.id,
+        label: next.evidence.source.label,
+      },
+      ...(next.evidence.reference !== undefined
+        ? { reference: next.evidence.reference }
+        : {}),
     }
+  }
+  return owned
+}
+
+function copyAcceptInput(input: DeliveryAcceptInput): DeliveryAcceptInput {
+  return {
+    requestId: input.requestId,
+    sender: {
+      sessionId: input.sender.sessionId,
+      incarnation: input.sender.incarnation,
+    },
+    destination: { subject: input.destination.subject },
+    text: input.text,
+    recipients: input.recipients.map(recipient => ({
+      providerId: recipient.providerId,
+      sessionId: recipient.sessionId,
+      incarnation: recipient.incarnation,
+    })),
+  }
+}
+
+function copyTransitionInput(input: DeliveryTransitionInput): DeliveryTransitionInput {
+  return {
+    deliveryId: input.deliveryId,
+    expected: {
+      state: input.expected.state,
+      attempt: input.expected.attempt,
+    },
+    next: copyTransitionNext(input.next),
   }
 }
 
@@ -811,8 +897,8 @@ export class DeliveryLedger {
   private readonly maxHistoryEntries: number
   private readonly loadOutcome: DeliveryLedgerLoadOutcome
   private currentHealth: DeliveryLedgerHealth
-  private primaryIsKnownGood: boolean
-  private acceptances = new Map<string, DeliveryAcceptanceRecord>()
+  private copiesSynchronized: boolean
+  private messagesByRequestId = new Map<string, DeliveryMessage>()
   private acceptedMessageIds = new Set<string>()
   private messages = new Map<string, DeliveryMessage>()
   private deliveries = new Map<string, DeliveryRecord>()
@@ -862,11 +948,10 @@ export class DeliveryLedger {
     const loaded = hydrate(this.paths, this.io)
     this.loadOutcome = loaded.outcome
     this.currentHealth = loaded.outcome.health
-    this.primaryIsKnownGood = loaded.primaryIsKnownGood
+    this.copiesSynchronized = loaded.copiesSynchronized
     if (loaded.outcome.from === 'primary' || loaded.outcome.from === 'backup') {
       this.install({
         version: DELIVERY_LEDGER_SCHEMA_VERSION,
-        acceptances: loaded.outcome.acceptances,
         messages: loaded.outcome.messages,
         deliveries: loaded.outcome.deliveries,
       })
@@ -912,11 +997,49 @@ export class DeliveryLedger {
   }
 
   accept(input: DeliveryAcceptInput): Promise<DeliveryAcceptResult> {
-    return this.enqueue(() => this.runAccept(input))
+    let captured: DeliveryAcceptInput | undefined
+    let captureProblem: string | null = null
+    try {
+      captureProblem = validateAcceptInput(input)
+      if (!captureProblem) captured = copyAcceptInput(input)
+    } catch (error) {
+      captureProblem = `request could not be captured: ${safeErrorMessage(error)}`
+    }
+    return this.enqueue(async () => {
+      const health = this.mutationHealthRejection()
+      if (health) return { accepted: false, ...health }
+      if (captureProblem || !captured) {
+        return {
+          accepted: false,
+          reason: 'invalid-request',
+          detail: captureProblem ?? 'request could not be captured',
+        }
+      }
+      return this.runAccept(captured)
+    })
   }
 
   transition(input: DeliveryTransitionInput): Promise<DeliveryTransitionResult> {
-    return this.enqueue(() => this.runTransition(input))
+    let captured: DeliveryTransitionInput | undefined
+    let captureProblem: string | null = null
+    try {
+      captureProblem = validateTransitionInput(input)
+      if (!captureProblem) captured = copyTransitionInput(input)
+    } catch (error) {
+      captureProblem = `transition could not be captured: ${safeErrorMessage(error)}`
+    }
+    return this.enqueue(async () => {
+      const health = this.mutationHealthRejection()
+      if (health) return { updated: false, ...health }
+      if (captureProblem || !captured) {
+        return {
+          updated: false,
+          reason: 'invalid-transition',
+          detail: captureProblem ?? 'transition could not be captured',
+        }
+      }
+      return this.runTransition(captured)
+    })
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -955,29 +1078,28 @@ export class DeliveryLedger {
       recipients,
     }
     const fingerprint = requestFingerprint(normalized)
-    const prior = this.acceptances.get(input.requestId)
+    const prior = this.messagesByRequestId.get(input.requestId)
     if (prior) {
       if (prior.requestFingerprint !== fingerprint) {
         return {
           accepted: false,
           reason: 'request-id-reuse',
-          detail: `request ${input.requestId} already belongs to message ${prior.messageId}`,
+          detail: `request ${input.requestId} already belongs to message ${prior.id}`,
         }
       }
       let wrote = false
-      if (!this.primaryIsKnownGood) {
+      if (!this.copiesSynchronized) {
         const persisted = await this.persist(this.snapshot())
         if (!persisted.ok) return { accepted: false, ...persisted.rejection }
         wrote = true
       }
-      const envelope = this.getMessage(prior.messageId)
+      const envelope = this.getMessage(prior.id)
       if (!envelope) {
+        this.currentHealth = 'faulted-read-only'
         return {
-          accepted: true,
-          replayed: true,
-          wrote,
-          details: 'pruned',
-          receipt: acceptanceReceipt(prior),
+          accepted: false,
+          reason: 'faulted-read-only',
+          detail: `request ${prior.requestId} references a missing message`,
         }
       }
       return {
@@ -1031,17 +1153,8 @@ export class DeliveryLedger {
       text: normalized.text,
       deliveryIds: deliveryRecords.map(delivery => delivery.id),
     }
-    const acceptance: DeliveryAcceptanceRecord = {
-      requestId: message.requestId,
-      requestFingerprint: message.requestFingerprint,
-      messageId: message.id,
-      acceptedAt: message.acceptedAt,
-      deliveryIds: [...message.deliveryIds],
-    }
-    const nextAcceptances = new Map(this.acceptances)
     const nextMessages = new Map(this.messages)
     const nextDeliveries = new Map(this.deliveries)
-    nextAcceptances.set(acceptance.requestId, acceptance)
     nextMessages.set(message.id, message)
     for (const delivery of deliveryRecords) {
       nextDeliveries.set(delivery.id, delivery)
@@ -1049,12 +1162,11 @@ export class DeliveryLedger {
     pruneTerminal(
       nextMessages,
       nextDeliveries,
-      nextAcceptances,
       this.clock(),
       this.retentionMs,
       this.maxTerminalMessages,
     )
-    const candidate = this.snapshot(nextMessages, nextDeliveries, nextAcceptances)
+    const candidate = this.snapshot(nextMessages, nextDeliveries)
     const persisted = await this.persist(candidate)
     if (!persisted.ok) return { accepted: false, ...persisted.rejection }
     this.install(candidate, persisted.serialized)
@@ -1063,7 +1175,7 @@ export class DeliveryLedger {
       replayed: false,
       wrote: true,
       details: 'retained',
-      receipt: acceptanceReceipt(acceptance),
+      receipt: acceptanceReceipt(message),
       message: clone(message),
       deliveries: clone(deliveryRecords),
     }
@@ -1074,24 +1186,29 @@ export class DeliveryLedger {
   ): Promise<DeliveryTransitionResult> {
     const health = this.mutationHealthRejection()
     if (health) return { updated: false, ...health }
-    const current = this.deliveries.get(input.deliveryId)
+    const shapeProblem = validateTransitionInput(input)
+    if (shapeProblem) {
+      return { updated: false, reason: 'invalid-transition', detail: shapeProblem }
+    }
+    const owned = copyTransitionInput(input)
+    const current = this.deliveries.get(owned.deliveryId)
     if (!current) return { updated: false, reason: 'unknown-delivery' }
-    if (current.state !== input.expected.state
-      || current.attempt !== input.expected.attempt) {
+    if (current.state !== owned.expected.state
+      || current.attempt !== owned.expected.attempt) {
       return {
         updated: false,
         reason: 'stale-delivery',
-        detail: `expected ${input.expected.state}/${input.expected.attempt}, `
+        detail: `expected ${owned.expected.state}/${owned.expected.attempt}, `
           + `found ${current.state}/${current.attempt}`,
       }
     }
-    const invalid = transitionProblem(current, input.next)
+    const invalid = transitionProblem(current, owned.next)
     if (invalid) {
       return { updated: false, reason: 'invalid-transition', detail: invalid }
     }
 
     const at = new Date(this.clock()).toISOString()
-    const event: DeliveryStateEvent = { ...input.next, at }
+    const event: DeliveryStateEvent = { ...owned.next, at }
     const history = [...current.history, event]
     const truncated = history.length > this.maxHistoryEntries
     const boundedHistory = !truncated
@@ -1107,17 +1224,15 @@ export class DeliveryLedger {
     }
     const nextMessages = new Map(this.messages)
     const nextDeliveries = new Map(this.deliveries)
-    const nextAcceptances = new Map(this.acceptances)
     nextDeliveries.set(updated.id, updated)
     pruneTerminal(
       nextMessages,
       nextDeliveries,
-      nextAcceptances,
       this.clock(),
       this.retentionMs,
       this.maxTerminalMessages,
     )
-    const candidate = this.snapshot(nextMessages, nextDeliveries, nextAcceptances)
+    const candidate = this.snapshot(nextMessages, nextDeliveries)
     const persisted = await this.persist(candidate)
     if (!persisted.ok) return { updated: false, ...persisted.rejection }
     this.install(candidate, persisted.serialized)
@@ -1135,11 +1250,9 @@ export class DeliveryLedger {
   private snapshot(
     messages: Map<string, DeliveryMessage> = this.messages,
     deliveries: Map<string, DeliveryRecord> = this.deliveries,
-    acceptances: Map<string, DeliveryAcceptanceRecord> = this.acceptances,
   ): DeliveryLedgerSnapshot {
     return {
       version: DELIVERY_LEDGER_SCHEMA_VERSION,
-      acceptances: [...acceptances.values()],
       messages: [...messages.values()],
       deliveries: [...deliveries.values()],
     }
@@ -1149,12 +1262,11 @@ export class DeliveryLedger {
     snapshot: DeliveryLedgerSnapshot,
     serialized: string = serialize(snapshot),
   ): void {
-    this.acceptances = new Map(snapshot.acceptances.map(acceptance => [
-      acceptance.requestId,
-      acceptance,
+    this.messagesByRequestId = new Map(snapshot.messages.map(message => [
+      message.requestId,
+      message,
     ]))
-    this.acceptedMessageIds = new Set(snapshot.acceptances.map(acceptance =>
-      acceptance.messageId))
+    this.acceptedMessageIds = new Set(snapshot.messages.map(message => message.id))
     this.messages = new Map(snapshot.messages.map(message => [message.id, message]))
     this.deliveries = new Map(snapshot.deliveries.map(delivery => [delivery.id, delivery]))
     this.lastSerialized = serialized
@@ -1187,12 +1299,12 @@ export class DeliveryLedger {
       }
     }
 
-    if (this.primaryIsKnownGood && serialized === this.lastSerialized) {
+    if (this.copiesSynchronized && serialized === this.lastSerialized) {
       return { ok: true, serialized }
     }
     try {
       await this.writeAtomically(serialized)
-      this.primaryIsKnownGood = true
+      this.copiesSynchronized = true
       this.currentHealth = 'healthy'
       this.lastSerialized = serialized
       return { ok: true, serialized }
@@ -1227,30 +1339,21 @@ export class DeliveryLedger {
         this.io.close(fd)
       }
 
-      await this.step('rotate-backup')
-      if (this.primaryIsKnownGood) {
-        let prior: Buffer | null
-        try {
-          prior = this.io.readFile(this.paths.primary)
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-          prior = null
-        }
-        if (prior) {
-          const backupFd = this.io.open(this.paths.backupTemp, 'w')
-          try {
-            this.writeAll(backupFd, prior)
-            this.io.fsync(backupFd)
-          } finally {
-            this.io.close(backupFd)
-          }
-          this.io.rename(this.paths.backupTemp, this.paths.backup)
-        }
+      await this.step('write-backup-temp')
+      const backupFd = this.io.open(this.paths.backupTemp, 'w')
+      try {
+        this.writeAll(backupFd, Buffer.from(serialized))
+        this.io.fsync(backupFd)
+      } finally {
+        this.io.close(backupFd)
       }
 
       await this.step('rename-primary')
       this.io.rename(this.paths.temp, this.paths.primary)
       primaryReplaced = true
+
+      await this.step('rename-backup')
+      this.io.rename(this.paths.backupTemp, this.paths.backup)
 
       await this.step('fsync-dir')
       this.fsyncDirectory()

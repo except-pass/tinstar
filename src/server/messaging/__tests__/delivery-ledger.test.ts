@@ -19,6 +19,7 @@ import {
   type DeliveryLedgerIo,
   type DeliveryLedgerPaths,
   type DeliveryLedgerWriteStep,
+  type DeliveryTransitionInput,
 } from '../delivery-ledger'
 
 interface TestContext {
@@ -180,10 +181,9 @@ describe('DeliveryLedger acceptance', () => {
 
       const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
       expect(Object.keys(snapshot).sort()).toEqual([
-        'acceptances', 'deliveries', 'messages', 'version',
+        'deliveries', 'messages', 'version',
       ])
       expect(snapshot.version).toBe(DELIVERY_LEDGER_SCHEMA_VERSION)
-      expect(snapshot.acceptances).toHaveLength(1)
       expect(snapshot.messages).toHaveLength(1)
       expect(snapshot.deliveries).toHaveLength(2)
     })
@@ -210,8 +210,9 @@ describe('DeliveryLedger acceptance', () => {
       expect(steps).toEqual([
         'write-temp',
         'fsync-temp',
-        'rotate-backup',
+        'write-backup-temp',
         'rename-primary',
+        'rename-backup',
         'fsync-dir',
       ])
       expect(existsSync(paths.primary)).toBe(true)
@@ -235,10 +236,13 @@ describe('DeliveryLedger acceptance', () => {
       expect(tempFsync).toBeGreaterThanOrEqual(0)
       expect(backupWrite).toBeGreaterThan(tempFsync)
       expect(backupFsync).toBeGreaterThan(backupWrite)
-      expect(backupRename).toBeGreaterThan(backupFsync)
-      expect(primaryRename).toBeGreaterThan(backupRename)
+      expect(primaryRename).toBeGreaterThan(backupFsync)
+      expect(backupRename).toBeGreaterThan(primaryRename)
       expect(primaryRename).toBeGreaterThan(tempFsync)
-      expect(dirFsync).toBeGreaterThan(primaryRename)
+      expect(dirFsync).toBeGreaterThan(backupRename)
+      expect(readFileSync(paths.backup, 'utf8')).toBe(
+        readFileSync(paths.primary, 'utf8'),
+      )
     })
   })
 
@@ -281,15 +285,17 @@ describe('DeliveryLedger acceptance', () => {
     })
   })
 
-  it('does not install a candidate when backup rotation fails', async () => {
+  it('does not install a candidate when backup staging fails', async () => {
     await withLedger(async ({ paths, open }) => {
       const original = open({ ids: ['msg-before-backup-failure'] })
       await original.accept(input('req-before-backup-failure'))
       const io: DeliveryLedgerIo = {
         ...nodeDeliveryLedgerIo,
-        rename(from, to) {
-          if (from === paths.backupTemp) throw new Error('backup rename failed')
-          nodeDeliveryLedgerIo.rename(from, to)
+        open(path, flags) {
+          if (path === paths.backupTemp && flags === 'w') {
+            throw new Error('backup staging failed')
+          }
+          return nodeDeliveryLedgerIo.open(path, flags)
         },
       }
       const replacement = open({ ids: ['msg-backup-failure'], io })
@@ -300,6 +306,72 @@ describe('DeliveryLedger acceptance', () => {
       const reopened = open()
       expect(reopened.getMessage('msg-before-backup-failure')).toBeDefined()
       expect(reopened.getMessage('msg-backup-failure')).toBeUndefined()
+    })
+  })
+
+  it('does not replace the primary when backup staging cannot be synced', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const original = open({ ids: ['msg-before-backup-fsync'] })
+      await original.accept(input('req-before-backup-fsync'))
+      const fdPaths = new Map<number, string>()
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        open(path, flags) {
+          const fd = nodeDeliveryLedgerIo.open(path, flags)
+          fdPaths.set(fd, path)
+          return fd
+        },
+        fsync(fd) {
+          if (fdPaths.get(fd) === paths.backupTemp) {
+            throw new Error('backup fsync failed')
+          }
+          nodeDeliveryLedgerIo.fsync(fd)
+        },
+        close(fd) {
+          nodeDeliveryLedgerIo.close(fd)
+          fdPaths.delete(fd)
+        },
+      }
+      const replacement = open({ ids: ['msg-backup-fsync'], io })
+      await expect(replacement.accept(input('req-backup-fsync')))
+        .resolves.toMatchObject({ accepted: false, reason: 'write-failed' })
+      expect(replacement.getMessage('msg-backup-fsync')).toBeUndefined()
+
+      const reopened = open()
+      expect(reopened.getMessage('msg-before-backup-fsync')).toBeDefined()
+      expect(reopened.getMessage('msg-backup-fsync')).toBeUndefined()
+    })
+  })
+
+  it('freezes when backup finalization fails and heals both copies on replay', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const original = open({ ids: ['msg-before-backup-rename'] })
+      await original.accept(input('req-before-backup-rename'))
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        rename(from, to) {
+          if (from === paths.backupTemp) throw new Error('backup rename failed')
+          nodeDeliveryLedgerIo.rename(from, to)
+        },
+      }
+      const uncertain = open({ ids: ['msg-backup-rename'], io })
+      await expect(uncertain.accept(input('req-backup-rename')))
+        .resolves.toMatchObject({ accepted: false, reason: 'write-uncertain' })
+      expect(uncertain.health).toBe('write-uncertain')
+      expect(uncertain.getMessage('msg-backup-rename')).toBeUndefined()
+
+      const reopened = open()
+      expect(reopened.health).toBe('recovered')
+      expect(reopened.getMessage('msg-backup-rename')).toBeDefined()
+      await expect(reopened.accept(input('req-backup-rename'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        wrote: true,
+        message: { id: 'msg-backup-rename' },
+      })
+      expect(readFileSync(paths.backup, 'utf8')).toBe(
+        readFileSync(paths.primary, 'utf8'),
+      )
     })
   })
 
@@ -352,6 +424,69 @@ describe('DeliveryLedger acceptance', () => {
         details: 'retained',
         receipt: { messageId: 'msg-canonical' },
       })
+    })
+  })
+
+  it('owns acceptance intent before queued work begins', async () => {
+    await withLedger(async ({ paths, open }) => {
+      let release!: () => void
+      let entered!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      const atWrite = new Promise<void>(resolve => { entered = resolve })
+      let holdWrite = true
+      const ledger = open({
+        ids: ['msg-blocking-accept', 'msg-owned-accept'],
+        beforeStep: async step => {
+          if (holdWrite && step === 'write-temp') {
+            holdWrite = false
+            entered()
+            await held
+          }
+        },
+      })
+      const blocking = ledger.accept(input('req-blocking-accept'))
+      await atWrite
+      const mutable = Object.assign(
+        input('req-owned-accept', { text: 'original intent' }),
+        { providerDetail: () => 'must not persist' },
+      )
+      Object.assign(mutable.sender, { providerDetail: () => 'must not persist' })
+      Object.assign(mutable.destination, { providerDetail: () => 'must not persist' })
+      Object.assign(mutable.recipients[0]!, {
+        providerDetail: () => 'must not persist',
+      })
+      const accepting = ledger.accept(mutable)
+      mutable.text = 'mutated intent'
+      mutable.sender.incarnation = 'mutated-sender'
+      mutable.recipients[0]!.incarnation = 'mutated-recipient'
+      release()
+      await expect(blocking).resolves.toMatchObject({ accepted: true })
+      const owned = await accepting
+      expect(owned).toMatchObject({
+        accepted: true,
+        message: {
+          id: 'msg-owned-accept',
+          text: 'original intent',
+          sender: { incarnation: 'sender-incarnation' },
+        },
+        deliveries: [{ recipient: { incarnation: 'reviewer-incarnation' } }],
+      })
+      if (!owned.accepted || owned.details !== 'retained') {
+        throw new Error('expected retained owned acceptance')
+      }
+      expect(Object.keys(owned.message).sort()).toEqual([
+        'acceptedAt', 'deliveryIds', 'destination', 'id', 'requestFingerprint',
+        'requestId', 'sender', 'text',
+      ])
+      expect(Object.keys(owned.message.sender).sort()).toEqual([
+        'incarnation', 'sessionId',
+      ])
+      expect(Object.keys(owned.deliveries[0]!.recipient).sort()).toEqual([
+        'incarnation', 'providerId', 'sessionId',
+      ])
+      const persisted = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(persisted.messages[1]).toEqual(owned.message)
+      expect(persisted.deliveries[1]).toEqual(owned.deliveries[0])
     })
   })
 
@@ -435,7 +570,7 @@ describe('DeliveryLedger reload and recovery', () => {
     })
   })
 
-  it('recovers the last-known-good backup when the primary is corrupt', async () => {
+  it('recovers the latest acknowledged snapshot when the primary is corrupt', async () => {
     await withLedger(async ({ paths, open }) => {
       const ledger = open({ ids: ['msg-one', 'msg-two'] })
       await ledger.accept(input('req-one'))
@@ -445,17 +580,155 @@ describe('DeliveryLedger reload and recovery', () => {
       const recovered = open({ ids: ['msg-three'] })
       expect(recovered.health).toBe('recovered')
       expect(recovered.getMessage('msg-one')).toBeDefined()
-      expect(recovered.getMessage('msg-two')).toBeUndefined()
+      expect(recovered.getMessage('msg-two')).toBeDefined()
 
       await expect(recovered.accept(input('req-three'))).resolves.toMatchObject({
         accepted: true,
         message: { id: 'msg-three' },
       })
       expect(JSON.parse(readFileSync(paths.backup, 'utf8')).messages)
-        .toHaveLength(1)
+        .toHaveLength(3)
       const replacement = open()
       expect(replacement.getMessage('msg-one')).toBeDefined()
       expect(replacement.getMessage('msg-three')).toBeDefined()
+    })
+  })
+
+  it('falls back when retained intent no longer matches its fingerprint', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-fingerprint'] })
+      await ledger.accept(input('req-fingerprint'))
+      const corrupted = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      corrupted.messages[0].text = 'corrupted work'
+      writeFileSync(paths.primary, JSON.stringify(corrupted))
+
+      const recovered = open()
+      expect(recovered.health).toBe('recovered')
+      expect(recovered.getMessage('msg-fingerprint')?.message.text)
+        .toBe('Please inspect the lifecycle race.')
+
+      writeFileSync(paths.primary, JSON.stringify(corrupted))
+      writeFileSync(paths.backup, JSON.stringify(corrupted))
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary).toMatchObject({
+        kind: 'malformed',
+        detail: 'message msg-fingerprint does not match its request fingerprint',
+      })
+    })
+  })
+
+  it('rejects provider-owned detail injected into persisted domain records', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-provider-detail'] })
+      const accepted = await ledger.accept(input('req-provider-detail'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      await ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: {
+          state: 'in-flight',
+          attempt: 1,
+          evidence: {
+            source: { id: 'rollout', label: 'Codex rollout' },
+            reference: 'event-1',
+          },
+        },
+      })
+      const base = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      const corruptions: Array<(snapshot: typeof base) => void> = [
+        snapshot => { snapshot.messages[0].providerDetail = 'leak' },
+        snapshot => { snapshot.messages[0].sender.providerDetail = 'leak' },
+        snapshot => { snapshot.messages[0].destination.providerDetail = 'leak' },
+        snapshot => { snapshot.deliveries[0].providerDetail = 'leak' },
+        snapshot => { snapshot.deliveries[0].recipient.providerDetail = 'leak' },
+        snapshot => { snapshot.deliveries[0].history[1].providerDetail = 'leak' },
+        snapshot => { snapshot.deliveries[0].history[1].evidence.providerDetail = 'leak' },
+        snapshot => {
+          snapshot.deliveries[0].history[1].evidence.source.providerDetail = 'leak'
+        },
+      ]
+
+      for (const corrupt of corruptions) {
+        const snapshot = structuredClone(base)
+        corrupt(snapshot)
+        const invalid = JSON.stringify(snapshot)
+        writeFileSync(paths.primary, invalid)
+        writeFileSync(paths.backup, invalid)
+        const faulted = open()
+        expect(faulted.health).toBe('faulted-read-only')
+        expect(faulted.fault?.primary?.kind).toBe('malformed')
+        expect(faulted.fault?.backup?.kind).toBe('malformed')
+      }
+    })
+  })
+
+  it('rejects a delivery whose acceptance time diverges from its message', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-divergent-time'], now: () => 1_000 })
+      await ledger.accept(input('req-divergent-time'))
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      const changedAt = '1970-01-01T00:00:02.000Z'
+      snapshot.deliveries[0].acceptedAt = changedAt
+      snapshot.deliveries[0].updatedAt = changedAt
+      snapshot.deliveries[0].history[0].at = changedAt
+      const invalid = JSON.stringify(snapshot)
+      writeFileSync(paths.primary, invalid)
+
+      const recovered = open()
+      expect(recovered.health).toBe('recovered')
+      expect(recovered.getMessage('msg-divergent-time')).toBeDefined()
+
+      writeFileSync(paths.primary, invalid)
+      writeFileSync(paths.backup, invalid)
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary).toMatchObject({
+        kind: 'malformed',
+        detail: 'delivery msg-divergent-time/d/1 has a different acceptance time than msg-divergent-time',
+      })
+    })
+  })
+
+  it('does not downgrade an unknown primary schema through an older backup', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-newer-schema'] })
+      await ledger.accept(input('req-newer-schema'))
+      const primary = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      primary.version = DELIVERY_LEDGER_SCHEMA_VERSION + 1
+      writeFileSync(paths.primary, JSON.stringify(primary))
+      const backup = readFileSync(paths.backup, 'utf8')
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary?.kind).toBe('unknown-version')
+      expect(faulted.fault?.backup).toBeUndefined()
+      await expect(faulted.accept(input('req-refused-downgrade'))).resolves.toEqual({
+        accepted: false,
+        reason: 'faulted-read-only',
+      })
+      expect(readFileSync(paths.backup, 'utf8')).toBe(backup)
+    })
+  })
+
+  it('does not overwrite an unknown backup schema from an older primary', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-older-primary'] })
+      await ledger.accept(input('req-older-primary'))
+      const primary = readFileSync(paths.primary, 'utf8')
+      const backup = JSON.parse(readFileSync(paths.backup, 'utf8'))
+      backup.version = DELIVERY_LEDGER_SCHEMA_VERSION + 1
+      writeFileSync(paths.backup, JSON.stringify(backup))
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary).toBeUndefined()
+      expect(faulted.fault?.backup?.kind).toBe('unknown-version')
+      await expect(faulted.accept(input('req-refused-backup-downgrade')))
+        .resolves.toEqual({ accepted: false, reason: 'faulted-read-only' })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(primary)
     })
   })
 
@@ -485,31 +758,32 @@ describe('DeliveryLedger reload and recovery', () => {
       const recovered = open()
       expect(recovered.health).toBe('recovered')
       expect(recovered.getMessage('msg-history-one')).toBeDefined()
-      expect(recovered.getMessage('msg-history-two')).toBeUndefined()
+      expect(recovered.getMessage('msg-history-two')).toBeDefined()
 
       writeFileSync(paths.primary, invalid)
       writeFileSync(paths.backup, invalid)
       const faulted = open()
       expect(faulted.health).toBe('faulted-read-only')
-      expect(faulted.fault?.primary.kind).toBe('malformed')
-      expect(faulted.fault?.backup.kind).toBe('malformed')
+      expect(faulted.fault?.primary?.kind).toBe('malformed')
+      expect(faulted.fault?.backup?.kind).toBe('malformed')
     })
   })
 
-  it('rejects an acceptance whose unpruned delivery detail disappeared', async () => {
+  it('rejects a retained message whose delivery detail disappeared', async () => {
     await withLedger(async ({ paths, open }) => {
       const ledger = open({ ids: ['msg-lost-detail'] })
       await ledger.accept(input('req-lost-detail'))
       const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      snapshot.messages = []
       snapshot.deliveries = []
-      writeFileSync(paths.primary, JSON.stringify(snapshot))
+      const invalid = JSON.stringify(snapshot)
+      writeFileSync(paths.primary, invalid)
+      writeFileSync(paths.backup, invalid)
 
       const faulted = open()
       expect(faulted.health).toBe('faulted-read-only')
       expect(faulted.fault?.primary).toMatchObject({
         kind: 'malformed',
-        detail: 'acceptance req-lost-detail lost unpruned delivery detail',
+        detail: 'message msg-lost-detail references unknown delivery msg-lost-detail/d/1',
       })
     })
   })
@@ -527,8 +801,8 @@ describe('DeliveryLedger reload and recovery', () => {
 
       const ledger = open()
       expect(ledger.health).toBe('faulted-read-only')
-      expect(ledger.fault?.primary.kind).toBe('unparsable')
-      expect(ledger.fault?.backup.kind).toBe('unknown-version')
+      expect(ledger.fault?.primary?.kind).toBe('unparsable')
+      expect(ledger.fault?.backup?.kind).toBe('unknown-version')
       await expect(ledger.accept(input('req-refused'))).resolves.toEqual({
         accepted: false,
         reason: 'faulted-read-only',
@@ -658,6 +932,194 @@ describe('DeliveryLedger transitions and retention', () => {
     })
   })
 
+  it('owns normalized transition evidence before queued work begins', async () => {
+    await withLedger(async ({ paths, open }) => {
+      let holdWrite = false
+      let release!: () => void
+      let entered!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      const atWrite = new Promise<void>(resolve => { entered = resolve })
+      const ledger = open({
+        ids: ['msg-owned-event', 'msg-blocker'],
+        beforeStep: async step => {
+          if (holdWrite && step === 'write-temp') {
+            entered()
+            await held
+          }
+        },
+      })
+      const accepted = await ledger.accept(input('req-owned-event'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const next = {
+        state: 'in-flight' as const,
+        attempt: 1,
+        evidence: {
+          source: { id: 'codex-rollout', label: 'Codex rollout' },
+          reference: 'event-1',
+          providerSecret: () => 'must not persist',
+        },
+        providerDetail: () => 'must not persist',
+      }
+
+      holdWrite = true
+      const blocking = ledger.accept(input('req-blocker'))
+      await atWrite
+      const transitioning = ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next,
+      })
+      next.evidence.source.label = 'mutated during write'
+      next.evidence.reference = 'event-mutated'
+      release()
+      await expect(blocking).resolves.toMatchObject({ accepted: true })
+      await expect(transitioning).resolves.toMatchObject({ updated: true })
+
+      const event = ledger.getDelivery(accepted.deliveries[0]!.id)?.history.at(-1)
+      expect(event).toEqual({
+        state: 'in-flight',
+        attempt: 1,
+        at: expect.any(String),
+        evidence: {
+          source: { id: 'codex-rollout', label: 'Codex rollout' },
+          reference: 'event-1',
+        },
+      })
+      const persisted = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(persisted.deliveries[0].history.at(-1)).toEqual(event)
+    })
+  })
+
+  it('returns structured rejections for malformed nested runtime input', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-malformed-input'] })
+      await expect(ledger.accept({
+        ...input('req-malformed-accept'),
+        recipients: null,
+      } as unknown as DeliveryAcceptInput)).resolves.toMatchObject({
+        accepted: false,
+        reason: 'invalid-request',
+      })
+
+      const accepted = await ledger.accept(input('req-malformed-transition'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const durableBeforeMalformedTransition = readFileSync(paths.primary, 'utf8')
+      await expect(ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: {
+          state: 'in-flight',
+          attempt: 1,
+          reason: { provider: 'not-a-string' },
+        },
+      } as unknown as DeliveryTransitionInput)).resolves.toEqual({
+        updated: false,
+        reason: 'invalid-transition',
+        detail: 'reason must be a string',
+      })
+      expect(readFileSync(paths.primary, 'utf8'))
+        .toBe(durableBeforeMalformedTransition)
+      expect(ledger.health).toBe('healthy')
+
+      await expect(ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: {
+          state: 'in-flight',
+          attempt: 1,
+          evidence: {},
+        },
+      } as unknown as DeliveryTransitionInput)).resolves.toMatchObject({
+        updated: false,
+        reason: 'invalid-transition',
+        detail: 'evidence is malformed',
+      })
+
+      const poisonedError = {}
+      Object.defineProperty(poisonedError, 'message', {
+        get() { throw new Error('poisoned message getter') },
+      })
+      const poisonedRequest = input('req-poisoned-capture')
+      Object.defineProperty(poisonedRequest, 'requestId', {
+        get() { throw poisonedError },
+      })
+      await expect(ledger.accept(poisonedRequest)).resolves.toMatchObject({
+        accepted: false,
+        reason: 'invalid-request',
+        detail: 'request could not be captured: unknown capture failure',
+      })
+
+      const poisonedTransition = {
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      }
+      Object.defineProperty(poisonedTransition.next, 'evidence', {
+        get() { throw poisonedError },
+      })
+      await expect(ledger.transition(
+        poisonedTransition as DeliveryTransitionInput,
+      )).resolves.toMatchObject({
+        updated: false,
+        reason: 'invalid-transition',
+        detail: 'transition could not be captured: unknown capture failure',
+      })
+    })
+  })
+
+  it('reports ledger health before malformed capture errors', async () => {
+    await withLedger(async ({ open }) => {
+      let release!: () => void
+      let entered!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      const atDirectorySync = new Promise<void>(resolve => { entered = resolve })
+      const ledger = open({
+        ids: ['msg-health-precedence'],
+        beforeStep: async step => {
+          if (step === 'fsync-dir') {
+            entered()
+            await held
+            throw new Error('directory fsync failed')
+          }
+        },
+      })
+      const makingUncertain = ledger.accept(input('req-health-precedence'))
+      await atDirectorySync
+      let malformedAcceptSettled = false
+      let malformedTransitionSettled = false
+      const malformedAccept = ledger.accept({
+        ...input('req-malformed-health'),
+        recipients: null,
+      } as unknown as DeliveryAcceptInput)
+      const malformedTransition = ledger.transition({
+        deliveryId: 'missing',
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1, evidence: {} },
+      } as unknown as DeliveryTransitionInput)
+      void malformedAccept.then(() => { malformedAcceptSettled = true })
+      void malformedTransition.then(() => { malformedTransitionSettled = true })
+      await new Promise(resolve => setImmediate(resolve))
+      expect(malformedAcceptSettled).toBe(false)
+      expect(malformedTransitionSettled).toBe(false)
+
+      release()
+      await expect(makingUncertain)
+        .resolves.toMatchObject({ accepted: false, reason: 'write-uncertain' })
+      await expect(malformedAccept).resolves.toEqual({
+        accepted: false,
+        reason: 'write-uncertain',
+      })
+      await expect(malformedTransition).resolves.toEqual({
+        updated: false,
+        reason: 'write-uncertain',
+      })
+    })
+  })
+
   it('keeps the initial event and a valid tail when history is bounded', async () => {
     await withLedger(async ({ open }) => {
       let now = 1_000
@@ -776,8 +1238,10 @@ describe('DeliveryLedger transitions and retention', () => {
       expect(ledger.getMessage('msg-a')).toBeDefined()
       expect(ledger.getMessage('msg-b')).toBeDefined()
       expect(steps).toEqual([
-        'write-temp', 'fsync-temp', 'rotate-backup', 'rename-primary', 'fsync-dir',
-        'write-temp', 'fsync-temp', 'rotate-backup', 'rename-primary', 'fsync-dir',
+        'write-temp', 'fsync-temp', 'write-backup-temp',
+        'rename-primary', 'rename-backup', 'fsync-dir',
+        'write-temp', 'fsync-temp', 'write-backup-temp',
+        'rename-primary', 'rename-backup', 'fsync-dir',
       ])
     })
   })
@@ -830,11 +1294,70 @@ describe('DeliveryLedger transitions and retention', () => {
     })
   })
 
-  it('retains request identity after terminal delivery detail is pruned', async () => {
+  it('enforces the terminal message count without pruning active work', async () => {
     await withLedger(async ({ paths, open }) => {
       let now = 0
       const ledger = open({
-        ids: ['msg-pruned', 'msg-trigger', 'msg-unused'],
+        ids: ['msg-old-count', 'msg-active-count', 'msg-retry-count', 'msg-new-count'],
+        now: () => now,
+        retentionMs: 10_000,
+        maxTerminalMessages: 1,
+      })
+      const finalize = async (requestId: string, retryable: boolean) => {
+        const accepted = await ledger.accept(input(requestId))
+        if (!accepted.accepted || accepted.details !== 'retained') {
+          throw new Error('expected retained count acceptance')
+        }
+        now++
+        await ledger.transition({
+          deliveryId: accepted.deliveries[0]!.id,
+          expected: { state: 'accepted', attempt: 0 },
+          next: {
+            state: 'failed',
+            attempt: 0,
+            reason: retryable ? 'broker unavailable' : 'recipient deleted',
+            retryable,
+          },
+        })
+        return accepted
+      }
+
+      const oldFinal = await finalize('req-old-count', false)
+      now++
+      const active = await ledger.accept(input('req-active-count'))
+      if (!active.accepted || active.details !== 'retained') {
+        throw new Error('expected retained active acceptance')
+      }
+      now++
+      const retryable = await finalize('req-retry-count', true)
+      now++
+      const newFinal = await finalize('req-new-count', false)
+
+      expect(ledger.getMessage(oldFinal.message.id)).toBeUndefined()
+      expect(ledger.getDelivery(oldFinal.deliveries[0]!.id)).toBeUndefined()
+      expect(ledger.getMessage(active.message.id)).toBeDefined()
+      expect(ledger.getMessage(retryable.message.id)).toBeDefined()
+      expect(ledger.getMessage(newFinal.message.id)).toBeDefined()
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(snapshot.messages.map((message: { id: string }) => message.id).sort())
+        .toEqual([
+          active.message.id,
+          retryable.message.id,
+          newFinal.message.id,
+        ].sort())
+
+      const replacement = open({ retentionMs: 10_000, maxTerminalMessages: 1 })
+      expect(replacement.getMessage(oldFinal.message.id)).toBeUndefined()
+      expect(replacement.listRecoverable().map(delivery => delivery.messageId).sort())
+        .toEqual([active.message.id, retryable.message.id].sort())
+    })
+  })
+
+  it('bounds request identity with the terminal detail retention policy', async () => {
+    await withLedger(async ({ paths, open }) => {
+      let now = 0
+      const ledger = open({
+        ids: ['msg-pruned', 'msg-trigger', 'msg-reaccepted'],
         now: () => now,
         retentionMs: 0,
       })
@@ -857,32 +1380,35 @@ describe('DeliveryLedger transitions and retention', () => {
       await ledger.accept(input('req-trigger'))
       expect(ledger.getMessage('msg-pruned')).toBeUndefined()
       const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      expect(snapshot.acceptances.find(
+      expect(snapshot.messages.find(
         (record: { requestId: string }) => record.requestId === 'req-pruned',
-      )?.detailsPrunedAt).toBe('1970-01-01T00:00:00.001Z')
-      await expect(ledger.accept(input('req-pruned'))).resolves.toMatchObject({
+      )).toBeUndefined()
+      const reacceptedInput = input('req-pruned', {
+        text: 'new logical work after retention',
+      })
+      await expect(ledger.accept(reacceptedInput)).resolves.toMatchObject({
         accepted: true,
-        replayed: true,
-        wrote: false,
-        details: 'pruned',
+        replayed: false,
+        wrote: true,
+        details: 'retained',
         receipt: {
           requestId: 'req-pruned',
-          messageId: 'msg-pruned',
-          deliveryIds: ['msg-pruned/d/1'],
+          messageId: 'msg-reaccepted',
+          deliveryIds: ['msg-reaccepted/d/1'],
         },
       })
-      await expect(ledger.accept(input('req-pruned', { text: 'conflict' })))
+      await expect(ledger.accept(input('req-pruned')))
         .resolves.toMatchObject({
           accepted: false,
           reason: 'request-id-reuse',
         })
 
       const replacement = open({ ids: ['msg-never-used'], now: () => now })
-      await expect(replacement.accept(input('req-pruned'))).resolves.toMatchObject({
+      await expect(replacement.accept(reacceptedInput)).resolves.toMatchObject({
         accepted: true,
         replayed: true,
-        details: 'pruned',
-        receipt: { messageId: 'msg-pruned' },
+        details: 'retained',
+        receipt: { messageId: 'msg-reaccepted' },
       })
     })
   })
