@@ -35,6 +35,9 @@ The mechanism that re-dispatches named server-sent events from a single shared e
 
 ## Surfaces
 
+### Focus mode
+A per-browser view of one Run Workspace that temporarily fits the existing workspace to the available canvas viewport at normal visual scale. Focus mode suppresses canvas arrangement and non-run widget interactions without changing the saved canvas layout, so returning to the canvas restores the prior arrangement. Distinct from the `Z` canvas utility and from the separate phone-oriented mobile projection.
+
 ### The Slate
 A region of a run's workspace card where an agent, the user, or any local process paints small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. Surfaces are described in A2UI and drawn by the shared host renderer. Authoring is file-in (a process writes a surface file into the run's worktree; a server watcher validates and projects it onto the run), while threads, lifecycle status, and control answers are answered HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run.
 

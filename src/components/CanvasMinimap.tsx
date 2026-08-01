@@ -23,6 +23,7 @@ interface MinimapProps {
   toggleRef?: React.MutableRefObject<(() => void) | null>
   /** When true, render in normal document flow instead of as a floating bottom-right overlay. */
   embedded?: boolean
+  interactionEnabled?: boolean
 }
 
 /** Collect all non-container (work) nodes from the tree */
@@ -63,7 +64,7 @@ function getNodeColor(
 export function CanvasMinimap({
   camera, setCamera, layouts, tree,
   runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap,
-  toggleRef, embedded = false,
+  toggleRef, embedded = false, interactionEnabled = true,
 }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(() => getPref('minimapVisible') ?? true)
@@ -197,26 +198,29 @@ export function CanvasMinimap({
   }, [setCamera])
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!interactionEnabled) return
     e.stopPropagation()
     e.preventDefault()
     isDragging.current = true
     const rect = e.currentTarget.getBoundingClientRect()
     panToMinimapPoint(e.clientX - rect.left, e.clientY - rect.top)
     e.currentTarget.setPointerCapture(e.pointerId)
-  }, [panToMinimapPoint])
+  }, [interactionEnabled, panToMinimapPoint])
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!interactionEnabled) return
     if (!isDragging.current) return
     e.stopPropagation()
     const rect = e.currentTarget.getBoundingClientRect()
     panToMinimapPoint(e.clientX - rect.left, e.clientY - rect.top)
-  }, [panToMinimapPoint])
+  }, [interactionEnabled, panToMinimapPoint])
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!interactionEnabled) return
     e.stopPropagation()
     isDragging.current = false
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already released */ }
-  }, [])
+  }, [interactionEnabled])
 
   if (!visible) {
     // Collapsed: show small icon button
@@ -267,6 +271,7 @@ export function CanvasMinimap({
       className={embedded ? 'select-none group' : 'absolute bottom-12 right-3 select-none group'}
       style={containerStyle}
       data-testid="canvas-minimap"
+      aria-disabled={!interactionEnabled || undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

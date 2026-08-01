@@ -5,7 +5,7 @@ import { CanvasContextMenu } from './CanvasContextMenu'
 import { buildMoveTargets } from '../domain/moveTargets'
 import { relocateWidgetTo } from '../domain/relocateWidget'
 import { moveSnapWidgetTo } from '../domain/moveSnapWidget'
-import { useCanvasCamera } from '../hooks/useCanvasCamera'
+import { findWheelYieldTarget, useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, preserveCohesion, MIN_WIDTH, MIN_HEIGHT } from '../hooks/useWidgetLayouts'
 import { RUN_WORKSPACE_DEFAULT_WIDTH } from '../widgets/runWorkspace'
 import { useSelection } from './SelectionProvider'
@@ -64,6 +64,8 @@ import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
 import { planDropSnap } from '../canvas/dropLayout'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { RunNodeCapabilities } from './RunNodeCapabilities'
+import { FocusCycleHint } from './FocusCycleHint'
+import { focusCycleDirection, resolveFocusLayout, type FocusCycleDirection } from '../focusMode/focusCanvas'
 
 interface Props {
   tree: TreeNode[]
@@ -75,6 +77,9 @@ interface Props {
   onPluginWidgetCreated?: (instance: PluginWidgetInstance) => void
   onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
+  /** Render-only Focus state; canonical camera and layouts stay untouched. */
+  focusMode?: boolean
+  focusedRunId?: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
   onSelectRun?: (runId: string, additive: boolean) => void
@@ -197,7 +202,7 @@ function effectiveMinSize(min: { width: number; height: number }) {
   return { width: Math.max(MIN_WIDTH, min.width), height: Math.max(MIN_HEIGHT, min.height) }
 }
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, focusMode = false, focusedRunId = null, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Seed initial placement for browser widgets opened via the host placement API
   // (POST/PATCH /api/browser-widgets with position/nearNodeId), and for file-editor
@@ -240,7 +245,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     insertLayout,
     batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
-  const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
+  const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera(!focusMode)
   const appConfig = useConfig()
   // Merge over defaults so a partial persisted config (missing aspectByType)
   // can't crash resolveAspect in the canvas render path.
@@ -250,6 +255,36 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Container size tracked via ResizeObserver — avoids getBoundingClientRect in the render body
   // (which forces a layout flush on every render, including 60fps pan).
   const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null)
+  const [canvasSidebarWidth, setCanvasSidebarWidth] = useState(0)
+  const focusedNodeId = focusedRunId ? `run-${focusedRunId}` : null
+  const focusLayout = useMemo(
+    () => containerSize ? resolveFocusLayout(containerSize, canvasSidebarWidth) : null,
+    [containerSize, canvasSidebarWidth],
+  )
+  const focusReady = !!(
+    focusMode
+    && focusedNodeId
+    && focusLayout
+    && focusLayout.width > 0
+    && focusLayout.height > 0
+  )
+  const presentedCamera = focusMode ? { x: 0, y: 0, zoom: 1 } : camera
+  const [focusCycleHint, setFocusCycleHint] = useState<FocusCycleDirection | null>(null)
+  const focusHintTimerRef = useRef<number | null>(null)
+  const focusHintLastShownRef = useRef<Record<FocusCycleDirection, number>>({ previous: 0, next: 0 })
+
+  const showFocusCycleHint = useCallback((direction: FocusCycleDirection) => {
+    const now = Date.now()
+    if (now - focusHintLastShownRef.current[direction] < 5000) return
+    focusHintLastShownRef.current[direction] = now
+    setFocusCycleHint(direction)
+    if (focusHintTimerRef.current !== null) window.clearTimeout(focusHintTimerRef.current)
+    focusHintTimerRef.current = window.setTimeout(() => setFocusCycleHint(null), 3000)
+  }, [])
+
+  useEffect(() => () => {
+    if (focusHintTimerRef.current !== null) window.clearTimeout(focusHintTimerRef.current)
+  }, [])
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -355,6 +390,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   useEffect(() => {
     if (!focusRunId) return
     onFocusHandled()
+    if (focusMode) return
     if (!containerRef.current) return
     const layout = getLayout(focusRunId)
     if (!layout) return
@@ -364,7 +400,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       y: Math.round(rect.height / 2 - (layout.y + layout.height / 2)),
       zoom: 1,
     })
-  }, [focusRunId, getLayout, setCamera, onFocusHandled])
+  }, [focusRunId, focusMode, getLayout, setCamera, onFocusHandled])
 
   // Listen for marshal-driven viewport directives. The marshal hand POSTs
   // /api/canvas/viewport which broadcasts a 'canvas:viewport' SSE event,
@@ -468,14 +504,39 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => window.removeEventListener('widget:flash-focus', handler as EventListener)
   }, [getLayout, centerOn, onFocusRun])
 
+  const handleFocusWheel = useCallback((e: WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      return
+    }
+    if (findWheelYieldTarget(e.target as Element | null, e.deltaX, e.deltaY)) return
+    const direction = focusCycleDirection(e.deltaX, e.deltaY)
+    if (!direction) return
+    e.preventDefault()
+    showFocusCycleHint(direction)
+  }, [showFocusCycleHint])
+
+  useEffect(() => {
+    if (!focusMode) {
+      setFocusCycleHint(null)
+      return
+    }
+    const onTerminalBoundary = (event: Event) => {
+      const direction = (event as CustomEvent<{ direction?: FocusCycleDirection }>).detail?.direction
+      if (direction === 'previous' || direction === 'next') showFocusCycleHint(direction)
+    }
+    window.addEventListener('tinstar:terminal-scroll-boundary', onTerminalBoundary)
+    return () => window.removeEventListener('tinstar:terminal-scroll-boundary', onTerminalBoundary)
+  }, [focusMode, showFocusCycleHint])
+
   // Attach wheel listener with { passive: false }
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const handler = (e: WheelEvent) => handleWheel(e)
+    const handler = (e: WheelEvent) => focusMode ? handleFocusWheel(e) : handleWheel(e)
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
-  }, [handleWheel])
+  }, [focusMode, handleFocusWheel, handleWheel])
 
   // Defensive: if the container ever scrolls (e.g. browser auto-scrolling to
   // reveal a focused descendant like a freshly-mounted ttyd iframe), snap it
@@ -530,6 +591,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (focusMode) return
       if (spaceHeld.current || e.button === 1) {
         // Space held or middle-click = pan
         e.preventDefault()
@@ -546,11 +608,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         marqueeRef.current = { startX: e.clientX, startY: e.clientY, active: false }
       }
     },
-    [startPan, spaceHeld],
+    [focusMode, startPan, spaceHeld],
   )
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent) => {
+      if (focusMode) return
       // Always forward to movePan — it no-ops if not panning
       movePan(e.nativeEvent)
       if (spaceHeld.current) return
@@ -568,11 +631,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
       }
     },
-    [movePan, spaceHeld],
+    [focusMode, movePan, spaceHeld],
   )
 
   const onPointerUp = useCallback(
     (_e: ReactPointerEvent) => {
+      if (focusMode) return
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
       // Release pointer capture from pan
@@ -629,22 +693,24 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       marqueeRef.current = { startX: 0, startY: 0, active: false }
       setMarquee(null)
     },
-    [endPan, spaceHeld, marquee, layouts, camera, selectMany, deselect],
+    [focusMode, endPan, spaceHeld, marquee, layouts, camera, selectMany, deselect],
   )
 
   const onPointerLeave = useCallback(() => {
+    if (focusMode) return
     // Don't kill pan if we hold pointer capture (cursor crossing iframes)
     if (panPointerIdRef.current === null) {
       endPan()
     }
     marqueeRef.current = { startX: 0, startY: 0, active: false }
     setMarquee(null)
-  }, [endPan])
+  }, [focusMode, endPan])
 
   // Escape: cancel any drag, deselect everything, focus the canvas
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
+      if (focusMode) return
       // Don't steal Escape from dialogs/modals
       const active = document.activeElement
       if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return
@@ -665,7 +731,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [endPan, deselect])
+  }, [focusMode, endPan, deselect])
 
   // Track alt key state globally so drag-start can read it even though onDragStart
   // receives only nodeId (no pointer event). Use a ref so it doesn't cause re-renders.
@@ -859,6 +925,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // ── Right-click "Move widget here" context menu ───────────────────────────
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
+
+  useEffect(() => {
+    if (!focusMode) return
+    endPan()
+    draggingRunRef.current = null
+    setDraggingNodeId(null)
+    snapPreviewRef.current = null
+    setSnapPreview(null)
+    setEditorDragActive(false)
+    dragEnterCountRef.current = 0
+    marqueeRef.current = { startX: 0, startY: 0, active: false }
+    canvasPointerDownRef.current = false
+    setMarquee(null)
+    setAddPicker(null)
+    setCtxMenu(null)
+    setPinDragging(false)
+    setActiveConstellationSlot(null)
+    setFocusedWidgetId(null)
+  }, [focusMode, endPan])
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // Show the move-here menu on empty canvas AND on container entities
@@ -1451,21 +1536,21 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
-    if (arrangeGridRef) arrangeGridRef.current = arrangeGrid
+    if (arrangeGridRef) arrangeGridRef.current = focusMode ? null : arrangeGrid
     return () => { if (arrangeGridRef) arrangeGridRef.current = null }
-  }, [arrangeGridRef, arrangeGrid])
+  }, [focusMode, arrangeGridRef, arrangeGrid])
 
   useEffect(() => {
     // Pass constellation slot members so reset keeps snapped groups (e.g. a
     // session and its attached browser) together instead of scattering them.
-    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(computeClusterGroups())
+    if (arrangeResetRef) arrangeResetRef.current = focusMode ? null : () => arrangeWorkspace(computeClusterGroups())
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
-  }, [arrangeResetRef, arrangeWorkspace, computeClusterGroups])
+  }, [focusMode, arrangeResetRef, arrangeWorkspace, computeClusterGroups])
 
   useEffect(() => {
-    if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes
+    if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = focusMode ? null : arrangeSwimlanes
     return () => { if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = null }
-  }, [arrangeSwimlanesRef, arrangeSwimlanes])
+  }, [focusMode, arrangeSwimlanesRef, arrangeSwimlanes])
 
   // Compute bounding box of a set of run node IDs using current layouts
   const getBoundingBox = useCallback((runIds: string[]): { x: number; y: number; w: number; h: number } | null => {
@@ -1622,7 +1707,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       }
       setActiveConstellationSlot(null)
     },
-  })
+  }, !focusMode)
 
   // Plugin-API constellation actions: widgets call
   // api.constellations.fitToMine() / tidyMine() / assignToSlot(n) / leave()
@@ -1630,6 +1715,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // the same primitives as the digit/Z/Shift+Z hotkey paths above.
   useEffect(() => {
     const onFit = (e: Event) => {
+      if (focusMode) return
       const detail = (e as CustomEvent<{ widgetId: string }>).detail
       const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
       if (!slot) return
@@ -1648,6 +1734,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       setCamera(fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40))
     }
     const onTidy = (e: Event) => {
+      if (focusMode) return
       const detail = (e as CustomEvent<{ widgetId: string }>).detail
       const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
       if (!slot) return
@@ -1663,11 +1750,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       for (const [posId, p] of positions) updateRunPosition(posId, p.x, p.y)
     }
     const onAssign = (e: Event) => {
+      if (focusMode) return
       const detail = (e as CustomEvent<{ widgetId: string; slot: number }>).detail
       const slotStr = String(detail.slot) as ConstellationSlot
       constellations.assign(slotStr, detail.widgetId)
     }
     const onLeave = (e: Event) => {
+      if (focusMode) return
       const detail = (e as CustomEvent<{ widgetId: string }>).detail
       const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
       if (!slot) return
@@ -1683,7 +1772,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       window.removeEventListener('constellation:assign', onAssign)
       window.removeEventListener('constellation:leave', onLeave)
     }
-  }, [constellations, layouts, updateRunPosition, setCamera])
+  }, [focusMode, constellations, layouts, updateRunPosition, setCamera])
 
   // Register the canvas-level fit implementation so widget action handlers
   // can call fitWidgetToViewport(id) in response to the 'fit-viewport'
@@ -1692,6 +1781,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const FIT_MIN_HEIGHT = 150 // mirrors MIN_HEIGHT in useWidgetLayouts.ts
     return registerCanvasActions({
       fit: (nodeId: string) => {
+        if (focusMode) return
         const layout = getLayout(nodeId)
         if (!layout) return
         const el = containerRef.current
@@ -1712,7 +1802,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         setCamera({ x: Math.round(cx), y: Math.round(cy), zoom: 1 })
       },
     })
-  }, [getLayout, resizeNode, setCamera])
+  }, [focusMode, getLayout, resizeNode, setCamera])
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
     if (!onDeleteEntity) return
@@ -1890,8 +1980,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       // uninstalled, or type renamed), render a host-owned placeholder instead of crashing.
       if (pluginWidgetMap.has(node.entityId)) {
         const instance = pluginWidgetMap.get(node.entityId)!
-        const layout = layouts.get(node.id)
-        if (!layout) return null
+        const canonicalLayout = layouts.get(node.id)
+        if (!canonicalLayout) return null
+        const isFocusTarget = focusReady && node.id === focusedNodeId
+        const layout = isFocusTarget && focusLayout ? focusLayout : canonicalLayout
         return (
           <CanvasWidgetShell
             key={node.id}
@@ -1900,7 +1992,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             widgetId={node.entityId}
             data={instance}
             layout={layout}
-            zoom={camera.zoom}
+            zoom={presentedCamera.zoom}
             isSelected={isSelected(node.id)}
             isFocused={focusedWidgetId === node.id}
             isSpawning={spawnedNodeIds.has(node.id)}
@@ -1915,14 +2007,19 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             onResizeEnd={handleResizeEnd}
             onAddWidget={(nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor })}
             occupiedEdges={occupiedEdgesFor(node.id)}
+            hidden={focusMode && !isFocusTarget}
+            interactionLocked={focusMode}
+            presentation={isFocusTarget ? 'focus' : 'canvas'}
           />
         )
       }
       console.warn(`No widget registered for type: ${node.type}`)
       return null
     }
-    const layout = layouts.get(node.id)
-    if (!layout) return null
+    const canonicalLayout = layouts.get(node.id)
+    if (!canonicalLayout) return null
+    const isFocusTarget = focusReady && node.id === focusedNodeId
+    const layout = isFocusTarget && focusLayout ? focusLayout : canonicalLayout
 
     const data: unknown =
       node.type === 'run'
@@ -1970,7 +2067,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (isSnapLeaf && presetViewport) {
       const aspect = resolveAspect(sizePresets, widgetType)
       const sizes = resolvePresetSizes(presetViewport, sizePresets, aspect, effectiveMinSize(reg.minSize))
-      activeSizePreset = matchPreset({ width: layout.width, height: layout.height }, sizes)
+      activeSizePreset = matchPreset({ width: canonicalLayout.width, height: canonicalLayout.height }, sizes)
     }
 
     return (
@@ -1982,7 +2079,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           widgetId={node.entityId}
           data={data}
           layout={layout}
-          zoom={camera.zoom}
+          zoom={presentedCamera.zoom}
           isSelected={isSelected(node.id)}
           isFocused={focusedWidgetId === node.id}
           isSpawning={spawnedNodeIds.has(node.id)}
@@ -1993,7 +2090,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           // the tree otherwise), so no toggle prop is needed here; attention-
           // pending background cards keep full opacity (breakthrough, R16).
           isDimmed={
-            (selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id))
+            (!focusMode && selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id))
             || (run?.background === true && !run.attention)
           }
           spaceHeldRef={spaceHeld}
@@ -2023,6 +2120,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onReplyPin={(id, text) => replyToPin(id, node.id, text)}
           onResolvePin={resolvePinCb}
           onReopenPin={reopenPinCb}
+          hidden={focusMode && !isFocusTarget}
+          interactionLocked={focusMode}
+          presentation={isFocusTarget ? 'focus' : 'canvas'}
         />
       </Fragment>
     )
@@ -2042,6 +2142,27 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }
 
   const renderedNodes = collectRenderOrder(tree, 0)
+  const lastPresentedFocusNodeRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!focusMode || !focusReady || !focusedNodeId) {
+      lastPresentedFocusNodeRef.current = focusMode ? focusedNodeId : null
+      return
+    }
+    const prior = lastPresentedFocusNodeRef.current
+    lastPresentedFocusNodeRef.current = focusedNodeId
+    if (!prior || prior === focusedNodeId) return
+
+    const frame = window.requestAnimationFrame(() => {
+      const active = document.activeElement as HTMLElement | null
+      const activeShell = active?.closest('[data-testid^="canvas-widget-"]') as HTMLElement | null
+      if (active !== document.body && !activeShell?.getAttribute('aria-hidden')) return
+      const next = containerRef.current?.querySelector(
+        `[data-testid="canvas-widget-${CSS.escape(focusedNodeId)}"]`,
+      ) as HTMLElement | null
+      next?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [focusMode, focusReady, focusedNodeId])
 
   // Snap overlay: highlight only the single widget the drag would snap to.
   const snapTargetWidget = useMemo((): SnapWidget | null => {
@@ -2119,28 +2240,29 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       data-testid="infinite-canvas"
       data-dragging={draggingNodeId ? 'true' : undefined}
       data-pin-dragging={pinDragging ? 'true' : undefined}
+      data-focus-mode={focusMode ? 'true' : undefined}
       className="w-full h-full overflow-clip relative outline-none"
       style={{
-        cursor: cursorStyle,
-        backgroundImage: 'radial-gradient(circle, rgba(0,240,255,0.04) 1px, transparent 1px)',
-        backgroundSize: `${24 * camera.zoom}px ${24 * camera.zoom}px`,
-        backgroundPosition: `${camera.x}px ${camera.y}px`,
+        cursor: focusMode ? 'default' : cursorStyle,
+        backgroundImage: focusMode ? 'none' : 'radial-gradient(circle, rgba(0,240,255,0.04) 1px, transparent 1px)',
+        backgroundSize: `${24 * presentedCamera.zoom}px ${24 * presentedCamera.zoom}px`,
+        backgroundPosition: `${presentedCamera.x}px ${presentedCamera.y}px`,
       }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={onPointerLeave}
-      onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
-      onContextMenu={handleContextMenu}
-      onDragOver={(e) => { e.preventDefault() }}
-      onDrop={handleDrop}
-      onDragEnter={(e) => {
+      onPointerDown={focusMode ? undefined : onPointerDown}
+      onPointerMove={focusMode ? undefined : onPointerMove}
+      onPointerUp={focusMode ? undefined : onPointerUp}
+      onPointerLeave={focusMode ? undefined : onPointerLeave}
+      onMouseDown={focusMode ? undefined : (e) => { if (e.button === 1) e.preventDefault() }}
+      onContextMenu={focusMode ? undefined : handleContextMenu}
+      onDragOver={focusMode ? undefined : (e) => { e.preventDefault() }}
+      onDrop={focusMode ? undefined : handleDrop}
+      onDragEnter={focusMode ? undefined : (e) => {
         if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
       }}
-      onDragLeave={() => {
+      onDragLeave={focusMode ? undefined : () => {
         dragEnterCountRef.current--
         if (dragEnterCountRef.current <= 0) {
           dragEnterCountRef.current = 0
@@ -2151,12 +2273,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       {/* Free-drag reminder — slides down while dragging a snap-eligible (ungrouped)
           widget. Screen-fixed (outside the transform), pointer-events-none. */}
       <FreeDragHint
-        visible={!!draggingNodeId && constellations.slotsForNode(draggingNodeId).length === 0}
+        visible={!focusMode && !!draggingNodeId && constellations.slotsForNode(draggingNodeId).length === 0}
         altActive={altPressed}
       />
 
       {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
-      {editorDragActive && (
+      {!focusMode && editorDragActive && (
         <div
           className="absolute inset-0 z-[9999]"
           style={{ background: 'rgba(0,240,255,0.04)', border: '2px dashed rgba(0,240,255,0.35)' }}
@@ -2167,21 +2289,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       )}
       {/* Transformed canvas layer */}
       <div
+        data-testid="canvas-transform-layer"
         style={{
           transformOrigin: '0 0',
-          transform: `translate(${Math.round(camera.x)}px, ${Math.round(camera.y)}px) scale(${camera.zoom})`,
+          transform: `translate(${Math.round(presentedCamera.x)}px, ${Math.round(presentedCamera.y)}px) scale(${presentedCamera.zoom})`,
           position: 'absolute',
           top: 0,
           left: 0,
         }}
       >
         {renderedNodes}
-        {dragGhost && <div style={dragGhost} />}
+        {!focusMode && dragGhost && <div style={dragGhost} />}
         {/* Constellation links sit above widgets (visible across the gap) but below
             the interactive break chips rendered by the chrome below. */}
-        <ConstellationLinks links={constellationLinks} zoom={camera.zoom} />
+        {!focusMode && <ConstellationLinks links={constellationLinks} zoom={camera.zoom} />}
         {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
-        {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
+        {!focusMode && (['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
           const memberIds = constellations.nodesInSlot(slot)
           const members = memberIds
             .map(id => {
@@ -2214,18 +2337,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             />
           )
         })}
-        <SnapZoneOverlay target={snapTargetWidget} canJoin={snapCanJoin} />
+        {!focusMode && <SnapZoneOverlay target={snapTargetWidget} canJoin={snapCanJoin} />}
       </div>
 
       {/* Empty canvas hint */}
-      {runMap.size === 0 && <EmptyCanvasHint />}
+      {!focusMode && runMap.size === 0 && <EmptyCanvasHint />}
 
       {/* Marquee selection box */}
-      {marqueeStyle && <div style={marqueeStyle} />}
+      {!focusMode && marqueeStyle && <div style={marqueeStyle} />}
 
       {/* Right-side canvas sidebar — telemetry + marshal terminal + minimap */}
       <CanvasSidebar
-        camera={camera}
+        camera={presentedCamera}
         setCamera={setCamera}
         layouts={layouts}
         tree={tree}
@@ -2238,20 +2361,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         hudToggleRef={hudToggleRef}
         minimapToggleRef={minimapToggleRef}
         forceExpanded={forceMarshalOpen}
+        onOccupiedWidthChange={setCanvasSidebarWidth}
+        cameraInteractionEnabled={!focusMode}
       />
 
       {/* Bottom-right zoom indicator */}
-      <div className="absolute bottom-3 right-3 flex items-center gap-2">
+      {!focusMode && <div className="absolute bottom-3 right-3 flex items-center gap-2">
         <div
           className="bg-surface-panel border border-white/10 px-3 py-1.5 text-xs font-mono text-slate-500 rounded-sm select-none"
           data-testid="zoom-indicator"
         >
           {Math.round(camera.zoom * 100)}%
         </div>
-      </div>
+      </div>}
 
       {/* Add-widget picker — screen-space (anchored to the clicked ghost button) */}
-      {addPicker && catalog.length > 0 && (() => {
+      {!focusMode && addPicker && catalog.length > 0 && (() => {
         const sourceType = toWidgetType(nodeTypeById.get(addPicker.sourceNodeId) ?? '')
         const wanted = DEFAULT_FOR[sourceType] ?? GLOBAL_DEFAULT
         const defaultType = catalog.some(e => e.type === wanted) ? wanted : catalog[0]!.type
@@ -2274,13 +2399,23 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       })()}
 
       {/* Right-click "Move widget here" menu — screen-space, empty-space only */}
-      {ctxMenu && (
+      {!focusMode && ctxMenu && (
         <CanvasContextMenu
           anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
           targets={moveTargets}
           onPick={relocateWidget}
           onClose={() => setCtxMenu(null)}
         />
+      )}
+
+      <FocusCycleHint
+        direction={focusMode ? focusCycleHint : null}
+        modifier={/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'}
+      />
+      {focusMode && focusedRunId && (
+        <div className="sr-only" role="status" aria-live="polite">
+          Focus mode: {runMap.get(focusedRunId)?.name || runMap.get(focusedRunId)?.id || focusedRunId}
+        </div>
       )}
 
     </div>

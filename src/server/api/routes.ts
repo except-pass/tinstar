@@ -733,6 +733,8 @@ export interface RouteContext {
   bus: EventBus
   startSimulator: () => void
   resetSimulator: () => void
+  /** Enables mutation-only simulator routes used by browser tests. */
+  simulatorTestApiEnabled: boolean
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
@@ -1427,12 +1429,52 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // POST /api/simulator/patch-run — test-only: set any field on a run and broadcast delta
   if (method === 'POST' && url === '/api/simulator/patch-run') {
+    if (!ctx.simulatorTestApiEnabled) { fail(res, 'NOT_FOUND', 'not found'); return true }
     const body = await readBody(req)
-    const { id, ...patch } = JSON.parse(body) as { id: string } & Record<string, unknown>
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      fail(res, 'BAD_REQUEST', 'malformed_json')
+      return true
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+      return true
+    }
+    const { id, ...patch } = parsed as { id?: unknown } & Record<string, unknown>
+    if (typeof id !== 'string' || id.length === 0) { fail(res, 'INVALID_PARAMS', 'id must be a non-empty string'); return true }
     const run = ctx.docStore.getRun(id)
-    if (!run) { fail(res, 'NOT_FOUND', 'run not found'); return true }
+    const runSpace = run?.spaceId ? ctx.docStore.getSpace(run.spaceId) : undefined
+    if (!run || runSpace?.name !== '_simulator') { fail(res, 'NOT_FOUND', 'run not found'); return true }
     const updated = { ...run, ...patch }
     ctx.docStore.upsertRun(id, updated)
+    ok(res, null)
+    return true
+  }
+
+  // POST /api/simulator/remove-run — test-only: exercise the real SSE removal
+  // path without requiring a managed tmux session on disk.
+  if (method === 'POST' && url === '/api/simulator/remove-run') {
+    if (!ctx.simulatorTestApiEnabled) { fail(res, 'NOT_FOUND', 'not found'); return true }
+    const body = await readBody(req)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      fail(res, 'BAD_REQUEST', 'malformed_json')
+      return true
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+      return true
+    }
+    const { id } = parsed as { id?: unknown }
+    if (typeof id !== 'string' || id.length === 0) { fail(res, 'INVALID_PARAMS', 'id must be a non-empty string'); return true }
+    const run = ctx.docStore.getRun(id)
+    const runSpace = run?.spaceId ? ctx.docStore.getSpace(run.spaceId) : undefined
+    if (!run || runSpace?.name !== '_simulator') { fail(res, 'NOT_FOUND', 'run not found'); return true }
+    ctx.docStore.deleteRun(id)
     ok(res, null)
     return true
   }
