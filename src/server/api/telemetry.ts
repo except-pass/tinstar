@@ -1,17 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SSEBroadcaster } from './sse.js'
-import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
 import { log } from '../logger.js'
 import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
 import { getRecentObservations } from '../observability/turn-length.js'
+import type { ClaudeTelemetryQuery } from '../providers/claude-observation-adapter.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
 
 export interface TelemetryApiDeps {
   sse: SSEBroadcaster
-  query: TelemetryQuery | null     // null when state is 'disabled' or 'downloading'
+  /** Provider-owned compatibility projection over the historical observation source. */
+  query: ClaudeTelemetryQuery | null // null when state is 'disabled' or 'downloading'
   getState: () => ObservabilityState
   getProgress: () => HudSnapshot['progress']
   /** Last captured startup/runtime error from the observability stack. Null when healthy or never attempted. */

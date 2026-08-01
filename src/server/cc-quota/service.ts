@@ -5,6 +5,11 @@ import type {
   ProviderTokenUsage,
 } from '../../domain/provider-capabilities'
 import { ProviderCurrentObservationStores } from '../providers/observation-stores'
+import {
+  CLAUDE_ACCOUNT_REF,
+  CLAUDE_PROVIDER_ID,
+  CLAUDE_STATUSLINE_SOURCE,
+} from '../providers/claude-observation-sources'
 import { emitCcQuotaMetrics, emitIngestCounter, type MetricSink } from './metrics'
 import type { CcQuotaSnapshot, IngestError, RawUsage, SessionContextSnapshot, UsageBucket } from './types'
 
@@ -21,12 +26,6 @@ export interface CcQuotaServiceOptions {
 
 const NOOP_SINK: MetricSink = { pushMetric: () => {} }
 const DEFAULT_OBSERVATION_STALE_AFTER_MS = 5 * 60 * 1_000
-const CLAUDE_PROVIDER_ID = 'claude'
-const CLAUDE_ACCOUNT_REF = 'default'
-const CLAUDE_STATUSLINE_SOURCE = {
-  id: 'statusline',
-  label: 'Claude Code statusline',
-} as const
 
 /**
  * Quota snapshot cache fed by Claude Code statusline pushes.
@@ -47,6 +46,7 @@ export class CcQuotaService {
   private readonly sink: MetricSink
   private readonly now: () => number
   private readonly observationStaleAfterMs: number
+  private lastObservationAtMs = 0
 
   readonly observationStores: ProviderCurrentObservationStores
 
@@ -61,7 +61,11 @@ export class CcQuotaService {
     this.observationStores = opts.observationStores
       ?? new ProviderCurrentObservationStores({ now: this.now })
     if (!this.observationStores.quotas.get(CLAUDE_PROVIDER_ID, CLAUDE_ACCOUNT_REF)) {
-      this.setQuotaUnavailable('not-observed', null, new Date(this.now()).toISOString())
+      this.setQuotaUnavailable(
+        'not-observed',
+        null,
+        new Date(this.nextObservationTime()).toISOString(),
+      )
     }
   }
 
@@ -75,7 +79,7 @@ export class CcQuotaService {
 
   /** Accept a statusline payload. Returns the resulting snapshot. */
   ingest(payload: unknown): CcQuotaSnapshot {
-    const nowMs = this.now()
+    const nowMs = this.nextObservationTime()
     const checkedAt = new Date(nowMs).toISOString()
     const ctx = extractSessionContext(payload)
     if (ctx) {
@@ -255,6 +259,12 @@ export class CcQuotaService {
       freshness: { state: 'unknown', observedAt, checkedAt },
       availability: { state: 'unavailable', reason, ...(message ? { message } : {}) },
     })
+  }
+
+  private nextObservationTime(): number {
+    const next = Math.max(this.now(), this.lastObservationAtMs)
+    this.lastObservationAtMs = next
+    return next
   }
 }
 
