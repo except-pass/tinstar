@@ -477,6 +477,7 @@ describe('getLiveSessionForBoot', () => {
     const releasePort = vi.fn()
     const releaseLease = vi.fn()
     const update = vi.fn(() => session)
+    const stopTtyd = vi.fn()
 
     await expect(reattachVerifiedSessionTtydAttempt(
       { dirs: { sessions: '/sessions' } } as TinstarConfig,
@@ -493,7 +494,7 @@ describe('getLiveSessionForBoot', () => {
         reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
         isCurrent: () => true,
         verifySurface: async () => 'unhealthy',
-        stopTtyd: vi.fn(),
+        stopTtyd,
         releasePort,
         updateSession: update,
         tmuxName: () => 'tinstar-fresh-port-failure',
@@ -503,8 +504,55 @@ describe('getLiveSessionForBoot', () => {
 
     expect(releasePort).toHaveBeenCalledTimes(1)
     expect(releasePort).toHaveBeenCalledWith(7000)
+    expect(stopTtyd).toHaveBeenCalledTimes(1)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach verification compensation',
+    })
     expect(update).not.toHaveBeenCalled()
     expect(releaseLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('labels compensation for an inconclusive fresh replacement', async () => {
+    const session = {
+      name: 'fresh-inspection-inconclusive',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        findSupersededError: findNoSupersededError,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({
+          port: opts.port,
+          ttydPid: 101,
+        }),
+        isCurrent: () => true,
+        verifySurface: async () => 'inconclusive',
+        stopTtyd,
+        releasePort,
+        updateSession: vi.fn(() => session),
+        tmuxName: () => 'tinstar-fresh-inspection-inconclusive',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach inconclusive-surface compensation',
+    })
+    expect(releasePort).toHaveBeenCalledWith(7000)
   })
 
   it('leaves an incumbent untouched when identity inspection is inconclusive', async () => {
@@ -799,6 +847,7 @@ describe('getLiveSessionForBoot', () => {
     const verifySurface = vi.fn()
       .mockResolvedValueOnce('unhealthy')
       .mockResolvedValueOnce('verified')
+    const stopTtyd = vi.fn()
 
     await expect(reattachVerifiedSessionTtydAttempt(
       { dirs: { sessions: '/sessions' } } as TinstarConfig,
@@ -815,7 +864,7 @@ describe('getLiveSessionForBoot', () => {
         reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
         isCurrent: () => true,
         verifySurface,
-        stopTtyd: vi.fn(),
+        stopTtyd,
         releasePort,
         updateSession: update,
         tmuxName: () => 'tinstar-stale-port-migration',
@@ -829,6 +878,9 @@ describe('getLiveSessionForBoot', () => {
     ])
     expect(releasePort).toHaveBeenCalledTimes(1)
     expect(releasePort).toHaveBeenCalledWith(6123)
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach unhealthy-surface retirement',
+    })
     expect(session).toMatchObject({ port: 7000, ttydPid: 101 })
   })
 
@@ -842,6 +894,10 @@ describe('getLiveSessionForBoot', () => {
     } as Session
     const update = vi.fn(() => session)
     const releasePort = vi.fn()
+    const stopTtyd = vi.fn()
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false)
 
     await expect(reattachVerifiedSessionTtydAttempt(
       { dirs: { sessions: '/sessions' } } as TinstarConfig,
@@ -856,9 +912,9 @@ describe('getLiveSessionForBoot', () => {
         getSession: () => session,
         findPort: async () => 7000,
         reattach: async (_config, opts) => ({ port: opts.port, ttydPid: 101 }),
-        isCurrent: () => false,
+        isCurrent,
         verifySurface: async () => 'verified',
-        stopTtyd: vi.fn(),
+        stopTtyd,
         releasePort,
         updateSession: update,
         tmuxName: () => 'tinstar-stale-generation-reattach',
@@ -867,7 +923,53 @@ describe('getLiveSessionForBoot', () => {
     )).resolves.toBe(false)
 
     expect(update).not.toHaveBeenCalled()
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach lifecycle ownership lost',
+    })
     expect(releasePort).toHaveBeenCalledTimes(1)
+    expect(releasePort).toHaveBeenCalledWith(7000)
+  })
+
+  it('labels compensation when verified terminal publication is refused', async () => {
+    const session = {
+      name: 'publication-refused-reattach',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        findSupersededError: findNoSupersededError,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({
+          port: opts.port,
+          ttydPid: 101,
+        }),
+        isCurrent: () => true,
+        verifySurface: async () => 'verified',
+        stopTtyd,
+        releasePort,
+        updateSession: vi.fn(() => null),
+        tmuxName: () => 'tinstar-publication-refused-reattach',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach publication compensation',
+    })
     expect(releasePort).toHaveBeenCalledWith(7000)
   })
 

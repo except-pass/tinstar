@@ -551,7 +551,7 @@ describe('fenced ttyd start attempts', () => {
     expect(deps.enqueueRestart).not.toHaveBeenCalled()
   })
 
-  it('reports an absent token as cancellation rather than replacement', async () => {
+  it('keeps the first cancellation reason through later teardown steps', async () => {
     const scheduled: Array<(...args: unknown[]) => void> = []
     const deps = fakeStartDeps({
       schedule: vi.fn((callback) => {
@@ -564,11 +564,14 @@ describe('fenced ttyd start attempts', () => {
     const rejection = expect(attempt).rejects.toMatchObject({
       name: 'TtydStartCancelledError',
       stage: 'post-spawn',
-      reason: 'session deletion requested',
+      reason: 'surface refresh retirement',
       interrupted: expect.any(TtydStartSupersededError),
     })
     await vi.waitFor(() => expect(scheduled).toHaveLength(1))
 
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'surface refresh retirement',
+    })
     stopManagedTtyd(opts.sessionName, {
       cancellationReason: 'session deletion requested',
     })

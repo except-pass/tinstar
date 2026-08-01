@@ -8,12 +8,13 @@
 // directory, the real `createSession`/`updateSession`/`deleteSession`, the real
 // port claim, and real compensation. Only tmux itself is substituted, because a
 // test that started a tmux server would be testing tmux.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
+  buildRefreshWorkerTerminalStops, isLiveSessionRecord, LIVE_SESSION_STATES,
+  parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
 } from '../refresh-wiring'
 import { findPort, releasePort } from '../../sessions/backends/tmux'
 import { launchRefreshWorker, refreshBriefText, type RefreshWorkerHost } from '../../sessions/surfaceAuthor'
@@ -164,6 +165,25 @@ describe('retireRefreshWorker', () => {
       releasePort: p => { released.push(p) },
     })
     expect(released).toEqual([5150])
+  })
+})
+
+describe('buildRefreshWorkerTerminalStops', () => {
+  it('labels launch compensation and retirement at the real wiring seam', () => {
+    const stopManagedTtyd = vi.fn(
+      (_name: string, _opts?: unknown): void => undefined,
+    )
+    const stops = buildRefreshWorkerTerminalStops(stopManagedTtyd)
+
+    stops.compensateLaunch('launch-worker')
+    stops.retire('retired-worker')
+
+    expect(stopManagedTtyd).toHaveBeenNthCalledWith(1, 'launch-worker', {
+      cancellationReason: 'surface refresh launch compensation',
+    })
+    expect(stopManagedTtyd).toHaveBeenNthCalledWith(2, 'retired-worker', {
+      cancellationReason: 'surface refresh retirement',
+    })
   })
 })
 

@@ -403,11 +403,27 @@ export async function reattachVerifiedSessionTtydAttempt(
   let sessionPublished = false
   let priorRun: ReturnType<DocumentStore['getRun']> = undefined
   let runPublicationAttempted = false
+  let reattachSurfaceCompensated = false
+  const stopReattachSurface = (
+    sessionName: string,
+    cancellationReason: tmuxBackend.TtydStartCancellationReason,
+  ): void => {
+    deps.stopTtyd(sessionName, { cancellationReason })
+    reattachSurfaceCompensated = true
+  }
+  const reattach = (
+    currentSession: Session,
+    port: number,
+  ): ReturnType<VerifiedSessionTtydReattachDeps['reattach']> => {
+    reattachSurfaceCompensated = false
+    return deps.reattach(config, { session: currentSession, port })
+  }
   const abandonInconclusiveSurface = (): false => {
     if (freshPort != null) {
-      deps.stopTtyd(session?.name ?? name, {
-        cancellationReason: 'reattach inconclusive-surface compensation',
-      })
+      stopReattachSurface(
+        session?.name ?? name,
+        'reattach inconclusive-surface compensation',
+      )
       deps.releasePort(freshPort)
     }
     return false
@@ -421,11 +437,12 @@ export async function reattachVerifiedSessionTtydAttempt(
     ) return false
     let port = session.port ?? await deps.findPort(config)
     if (session.port == null) freshPort = port
-    let result = await deps.reattach(config, { session, port })
+    let result = await reattach(session, port)
     if (!deps.isCurrent(config, session, lease.token)) {
-      deps.stopTtyd(session.name, {
-        cancellationReason: 'reattach lifecycle ownership lost',
-      })
+      stopReattachSurface(
+        session.name,
+        'reattach lifecycle ownership lost',
+      )
       if (freshPort != null) deps.releasePort(freshPort)
       return false
     }
@@ -442,9 +459,10 @@ export async function reattachVerifiedSessionTtydAttempt(
       && session.port != null
       && deps.isCurrent(config, session, lease.token)
     ) {
-      deps.stopTtyd(session.name, {
-        cancellationReason: 'reattach unhealthy-surface retirement',
-      })
+      stopReattachSurface(
+        session.name,
+        'reattach unhealthy-surface retirement',
+      )
       const staleSession = session
       const stalePort = session.port
       const staleRun = docStore.getRun(session.name)
@@ -486,11 +504,12 @@ export async function reattachVerifiedSessionTtydAttempt(
       session = clearedSession
       port = await deps.findPort(config)
       freshPort = port
-      result = await deps.reattach(config, { session, port })
+      result = await reattach(session, port)
       if (!deps.isCurrent(config, session, lease.token)) {
-        deps.stopTtyd(session.name, {
-          cancellationReason: 'reattach lifecycle ownership lost',
-        })
+        stopReattachSurface(
+          session.name,
+          'reattach lifecycle ownership lost',
+        )
         deps.releasePort(port)
         return false
       }
@@ -507,9 +526,12 @@ export async function reattachVerifiedSessionTtydAttempt(
       surfaceState !== 'verified'
       || !deps.isCurrent(config, session, lease.token)
     ) {
-      deps.stopTtyd(session.name, {
-        cancellationReason: 'reattach verification compensation',
-      })
+      stopReattachSurface(
+        session.name,
+        surfaceState === 'verified'
+          ? 'reattach lifecycle ownership lost'
+          : 'reattach verification compensation',
+      )
       if (surfaceState === 'verified') {
         if (freshPort != null) deps.releasePort(freshPort)
         return false
@@ -522,9 +544,10 @@ export async function reattachVerifiedSessionTtydAttempt(
       { port: result.port, ttydPid: result.ttydPid ?? null },
     )
     if (!updated) {
-      deps.stopTtyd(session.name, {
-        cancellationReason: 'reattach publication compensation',
-      })
+      stopReattachSurface(
+        session.name,
+        'reattach publication compensation',
+      )
       if (freshPort != null) deps.releasePort(freshPort)
       return false
     }
@@ -576,10 +599,11 @@ export async function reattachVerifiedSessionTtydAttempt(
     // has not created a replacement, so tearing down the incumbent would turn
     // an observation outage into a terminal outage.
     const inspectionInconclusive = deps.isIdentityInspectionError(err)
-    if (!inspectionInconclusive) {
-      deps.stopTtyd(name, {
-        cancellationReason: 'reattach failure compensation',
-      })
+    if (!inspectionInconclusive && !reattachSurfaceCompensated) {
+      stopReattachSurface(
+        name,
+        'reattach failure compensation',
+      )
     }
     let rollbackComplete = true
     if (sessionPublished && session) {

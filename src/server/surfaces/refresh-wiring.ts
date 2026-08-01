@@ -163,10 +163,28 @@ export interface RefreshWiringInput {
   reobserveRun: (runId: string) => Promise<void>
 }
 
+export function buildRefreshWorkerTerminalStops(
+  stopManagedTtyd: typeof tmuxBackend.stopManagedTtyd
+    = tmuxBackend.stopManagedTtyd,
+): {
+  compensateLaunch: (name: string) => void
+  retire: (name: string) => void
+} {
+  return {
+    compensateLaunch: name => stopManagedTtyd(name, {
+      cancellationReason: 'surface refresh launch compensation',
+    }),
+    retire: name => stopManagedTtyd(name, {
+      cancellationReason: 'surface refresh retirement',
+    }),
+  }
+}
+
 /** Build the coordinator with the real host effects behind it. */
 export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefreshCoordinator {
   const { cfg, docStore, service, reobserveRun } = input
   const jobs = SurfaceRefreshJobStore.open(cfg.dirs.root)
+  const terminalStops = buildRefreshWorkerTerminalStops()
   // A broken port/cap config degrades the engine to owner delivery rather than
   // stopping it: freshness still tracks, jobs still queue, and a live owner still
   // gets the work — only the background fleet is withheld, which is the part the
@@ -245,9 +263,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
             template: null,
             provider,
           }),
-        stopSession: name => tmuxBackend.stopManagedTtyd(name, {
-          cancellationReason: 'surface refresh launch compensation',
-        }),
+        stopSession: terminalStops.compensateLaunch,
         // A cast, because the launcher takes the run shape as an opaque record —
         // it may not import the Run type without dragging the whole document model
         // into the sessions layer. The fields it actually builds are asserted by
@@ -270,9 +286,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
     retireWorker: name => retireRefreshWorker({
       name,
       getSession: () => getSession(cfg.dirs.sessions, name),
-      stopTtyd: () => tmuxBackend.stopManagedTtyd(name, {
-        cancellationReason: 'surface refresh retirement',
-      }),
+      stopTtyd: () => terminalStops.retire(name),
       deleteTmux: session => tmuxBackend.deleteTmuxSession(cfg, session as Session),
       deleteRun: () => docStore.deleteRun(name),
       deleteSession: () => { deleteSession(cfg.dirs.sessions, name) },

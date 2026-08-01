@@ -1930,8 +1930,13 @@ function invalidateTtydStarts(
 ): void {
   const pending = pendingTtydStartTokens.get(sessionName)
   if (pending) {
-    for (const token of pending.keys()) {
-      ttydStartCancellationReasons.set(token, reason)
+    for (const token of pending) {
+      // The first invalidation removed ownership. Later compensation steps
+      // (for example refresh retirement followed by tmux deletion) must not
+      // rewrite that receipt while the same start is still settling.
+      if (!ttydStartCancellationReasons.has(token)) {
+        ttydStartCancellationReasons.set(token, reason)
+      }
     }
   }
   ttydStartTokens.delete(sessionName)
