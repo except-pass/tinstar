@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import type { Camera } from '../../hooks/useCanvasCamera'
 import type { WidgetLayout } from '../../hooks/useWidgetLayouts'
 import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget } from '../../domain/types'
@@ -27,6 +27,10 @@ interface Props {
    * The user's preference is preserved (not mutated) so it returns to its
    * previous state once forceExpanded becomes false. */
   forceExpanded?: boolean
+  /** Reports the screen-space rail reserved by the expanded sidebar. */
+  onOccupiedWidthChange?: (width: number) => void
+  /** Keep the minimap visible but prevent it from moving the canvas camera. */
+  cameraInteractionEnabled?: boolean
 }
 
 /** Right-side canvas sidebar: telemetry HUD on top, marshal terminal in the
@@ -38,6 +42,11 @@ export function CanvasSidebar(props: Props) {
   useEffect(() => {
     setPref('canvasSidebarCollapsed', storedCollapsed)
   }, [storedCollapsed])
+
+  useLayoutEffect(() => {
+    props.onOccupiedWidthChange?.(collapsed ? 0 : SIDEBAR_WIDTH)
+    return () => props.onOccupiedWidthChange?.(0)
+  }, [collapsed, props.onOccupiedWidthChange])
 
   const toggle = useCallback(() => setStoredCollapsed(c => !c), [])
 
@@ -104,6 +113,7 @@ export function CanvasSidebar(props: Props) {
           browserWidgetMap={props.browserWidgetMap}
           imageWidgetMap={props.imageWidgetMap}
           toggleRef={props.minimapToggleRef}
+          interactionEnabled={props.cameraInteractionEnabled}
         />
       </div>
     </div>

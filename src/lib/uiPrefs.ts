@@ -23,6 +23,9 @@ const PREFS_KEY = 'tinstar-ui-prefs'
 export const PREFS_STORAGE_KEY = PREFS_KEY
 
 export interface UiPrefs {
+  /** Per-browser default workspace view. The active run remains live state and
+   *  is deliberately never persisted because run ids are reusable. */
+  focusMode?: boolean
   hotkeysSidebarWidth?: number
   hotkeysSidebarCollapsed?: boolean
   hotkeysHeight?: number

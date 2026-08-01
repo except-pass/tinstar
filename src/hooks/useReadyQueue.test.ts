@@ -97,6 +97,15 @@ describe('visibleCycleQueue', () => {
   })
 })
 
+describe('cycle navigation', () => {
+  it('wraps previous to the final candidate when the current run is outside the queue', () => {
+    const run = (id: string): Run => ({ id, sessionId: id } as Run)
+    const runs = [run('alpha'), run('bravo'), run('charlie'), run('stopped')]
+
+    expect(cyclePrev(runs, ['alpha', 'bravo', 'charlie'], 'stopped')?.id).toBe('charlie')
+  })
+})
+
 // Background sessions (R7): WorkspaceShell filters cycle candidates through
 // `isBackgroundHidden` BEFORE they reach visibleCycleQueue, so background-
 // hidden runs can't leak even on the pre-report fallback path (which returns
