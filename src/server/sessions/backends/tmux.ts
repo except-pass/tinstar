@@ -863,10 +863,10 @@ export async function createTmuxSession(
 }
 
 interface StartTmuxSessionDeps {
-  startTtyd: typeof startTtyd
+  reattachTmuxSession: typeof reattachTmuxSession
 }
 
-const startTmuxSessionDeps: StartTmuxSessionDeps = { startTtyd }
+const startTmuxSessionDeps: StartTmuxSessionDeps = { reattachTmuxSession }
 
 export async function startTmuxSession(
   config: TinstarConfig,
@@ -897,15 +897,10 @@ export async function startTmuxSession(
   // Re-establish the exact-target terminal surface because the prior ttyd may
   // have exited independently while the agent survived.
   if (await getTmuxAgentIdentity(config, opts.session.name) !== null) {
-    const ttydPid = await deps.startTtyd({
-      tmuxName,
+    return deps.reattachTmuxSession(config, {
+      session: opts.session,
       port: opts.port,
-      sessionName: opts.session.name,
     })
-    return {
-      port: opts.port,
-      ttydPid,
-    }
   }
 
   // A restart in the same pane keeps the shell PID, so give every managed
@@ -982,7 +977,7 @@ export async function startTmuxSession(
   }
 
   // Restart ttyd
-  const ttydPid = await deps.startTtyd({
+  const ttydPid = await startTtyd({
     tmuxName,
     port: opts.port,
     sessionName: opts.session.name,
@@ -1071,9 +1066,20 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   }
 }
 
+interface ReattachTmuxSessionDeps {
+  incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
+  startTtyd: typeof startTtyd
+}
+
+const reattachTmuxSessionDeps: ReattachTmuxSessionDeps = {
+  incumbentsOnPort: ttydIncumbentsOnPortStrict,
+  startTtyd,
+}
+
 export async function reattachTmuxSession(
   config: TinstarConfig,
   opts: { session: Session; port: number },
+  deps: ReattachTmuxSessionDeps = reattachTmuxSessionDeps,
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
   // The boot rehydration path has already reclaimed persisted ports, while a
@@ -1083,12 +1089,16 @@ export async function reattachTmuxSession(
 
   // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
   // any unrelated HTTP listener) must never make this session look healthy.
-  const incumbent = (await ttydIncumbentsOnPortStrict(opts.port)).find(
+  const incumbent = (await deps.incumbentsOnPort(opts.port)).find(
     candidate => candidate.tmuxTarget === tmuxName,
   )
   if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
 
-  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  const ttydPid = await deps.startTtyd({
+    tmuxName,
+    port: opts.port,
+    sessionName: opts.session.name,
+  })
   return { port: opts.port, ttydPid }
 }
 

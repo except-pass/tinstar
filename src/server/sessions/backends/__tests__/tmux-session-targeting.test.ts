@@ -11,6 +11,7 @@ import {
   getTmuxAgentIdentity,
   getTmuxSessionState,
   healthCheck,
+  reattachTmuxSession,
   startTmuxSession,
   stopTmuxSession,
   tmuxHasSession,
@@ -159,7 +160,7 @@ describe('session-scoped tmux targets', () => {
   })
 
   it('leaves a live tmux agent unchanged on a redundant start', async () => {
-    const ensureTtyd = vi.fn(async () => 8383)
+    const ensureTtyd = vi.fn(async () => ({ port: 6123, ttydPid: 8383 }))
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
       if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
       if (file === 'ps') {
@@ -185,12 +186,11 @@ describe('session-scoped tmux targets', () => {
       port: 6123,
       provider: {} as never,
     }, {
-      startTtyd: ensureTtyd,
+      reattachTmuxSession: ensureTtyd,
     })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
-    expect(ensureTtyd).toHaveBeenCalledWith({
-      tmuxName: 'tinstar-parent',
+    expect(ensureTtyd).toHaveBeenCalledWith(config, {
+      session: expect.objectContaining({ name: 'parent' }),
       port: 6123,
-      sessionName: 'parent',
     })
     const mutatingTmuxCalls = execFileMock.mock.calls.filter((call) => {
       const [file, args] = call as [string, string[]]
@@ -198,6 +198,22 @@ describe('session-scoped tmux targets', () => {
         && (args[0] === 'set-environment' || args[0] === 'send-keys')
     })
     expect(mutatingTmuxCalls).toEqual([])
+  })
+
+  it('adopts a healthy exact-target ttyd without restarting it', async () => {
+    const startSurface = vi.fn(async () => 8383)
+
+    await expect(reattachTmuxSession(config, {
+      session: parent,
+      port: 6123,
+    }, {
+      incumbentsOnPort: async () => [
+        { pid: 7373, tmuxTarget: 'tinstar-parent' },
+        { pid: 7474, tmuxTarget: 'tinstar-parent-hand' },
+      ],
+      startTtyd: startSurface,
+    })).resolves.toEqual({ port: 6123, ttydPid: 7373 })
+    expect(startSurface).not.toHaveBeenCalled()
   })
 
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {
