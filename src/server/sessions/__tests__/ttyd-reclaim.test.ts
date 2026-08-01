@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import {
   allTtydIncumbentsStrict,
+  clearTtydStartCancellationReceiptsForTests,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
@@ -419,9 +420,10 @@ describe('fenced ttyd start attempts', () => {
     )
     expect(findTtydStartSupersededError(missingReceipt)).toBeNull()
     expect(findTtydStartCancelledError(missingReceipt)).toBeNull()
+    expect(isExpectedTtydStartInterruption(missingReceipt)).toBe(false)
     expect(missingReceipt.cause).toBeUndefined()
     expect(missingReceipt.interrupted).toBe(interrupted)
-    expect(missingReceipt.message).toContain(interrupted.message)
+    expect(missingReceipt.message).not.toContain(interrupted.message)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {
@@ -590,6 +592,40 @@ describe('fenced ttyd start attempts', () => {
     })
     scheduled[0]!()
     await rejection
+  })
+
+  it('fails hard when cancellation ownership has no receipt', async () => {
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const cleanupError = new Error('receipt cleanup failed')
+    const stopManaged = vi.fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => { throw cleanupError })
+    const deps = fakeStartDeps({
+      stopManaged,
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+
+    const attempt = startTtydWithDeps(opts, deps)
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'session stop requested',
+    })
+    clearTtydStartCancellationReceiptsForTests()
+    scheduled[0]!()
+
+    const rejection = await attempt.catch(err => err)
+    expect(rejection).toBeInstanceOf(TtydStartCancellationReceiptError)
+    expect(isExpectedTtydStartInterruption(rejection)).toBe(false)
+    expect(findTtydStartSupersededError(rejection)).toBeNull()
+    expect(rejection.cause).toBeInstanceOf(AggregateError)
+    expect((rejection.cause as AggregateError).errors).toEqual([
+      rejection.interrupted,
+      cleanupError,
+    ])
   })
 
   it('records why an in-flight start is abandoned after its child exits', async () => {

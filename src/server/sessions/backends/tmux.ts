@@ -1221,10 +1221,12 @@ export class TtydStartCancellationReceiptError extends Error {
     sessionName: string,
     /** Original interruption kept non-causal so supersession cannot be inferred. */
     readonly interrupted: unknown,
+    /** Optional cleanup aggregate; its sibling errors remain non-causal. */
+    options?: ErrorOptions,
   ) {
     super(
-      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
-        + (interrupted instanceof Error ? `: ${interrupted.message}` : ''),
+      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`,
+      options,
     )
     this.name = 'TtydStartCancellationReceiptError'
   }
@@ -1266,6 +1268,16 @@ export function findTtydStartCancelledError(
     err,
     (candidate): candidate is TtydStartCancelledError =>
       candidate instanceof TtydStartCancelledError,
+  )
+}
+
+export function findTtydStartCancellationReceiptError(
+  err: unknown,
+): TtydStartCancellationReceiptError | null {
+  return findTtydStartCause(
+    err,
+    (candidate): candidate is TtydStartCancellationReceiptError =>
+      candidate instanceof TtydStartCancellationReceiptError,
   )
 }
 
@@ -1695,6 +1707,7 @@ function enqueueTtydStart(
             throw new TtydStartCancellationReceiptError(
               opts.sessionName,
               err,
+              combinedFailure ? { cause: combinedFailure } : undefined,
             )
           }
           throw new TtydStartCancelledError(
@@ -1883,7 +1896,9 @@ export async function startTtydForTokenAttempt(
             if (cur.onRestart && pid) cur.onRestart(pid)
           }).catch(err => {
             if (isExpectedTtydStartInterruption(err)) return
-            log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
+            log.error('ttyd', `${opts.sessionName}: restart failed`, {
+              error: describeTtydStartFailureForLog(err),
+            })
           })
         }, 2000)
       })
@@ -1911,6 +1926,16 @@ export async function startTtydForTokenAttempt(
 export function isExpectedTtydStartInterruption(err: unknown): boolean {
   return err instanceof TtydStartSupersededError
     || err instanceof TtydStartCancelledError
+}
+
+function describeTtydStartFailureForLog(err: unknown): string {
+  if (!(err instanceof TtydStartCancellationReceiptError)) {
+    return (err as Error).message
+  }
+  const interrupted = err.interrupted instanceof Error
+    ? err.interrupted.message
+    : String(err.interrupted)
+  return `${err.message}; interrupted failure: ${interrupted}`
 }
 
 export function stopManagedTtyd(
@@ -1960,6 +1985,11 @@ function invalidateTtydStarts(
     }
   }
   ttydStartTokens.delete(sessionName)
+}
+
+/** Test-only fault injection for the otherwise unreachable receipt invariant. */
+export function clearTtydStartCancellationReceiptsForTests(): void {
+  ttydStartCancellationReasons.clear()
 }
 
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {

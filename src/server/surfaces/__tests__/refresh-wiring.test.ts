@@ -20,9 +20,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  buildRefreshCoordinatorDeps, buildRefreshWorkerTerminalStops,
-  isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult,
-  refreshDispatchPrompt, retireRefreshWorker,
+  buildRefreshCoordinatorDeps, isLiveSessionRecord, LIVE_SESSION_STATES,
+  parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
 } from '../refresh-wiring'
 import { findPort, releasePort } from '../../sessions/backends/tmux'
 import * as tmuxBackend from '../../sessions/backends/tmux'
@@ -178,24 +177,7 @@ describe('retireRefreshWorker', () => {
   })
 })
 
-describe('buildRefreshWorkerTerminalStops', () => {
-  it('labels launch compensation and retirement at the real wiring seam', () => {
-    const stopManagedTtyd = vi.fn(
-      (_name: string, _opts?: unknown): void => undefined,
-    )
-    const stops = buildRefreshWorkerTerminalStops(stopManagedTtyd)
-
-    stops.compensateLaunch('launch-worker')
-    stops.retire('retired-worker')
-
-    expect(stopManagedTtyd).toHaveBeenNthCalledWith(1, 'launch-worker', {
-      cancellationReason: 'surface refresh launch compensation',
-    })
-    expect(stopManagedTtyd).toHaveBeenNthCalledWith(2, 'retired-worker', {
-      cancellationReason: 'surface refresh retirement',
-    })
-  })
-
+describe('buildRefreshCoordinatorDeps', () => {
   it('threads both terminal stops through the real coordinator wiring', async () => {
     const root = mkdtempSync(join(tmpdir(), 'refresh-stop-wiring-'))
     const sessions = join(root, 'sessions')

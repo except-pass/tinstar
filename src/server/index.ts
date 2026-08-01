@@ -372,13 +372,17 @@ function ttydFailureContains(
 
 export function describeTtydReattachFailure(failure: unknown): string {
   const cancelled = tmuxBackend.findTtydStartCancelledError(failure)
-  if (!cancelled) return describeTtydFailure(failure)
-  const interrupted = ttydFailureContains(failure, cancelled.interrupted)
+  const receipt = tmuxBackend.findTtydStartCancellationReceiptError(failure)
+  if (!cancelled && !receipt) return describeTtydFailure(failure)
+  const interruption = cancelled?.interrupted ?? receipt?.interrupted
+  const interrupted = ttydFailureContains(failure, interruption)
     ? ''
-    : `; interrupted failure: ${describeTtydFailure(cancelled.interrupted)}`
-  return `${describeTtydFailure(failure)}; cancellation reason: `
-    + cancelled.reason
-    + interrupted
+    : `; interrupted failure: ${describeTtydFailure(interruption)}`
+  return cancelled
+    ? `${describeTtydFailure(failure)}; cancellation reason: `
+      + cancelled.reason
+      + interrupted
+    : describeTtydFailure(failure) + interrupted
 }
 
 /**

@@ -168,15 +168,12 @@ export interface RefreshWorkerTerminalStops {
   retire: (name: string) => void
 }
 
-export function buildRefreshWorkerTerminalStops(
-  stopManagedTtyd: typeof tmuxBackend.stopManagedTtyd
-    = tmuxBackend.stopManagedTtyd,
-): RefreshWorkerTerminalStops {
+function buildRefreshWorkerTerminalStops(): RefreshWorkerTerminalStops {
   return {
-    compensateLaunch: name => stopManagedTtyd(name, {
+    compensateLaunch: name => tmuxBackend.stopManagedTtyd(name, {
       cancellationReason: 'surface refresh launch compensation',
     }),
-    retire: name => stopManagedTtyd(name, {
+    retire: name => tmuxBackend.stopManagedTtyd(name, {
       cancellationReason: 'surface refresh retirement',
     }),
   }

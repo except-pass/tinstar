@@ -35,6 +35,7 @@ import {
 import {
   findTtydStartSupersededError,
   TtydIdentityInspectionError,
+  TtydStartCancellationReceiptError,
   TtydStartCancelledError,
   TtydStartSupersededError,
 } from '../sessions/backends/tmux'
@@ -164,6 +165,38 @@ describe('describeTtydFailure', () => {
         + 'was superseded at post-spawn | cleanup failed]',
     )
     expect(described).not.toContain('interrupted failure:')
+
+    const missingReceipt = new TtydStartCancellationReceiptError(
+      'diagnostic-session',
+      interrupted,
+    )
+    const interruptionMessage = 'ttyd start for diagnostic-session '
+      + 'was superseded at post-spawn'
+    const missingReceiptDescription = describeTtydReattachFailure(
+      missingReceipt,
+    )
+    expect(missingReceiptDescription).toContain(
+      `; interrupted failure: ${interruptionMessage}`,
+    )
+    expect(missingReceiptDescription.split(interruptionMessage)).toHaveLength(2)
+
+    const receiptWithCleanup = new TtydStartCancellationReceiptError(
+      'diagnostic-session',
+      interrupted,
+      {
+        cause: new AggregateError(
+          [interrupted, new Error('receipt cleanup failed')],
+          'receipt cleanup aggregate',
+        ),
+      },
+    )
+    const receiptDescription = describeTtydReattachFailure(receiptWithCleanup)
+    expect(receiptDescription).toContain(
+      'receipt cleanup aggregate; errors: [ttyd start for diagnostic-session '
+        + 'was superseded at post-spawn | receipt cleanup failed]',
+    )
+    expect(receiptDescription).not.toContain('interrupted failure:')
+    expect(receiptDescription.split(interruptionMessage)).toHaveLength(2)
   })
 })
 
