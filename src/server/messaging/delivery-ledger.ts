@@ -823,6 +823,16 @@ function isFinal(delivery: DeliveryRecord): boolean {
   return delivery.state === 'failed' && lastEvent(delivery).retryable === false
 }
 
+function evidenceEqual(
+  left: DeliveryEvidence | undefined,
+  right: DeliveryEvidence | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.source.id === right.source.id
+    && left.source.label === right.source.label
+    && left.reference === right.reference
+}
+
 function transitionProblem(
   current: Pick<DeliveryRecord, 'state' | 'attempt' | 'history'>,
   next: Omit<DeliveryStateEvent, 'at'>,
@@ -842,7 +852,10 @@ function transitionProblem(
   if (delta === 0
     && next.state === current.state
     && next.reason === lastEvent(current).reason
-    && next.retryAt === lastEvent(current).retryAt) {
+    && next.retryAt === lastEvent(current).retryAt
+    && next.retryable === lastEvent(current).retryable
+    && next.attemptRef === lastEvent(current).attemptRef
+    && evidenceEqual(next.evidence, lastEvent(current).evidence)) {
     return 'transition must change state or attempt metadata'
   }
   if ((next.state === 'in-flight' || next.state === 'delivered')

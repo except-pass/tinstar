@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { acquireBackendSingleton } from '../../infra/lock'
+import { DeliveryLedger } from '../delivery-ledger'
 import type {
   LiveDeliveryResult,
   RecipientExclusion,
@@ -330,6 +332,79 @@ describe('NATS request/reply boundary', () => {
       'second:start',
       'second:stop',
     ])
+  })
+
+  it('drains an old acceptance before replacement state opens and preserves both writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'message-router-hmr-'))
+    const lockPath = join(dir, 'server.lock')
+    const lock = acquireBackendSingleton(lockPath)
+    if (!lock.acquired) throw new Error('test setup could not acquire backend singleton')
+    const calls: string[] = []
+    let releaseWrite!: () => void
+    const writeFinished = new Promise<void>(resolve => { releaseWrite = resolve })
+    const ids = ['msg-before-handoff', 'msg-after-handoff']
+    const openLedger = () => DeliveryLedger.open({
+      dir,
+      lockPath,
+      createMessageId: () => ids.shift() ?? 'msg-unused',
+    })
+    const oldLedger = openLedger()
+    const accept = (requestId: string) => oldLedger.accept({
+      requestId,
+      sender: { sessionId: 'sender', incarnation: 'sender-v1' },
+      destination: { subject: 'tinstar.agent.receiver' },
+      text: requestId,
+      recipients: [{
+        providerId: 'codex',
+        sessionId: 'receiver',
+        incarnation: 'receiver-v1',
+      }],
+    })
+    const first = {
+      start: vi.fn(async () => { calls.push('first:start') }),
+      stop: vi.fn(async () => {
+        calls.push('first:draining')
+        await writeFinished
+        await accept('req-before-handoff')
+        calls.push('first:stopped')
+      }),
+    } as unknown as NatsMessageRouterService
+    const firstLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
+    await firstLease.start(first)
+
+    const secondLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
+    const replacementOpen = secondLease.quiesced().then(async () => {
+      calls.push('replacement:open')
+      const replacement = openLedger()
+      await replacement.accept({
+        requestId: 'req-after-handoff',
+        sender: { sessionId: 'sender', incarnation: 'sender-v1' },
+        destination: { subject: 'tinstar.agent.receiver' },
+        text: 'req-after-handoff',
+        recipients: [{
+          providerId: 'codex',
+          sessionId: 'receiver',
+          incarnation: 'receiver-v1',
+        }],
+      })
+      return replacement
+    })
+    await Promise.resolve()
+    expect(calls).toEqual(['first:start', 'first:draining'])
+
+    releaseWrite()
+    const replacement = await replacementOpen
+    expect(calls).toEqual([
+      'first:start',
+      'first:draining',
+      'first:stopped',
+      'replacement:open',
+    ])
+    expect(replacement.getMessage('msg-before-handoff')).toBeDefined()
+    expect(replacement.getMessage('msg-after-handoff')).toBeDefined()
+    await secondLease.stop()
+    rmSync(`${lockPath}.mark`, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('makes no-responder and timeout failures visible to the sender', async () => {
