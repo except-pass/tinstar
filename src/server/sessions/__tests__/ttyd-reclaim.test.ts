@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
+import { log } from '../../logger'
 import {
   allTtydIncumbentsStrict,
-  clearTtydStartCancellationReceiptsForTests,
+  clearTtydStartCancellationReasonForTests,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
@@ -382,6 +383,7 @@ describe('fenced ttyd start attempts', () => {
   }
 
   afterEach(() => {
+    vi.restoreAllMocks()
     stopManagedTtyd(opts.sessionName, {
       cancellationReason: 'session stop requested',
     })
@@ -423,7 +425,7 @@ describe('fenced ttyd start attempts', () => {
     expect(isExpectedTtydStartInterruption(missingReceipt)).toBe(false)
     expect(missingReceipt.cause).toBeUndefined()
     expect(missingReceipt.interrupted).toBe(interrupted)
-    expect(missingReceipt.message).not.toContain(interrupted.message)
+    expect(missingReceipt.message).toContain(interrupted.message)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {
@@ -614,7 +616,7 @@ describe('fenced ttyd start attempts', () => {
     stopManagedTtyd(opts.sessionName, {
       cancellationReason: 'session stop requested',
     })
-    clearTtydStartCancellationReceiptsForTests()
+    clearTtydStartCancellationReasonForTests(opts.sessionName)
     scheduled[0]!()
 
     const rejection = await attempt.catch(err => err)
@@ -838,6 +840,77 @@ describe('fenced ttyd start attempts', () => {
       startToken,
     ))
     await vi.waitFor(() => expect(onRestart).toHaveBeenCalledWith(888))
+  })
+
+  it('logs a restart receipt with its interruption and cleanup diagnostics once', async () => {
+    const child = fakeChild(777)
+    const scheduled: Array<{
+      callback: (...args: unknown[]) => void
+      delay: number | undefined
+    }> = []
+    const interrupted = new TtydStartSupersededError(
+      opts.sessionName,
+      'post-spawn',
+      { cause: new Error('nested interruption detail') },
+    )
+    const cleanupError = new Error('restart cleanup failed')
+    const receipt = new TtydStartCancellationReceiptError(
+      opts.sessionName,
+      interrupted,
+      {
+        cause: new AggregateError(
+          [interrupted, cleanupError],
+          'restart receipt cleanup aggregate',
+        ),
+      },
+    )
+    const enqueueRestart = vi.fn(async () => {
+      throw receipt
+    })
+    const errorLog = vi.spyOn(log, 'error').mockImplementation(() => undefined)
+    const startToken = Symbol('start')
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn(() => child),
+      schedule: vi.fn((callback, delay) => {
+        scheduled.push({ callback, delay })
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+      enqueueRestart,
+    })
+
+    const attempt = startTtydForTokenAttempt(
+      opts,
+      startToken,
+      () => true,
+      deps,
+    )
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(500))
+    scheduled.shift()!.callback()
+    await expect(attempt).resolves.toBe(777)
+
+    child.emit('exit', 1)
+    await vi.waitFor(() => expect(scheduled[0]?.delay).toBe(2_000))
+    scheduled.shift()!.callback()
+
+    await vi.waitFor(() => expect(errorLog).toHaveBeenCalledWith(
+      'ttyd',
+      `${opts.sessionName}: restart failed`,
+      { error: expect.any(String) },
+    ))
+    const diagnostic = (
+      errorLog.mock.calls.find(
+        ([tag, message]) =>
+          tag === 'ttyd' && message === `${opts.sessionName}: restart failed`,
+      )?.[2]?.error
+    ) as string
+    expect(diagnostic).toContain(
+      `ttyd start for ${opts.sessionName} lost ownership `
+        + 'without a cancellation receipt',
+    )
+    expect(diagnostic).toContain('restart receipt cleanup aggregate')
+    expect(diagnostic).toContain('restart cleanup failed')
+    expect(diagnostic).toContain('nested interruption detail')
+    expect(diagnostic.split(interrupted.message)).toHaveLength(2)
   })
 
   it('fences a queued restart when the start is superseded before its timer', async () => {

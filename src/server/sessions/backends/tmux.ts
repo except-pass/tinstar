@@ -6,6 +6,10 @@ import type { Session, SessionNats } from '../session'
 import { portWindowsOverlap, type TinstarConfig, type CliTemplate, type PortWindow } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { serializeByKey } from './serializeByKey'
+import {
+  describeTtydFailure,
+  TTYD_NON_CAUSAL_INTERRUPTION,
+} from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { log } from '../../logger'
 import {
@@ -1217,6 +1221,9 @@ export class TtydStartCancelledError extends Error {
 }
 
 export class TtydStartCancellationReceiptError extends Error {
+  readonly diagnosticSummary: string
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION]: unknown
+
   constructor(
     sessionName: string,
     /** Original interruption kept non-causal so supersession cannot be inferred. */
@@ -1224,11 +1231,15 @@ export class TtydStartCancellationReceiptError extends Error {
     /** Optional cleanup aggregate; its sibling errors remain non-causal. */
     options?: ErrorOptions,
   ) {
+    const summary =
+      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
     super(
-      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`,
+      summary + (interrupted instanceof Error ? `: ${interrupted.message}` : ''),
       options,
     )
     this.name = 'TtydStartCancellationReceiptError'
+    this.diagnosticSummary = summary
+    this[TTYD_NON_CAUSAL_INTERRUPTION] = interrupted
   }
 }
 
@@ -1268,16 +1279,6 @@ export function findTtydStartCancelledError(
     err,
     (candidate): candidate is TtydStartCancelledError =>
       candidate instanceof TtydStartCancelledError,
-  )
-}
-
-export function findTtydStartCancellationReceiptError(
-  err: unknown,
-): TtydStartCancellationReceiptError | null {
-  return findTtydStartCause(
-    err,
-    (candidate): candidate is TtydStartCancellationReceiptError =>
-      candidate instanceof TtydStartCancellationReceiptError,
   )
 }
 
@@ -1897,7 +1898,7 @@ export async function startTtydForTokenAttempt(
           }).catch(err => {
             if (isExpectedTtydStartInterruption(err)) return
             log.error('ttyd', `${opts.sessionName}: restart failed`, {
-              error: describeTtydStartFailureForLog(err),
+              error: describeTtydFailure(err),
             })
           })
         }, 2000)
@@ -1926,16 +1927,6 @@ export async function startTtydForTokenAttempt(
 export function isExpectedTtydStartInterruption(err: unknown): boolean {
   return err instanceof TtydStartSupersededError
     || err instanceof TtydStartCancelledError
-}
-
-function describeTtydStartFailureForLog(err: unknown): string {
-  if (!(err instanceof TtydStartCancellationReceiptError)) {
-    return (err as Error).message
-  }
-  const interrupted = err.interrupted instanceof Error
-    ? err.interrupted.message
-    : String(err.interrupted)
-  return `${err.message}; interrupted failure: ${interrupted}`
 }
 
 export function stopManagedTtyd(
@@ -1987,9 +1978,13 @@ function invalidateTtydStarts(
   ttydStartTokens.delete(sessionName)
 }
 
-/** Test-only fault injection for the otherwise unreachable receipt invariant. */
-export function clearTtydStartCancellationReceiptsForTests(): void {
-  ttydStartCancellationReasons.clear()
+/** Test-only fault injection for one session's otherwise unreachable invariant. */
+export function clearTtydStartCancellationReasonForTests(
+  sessionName: string,
+): void {
+  const pending = pendingTtydStartTokens.get(sessionName)
+  if (!pending) return
+  for (const token of pending) ttydStartCancellationReasons.delete(token)
 }
 
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {

@@ -61,6 +61,10 @@ import { rehydrateSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
+import {
+  describeTtydFailure,
+  ttydFailureContains,
+} from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
@@ -335,54 +339,18 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   onTtydRestart: tmuxBackend.onTtydRestart,
 }
 
-export function describeTtydFailure(
-  failure: unknown,
-  path: Set<unknown> = new Set(),
-): string {
-  if (!(failure instanceof Error)) return String(failure)
-  if (path.has(failure)) return `[cycle: ${failure.message}]`
-  path.add(failure)
-  try {
-    const aggregate = failure instanceof AggregateError
-      ? '; errors: ['
-        + failure.errors.map(error => describeTtydFailure(error, path)).join(' | ')
-        + ']'
-      : ''
-    const cause = failure.cause === undefined
-      ? ''
-      : `; caused by: ${describeTtydFailure(failure.cause, path)}`
-    return failure.message + aggregate + cause
-  } finally {
-    path.delete(failure)
-  }
-}
-
-function ttydFailureContains(
-  failure: unknown,
-  target: unknown,
-  seen: Set<unknown> = new Set(),
-): boolean {
-  if (failure === target) return true
-  if (!(failure instanceof Error) || seen.has(failure)) return false
-  seen.add(failure)
-  if (ttydFailureContains(failure.cause, target, seen)) return true
-  return failure instanceof AggregateError
-    && failure.errors.some(error => ttydFailureContains(error, target, seen))
-}
+export { describeTtydFailure }
 
 export function describeTtydReattachFailure(failure: unknown): string {
   const cancelled = tmuxBackend.findTtydStartCancelledError(failure)
-  const receipt = tmuxBackend.findTtydStartCancellationReceiptError(failure)
-  if (!cancelled && !receipt) return describeTtydFailure(failure)
-  const interruption = cancelled?.interrupted ?? receipt?.interrupted
+  if (!cancelled) return describeTtydFailure(failure)
+  const interruption = cancelled.interrupted
   const interrupted = ttydFailureContains(failure, interruption)
     ? ''
     : `; interrupted failure: ${describeTtydFailure(interruption)}`
-  return cancelled
-    ? `${describeTtydFailure(failure)}; cancellation reason: `
-      + cancelled.reason
-      + interrupted
-    : describeTtydFailure(failure) + interrupted
+  return `${describeTtydFailure(failure)}; cancellation reason: `
+    + cancelled.reason
+    + interrupted
 }
 
 /**
