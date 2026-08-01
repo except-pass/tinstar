@@ -1,10 +1,25 @@
-import { readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { log } from '../logger'
 import { readTail } from './transcript-parser'
 import type { RecapEntry } from '../../types'
+import type {
+  ProviderQuota,
+  ProviderQuotaWindow,
+  ProviderSessionContext,
+  ProviderSessionUsage,
+  ProviderTokenUsage,
+} from '../../domain/provider-capabilities'
 
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 
@@ -163,6 +178,368 @@ export function readCodexStatus(transcriptPath: string): 'running' | 'idle' | nu
     } catch { /* skip */ }
   }
   return null
+}
+
+// --- Observation events ---
+
+type UnknownRecord = Record<string, unknown>
+
+export interface CodexCreditsObservation {
+  hasCredits?: boolean
+  unlimited?: boolean
+  balance?: string | null
+}
+
+/** Codex-owned fields that do not belong in the shared quota vocabulary. */
+export interface CodexObservationDetail {
+  limitId?: string
+  limitName?: string
+  planType?: string
+  credits?: CodexCreditsObservation
+}
+
+/**
+ * Privacy-bounded projection of one Codex `event_msg.token_count` rollout line.
+ * The raw record is deliberately not retained: prompts, account identifiers,
+ * and version-specific private fields cannot escape through this type.
+ */
+export interface CodexObservationEvent {
+  /** Stable for an identical normalized event, including after file replay. */
+  id: string
+  /** Original rollout capture time. Missing or invalid timestamps remain unknown. */
+  observedAt: string | null
+  sessionUsage?: ProviderSessionUsage
+  sessionContext?: ProviderSessionContext
+  providerQuota?: ProviderQuota
+  detail?: CodexObservationDetail
+}
+
+interface CodexFileCursor {
+  path: string
+  device: number
+  inode: number
+  /** Byte offset immediately after the last complete newline. */
+  offset: number
+  /** Small fingerprint of bytes immediately before `offset`. */
+  anchor: string
+}
+
+interface CodexObservationSessionState {
+  cursor?: CodexFileCursor
+  /** Recent replay IDs; older replays retain the same stable ID for downstream dedupe. */
+  seenIds: Set<string>
+}
+
+const MAX_SEEN_OBSERVATION_IDS = 4_096
+
+function asRecord(value: unknown): UnknownRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as UnknownRecord
+}
+
+function asNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : undefined
+}
+
+function asPercent(value: unknown): number | undefined {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= 100
+    ? value
+    : undefined
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function asTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const milliseconds = Date.parse(value)
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
+}
+
+function timestampFromMilliseconds(milliseconds: number): string | undefined {
+  if (!Number.isFinite(milliseconds) || Math.abs(milliseconds) > 8.64e15) return undefined
+  return new Date(milliseconds).toISOString()
+}
+
+function parseTokenUsage(value: unknown): ProviderTokenUsage | undefined {
+  const raw = asRecord(value)
+  if (!raw) return undefined
+
+  const usage: Partial<ProviderTokenUsage> = {}
+  const fields = [
+    ['input', 'input_tokens'],
+    ['output', 'output_tokens'],
+    ['cacheRead', 'cached_input_tokens'],
+    ['cacheWrite', 'cache_write_input_tokens'],
+    ['reasoning', 'reasoning_output_tokens'],
+    ['total', 'total_tokens'],
+  ] as const
+
+  for (const [normalized, native] of fields) {
+    const count = asNonNegativeInteger(raw[native])
+    if (count !== undefined) usage[normalized] = count
+  }
+
+  return Object.keys(usage).length > 0
+    ? usage as ProviderTokenUsage
+    : undefined
+}
+
+function parseSessionUsage(info: UnknownRecord | null): ProviderSessionUsage | undefined {
+  if (!info) return undefined
+  const cumulativeTokens = parseTokenUsage(info.total_token_usage)
+  const latestTurnTokens = parseTokenUsage(info.last_token_usage)
+  if (cumulativeTokens) {
+    return {
+      cumulativeTokens,
+      ...(latestTurnTokens ? { latestTurnTokens } : {}),
+    }
+  }
+  if (latestTurnTokens) return { latestTurnTokens }
+  return undefined
+}
+
+function parseSessionContext(
+  info: UnknownRecord | null,
+  sessionUsage: ProviderSessionUsage | undefined,
+): ProviderSessionContext | undefined {
+  if (!info) return undefined
+  const windowTokens = asNonNegativeInteger(info.model_context_window)
+  // Lifetime totals span every request; Codex's last usage is the active context snapshot.
+  const latestTurnTokens = sessionUsage?.latestTurnTokens
+  const usedTokens = latestTurnTokens?.total === undefined
+    ? undefined
+    : Math.max(0, latestTurnTokens.total - (latestTurnTokens.reasoning ?? 0))
+  if (windowTokens === undefined && usedTokens === undefined) return undefined
+
+  const context: ProviderSessionContext = {
+    ...(usedTokens !== undefined ? { usedTokens } : {}),
+    ...(windowTokens !== undefined ? { windowTokens } : {}),
+  }
+  if (usedTokens !== undefined && windowTokens !== undefined && windowTokens > 0) {
+    context.usedPercent = Math.min(100, usedTokens / windowTokens * 100)
+  }
+  return context
+}
+
+function parseResetAt(
+  raw: UnknownRecord,
+  observedAt: string | null,
+): string | undefined {
+  const absoluteSeconds = asNonNegativeInteger(raw.resets_at)
+  if (absoluteSeconds !== undefined) {
+    return timestampFromMilliseconds(absoluteSeconds * 1_000)
+  }
+
+  const relativeSeconds = asNonNegativeInteger(raw.resets_in_seconds)
+  if (relativeSeconds === undefined || observedAt === null) return undefined
+  return timestampFromMilliseconds(Date.parse(observedAt) + relativeSeconds * 1_000)
+}
+
+function parseQuotaWindow(
+  id: 'primary' | 'secondary',
+  value: unknown,
+  observedAt: string | null,
+): ProviderQuotaWindow | undefined {
+  const raw = asRecord(value)
+  if (!raw) return undefined
+  const windowMinutes = asNonNegativeInteger(raw.window_minutes)
+  const usedPercent = asPercent(raw.used_percent)
+  if (windowMinutes === undefined || usedPercent === undefined) return undefined
+
+  const resetsAt = parseResetAt(raw, observedAt)
+  return {
+    id,
+    label: id === 'primary' ? 'Primary' : 'Secondary',
+    windowMinutes,
+    usedPercent,
+    ...(resetsAt ? { resetsAt } : {}),
+  }
+}
+
+function parseProviderQuota(
+  rateLimits: UnknownRecord | null,
+  observedAt: string | null,
+): ProviderQuota | undefined {
+  if (!rateLimits) return undefined
+  const windows = [
+    parseQuotaWindow('primary', rateLimits.primary, observedAt),
+    parseQuotaWindow('secondary', rateLimits.secondary, observedAt),
+  ].filter((window): window is ProviderQuotaWindow => Boolean(window))
+  return windows.length > 0 ? { windows } : undefined
+}
+
+function parseCredits(value: unknown): CodexCreditsObservation | undefined {
+  const raw = asRecord(value)
+  if (!raw) return undefined
+  const credits: CodexCreditsObservation = {}
+  if (typeof raw.has_credits === 'boolean') credits.hasCredits = raw.has_credits
+  if (typeof raw.unlimited === 'boolean') credits.unlimited = raw.unlimited
+  if (typeof raw.balance === 'string' || raw.balance === null) credits.balance = raw.balance
+  return Object.keys(credits).length > 0 ? credits : undefined
+}
+
+function parseObservationDetail(
+  rateLimits: UnknownRecord | null,
+): CodexObservationDetail | undefined {
+  if (!rateLimits) return undefined
+  const detail: CodexObservationDetail = {}
+  const limitId = asNonEmptyString(rateLimits.limit_id)
+  const limitName = asNonEmptyString(rateLimits.limit_name)
+  const planType = asNonEmptyString(rateLimits.plan_type)
+  const credits = parseCredits(rateLimits.credits)
+  if (limitId) detail.limitId = limitId
+  if (limitName) detail.limitName = limitName
+  if (planType) detail.planType = planType
+  if (credits) detail.credits = credits
+  return Object.keys(detail).length > 0 ? detail : undefined
+}
+
+/** Parse only the documented, non-message projection from one rollout line. */
+export function parseCodexObservationLine(line: string): CodexObservationEvent | null {
+  let record: UnknownRecord | null
+  try {
+    record = asRecord(JSON.parse(line))
+  } catch {
+    return null
+  }
+  if (record?.type !== 'event_msg') return null
+
+  const payload = asRecord(record.payload)
+  if (payload?.type !== 'token_count') return null
+
+  const observedAt = asTimestamp(record.timestamp)
+  const info = asRecord(payload.info)
+  const rateLimits = asRecord(payload.rate_limits)
+  const sessionUsage = parseSessionUsage(info)
+  const sessionContext = parseSessionContext(info, sessionUsage)
+  const providerQuota = parseProviderQuota(rateLimits, observedAt)
+  const detail = parseObservationDetail(rateLimits)
+  if (!sessionUsage && !sessionContext && !providerQuota && !detail) return null
+
+  const projection = {
+    observedAt,
+    ...(sessionUsage ? { sessionUsage } : {}),
+    ...(sessionContext ? { sessionContext } : {}),
+    ...(providerQuota ? { providerQuota } : {}),
+    ...(detail ? { detail } : {}),
+  }
+  const id = createHash('sha256').update(JSON.stringify(projection)).digest('hex')
+  return { id, ...projection }
+}
+
+function readAnchor(fd: number, offset: number): string {
+  const length = Math.min(128, offset)
+  if (length === 0) return ''
+  const buffer = Buffer.alloc(length)
+  const bytesRead = readSync(fd, buffer, 0, length, offset - length)
+  return bytesRead === length
+    ? createHash('sha256').update(buffer).digest('hex')
+    : ''
+}
+
+/** Stateful, incremental observation reader for append-only Codex rollout files. */
+export class CodexRolloutObservationSource {
+  private readonly sessions = new Map<string, CodexObservationSessionState>()
+
+  read(sessionName: string, transcriptPath: string): CodexObservationEvent[] {
+    let fd: number
+    try {
+      fd = openSync(transcriptPath, 'r')
+    } catch {
+      return []
+    }
+
+    try {
+      const stats = fstatSync(fd)
+      let state = this.sessions.get(sessionName)
+      if (!state) {
+        state = { seenIds: new Set() }
+        this.sessions.set(sessionName, state)
+      }
+
+      const previous = state.cursor
+      const sameFile = previous?.path === transcriptPath
+        && previous.device === stats.dev
+        && previous.inode === stats.ino
+      let start = sameFile ? previous.offset : 0
+      if (stats.size < start) start = 0
+      if (sameFile && start > 0 && readAnchor(fd, start) !== previous.anchor) start = 0
+
+      const events: CodexObservationEvent[] = []
+      const emittedIds = new Set<string>()
+      const chunkSize = 256 * 1024
+      const buffer = Buffer.alloc(chunkSize)
+      let pending = Buffer.alloc(0)
+      let position = start
+
+      while (position < stats.size) {
+        const bytesToRead = Math.min(chunkSize, stats.size - position)
+        const bytesRead = readSync(fd, buffer, 0, bytesToRead, position)
+        if (bytesRead <= 0) break
+        position += bytesRead
+
+        const chunk = buffer.subarray(0, bytesRead)
+        const bytes = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk
+        let lineStart = 0
+        for (let index = 0; index < bytes.length; index += 1) {
+          if (bytes[index] !== 0x0a) continue
+          const rawLine = bytes.subarray(lineStart, index).toString('utf-8')
+          lineStart = index + 1
+          if (!rawLine.trim()) continue
+          const event = parseCodexObservationLine(rawLine)
+          if (!event || state.seenIds.has(event.id) || emittedIds.has(event.id)) continue
+          emittedIds.add(event.id)
+          events.push(event)
+        }
+        pending = Buffer.from(bytes.subarray(lineStart))
+      }
+
+      const offset = position - pending.length
+      state.cursor = {
+        path: transcriptPath,
+        device: stats.dev,
+        inode: stats.ino,
+        offset,
+        anchor: readAnchor(fd, offset),
+      }
+      for (const id of emittedIds) {
+        state.seenIds.add(id)
+        if (state.seenIds.size > MAX_SEEN_OBSERVATION_IDS) {
+          const oldestId = state.seenIds.values().next().value
+          if (oldestId) state.seenIds.delete(oldestId)
+        }
+      }
+      return events
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  reset(sessionName: string): void {
+    this.sessions.delete(sessionName)
+  }
+}
+
+const codexObservationSource = new CodexRolloutObservationSource()
+
+export function readCodexObservationEvents(
+  sessionName: string,
+  transcriptPath: string,
+): CodexObservationEvent[] {
+  return codexObservationSource.read(sessionName, transcriptPath)
+}
+
+export function resetCodexObservationSource(sessionName: string): void {
+  codexObservationSource.reset(sessionName)
 }
 
 // --- Recap entries ---
