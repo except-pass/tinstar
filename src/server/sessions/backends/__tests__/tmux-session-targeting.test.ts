@@ -32,7 +32,12 @@ describe('session-scoped tmux targets', () => {
   it('keeps a surviving agent identity stable and rotates it on relaunch', async () => {
     let launchToken = 'launch-one'
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '5252\n', stderr: '' }
+      }
+      if (file === 'ps') {
+        return { stdout: 'Fri Aug  1 10:00:00 2026\n', stderr: '' }
+      }
       if (args[0] === 'show-environment') {
         return {
           stdout: `TINSTAR_AGENT_INCARNATION=${launchToken}\n`,
@@ -62,8 +67,8 @@ describe('session-scoped tmux targets', () => {
       expect.objectContaining({ timeout: expect.any(Number) }),
     )
     expect(execFileMock).toHaveBeenCalledWith(
-      'pgrep',
-      ['-P', '4242'],
+      'ps',
+      ['-o', 'tpgid=', '-p', '4242'],
       expect.objectContaining({ timeout: expect.any(Number) }),
     )
   })
@@ -72,7 +77,9 @@ describe('session-scoped tmux targets', () => {
     let agentPid = '5252'
     let processBirth = 'Fri Aug  1 10:00:00 2026'
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: `${agentPid}\n`, stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: `${agentPid}\n`, stderr: '' }
+      }
       if (file === 'ps') return { stdout: `${processBirth}\n`, stderr: '' }
       if (args[0] === 'show-environment') {
         return {
@@ -91,21 +98,24 @@ describe('session-scoped tmux targets', () => {
     expect(replacement).not.toBe(first)
   })
 
-  it('does not report a live recipient when the pane shell has no agent child', async () => {
-    execFileMock
-      .mockResolvedValueOnce({ stdout: '4242\n', stderr: '' })
-      .mockRejectedValueOnce(Object.assign(new Error('no child'), {
-        code: 1,
-        stdout: '',
-        stderr: '',
-      }))
+  it('does not report a live recipient when only the pane shell owns the foreground', async () => {
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '4242\n', stderr: '' }
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
 
     await expect(getTmuxAgentIdentity(config, 'parent')).resolves.toBeNull()
+    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'show-environment'))
+      .toBe(false)
   })
 
   it('propagates transient launch-token inspection failures', async () => {
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '5252\n', stderr: '' }
+      }
       if (args[0] === 'show-environment') {
         throw Object.assign(new Error('tmux timed out'), {
           killed: true,
@@ -128,7 +138,9 @@ describe('session-scoped tmux targets', () => {
     environmentOutput,
   ) => {
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '5252\n', stderr: '' }
+      }
       if (args[0] === 'show-environment') {
         return { stdout: environmentOutput, stderr: '' }
       }
@@ -137,12 +149,14 @@ describe('session-scoped tmux targets', () => {
 
     await expect(getTmuxAgentIdentity(config, 'parent'))
       .rejects.toThrow('returned an invalid TINSTAR_AGENT_INCARNATION value')
-    expect(execFileMock.mock.calls.some(([file]) => file === 'ps')).toBe(false)
+    expect(execFileMock.mock.calls.some(([, args]) => args[1] === 'lstart=')).toBe(false)
   })
 
   it('uses process birth for legacy sessions whose launch token is absent', async () => {
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '5252\n', stderr: '' }
+      }
       if (file === 'ps') {
         return { stdout: 'Fri Aug  1 10:00:00 2026\n', stderr: '' }
       }
@@ -162,7 +176,9 @@ describe('session-scoped tmux targets', () => {
   it('leaves a live tmux agent unchanged on a redundant start', async () => {
     const ensureTtyd = vi.fn(async () => ({ port: 6123, ttydPid: 8383 }))
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
-      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps' && args[1] === 'tpgid=') {
+        return { stdout: '5252\n', stderr: '' }
+      }
       if (file === 'ps') {
         return { stdout: 'Fri Aug  1 10:00:00 2026\n', stderr: '' }
       }
@@ -202,6 +218,7 @@ describe('session-scoped tmux targets', () => {
 
   it('adopts a healthy exact-target ttyd without restarting it', async () => {
     const startSurface = vi.fn(async () => 8383)
+    const verifySurface = vi.fn(async () => 'verified' as const)
 
     await expect(reattachTmuxSession(config, {
       session: parent,
@@ -211,9 +228,35 @@ describe('session-scoped tmux targets', () => {
         { pid: 7373, tmuxTarget: 'tinstar-parent' },
         { pid: 7474, tmuxTarget: 'tinstar-parent-hand' },
       ],
+      verifySurface,
       startTtyd: startSurface,
     })).resolves.toEqual({ port: 6123, ttydPid: 7373 })
+    expect(verifySurface).toHaveBeenCalledWith({
+      port: 6123,
+      pid: 7373,
+      tmuxName: 'tinstar-parent',
+    })
     expect(startSurface).not.toHaveBeenCalled()
+  })
+
+  it('restarts an exact-target ttyd that is listening but unresponsive', async () => {
+    const startSurface = vi.fn(async () => 8383)
+
+    await expect(reattachTmuxSession(config, {
+      session: parent,
+      port: 6123,
+    }, {
+      incumbentsOnPort: async () => [
+        { pid: 7373, tmuxTarget: 'tinstar-parent' },
+      ],
+      verifySurface: async () => 'unhealthy',
+      startTtyd: startSurface,
+    })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
+    expect(startSurface).toHaveBeenCalledWith({
+      tmuxName: 'tinstar-parent',
+      port: 6123,
+      sessionName: 'parent',
+    })
   })
 
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {

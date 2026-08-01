@@ -1068,11 +1068,13 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
 
 interface ReattachTmuxSessionDeps {
   incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
+  verifySurface: typeof verifyTtydSessionSurface
   startTtyd: typeof startTtyd
 }
 
 const reattachTmuxSessionDeps: ReattachTmuxSessionDeps = {
   incumbentsOnPort: ttydIncumbentsOnPortStrict,
+  verifySurface: verifyTtydSessionSurface,
   startTtyd,
 }
 
@@ -1092,7 +1094,13 @@ export async function reattachTmuxSession(
   const incumbent = (await deps.incumbentsOnPort(opts.port)).find(
     candidate => candidate.tmuxTarget === tmuxName,
   )
-  if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
+  if (incumbent && await deps.verifySurface({
+    port: opts.port,
+    pid: incumbent.pid,
+    tmuxName,
+  }) === 'verified') {
+    return { port: opts.port, ttydPid: incumbent.pid }
+  }
 
   const ttydPid = await deps.startTtyd({
     tmuxName,
@@ -1157,9 +1165,17 @@ export async function getTmuxAgentIdentity(
 
   let agentPid: string
   try {
-    const { stdout } = await execFileAsync('pgrep', ['-P', shellPid])
-    agentPid = stdout.trim().split('\n')[0] ?? ''
-    if (!/^\d+$/.test(agentPid)) return null
+    // The pane shell can have unrelated background children. Its foreground
+    // process group is the command currently owning the terminal, so use that
+    // leader as the managed agent identity rather than accepting the first
+    // direct child returned by pgrep.
+    const { stdout } = await execFileAsync(
+      'ps',
+      ['-o', 'tpgid=', '-p', shellPid],
+      { timeout: 2_000 },
+    )
+    agentPid = stdout.trim()
+    if (!/^\d+$/.test(agentPid) || agentPid === shellPid) return null
   } catch (error) {
     if (isCleanInspectionMiss(error)) return null
     throw error
