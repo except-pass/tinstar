@@ -404,6 +404,8 @@ export async function reattachVerifiedSessionTtydAttempt(
   let priorRun: ReturnType<DocumentStore['getRun']> = undefined
   let runPublicationAttempted = false
   let reattachSurfaceCompensated = false
+  // A compensation receipt applies only to the surface produced by the most
+  // recent reattach. Later catch handling must not stop that surface twice.
   const stopReattachSurface = (
     sessionName: string,
     cancellationReason: tmuxBackend.TtydStartCancellationReason,
@@ -411,6 +413,8 @@ export async function reattachVerifiedSessionTtydAttempt(
     deps.stopTtyd(sessionName, { cancellationReason })
     reattachSurfaceCompensated = true
   }
+  // Every reattach must pass through this wrapper: creating a new surface
+  // invalidates the prior surface's teardown receipt.
   const reattach = (
     currentSession: Session,
     port: number,

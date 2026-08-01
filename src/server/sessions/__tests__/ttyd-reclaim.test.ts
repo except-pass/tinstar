@@ -380,7 +380,9 @@ describe('fenced ttyd start attempts', () => {
   }
 
   afterEach(() => {
-    stopManagedTtyd(opts.sessionName)
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'terminal ownership cleared',
+    })
   })
 
   it('treats cancellation as expected without reclassifying its cause', () => {
@@ -841,7 +843,9 @@ describe('fenced ttyd start attempts', () => {
       () => true,
       deps,
     )
-    stopManagedTtyd(opts.sessionName)
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'session stop requested',
+    })
     child.emit('exit', 1)
     await Promise.resolve()
 

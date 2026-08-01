@@ -1898,17 +1898,20 @@ export function isExpectedTtydStartInterruption(err: unknown): boolean {
 
 export function stopManagedTtyd(
   sessionName: string,
-  opts: {
-    resetHistory?: boolean
-    invalidateStarts?: boolean
-    cancellationReason?: TtydStartCancellationReason
-  } = {},
+  opts:
+    | {
+        resetHistory?: boolean
+        invalidateStarts?: true
+        cancellationReason: TtydStartCancellationReason
+      }
+    | {
+        resetHistory?: boolean
+        invalidateStarts: false
+        cancellationReason?: never
+      },
 ): void {
   if (opts.invalidateStarts !== false) {
-    invalidateTtydStarts(
-      sessionName,
-      opts.cancellationReason ?? 'terminal ownership cleared',
-    )
+    invalidateTtydStarts(sessionName, opts.cancellationReason)
   }
   const entry = managedTtyd.get(sessionName)
   if (entry) {

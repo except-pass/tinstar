@@ -512,6 +512,51 @@ describe('getLiveSessionForBoot', () => {
     expect(releaseLease).toHaveBeenCalledTimes(1)
   })
 
+  it('labels ownership loss immediately after the first reattach', async () => {
+    const session = {
+      name: 'first-reattach-stale',
+      state: 'running',
+      port: null,
+      ttydPid: null,
+      created: '2026-07-30T00:00:00.000Z',
+    } as Session
+    const stopTtyd = vi.fn()
+    const releasePort = vi.fn()
+    const verifySurface = vi.fn(async () => 'verified' as const)
+
+    await expect(reattachVerifiedSessionTtydAttempt(
+      { dirs: { sessions: '/sessions' } } as TinstarConfig,
+      new DocumentStore(),
+      session.name,
+      'generation',
+      {
+        identityInspectionUnavailable: () => false,
+        isIdentityInspectionError: isNeverIdentityInspectionError,
+        findSupersededError: findNoSupersededError,
+        acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+        getSession: () => session,
+        findPort: async () => 7000,
+        reattach: async (_config, opts) => ({
+          port: opts.port,
+          ttydPid: 101,
+        }),
+        isCurrent: () => false,
+        verifySurface,
+        stopTtyd,
+        releasePort,
+        updateSession: vi.fn(() => session),
+        tmuxName: () => 'tinstar-first-reattach-stale',
+        onTtydRestart: vi.fn(),
+      },
+    )).resolves.toBe(false)
+
+    expect(stopTtyd).toHaveBeenCalledWith(session.name, {
+      cancellationReason: 'reattach lifecycle ownership lost',
+    })
+    expect(releasePort).toHaveBeenCalledWith(7000)
+    expect(verifySurface).not.toHaveBeenCalled()
+  })
+
   it('labels compensation for an inconclusive fresh replacement', async () => {
     const session = {
       name: 'fresh-inspection-inconclusive',
@@ -883,6 +928,106 @@ describe('getLiveSessionForBoot', () => {
     })
     expect(session).toMatchObject({ port: 7000, ttydPid: 101 })
   })
+
+  it.each([
+    [
+      'a second verification failure',
+      'throws',
+      'reattach failure compensation',
+    ],
+    [
+      'a rejected second reattach',
+      'reattach-throws',
+      'reattach failure compensation',
+    ],
+    [
+      'ownership loss after the second reattach',
+      'stale',
+      'reattach lifecycle ownership lost',
+    ],
+    [
+      'an inconclusive second surface',
+      'inconclusive',
+      'reattach inconclusive-surface compensation',
+    ],
+  ] as const)(
+    'compensates %s after unhealthy-surface retirement',
+    async (_case, outcome, secondReason) => {
+      let session = {
+        name: `retirement-${outcome}`,
+        state: 'running',
+        port: 6123,
+        ttydPid: 99,
+        created: '2026-07-30T00:00:00.000Z',
+      } as Session
+      const stopTtyd = vi.fn()
+      const releasePort = vi.fn()
+      const updateSession = vi.fn((
+        _sessionsDir: string,
+        _name: string,
+        patch: Partial<Session>,
+      ) => {
+        session = { ...session, ...patch }
+        return session
+      })
+      let currentChecks = 0
+      const isCurrent = vi.fn(() => {
+        currentChecks += 1
+        return outcome !== 'stale' || currentChecks < 3
+      })
+      let verifications = 0
+      const verifySurface = vi.fn(async () => {
+        verifications += 1
+        if (verifications === 1) return 'unhealthy' as const
+        if (outcome === 'throws') throw new Error('second verification failed')
+        return 'inconclusive' as const
+      })
+      let reattachments = 0
+      const reattach = vi.fn(async (
+        _config: TinstarConfig,
+        opts: { port: number },
+      ) => {
+        reattachments += 1
+        if (outcome === 'reattach-throws' && reattachments === 2) {
+          throw new Error('second reattach failed')
+        }
+        return { port: opts.port, ttydPid: 101 }
+      })
+
+      await expect(reattachVerifiedSessionTtydAttempt(
+        { dirs: { sessions: '/sessions' } } as TinstarConfig,
+        new DocumentStore(),
+        session.name,
+        'generation',
+        {
+          identityInspectionUnavailable: () => false,
+          isIdentityInspectionError: isNeverIdentityInspectionError,
+          findSupersededError: findNoSupersededError,
+          acquireLease: () => ({ token: 'generation', release: vi.fn() }),
+          getSession: () => session,
+          findPort: async () => 7000,
+          reattach,
+          isCurrent,
+          verifySurface,
+          stopTtyd,
+          releasePort,
+          updateSession,
+          tmuxName: () => `tinstar-retirement-${outcome}`,
+          onTtydRestart: vi.fn(),
+        },
+      )).resolves.toBe(false)
+
+      expect(stopTtyd).toHaveBeenCalledTimes(2)
+      expect(stopTtyd).toHaveBeenNthCalledWith(1, session.name, {
+        cancellationReason: 'reattach unhealthy-surface retirement',
+      })
+      expect(stopTtyd).toHaveBeenNthCalledWith(2, session.name, {
+        cancellationReason: secondReason,
+      })
+      expect(releasePort).toHaveBeenCalledWith(6123)
+      expect(releasePort).toHaveBeenCalledWith(7000)
+    },
+  )
 
   it('publishes nothing when the generation becomes stale after reattach', async () => {
     const session = {

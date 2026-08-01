@@ -158,18 +158,21 @@ export interface RefreshWiringInput {
   cfg: TinstarConfig
   docStore: DocumentStore
   service: SurfaceService
+  terminalStops?: RefreshWorkerTerminalStops
   /** Re-run the source reconciler for one run and await it — the barrier's
    *  re-observation. */
   reobserveRun: (runId: string) => Promise<void>
 }
 
+export interface RefreshWorkerTerminalStops {
+  compensateLaunch: (name: string) => void
+  retire: (name: string) => void
+}
+
 export function buildRefreshWorkerTerminalStops(
   stopManagedTtyd: typeof tmuxBackend.stopManagedTtyd
     = tmuxBackend.stopManagedTtyd,
-): {
-  compensateLaunch: (name: string) => void
-  retire: (name: string) => void
-} {
+): RefreshWorkerTerminalStops {
   return {
     compensateLaunch: name => stopManagedTtyd(name, {
       cancellationReason: 'surface refresh launch compensation',
@@ -184,7 +187,7 @@ export function buildRefreshWorkerTerminalStops(
 export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefreshCoordinator {
   const { cfg, docStore, service, reobserveRun } = input
   const jobs = SurfaceRefreshJobStore.open(cfg.dirs.root)
-  const terminalStops = buildRefreshWorkerTerminalStops()
+  const terminalStops = input.terminalStops ?? buildRefreshWorkerTerminalStops()
   // A broken port/cap config degrades the engine to owner delivery rather than
   // stopping it: freshness still tracks, jobs still queue, and a live owner still
   // gets the work — only the background fleet is withheld, which is the part the

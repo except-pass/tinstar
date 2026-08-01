@@ -9,19 +9,29 @@
 // port claim, and real compensation. Only tmux itself is substituted, because a
 // test that started a tmux server would be testing tmux.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  buildRefreshWorkerTerminalStops, isLiveSessionRecord, LIVE_SESSION_STATES,
-  parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
+  buildRefreshCoordinator, buildRefreshWorkerTerminalStops,
+  isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult,
+  refreshDispatchPrompt, retireRefreshWorker,
 } from '../refresh-wiring'
 import { findPort, releasePort } from '../../sessions/backends/tmux'
+import * as tmuxBackend from '../../sessions/backends/tmux'
 import { launchRefreshWorker, refreshBriefText, type RefreshWorkerHost } from '../../sessions/surfaceAuthor'
 import { createSession, deleteSession, getSession, updateSession, type Session } from '../../sessions/session'
 import { BASE_CONFIG, type PortWindow, type TinstarConfig } from '../../sessions/config'
 import type { LaunchStage } from '../../sessions/session-launcher'
 import type { Surface } from '../../../domain/types'
+import type { RefreshCoordinatorDeps } from '../surface-refresh-coordinator'
 
 describe('parseStagedResult', () => {
   it('accepts a full result and validates its A2UI', () => {
@@ -184,6 +194,75 @@ describe('buildRefreshWorkerTerminalStops', () => {
     expect(stopManagedTtyd).toHaveBeenNthCalledWith(2, 'retired-worker', {
       cancellationReason: 'surface refresh retirement',
     })
+  })
+
+  it('threads both terminal stops through the real coordinator wiring', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'refresh-stop-wiring-'))
+    const sessions = join(root, 'sessions')
+    const secrets = join(root, '.secrets')
+    mkdirSync(sessions, { recursive: true })
+    mkdirSync(secrets, { recursive: true })
+    const cfg = {
+      ...(BASE_CONFIG as unknown as TinstarConfig),
+      dirs: { root, sessions, secrets },
+      ports: {
+        ...BASE_CONFIG.ports,
+        refreshStart: 19_941,
+        refreshCount: 8,
+      },
+    }
+    const compensateLaunch = vi.fn()
+    const retire = vi.fn()
+    const docStore = {
+      getAllSurfaces: () => [],
+      upsertRun: vi.fn(() => {
+        throw new Error('run projection failed')
+      }),
+      deleteRun: vi.fn(),
+    }
+    const coordinator = buildRefreshCoordinator({
+      cfg,
+      docStore: docStore as unknown as Parameters<
+        typeof buildRefreshCoordinator
+      >[0]['docStore'],
+      service: {} as Parameters<typeof buildRefreshCoordinator>[0]['service'],
+      terminalStops: { compensateLaunch, retire },
+      reobserveRun: async () => undefined,
+    })
+    const deps = (coordinator as unknown as {
+      deps: RefreshCoordinatorDeps
+    }).deps
+    vi.spyOn(tmuxBackend, 'findPort').mockResolvedValue(19_941)
+    vi.spyOn(tmuxBackend, 'createTmuxSession')
+      .mockResolvedValue({ port: 19_941, ttydPid: 4242 })
+
+    try {
+      const launched = await deps.launchWorker({
+        job: {
+          id: 'wired-launch',
+          worktree: root,
+          stagingPath: join(root, 'wired-launch.json'),
+        },
+        surface: {
+          spaceId: 'spc-wired',
+          content: {
+            headline: 'Wired refresh',
+            recipe: 'Re-run the source.',
+          },
+        },
+      } as Parameters<RefreshCoordinatorDeps['launchWorker']>[0])
+      expect(launched).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('run projection failed'),
+      })
+      expect(compensateLaunch).toHaveBeenCalledWith('refresh-wired-launch')
+
+      await deps.retireWorker('refresh-retired')
+      expect(retire).toHaveBeenCalledWith('refresh-retired')
+    } finally {
+      vi.restoreAllMocks()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
