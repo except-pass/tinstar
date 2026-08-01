@@ -79,6 +79,7 @@ function dependencies(
 ): LiveDeliveryDependencies {
   const byName = new Map(sessions.map(session => [session.name, session]))
   return {
+    coordinationKey: {},
     listSessions: vi.fn(async () => sessions),
     readSession: name => byName.get(name) ?? null,
     isDeleting: () => false,
@@ -87,10 +88,10 @@ function dependencies(
       ? { token: `${name}-generation`, release: () => {} }
       : null,
     leaseIsCurrent: () => true,
-    observeProcess: async name => ({
-      state: 'alive',
+    observeProcess: vi.fn(async name => ({
+      state: 'alive' as const,
       incarnation: `${name}-process`,
-    }),
+    })),
     providerIdFor: session => session.adapter ?? 'claude',
     replayAcceptance: vi.fn(async () => null),
     accept: vi.fn(async input => ({
@@ -175,6 +176,42 @@ describe('live delivery recipient resolution', () => {
     })
     expect(deps.listSessions).not.toHaveBeenCalled()
     expect(deps.accept).not.toHaveBeenCalled()
+  })
+
+  it('single-flights concurrent retries before their live sets can diverge', async () => {
+    const deps = dependencies([managedSession('agent-2')])
+    const originalAccept = deps.accept
+    let acceptEntered!: () => void
+    let releaseAccept!: () => void
+    const atAccept = new Promise<void>(resolve => { acceptEntered = resolve })
+    const accepting = new Promise<void>(resolve => { releaseAccept = resolve })
+    deps.accept = vi.fn(async input => {
+      acceptEntered()
+      await accepting
+      return originalAccept(input)
+    })
+
+    const first = acceptForLiveRecipients(request(`${TASK}.agent-2`), deps)
+    await atAccept
+    const retry = acceptForLiveRecipients(request(`${TASK}.agent-2`), deps)
+    const conflicting = await acceptForLiveRecipients({
+      ...request(`${TASK}.agent-2`),
+      text: 'Different intent under the same request ID.',
+    }, deps)
+
+    expect(conflicting).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ledger-rejected',
+        rejection: { reason: 'request-id-reuse' },
+      },
+    })
+    releaseAccept()
+    const [accepted, replayedConcurrent] = await Promise.all([first, retry])
+    expect(accepted).toEqual(replayedConcurrent)
+    expect(deps.listSessions).toHaveBeenCalledOnce()
+    expect(deps.observeProcess).toHaveBeenCalledOnce()
+    expect(deps.accept).toHaveBeenCalledOnce()
   })
 
   it('accepts a direct destination only for the named live subscriber', async () => {

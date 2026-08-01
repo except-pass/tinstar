@@ -8,7 +8,7 @@ vi.mock('node:util', async (orig) => {
 
 import {
   deleteTmuxSession,
-  getTmuxSessionIdentity,
+  getTmuxAgentIdentity,
   getTmuxSessionState,
   healthCheck,
   stopTmuxSession,
@@ -27,17 +27,27 @@ beforeEach(() => {
 })
 
 describe('session-scoped tmux targets', () => {
-  it('derives a restart-stable opaque identity from the exact tmux pane', async () => {
-    execFileMock.mockResolvedValue({
-      stdout: '$1:1785592800:%3:4242\n',
-      stderr: '',
+  it('keeps a surviving agent identity stable and rotates it on relaunch', async () => {
+    let launchToken = 'launch-one'
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (args[0] === 'show-environment') {
+        return {
+          stdout: `TINSTAR_AGENT_INCARNATION=${launchToken}\n`,
+          stderr: '',
+        }
+      }
+      return { stdout: '4242\n', stderr: '' }
     })
 
-    const first = await getTmuxSessionIdentity(config, 'parent')
-    const second = await getTmuxSessionIdentity(config, 'parent')
+    const first = await getTmuxAgentIdentity(config, 'parent')
+    const sameProcess = await getTmuxAgentIdentity(config, 'parent')
+    launchToken = 'launch-two'
+    const replacement = await getTmuxAgentIdentity(config, 'parent')
 
     expect(first).toMatch(/^[a-f0-9]{64}$/)
-    expect(second).toBe(first)
+    expect(sameProcess).toBe(first)
+    expect(replacement).not.toBe(first)
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
       [
@@ -45,10 +55,50 @@ describe('session-scoped tmux targets', () => {
         '-p',
         '-t',
         '=tinstar-parent:',
-        '#{session_id}:#{session_created}:#{pane_id}:#{pane_pid}',
+        '#{pane_pid}',
       ],
       expect.objectContaining({ timeout: expect.any(Number) }),
     )
+    expect(execFileMock).toHaveBeenCalledWith(
+      'pgrep',
+      ['-P', '4242'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+  })
+
+  it('rotates identity when the agent process is replaced without a managed relaunch', async () => {
+    let agentPid = '5252'
+    let processBirth = 'Fri Aug  1 10:00:00 2026'
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: `${agentPid}\n`, stderr: '' }
+      if (file === 'ps') return { stdout: `${processBirth}\n`, stderr: '' }
+      if (args[0] === 'show-environment') {
+        return {
+          stdout: 'TINSTAR_AGENT_INCARNATION=unchanged-launch\n',
+          stderr: '',
+        }
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
+
+    const first = await getTmuxAgentIdentity(config, 'parent')
+    agentPid = '6262'
+    processBirth = 'Fri Aug  1 10:05:00 2026'
+    const replacement = await getTmuxAgentIdentity(config, 'parent')
+
+    expect(replacement).not.toBe(first)
+  })
+
+  it('does not report a live recipient when the pane shell has no agent child', async () => {
+    execFileMock
+      .mockResolvedValueOnce({ stdout: '4242\n', stderr: '' })
+      .mockRejectedValueOnce(Object.assign(new Error('no child'), {
+        code: 1,
+        stdout: '',
+        stderr: '',
+      }))
+
+    await expect(getTmuxAgentIdentity(config, 'parent')).resolves.toBeNull()
   })
 
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {

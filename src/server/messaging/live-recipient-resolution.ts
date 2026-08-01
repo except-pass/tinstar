@@ -35,6 +35,8 @@ export interface DeliveryRecipientLease {
 }
 
 export interface LiveDeliveryDependencies {
+  /** Ledger/service identity used to isolate request single flights. */
+  coordinationKey: object
   listSessions: () => readonly Session[] | Promise<readonly Session[]>
   /** Re-read after acquiring the lifecycle lease; the initial list is discovery only. */
   readSession: (sessionId: string) => Session | null
@@ -117,6 +119,36 @@ const PROCESS_BACKED_STATES = new Set<Session['state']>([
   'needs_attention',
 ])
 
+interface DeliveryResolutionFlight {
+  intent: DeliveryAcceptIntent
+  result: Promise<LiveDeliveryResult>
+}
+
+const resolutionFlights = new WeakMap<
+  object,
+  Map<string, DeliveryResolutionFlight>
+>()
+
+function copyIntent(intent: DeliveryAcceptIntent): DeliveryAcceptIntent {
+  return {
+    requestId: intent.requestId,
+    sender: { ...intent.sender },
+    destination: { ...intent.destination },
+    text: intent.text,
+  }
+}
+
+function sameIntent(
+  left: DeliveryAcceptIntent,
+  right: DeliveryAcceptIntent,
+): boolean {
+  return left.requestId === right.requestId
+    && left.sender.sessionId === right.sender.sessionId
+    && left.sender.incarnation === right.sender.incarnation
+    && left.destination.subject === right.destination.subject
+    && left.text === right.text
+}
+
 function destinationSessions(
   parsed: ParsedSubject,
   subject: string,
@@ -193,6 +225,51 @@ export async function acceptForLiveRecipients(
   if (!parsed) {
     return { ok: false, error: { code: 'invalid-destination', subject } }
   }
+
+  let flights = resolutionFlights.get(deps.coordinationKey)
+  if (!flights) {
+    flights = new Map()
+    resolutionFlights.set(deps.coordinationKey, flights)
+  }
+  const current = flights.get(request.requestId)
+  if (current) {
+    if (!sameIntent(current.intent, request)) {
+      return {
+        ok: false,
+        error: {
+          code: 'ledger-rejected',
+          destinationKind: parsed.kind,
+          subject,
+          exclusions: [],
+          rejection: {
+            accepted: false,
+            reason: 'request-id-reuse',
+            detail: `request ${request.requestId} is already being resolved for different intent`,
+          },
+        },
+      }
+    }
+    return structuredClone(await current.result)
+  }
+
+  const intent = copyIntent(request)
+  const result = acceptForLiveRecipientsOwned(intent, deps, parsed)
+  flights.set(request.requestId, { intent, result })
+  try {
+    return structuredClone(await result)
+  } finally {
+    if (flights.get(request.requestId)?.result === result) {
+      flights.delete(request.requestId)
+    }
+  }
+}
+
+async function acceptForLiveRecipientsOwned(
+  request: LiveDeliveryRequest,
+  deps: LiveDeliveryDependencies,
+  parsed: ParsedSubject,
+): Promise<LiveDeliveryResult> {
+  const subject = request.destination.subject
 
   let replay: DeliveryAcceptResult | null
   try {

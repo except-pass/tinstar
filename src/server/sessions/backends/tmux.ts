@@ -1,5 +1,5 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
@@ -35,6 +35,7 @@ const rawExecFileAsync = promisify(execFile)
 // that run no tmux commands stay responsive throughout, which is exactly the reported
 // symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
 const TMUX_EXEC_TIMEOUT_MS = 10_000
+const AGENT_INCARNATION_ENV = 'TINSTAR_AGENT_INCARNATION'
 const strictProbeWarnings = new Set<string>()
 function execFileAsync(
   file: string,
@@ -769,6 +770,13 @@ export async function createTmuxSession(
 
   // Inject session identity + secrets into tmux environment
   await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, 'TINSTAR_SESSION_NAME', opts.session.name])
+  await execFileAsync('tmux', [
+    'set-environment',
+    '-t',
+    tmuxTarget,
+    AGENT_INCARNATION_ENV,
+    randomUUID(),
+  ])
   for (const [key, value] of Object.entries(opts.secrets)) {
     if (value) {
       await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
@@ -876,6 +884,16 @@ export async function startTmuxSession(
   if (!exists) {
     return createTmuxSession(config, { ...opts, provider, resume: true })
   }
+
+  // A restart in the same pane keeps the shell PID, so give every managed
+  // agent launch its own tmux-persisted identity before sending the command.
+  await execFileAsync('tmux', [
+    'set-environment',
+    '-t',
+    exactTmuxSessionTarget(tmuxName),
+    AGENT_INCARNATION_ENV,
+    randomUUID(),
+  ])
 
   // Existing tmux sessions retain session-scoped variables across agent
   // restarts. Reconcile both sides of the policy: inject newly enabled
@@ -1070,32 +1088,73 @@ export async function getTmuxSessionState(config: TinstarConfig, sessionName: st
 }
 
 /**
- * Stable identity for the currently running tmux backend. It survives a
- * Tinstar restart because it comes from tmux, but changes when the tmux
- * session/pane is replaced. The native tuple is hashed before it enters
- * provider-neutral delivery records.
+ * Stable identity for the managed agent process inside a tmux pane. A launch
+ * token stored by tmux survives a Tinstar restart and rotates on every managed
+ * relaunch. The child PID and birth time fence manual or unexpected process
+ * replacement even when that token does not rotate.
  */
-export async function getTmuxSessionIdentity(
+export async function getTmuxAgentIdentity(
   config: TinstarConfig,
   sessionName: string,
 ): Promise<string | null> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  let shellPid: string
+  let launchToken = ''
   try {
     const { stdout } = await execFileAsync('tmux', [
       'display-message',
       '-p',
       '-t',
       exactTmuxPaneTarget(tmuxName),
-      '#{session_id}:#{session_created}:#{pane_id}:#{pane_pid}',
+      '#{pane_pid}',
     ])
-    const nativeIdentity = stdout.trim()
-    if (!nativeIdentity) throw new Error(`tmux returned an empty identity for ${tmuxName}`)
-    return createHash('sha256').update(nativeIdentity).digest('hex')
+    shellPid = stdout.trim()
+    if (!/^\d+$/.test(shellPid)) {
+      throw new Error(`tmux returned an invalid shell pid for ${tmuxName}`)
+    }
   } catch (error) {
     const failure = error as { stderr?: string | Buffer }
     if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) return null
     throw error
   }
+
+  let agentPid: string
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-P', shellPid])
+    agentPid = stdout.trim().split('\n')[0] ?? ''
+    if (!/^\d+$/.test(agentPid)) return null
+  } catch (error) {
+    if (isCleanInspectionMiss(error)) return null
+    throw error
+  }
+
+  try {
+    const { stdout } = await execFileAsync('tmux', [
+      'show-environment',
+      '-t',
+      exactTmuxSessionTarget(tmuxName),
+      AGENT_INCARNATION_ENV,
+    ])
+    const prefix = `${AGENT_INCARNATION_ENV}=`
+    launchToken = stdout.trim().startsWith(prefix)
+      ? stdout.trim().slice(prefix.length)
+      : ''
+  } catch {
+    // Sessions launched before managed tokens existed still use process birth.
+  }
+
+  const { stdout: processBirth } = await execFileAsync(
+    'ps',
+    ['-o', 'lstart=', '-p', agentPid],
+    { timeout: 2_000 },
+  )
+  if (!processBirth.trim()) return null
+  const nativeIdentity = JSON.stringify([
+    launchToken,
+    agentPid,
+    processBirth.trim(),
+  ])
+  return createHash('sha256').update(nativeIdentity).digest('hex')
 }
 
 // --- ttyd management ---

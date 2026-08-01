@@ -2143,6 +2143,7 @@ export function acceptForManagedSessionRecipients(
   }
   const registry = ctx.providerRegistry ?? defaultProviderRegistry
   return acceptForLiveRecipients(request, {
+    coordinationKey: ledger,
     listSessions: () => listAllSessions(ctx),
     readSession: sessionId => getSession(cfg.dirs.sessions, sessionId),
     isDeleting: sessionId =>
@@ -2154,7 +2155,7 @@ export function acceptForManagedSessionRecipients(
     leaseIsCurrent: (sessionId, token) =>
       persistedSessionBackendGenerationForConfig(cfg, sessionId) === token,
     observeProcess: options.observeProcess ?? (async sessionId => {
-      const incarnation = await tmuxBackend.getTmuxSessionIdentity(cfg, sessionId)
+      const incarnation = await tmuxBackend.getTmuxAgentIdentity(cfg, sessionId)
       return incarnation === null
         ? { state: 'dead' }
         : { state: 'alive', incarnation }
