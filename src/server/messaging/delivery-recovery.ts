@@ -205,45 +205,63 @@ export class DeliveryRecoveryCoordinator {
     const current = this.dependencies.ledger.getDelivery(captured.id)
     if (!current) return outcome(captured, 'error', 'ledger record disappeared')
 
-    let observed: DeliveryRecoveryLiveness
-    try {
-      observed = await this.dependencies.observeRecipient({ ...current.recipient })
-    } catch (error) {
-      observed = {
-        state: 'inconclusive',
-        reason: `recipient liveness probe failed: ${errorMessage(error)}`,
-      }
-    }
-    if (observed.state === 'dead') {
-      const reason = typeof observed.reason === 'string' && observed.reason.trim()
-        ? observed.reason
-        : 'recipient process was not running'
-      return this.terminalize(current, reason)
-    }
-    if (observed.state === 'inconclusive') {
-      return outcome(current, 'ambiguous', observed.reason)
-    }
-    if (typeof observed.incarnation !== 'string' || !observed.incarnation.trim()) {
-      return outcome(current, 'ambiguous', 'recipient process identity was unavailable')
-    }
-    if (observed.incarnation !== current.recipient.incarnation) {
-      return this.terminalize(
-        current,
-        'recipient process incarnation changed while Tinstar was offline',
-      )
-    }
-
+    // An interrupted injection can have completed before its durable ledger
+    // transition. Exact provider evidence is therefore authoritative even if
+    // the recipient has since exited or been replaced.
     if (current.state === 'in-flight') return this.reconcileInFlight(current)
+
+    const continuity = await this.recipientDiscontinuity(current)
+    if (continuity) return continuity
+
     if (current.state === 'pending') {
       return outcome(current, 'ready', 'pending obligation retained after restart')
     }
     return this.makePending(current, 'same recipient process survived restart')
   }
 
+  /**
+   * Return an outcome only when the original recipient cannot safely continue.
+   * `null` means the exact recipient incarnation is still live.
+   */
+  private async recipientDiscontinuity(
+    delivery: DeliveryRecord,
+  ): Promise<DeliveryRecoveryOutcome | null> {
+    let observed: DeliveryRecoveryLiveness
+    try {
+      observed = await this.dependencies.observeRecipient({ ...delivery.recipient })
+    } catch (error) {
+      observed = {
+        state: 'inconclusive',
+        reason: `recipient liveness probe failed: ${errorMessage(error)}`,
+      }
+    }
+
+    if (observed.state === 'dead') {
+      const reason = typeof observed.reason === 'string' && observed.reason.trim()
+        ? observed.reason
+        : 'recipient process was not running'
+      return this.terminalize(delivery, reason)
+    }
+    if (observed.state === 'inconclusive') {
+      return outcome(delivery, 'ambiguous', observed.reason)
+    }
+    if (typeof observed.incarnation !== 'string' || !observed.incarnation.trim()) {
+      return outcome(delivery, 'ambiguous', 'recipient process identity was unavailable')
+    }
+    if (observed.incarnation !== delivery.recipient.incarnation) {
+      return this.terminalize(
+        delivery,
+        'recipient process incarnation changed while Tinstar was offline',
+      )
+    }
+    return null
+  }
+
   private async reconcileInFlight(
     delivery: DeliveryRecord,
   ): Promise<DeliveryRecoveryOutcome> {
-    let evidence: DeliveryRecoveryEvidence
+    let evidence: DeliveryRecoveryEvidence | null = null
+    let inconclusiveReason: string | null = null
     try {
       const attemptRef = lastAttemptRef(delivery)
       evidence = await this.dependencies.inspectTranscriptEvidence({
@@ -258,40 +276,47 @@ export class DeliveryRecoveryCoordinator {
         recipient: { ...delivery.recipient },
       })
     } catch (error) {
+      inconclusiveReason = `transcript evidence probe failed: ${errorMessage(error)}`
+    }
+
+    if (evidence !== null
+      && evidenceMatches(evidence, delivery)
+      && evidence.state === 'confirmed') {
+      const transition = await this.dependencies.ledger.transition({
+        deliveryId: delivery.id,
+        expected: { state: delivery.state, attempt: delivery.attempt },
+        next: {
+          state: 'delivered',
+          attempt: delivery.attempt,
+          evidence: evidence.evidence,
+        },
+      })
+      return transition.updated
+        ? outcome(delivery, 'delivered', 'exact stamped transcript evidence confirmed delivery')
+        : outcome(delivery, 'error', `could not record delivery: ${transition.reason}`)
+    }
+
+    // Without exact confirmation, recipient continuity decides whether the
+    // obligation is terminal. This runs only after evidence inspection so a
+    // completed injection always wins over later process death/replacement.
+    const continuity = await this.recipientDiscontinuity(delivery)
+    if (continuity) return continuity
+
+    if (evidence === null || !evidenceMatches(evidence, delivery)) {
       return outcome(
         delivery,
         'ambiguous',
-        `transcript evidence probe failed: ${errorMessage(error)}`,
+        inconclusiveReason
+          ?? 'transcript evidence did not match the exact delivery identity',
       )
-    }
-    if (!evidenceMatches(evidence, delivery)) {
-      return outcome(
-        delivery,
-        'ambiguous',
-        'transcript evidence did not match the exact delivery identity',
-      )
-    }
-    if (evidence.state === 'inconclusive') {
-      return outcome(delivery, 'ambiguous', evidence.reason)
     }
     if (evidence.state === 'not-found') {
       return this.makePending(delivery, evidence.reason)
     }
-    if (evidence.state !== 'confirmed') {
-      return outcome(delivery, 'ambiguous', 'transcript evidence state was unknown')
+    if (evidence.state === 'inconclusive') {
+      return outcome(delivery, 'ambiguous', evidence.reason)
     }
-    const transition = await this.dependencies.ledger.transition({
-      deliveryId: delivery.id,
-      expected: { state: delivery.state, attempt: delivery.attempt },
-      next: {
-        state: 'delivered',
-        attempt: delivery.attempt,
-        evidence: evidence.evidence,
-      },
-    })
-    return transition.updated
-      ? outcome(delivery, 'delivered', 'exact stamped transcript evidence confirmed delivery')
-      : outcome(delivery, 'error', `could not record delivery: ${transition.reason}`)
+    return outcome(delivery, 'ambiguous', 'transcript evidence state was unknown')
   }
 
   private async makePending(

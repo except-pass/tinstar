@@ -240,6 +240,70 @@ describe('delivery restart recovery', () => {
     })
   })
 
+  it.each([
+    ['dead', { state: 'dead' as const, reason: 'process exited' }],
+    ['replaced', { state: 'alive' as const, incarnation: 'receiver-process-v2' }],
+  ])('honors exact delivery evidence before treating a %s recipient as terminal', async (
+    suffix,
+    observed,
+  ) => {
+    await withLedger(async open => {
+      const messageId = `msg-confirmed-${suffix}`
+      const ledger = open([messageId])
+      await makeInFlight(ledger, messageId)
+      const restarted = open()
+      const observeRecipient = vi.fn(async () => observed)
+
+      const report = await new DeliveryRecoveryCoordinator({
+        ledger: restarted,
+        observeRecipient,
+        inspectTranscriptEvidence: async () => evidence('confirmed', messageId),
+      }).recover()
+
+      expect(report.outcomes).toEqual([expect.objectContaining({
+        disposition: 'delivered',
+      })])
+      expect(observeRecipient).not.toHaveBeenCalled()
+      expect(restarted.getDelivery(`${messageId}/d/1`)).toMatchObject({
+        state: 'delivered',
+        attempt: 1,
+      })
+    })
+  })
+
+  it.each(['not-found', 'inconclusive'] as const)(
+    'uses recipient death to settle %s in-flight evidence',
+    async evidenceState => {
+      await withLedger(async open => {
+        const messageId = `msg-dead-${evidenceState}`
+        const ledger = open([messageId])
+        await makeInFlight(ledger, messageId)
+        const restarted = open()
+        const inspectTranscriptEvidence = vi.fn(async () => evidence(
+          evidenceState,
+          messageId,
+        ))
+
+        const report = await new DeliveryRecoveryCoordinator({
+          ledger: restarted,
+          observeRecipient: async () => ({
+            state: 'dead',
+            reason: 'process exited while Tinstar was offline',
+          }),
+          inspectTranscriptEvidence,
+        }).recover()
+
+        expect(inspectTranscriptEvidence).toHaveBeenCalledOnce()
+        expect(report.outcomes).toEqual([expect.objectContaining({
+          disposition: 'failed',
+        })])
+        expect(restarted.getDelivery(`${messageId}/d/1`)).toMatchObject({
+          state: 'failed',
+        })
+      })
+    },
+  )
+
   it('never treats a different stamped message ID as delivery evidence', async () => {
     await withLedger(async open => {
       const ledger = open(['msg-expected'])

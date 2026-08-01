@@ -901,93 +901,95 @@ export function initBackend(): RouteContext {
       deliveryRecoveryReady = settleDeliveryRecoveryBarrier({
         recover: async () => {
           // HMR may initialize a replacement backend in the same process. The
-          // old responder must drain every accepted write before this backend
-          // snapshots the ledger, or the replacement can overwrite late work.
-          await messageRouterOwner!.quiesced()
-          deliveryLedger = DeliveryLedger.open({ dir: sessionConfig!.dirs.root })
-          const recovery = new DeliveryRecoveryCoordinator({
-            ledger: deliveryLedger,
-            observeRecipient: async (recipient) => {
-              const session = getSession(sessionConfig!.dirs.sessions, recipient.sessionId)
-              if (!session) {
-                return {
-                  state: 'dead' as const,
-                  reason: 'recipient session was deleted while Tinstar was offline',
+          // old responder, ledger open, and recovery must be one owner-held
+          // transition. That prevents rapid replacement generations from
+          // opening or mutating the same ledger concurrently.
+          await messageRouterOwner!.handoff(async () => {
+            deliveryLedger = DeliveryLedger.open({ dir: sessionConfig!.dirs.root })
+            const recovery = new DeliveryRecoveryCoordinator({
+              ledger: deliveryLedger,
+              observeRecipient: async (recipient) => {
+                const session = getSession(sessionConfig!.dirs.sessions, recipient.sessionId)
+                if (!session) {
+                  return {
+                    state: 'dead' as const,
+                    reason: 'recipient session was deleted while Tinstar was offline',
+                  }
                 }
-              }
-              if (existsSync(join(
-                sessionConfig!.dirs.sessions,
-                recipient.sessionId,
-                '.deleting',
-              ))) {
-                return {
-                  state: 'dead' as const,
-                  reason: 'recipient session deletion was in progress during restart',
-                }
-              }
-              if (session.state !== 'running'
-                && session.state !== 'idle'
-                && session.state !== 'needs_attention') {
-                return {
-                  state: 'dead' as const,
-                  reason: `recipient session was ${session.state} during restart`,
-                }
-              }
-              try {
-                const incarnation = await tmuxBackend.getTmuxAgentIdentity(
-                  sessionConfig!,
+                if (existsSync(join(
+                  sessionConfig!.dirs.sessions,
                   recipient.sessionId,
-                )
-                return incarnation === null
-                  ? {
-                      state: 'dead' as const,
-                      reason: 'recipient process exited while Tinstar was offline',
-                    }
-                  : { state: 'alive' as const, incarnation }
-              } catch (error) {
-                return {
-                  state: 'inconclusive' as const,
-                  reason: `recipient liveness probe failed: ${error instanceof Error ? error.message : String(error)}`,
+                  '.deleting',
+                ))) {
+                  return {
+                    state: 'dead' as const,
+                    reason: 'recipient session deletion was in progress during restart',
+                  }
                 }
-              }
-            },
-            // M4 defines and enforces the provider-neutral evidence boundary. Until
-            // M5/M6 register provider-specific stamped transcript readers, an
-            // ambiguous in-flight attempt stays ambiguous instead of substring-
-            // matching an unrelated transcript line and retrying blindly.
-            inspectTranscriptEvidence: async request => ({
-              providerId: request.providerId,
-              messageId: request.messageId,
-              attempt: request.attempt,
-              ...(request.attemptRef !== undefined
-                ? { attemptRef: request.attemptRef }
-                : {}),
-              recipient: {
-                providerId: request.recipient.providerId,
-                sessionId: request.recipient.sessionId,
-                incarnation: request.recipient.incarnation,
+                if (session.state !== 'running'
+                  && session.state !== 'idle'
+                  && session.state !== 'needs_attention') {
+                  return {
+                    state: 'dead' as const,
+                    reason: `recipient session was ${session.state} during restart`,
+                  }
+                }
+                try {
+                  const incarnation = await tmuxBackend.getTmuxAgentIdentity(
+                    sessionConfig!,
+                    recipient.sessionId,
+                  )
+                  return incarnation === null
+                    ? {
+                        state: 'dead' as const,
+                        reason: 'recipient process exited while Tinstar was offline',
+                      }
+                    : { state: 'alive' as const, incarnation }
+                } catch (error) {
+                  return {
+                    state: 'inconclusive' as const,
+                    reason: `recipient liveness probe failed: ${error instanceof Error ? error.message : String(error)}`,
+                  }
+                }
               },
-              state: 'inconclusive' as const,
-              checkedAt: new Date().toISOString(),
-              reason: 'provider transcript recovery evidence is not registered',
-            }),
-          })
-          const report = await recovery.recover()
-          const failed = report.outcomes.filter(entry => entry.disposition === 'failed').length
-          const ambiguous = report.outcomes.filter(entry => entry.disposition === 'ambiguous').length
-          if (report.status === 'faulted') {
-            log.error('delivery-recovery', 'startup delivery recovery remained fail-closed', {
-              ledgerHealth: report.ledgerHealth,
-              scanned: report.scanned,
-              outcomes: report.outcomes,
+              // M4 defines and enforces the provider-neutral evidence boundary. Until
+              // M5/M6 register provider-specific stamped transcript readers, an
+              // ambiguous in-flight attempt stays ambiguous instead of substring-
+              // matching an unrelated transcript line and retrying blindly.
+              inspectTranscriptEvidence: async request => ({
+                providerId: request.providerId,
+                messageId: request.messageId,
+                attempt: request.attempt,
+                ...(request.attemptRef !== undefined
+                  ? { attemptRef: request.attemptRef }
+                  : {}),
+                recipient: {
+                  providerId: request.recipient.providerId,
+                  sessionId: request.recipient.sessionId,
+                  incarnation: request.recipient.incarnation,
+                },
+                state: 'inconclusive' as const,
+                checkedAt: new Date().toISOString(),
+                reason: 'provider transcript recovery evidence is not registered',
+              }),
             })
-          } else if (report.scanned > 0) {
-            log.info(
-              'delivery-recovery',
-              `reconciled ${report.scanned} delivery obligation(s)`,
-              { failed, ambiguous },
-            )
-          }
+            const report = await recovery.recover()
+            const failed = report.outcomes.filter(entry => entry.disposition === 'failed').length
+            const ambiguous = report.outcomes.filter(entry => entry.disposition === 'ambiguous').length
+            if (report.status === 'faulted') {
+              log.error('delivery-recovery', 'startup delivery recovery remained fail-closed', {
+                ledgerHealth: report.ledgerHealth,
+                scanned: report.scanned,
+                outcomes: report.outcomes,
+              })
+            } else if (report.scanned > 0) {
+              log.info(
+                'delivery-recovery',
+                `reconciled ${report.scanned} delivery obligation(s)`,
+                { failed, ambiguous },
+              )
+            }
+          })
         },
         onError: error => {
           log.error('delivery-recovery', 'startup delivery recovery failed closed', {
