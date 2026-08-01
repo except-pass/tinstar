@@ -1,0 +1,889 @@
+// @vitest-environment node
+import { describe, expect, it } from 'vitest'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { acquireBackendSingleton } from '../../infra/lock'
+import {
+  DELIVERY_LEDGER_SCHEMA_VERSION,
+  DeliveryLedger,
+  deliveryLedgerPaths,
+  nodeDeliveryLedgerIo,
+  type DeliveryAcceptInput,
+  type DeliveryLedgerIo,
+  type DeliveryLedgerPaths,
+  type DeliveryLedgerWriteStep,
+} from '../delivery-ledger'
+
+interface TestContext {
+  dir: string
+  lockPath: string
+  paths: DeliveryLedgerPaths
+  open: (options?: {
+    ids?: string[]
+    now?: () => number
+    beforeStep?: (step: DeliveryLedgerWriteStep) => void | Promise<void>
+    io?: DeliveryLedgerIo
+    retentionMs?: number
+    maxTerminalMessages?: number
+    maxOutstandingDeliveries?: number
+    maxHistoryEntries?: number
+  }) => DeliveryLedger
+}
+
+async function withLedger(
+  body: (context: TestContext) => void | Promise<void>,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), 'delivery-ledger-'))
+  const lockPath = join(dir, 'server.lock')
+  const lock = acquireBackendSingleton(lockPath)
+  if (!lock.acquired) throw new Error('test setup could not acquire backend singleton')
+  try {
+    await body({
+      dir,
+      lockPath,
+      paths: deliveryLedgerPaths(dir),
+      open: (options = {}) => {
+        const ids = [...(options.ids ?? ['msg-default'])]
+        return DeliveryLedger.open({
+          dir,
+          lockPath,
+          createMessageId: () => ids.shift() ?? 'msg-exhausted',
+          ...(options.now ? { now: options.now } : {}),
+          ...(options.beforeStep
+            ? { hooks: { beforeStep: options.beforeStep } }
+            : {}),
+          ...(options.io ? { io: options.io } : {}),
+          ...(options.retentionMs !== undefined
+            ? { retentionMs: options.retentionMs }
+            : {}),
+          ...(options.maxTerminalMessages !== undefined
+            ? { maxTerminalMessages: options.maxTerminalMessages }
+            : {}),
+          ...(options.maxOutstandingDeliveries !== undefined
+            ? { maxOutstandingDeliveries: options.maxOutstandingDeliveries }
+            : {}),
+          ...(options.maxHistoryEntries !== undefined
+            ? { maxHistoryEntries: options.maxHistoryEntries }
+            : {}),
+        })
+      },
+    })
+  } finally {
+    rmSync(`${lockPath}.mark`, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function input(
+  requestId = 'req-1',
+  overrides: Partial<DeliveryAcceptInput> = {},
+): DeliveryAcceptInput {
+  return {
+    requestId,
+    sender: { sessionId: 'sender', incarnation: 'sender-incarnation' },
+    destination: { subject: 'tinstar.space.init.epic.task' },
+    text: 'Please inspect the lifecycle race.',
+    recipients: [
+      {
+        providerId: 'claude',
+        sessionId: 'reviewer',
+        incarnation: 'reviewer-incarnation',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function recordingIo(): { io: DeliveryLedgerIo; log: string[] } {
+  const log: string[] = []
+  const paths = new Map<number, string>()
+  const io: DeliveryLedgerIo = {
+    open(path, flags) {
+      const fd = nodeDeliveryLedgerIo.open(path, flags)
+      paths.set(fd, path)
+      return fd
+    },
+    writeBuffer(fd, data) {
+      log.push(`write ${paths.get(fd)}`)
+      return nodeDeliveryLedgerIo.writeBuffer(fd, data)
+    },
+    fsync(fd) {
+      log.push(`fsync ${paths.get(fd)}`)
+      nodeDeliveryLedgerIo.fsync(fd)
+    },
+    close(fd) {
+      nodeDeliveryLedgerIo.close(fd)
+      paths.delete(fd)
+    },
+    rename(from, to) {
+      log.push(`rename ${from} -> ${to}`)
+      nodeDeliveryLedgerIo.rename(from, to)
+    },
+    readFile: path => nodeDeliveryLedgerIo.readFile(path),
+  }
+  return { io, log }
+}
+
+describe('DeliveryLedger acceptance', () => {
+  it('persists one logical message and an independent record per recipient', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-broadcast'], now: () => 1_000 })
+      const accepted = await ledger.accept(input('req-broadcast', {
+        recipients: [
+          {
+            providerId: 'codex',
+            sessionId: 'agent-2',
+            incarnation: 'agent-2-v1',
+          },
+          {
+            providerId: 'claude',
+            sessionId: 'agent-1',
+            incarnation: 'agent-1-v3',
+          },
+        ],
+      }))
+
+      expect(accepted).toMatchObject({
+        accepted: true,
+        replayed: false,
+        wrote: true,
+        message: {
+          id: 'msg-broadcast',
+          requestId: 'req-broadcast',
+          acceptedAt: '1970-01-01T00:00:01.000Z',
+        },
+      })
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      expect(accepted.deliveries).toHaveLength(2)
+      expect(accepted.deliveries.map(delivery => delivery.id)).toEqual([
+        'msg-broadcast/d/1',
+        'msg-broadcast/d/2',
+      ])
+      expect(accepted.deliveries.map(delivery => delivery.recipient.sessionId)).toEqual([
+        'agent-1',
+        'agent-2',
+      ])
+      expect(accepted.deliveries.every(delivery =>
+        delivery.messageId === 'msg-broadcast'
+        && delivery.state === 'accepted'
+        && delivery.attempt === 0,
+      )).toBe(true)
+
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(Object.keys(snapshot).sort()).toEqual([
+        'acceptances', 'deliveries', 'messages', 'version',
+      ])
+      expect(snapshot.version).toBe(DELIVERY_LEDGER_SCHEMA_VERSION)
+      expect(snapshot.acceptances).toHaveLength(1)
+      expect(snapshot.messages).toHaveLength(1)
+      expect(snapshot.deliveries).toHaveLength(2)
+    })
+  })
+
+  it('does not resolve acceptance until the durable write sequence completes', async () => {
+    await withLedger(async ({ dir, paths, open }) => {
+      let release!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      let settled = false
+      const steps: DeliveryLedgerWriteStep[] = []
+      const ledger = open({
+        ids: ['msg-durable'],
+        beforeStep: async step => {
+          steps.push(step)
+          if (step === 'fsync-dir') await held
+        },
+      })
+
+      const accepting = ledger.accept(input('req-durable'))
+      void accepting.then(() => { settled = true })
+      await new Promise(resolve => setImmediate(resolve))
+
+      expect(steps).toEqual([
+        'write-temp',
+        'fsync-temp',
+        'rotate-backup',
+        'rename-primary',
+        'fsync-dir',
+      ])
+      expect(existsSync(paths.primary)).toBe(true)
+      expect(settled).toBe(false)
+
+      release()
+      await expect(accepting).resolves.toMatchObject({ accepted: true })
+      expect(settled).toBe(true)
+
+      const { io, log } = recordingIo()
+      const restarted = DeliveryLedger.open({ dir, lockPath: join(dir, 'server.lock'), io })
+      await restarted.accept(input('req-next'))
+      const tempFsync = log.indexOf(`fsync ${paths.temp}`)
+      const backupWrite = log.indexOf(`write ${paths.backupTemp}`)
+      const backupFsync = log.indexOf(`fsync ${paths.backupTemp}`)
+      const backupRename = log.indexOf(
+        `rename ${paths.backupTemp} -> ${paths.backup}`,
+      )
+      const primaryRename = log.indexOf(`rename ${paths.temp} -> ${paths.primary}`)
+      const dirFsync = log.indexOf(`fsync ${dir}`)
+      expect(tempFsync).toBeGreaterThanOrEqual(0)
+      expect(backupWrite).toBeGreaterThan(tempFsync)
+      expect(backupFsync).toBeGreaterThan(backupWrite)
+      expect(backupRename).toBeGreaterThan(backupFsync)
+      expect(primaryRename).toBeGreaterThan(backupRename)
+      expect(primaryRename).toBeGreaterThan(tempFsync)
+      expect(dirFsync).toBeGreaterThan(primaryRename)
+    })
+  })
+
+  it('writes every byte when the filesystem reports partial progress', async () => {
+    await withLedger(async ({ dir, lockPath, open }) => {
+      let writeCalls = 0
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        writeBuffer(fd, data) {
+          writeCalls++
+          const chunkLength = Math.max(1, Math.floor(data.length / 2))
+          return nodeDeliveryLedgerIo.writeBuffer(fd, data.subarray(0, chunkLength))
+        },
+      }
+      const ledger = open({ ids: ['msg-partial-write'], io })
+      await expect(ledger.accept(input('req-partial-write'))).resolves.toMatchObject({
+        accepted: true,
+        message: { id: 'msg-partial-write' },
+      })
+      expect(writeCalls).toBeGreaterThan(1)
+
+      const replacement = DeliveryLedger.open({ dir, lockPath })
+      expect(replacement.getMessage('msg-partial-write')).toBeDefined()
+    })
+  })
+
+  it('does not acknowledge a filesystem write that makes no progress', async () => {
+    await withLedger(async ({ open }) => {
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        writeBuffer: () => 0,
+      }
+      const ledger = open({ ids: ['msg-zero-write'], io })
+      await expect(ledger.accept(input('req-zero-write'))).resolves.toMatchObject({
+        accepted: false,
+        reason: 'write-failed',
+        detail: 'filesystem write made invalid progress: 0',
+      })
+      expect(ledger.getMessage('msg-zero-write')).toBeUndefined()
+    })
+  })
+
+  it('does not install a candidate when backup rotation fails', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const original = open({ ids: ['msg-before-backup-failure'] })
+      await original.accept(input('req-before-backup-failure'))
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        rename(from, to) {
+          if (from === paths.backupTemp) throw new Error('backup rename failed')
+          nodeDeliveryLedgerIo.rename(from, to)
+        },
+      }
+      const replacement = open({ ids: ['msg-backup-failure'], io })
+      await expect(replacement.accept(input('req-backup-failure')))
+        .resolves.toMatchObject({ accepted: false, reason: 'write-failed' })
+      expect(replacement.getMessage('msg-backup-failure')).toBeUndefined()
+
+      const reopened = open()
+      expect(reopened.getMessage('msg-before-backup-failure')).toBeDefined()
+      expect(reopened.getMessage('msg-backup-failure')).toBeUndefined()
+    })
+  })
+
+  it('replays the same request identity and rejects conflicting reuse', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-stable', 'msg-unused'] })
+      const first = await ledger.accept(input('req-stable'))
+      const bytes = readFileSync(paths.primary, 'utf8')
+      const replay = await ledger.accept(input('req-stable'))
+
+      expect(first).toMatchObject({ accepted: true, replayed: false })
+      expect(replay).toMatchObject({
+        accepted: true,
+        replayed: true,
+        wrote: false,
+        message: { id: 'msg-stable' },
+      })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(bytes)
+
+      await expect(ledger.accept(input('req-stable', { text: 'different work' })))
+        .resolves.toMatchObject({
+          accepted: false,
+          reason: 'request-id-reuse',
+        })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(bytes)
+    })
+  })
+
+  it('fingerprints semantic fields independently of runtime property order', async () => {
+    await withLedger(async ({ open }) => {
+      const ledger = open({ ids: ['msg-canonical'] })
+      await expect(ledger.accept(input('req-canonical'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: false,
+      })
+
+      await expect(ledger.accept(input('req-canonical', {
+        sender: {
+          incarnation: 'sender-incarnation',
+          sessionId: 'sender',
+        },
+        recipients: [{
+          incarnation: 'reviewer-incarnation',
+          sessionId: 'reviewer',
+          providerId: 'claude',
+        }],
+      }))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        details: 'retained',
+        receipt: { messageId: 'msg-canonical' },
+      })
+    })
+  })
+
+  it('rejects duplicate recipients instead of creating ambiguous delivery records', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const recipient = {
+        providerId: 'codex',
+        sessionId: 'same-name',
+        incarnation: 'same-process',
+      }
+      const ledger = open()
+      await expect(ledger.accept(input('req-duplicate', {
+        recipients: [recipient, { ...recipient }],
+      }))).resolves.toMatchObject({
+        accepted: false,
+        reason: 'invalid-request',
+      })
+      expect(existsSync(paths.primary)).toBe(false)
+    })
+  })
+
+  it('applies explicit backpressure without revoking an accepted request replay', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({
+        ids: ['msg-capacity-one', 'msg-capacity-two'],
+        maxOutstandingDeliveries: 1,
+      })
+      const first = await ledger.accept(input('req-capacity-one'))
+      if (!first.accepted || first.details !== 'retained') {
+        throw new Error('expected retained first acceptance')
+      }
+
+      await expect(ledger.accept(input('req-capacity-one'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        message: { id: 'msg-capacity-one' },
+      })
+      const bytes = readFileSync(paths.primary, 'utf8')
+      await expect(ledger.accept(input('req-capacity-two'))).resolves.toMatchObject({
+        accepted: false,
+        reason: 'capacity-exceeded',
+      })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(bytes)
+
+      await ledger.transition({
+        deliveryId: first.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: {
+          state: 'failed',
+          attempt: 0,
+          reason: 'recipient deleted',
+          retryable: false,
+        },
+      })
+      await expect(ledger.accept(input('req-capacity-two'))).resolves.toMatchObject({
+        accepted: true,
+        message: { id: 'msg-capacity-two' },
+      })
+    })
+  })
+})
+
+describe('DeliveryLedger reload and recovery', () => {
+  it('survives service replacement with message and recipient identity intact', async () => {
+    await withLedger(async ({ open }) => {
+      const first = open({ ids: ['msg-restart'], now: () => 2_000 })
+      const accepted = await first.accept(input('req-restart'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+
+      const replacement = open({ ids: ['msg-never-used'], now: () => 9_000 })
+      expect(replacement.health).toBe('healthy')
+      expect(replacement.getMessage('msg-restart')).toEqual({
+        message: accepted.message,
+        deliveries: accepted.deliveries,
+      })
+      expect(replacement.listRecoverable().map(delivery => delivery.id)).toEqual([
+        'msg-restart/d/1',
+      ])
+    })
+  })
+
+  it('recovers the last-known-good backup when the primary is corrupt', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-one', 'msg-two'] })
+      await ledger.accept(input('req-one'))
+      await ledger.accept(input('req-two'))
+      writeFileSync(paths.primary, '{"version":1,"messages":[')
+
+      const recovered = open({ ids: ['msg-three'] })
+      expect(recovered.health).toBe('recovered')
+      expect(recovered.getMessage('msg-one')).toBeDefined()
+      expect(recovered.getMessage('msg-two')).toBeUndefined()
+
+      await expect(recovered.accept(input('req-three'))).resolves.toMatchObject({
+        accepted: true,
+        message: { id: 'msg-three' },
+      })
+      expect(JSON.parse(readFileSync(paths.backup, 'utf8')).messages)
+        .toHaveLength(1)
+      const replacement = open()
+      expect(replacement.getMessage('msg-one')).toBeDefined()
+      expect(replacement.getMessage('msg-three')).toBeDefined()
+    })
+  })
+
+  it('rejects parseable snapshots whose history crosses a terminal state', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-history-one', 'msg-history-two'] })
+      await ledger.accept(input('req-history-one'))
+      await ledger.accept(input('req-history-two'))
+
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      const delivery = snapshot.deliveries.find((record: { messageId: string }) =>
+        record.messageId === 'msg-history-two')
+      const acceptedAt = Date.parse(delivery.acceptedAt)
+      const at = (offset: number) => new Date(acceptedAt + offset).toISOString()
+      delivery.state = 'in-flight'
+      delivery.attempt = 2
+      delivery.updatedAt = at(3)
+      delivery.history = [
+        { state: 'accepted', attempt: 0, at: delivery.acceptedAt },
+        { state: 'in-flight', attempt: 1, at: at(1) },
+        { state: 'delivered', attempt: 1, at: at(2) },
+        { state: 'in-flight', attempt: 2, at: at(3) },
+      ]
+      const invalid = JSON.stringify(snapshot)
+      writeFileSync(paths.primary, invalid)
+
+      const recovered = open()
+      expect(recovered.health).toBe('recovered')
+      expect(recovered.getMessage('msg-history-one')).toBeDefined()
+      expect(recovered.getMessage('msg-history-two')).toBeUndefined()
+
+      writeFileSync(paths.primary, invalid)
+      writeFileSync(paths.backup, invalid)
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary.kind).toBe('malformed')
+      expect(faulted.fault?.backup.kind).toBe('malformed')
+    })
+  })
+
+  it('rejects an acceptance whose unpruned delivery detail disappeared', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-lost-detail'] })
+      await ledger.accept(input('req-lost-detail'))
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      snapshot.messages = []
+      snapshot.deliveries = []
+      writeFileSync(paths.primary, JSON.stringify(snapshot))
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.primary).toMatchObject({
+        kind: 'malformed',
+        detail: 'acceptance req-lost-detail lost unpruned delivery detail',
+      })
+    })
+  })
+
+  it('fails read-only when accepted obligations cannot be recovered', async () => {
+    await withLedger(async ({ paths, open }) => {
+      writeFileSync(paths.primary, '{not-json')
+      writeFileSync(paths.backup, JSON.stringify({
+        version: DELIVERY_LEDGER_SCHEMA_VERSION + 1,
+        messages: [],
+        deliveries: [],
+      }))
+      const primary = readFileSync(paths.primary, 'utf8')
+      const backup = readFileSync(paths.backup, 'utf8')
+
+      const ledger = open()
+      expect(ledger.health).toBe('faulted-read-only')
+      expect(ledger.fault?.primary.kind).toBe('unparsable')
+      expect(ledger.fault?.backup.kind).toBe('unknown-version')
+      await expect(ledger.accept(input('req-refused'))).resolves.toEqual({
+        accepted: false,
+        reason: 'faulted-read-only',
+      })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(primary)
+      expect(readFileSync(paths.backup, 'utf8')).toBe(backup)
+      expect(existsSync(paths.temp)).toBe(false)
+    })
+  })
+
+  it('does not acknowledge a pre-rename failure or install it in memory', async () => {
+    await withLedger(async ({ open }) => {
+      const ledger = open({
+        ids: ['msg-not-accepted'],
+        beforeStep: step => {
+          if (step === 'rename-primary') throw new Error('disk failed before rename')
+        },
+      })
+      await expect(ledger.accept(input('req-not-accepted'))).resolves.toMatchObject({
+        accepted: false,
+        reason: 'write-failed',
+      })
+      expect(ledger.getMessage('msg-not-accepted')).toBeUndefined()
+      expect(ledger.health).toBe('healthy')
+    })
+  })
+
+  it('freezes after a post-rename durability failure and recovers by request ID on reopen', async () => {
+    await withLedger(async ({ open }) => {
+      const uncertain = open({
+        ids: ['msg-uncertain'],
+        beforeStep: step => {
+          if (step === 'fsync-dir') throw new Error('directory fsync failed')
+        },
+      })
+      await expect(uncertain.accept(input('req-uncertain'))).resolves.toMatchObject({
+        accepted: false,
+        reason: 'write-uncertain',
+      })
+      expect(uncertain.health).toBe('write-uncertain')
+      await expect(uncertain.accept(input('req-blocked'))).resolves.toEqual({
+        accepted: false,
+        reason: 'write-uncertain',
+      })
+
+      const replacement = open({ ids: ['msg-unused'] })
+      expect(replacement.health).toBe('healthy')
+      await expect(replacement.accept(input('req-uncertain'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        message: { id: 'msg-uncertain' },
+      })
+    })
+  })
+})
+
+describe('DeliveryLedger transitions and retention', () => {
+  it('guards state and attempt changes with the durable current value', async () => {
+    await withLedger(async ({ paths, open }) => {
+      let now = 1_000
+      const ledger = open({ ids: ['msg-state'], now: () => now })
+      const accepted = await ledger.accept(input('req-state'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+
+      now = 2_000
+      const inFlight = await ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      expect(inFlight).toMatchObject({
+        updated: true,
+        delivery: { id: deliveryId, messageId: 'msg-state', attempt: 1 },
+      })
+
+      const bytes = readFileSync(paths.primary, 'utf8')
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'delivered', attempt: 1 },
+      })).resolves.toMatchObject({ updated: false, reason: 'stale-delivery' })
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: { state: 'in-flight', attempt: 3 },
+      })).resolves.toMatchObject({ updated: false, reason: 'invalid-transition' })
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: { state: 'pending', attempt: 0 },
+      })).resolves.toMatchObject({ updated: false, reason: 'invalid-transition' })
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: { state: 'in-flight', attempt: 1 },
+      })).resolves.toMatchObject({ updated: false, reason: 'invalid-transition' })
+      expect(readFileSync(paths.primary, 'utf8')).toBe(bytes)
+
+      now = 3_000
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: {
+          state: 'failed',
+          attempt: 1,
+          reason: 'recipient stopped',
+          retryable: false,
+        },
+      })).resolves.toMatchObject({
+        updated: true,
+        delivery: {
+          id: deliveryId,
+          messageId: 'msg-state',
+          state: 'failed',
+          attempt: 1,
+        },
+      })
+      expect(ledger.listRecoverable()).toEqual([])
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'failed', attempt: 1 },
+        next: { state: 'in-flight', attempt: 2 },
+      })).resolves.toMatchObject({ updated: false, reason: 'invalid-transition' })
+    })
+  })
+
+  it('keeps the initial event and a valid tail when history is bounded', async () => {
+    await withLedger(async ({ open }) => {
+      let now = 1_000
+      const ledger = open({
+        ids: ['msg-bounded-history'],
+        now: () => now,
+        maxHistoryEntries: 4,
+      })
+      const accepted = await ledger.accept(input('req-bounded-history'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      const advance = async (
+        expected: { state: 'accepted' | 'in-flight' | 'failed'; attempt: number },
+        next: {
+          state: 'in-flight' | 'failed'
+          attempt: number
+          reason?: string
+          retryable?: boolean
+        },
+      ) => {
+        now++
+        await expect(ledger.transition({ deliveryId, expected, next }))
+          .resolves.toMatchObject({ updated: true })
+      }
+      await advance(
+        { state: 'accepted', attempt: 0 },
+        { state: 'in-flight', attempt: 1 },
+      )
+      await advance(
+        { state: 'in-flight', attempt: 1 },
+        { state: 'failed', attempt: 1, reason: 'retry one', retryable: true },
+      )
+      await advance(
+        { state: 'failed', attempt: 1 },
+        { state: 'in-flight', attempt: 2 },
+      )
+      await advance(
+        { state: 'in-flight', attempt: 2 },
+        { state: 'failed', attempt: 2, reason: 'retry two', retryable: true },
+      )
+      await advance(
+        { state: 'failed', attempt: 2 },
+        { state: 'in-flight', attempt: 3 },
+      )
+
+      const replacement = open({ maxHistoryEntries: 4 })
+      const recovered = replacement.getDelivery(deliveryId)
+      expect(recovered).toMatchObject({
+        state: 'in-flight',
+        attempt: 3,
+        historyTruncated: true,
+      })
+      expect(recovered?.history).toHaveLength(4)
+      expect(recovered?.history[0]).toMatchObject({ state: 'accepted', attempt: 0 })
+      expect(recovered?.history.slice(1).map(event => [event.state, event.attempt]))
+        .toEqual([
+          ['in-flight', 2],
+          ['failed', 2],
+          ['in-flight', 3],
+        ])
+    })
+  })
+
+  it('never transitions a delivered record back into active work', async () => {
+    await withLedger(async ({ open }) => {
+      const ledger = open({ ids: ['msg-delivered-terminal'] })
+      const accepted = await ledger.accept(input('req-delivered-terminal'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      await ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      await ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: { state: 'delivered', attempt: 1 },
+      })
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'delivered', attempt: 1 },
+        next: { state: 'in-flight', attempt: 2 },
+      })).resolves.toMatchObject({ updated: false, reason: 'invalid-transition' })
+    })
+  })
+
+  it('serializes concurrent accepts without losing either message', async () => {
+    await withLedger(async ({ open }) => {
+      let release!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      let holdOnce = true
+      const steps: DeliveryLedgerWriteStep[] = []
+      const ledger = open({
+        ids: ['msg-a', 'msg-b'],
+        beforeStep: async step => {
+          steps.push(step)
+          if (step === 'fsync-temp' && holdOnce) {
+            holdOnce = false
+            await held
+          }
+        },
+      })
+      const a = ledger.accept(input('req-a'))
+      const b = ledger.accept(input('req-b'))
+      await new Promise(resolve => setImmediate(resolve))
+      expect(steps).toEqual(['write-temp', 'fsync-temp'])
+      release()
+      await expect(a).resolves.toMatchObject({ accepted: true })
+      await expect(b).resolves.toMatchObject({ accepted: true })
+
+      expect(ledger.getMessage('msg-a')).toBeDefined()
+      expect(ledger.getMessage('msg-b')).toBeDefined()
+      expect(steps).toEqual([
+        'write-temp', 'fsync-temp', 'rotate-backup', 'rename-primary', 'fsync-dir',
+        'write-temp', 'fsync-temp', 'rotate-backup', 'rename-primary', 'fsync-dir',
+      ])
+    })
+  })
+
+  it('prunes only terminal non-retryable messages by age and count', async () => {
+    await withLedger(async ({ open }) => {
+      let now = 0
+      const ledger = open({
+        ids: ['msg-old-final', 'msg-active', 'msg-retryable', 'msg-new-final'],
+        now: () => now,
+        retentionMs: 100,
+        maxTerminalMessages: 1,
+      })
+
+      const acceptAndFail = async (requestId: string, retryable: boolean) => {
+        const accepted = await ledger.accept(input(requestId))
+        if (!accepted.accepted || accepted.details !== 'retained') {
+          throw new Error('expected retained acceptance')
+        }
+        const deliveryId = accepted.deliveries[0]!.id
+        await ledger.transition({
+          deliveryId,
+          expected: { state: 'accepted', attempt: 0 },
+          next: {
+            state: 'failed',
+            attempt: 0,
+            reason: retryable ? 'broker unavailable' : 'recipient deleted',
+            retryable,
+          },
+        })
+        return accepted.message.id
+      }
+
+      const oldFinal = await acceptAndFail('req-old-final', false)
+      now = 50
+      const active = await ledger.accept(input('req-active'))
+      if (!active.accepted || active.details !== 'retained') {
+        throw new Error('expected retained active acceptance')
+      }
+      const retryable = await acceptAndFail('req-retryable', true)
+      now = 200
+      const newFinal = await acceptAndFail('req-new-final', false)
+
+      expect(ledger.getMessage(oldFinal)).toBeUndefined()
+      expect(ledger.getMessage(active.message.id)).toBeDefined()
+      expect(ledger.getMessage(retryable)).toBeDefined()
+      expect(ledger.getMessage(newFinal)).toBeDefined()
+      expect(ledger.listRecoverable().map(delivery => delivery.messageId).sort())
+        .toEqual([active.message.id, retryable].sort())
+    })
+  })
+
+  it('retains request identity after terminal delivery detail is pruned', async () => {
+    await withLedger(async ({ paths, open }) => {
+      let now = 0
+      const ledger = open({
+        ids: ['msg-pruned', 'msg-trigger', 'msg-unused'],
+        now: () => now,
+        retentionMs: 0,
+      })
+      const accepted = await ledger.accept(input('req-pruned'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      await ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: {
+          state: 'failed',
+          attempt: 0,
+          reason: 'recipient deleted',
+          retryable: false,
+        },
+      })
+
+      now = 1
+      await ledger.accept(input('req-trigger'))
+      expect(ledger.getMessage('msg-pruned')).toBeUndefined()
+      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(snapshot.acceptances.find(
+        (record: { requestId: string }) => record.requestId === 'req-pruned',
+      )?.detailsPrunedAt).toBe('1970-01-01T00:00:00.001Z')
+      await expect(ledger.accept(input('req-pruned'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        wrote: false,
+        details: 'pruned',
+        receipt: {
+          requestId: 'req-pruned',
+          messageId: 'msg-pruned',
+          deliveryIds: ['msg-pruned/d/1'],
+        },
+      })
+      await expect(ledger.accept(input('req-pruned', { text: 'conflict' })))
+        .resolves.toMatchObject({
+          accepted: false,
+          reason: 'request-id-reuse',
+        })
+
+      const replacement = open({ ids: ['msg-never-used'], now: () => now })
+      await expect(replacement.accept(input('req-pruned'))).resolves.toMatchObject({
+        accepted: true,
+        replayed: true,
+        details: 'pruned',
+        receipt: { messageId: 'msg-pruned' },
+      })
+    })
+  })
+})
