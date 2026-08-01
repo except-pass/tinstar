@@ -11,6 +11,7 @@ import {
   getTmuxAgentIdentity,
   getTmuxSessionState,
   healthCheck,
+  startTmuxSession,
   stopTmuxSession,
   tmuxHasSession,
 } from '../tmux'
@@ -99,6 +100,75 @@ describe('session-scoped tmux targets', () => {
       }))
 
     await expect(getTmuxAgentIdentity(config, 'parent')).resolves.toBeNull()
+  })
+
+  it('propagates transient launch-token inspection failures', async () => {
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (args[0] === 'show-environment') {
+        throw Object.assign(new Error('tmux timed out'), {
+          killed: true,
+          signal: 'SIGTERM',
+          stderr: '',
+        })
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
+
+    await expect(getTmuxAgentIdentity(config, 'parent'))
+      .rejects.toThrow('tmux timed out')
+  })
+
+  it('uses process birth for legacy sessions whose launch token is absent', async () => {
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps') {
+        return { stdout: 'Fri Aug  1 10:00:00 2026\n', stderr: '' }
+      }
+      if (args[0] === 'show-environment') {
+        throw Object.assign(new Error('unknown variable'), {
+          code: 1,
+          stderr: 'unknown variable: TINSTAR_AGENT_INCARNATION\n',
+        })
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
+
+    await expect(getTmuxAgentIdentity(config, 'parent'))
+      .resolves.toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('leaves a live tmux agent unchanged on a redundant start', async () => {
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (file === 'ps') {
+        return { stdout: 'Fri Aug  1 10:00:00 2026\n', stderr: '' }
+      }
+      if (args[0] === 'show-environment') {
+        return {
+          stdout: 'TINSTAR_AGENT_INCARNATION=launch-one\n',
+          stderr: '',
+        }
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
+
+    await expect(startTmuxSession(config, {
+      session: {
+        ...parent,
+        adapter: 'claude',
+        state: 'running',
+        ttydPid: 7373,
+      },
+      secrets: {},
+      port: 6123,
+      provider: {} as never,
+    })).resolves.toEqual({ port: 6123, ttydPid: 7373 })
+    expect(execFileMock).not.toHaveBeenCalledWith(
+      'tmux',
+      expect.arrayContaining(['set-environment']),
+      expect.anything(),
+    )
   })
 
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {

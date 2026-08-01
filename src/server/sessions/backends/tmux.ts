@@ -885,6 +885,16 @@ export async function startTmuxSession(
     return createTmuxSession(config, { ...opts, provider, resume: true })
   }
 
+  // Retrying /start against a live child is idempotent: do not rotate the
+  // durable delivery incarnation or inject a second CLI into the same terminal.
+  if (await getTmuxAgentIdentity(config, opts.session.name) !== null) {
+    return {
+      port: opts.port,
+      ttydPid: opts.session.ttydPid
+        ?? managedTtyd.get(opts.session.name)?.child.pid,
+    }
+  }
+
   // A restart in the same pane keeps the shell PID, so give every managed
   // agent launch its own tmux-persisted identity before sending the command.
   await execFileAsync('tmux', [
@@ -1136,11 +1146,34 @@ export async function getTmuxAgentIdentity(
       AGENT_INCARNATION_ENV,
     ])
     const prefix = `${AGENT_INCARNATION_ENV}=`
-    launchToken = stdout.trim().startsWith(prefix)
-      ? stdout.trim().slice(prefix.length)
-      : ''
-  } catch {
+    const environmentLine = stdout.trim()
+    if (!environmentLine.startsWith(prefix)) {
+      throw new Error(
+        `tmux returned an invalid ${AGENT_INCARNATION_ENV} value for ${tmuxName}`,
+      )
+    }
+    launchToken = environmentLine.slice(prefix.length)
+  } catch (error) {
+    const failure = error as {
+      code?: string | number
+      killed?: boolean
+      signal?: NodeJS.Signals | string | null
+      stderr?: string | Buffer
+    }
+    const stderr = (
+      typeof failure.stderr === 'string'
+        ? failure.stderr
+        : failure.stderr?.toString('utf8') ?? ''
+    ).trim()
+    const variableMissing = (
+      (failure.code === 1 || failure.code === '1')
+      && failure.killed !== true
+      && failure.signal == null
+      && stderr === `unknown variable: ${AGENT_INCARNATION_ENV}`
+    )
     // Sessions launched before managed tokens existed still use process birth.
+    // Operational inspection failures are inconclusive and must fail closed.
+    if (!variableMissing) throw error
   }
 
   const { stdout: processBirth } = await execFileAsync(
