@@ -3,22 +3,32 @@ export const TTYD_NON_CAUSAL_INTERRUPTION = Symbol(
   'tinstar.ttyd.non-causal-interruption',
 )
 
-export interface NonCausalInterruptionError extends Error {
+interface NonCausalDiagnosticError extends Error {
   readonly diagnosticSummary: string
-  readonly interrupted: unknown
   readonly [TTYD_NON_CAUSAL_INTERRUPTION]: true
+}
+
+export interface NonCausalInterruptionError
+  extends NonCausalDiagnosticError {
+  readonly interrupted: unknown
+}
+
+function hasNonCausalDiagnosticSummary(
+  failure: Error,
+): failure is NonCausalDiagnosticError {
+  const candidate = failure as Partial<NonCausalDiagnosticError>
+  return candidate[TTYD_NON_CAUSAL_INTERRUPTION] === true
+    && typeof candidate.diagnosticSummary === 'string'
 }
 
 function hasNonCausalInterruption(
   failure: Error,
 ): failure is NonCausalInterruptionError {
-  const candidate = failure as Partial<NonCausalInterruptionError>
-  return candidate[TTYD_NON_CAUSAL_INTERRUPTION] === true
-    && typeof candidate.diagnosticSummary === 'string'
+  return hasNonCausalDiagnosticSummary(failure)
     && 'interrupted' in failure
 }
 
-export function ttydFailureContains(
+function ttydFailureContains(
   failure: unknown,
   target: unknown,
   seen: Set<unknown> = new Set(),
@@ -34,6 +44,17 @@ export function ttydFailureContains(
 export function describeTtydFailure(
   failure: unknown,
   path: Set<unknown> = new Set(),
+): string {
+  try {
+    return describeTtydFailureUnsafe(failure, path)
+  } catch {
+    return '[diagnostic unavailable]'
+  }
+}
+
+function describeTtydFailureUnsafe(
+  failure: unknown,
+  path: Set<unknown>,
 ): string {
   if (!(failure instanceof Error)) return String(failure)
   if (path.has(failure)) return `[cycle: ${failure.message}]`
@@ -58,7 +79,7 @@ export function describeTtydFailure(
           path,
         )
       : ''
-    const summary = hasNonCausalInterruption(failure)
+    const summary = hasNonCausalDiagnosticSummary(failure)
       ? failure.diagnosticSummary
       : failure.message
     return summary + aggregate + cause + interrupted

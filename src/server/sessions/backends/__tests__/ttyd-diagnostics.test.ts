@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { describeTtydFailure } from '../ttyd-diagnostics'
+import {
+  describeTtydFailure,
+  TTYD_NON_CAUSAL_INTERRUPTION,
+} from '../ttyd-diagnostics'
 import {
   TtydStartCancellationReceiptError,
   TtydStartCancelledError,
@@ -37,6 +40,47 @@ describe('describeTtydFailure', () => {
     ['cause cycle', cyclic, 'cycle; caused by: [cycle: cycle]'],
   ])('renders a %s diagnostic', (_case, failure, expected) => {
     expect(describeTtydFailure(failure)).toBe(expected)
+  })
+
+  it('ignores marker-shaped errors that do not own the marker', () => {
+    const mimic = Object.assign(new Error('fallback message'), {
+      diagnosticSummary: 'untrusted summary',
+      interrupted: new Error('untrusted interruption'),
+      [TTYD_NON_CAUSAL_INTERRUPTION]: false,
+    })
+
+    expect(describeTtydFailure(mimic)).toBe('fallback message')
+  })
+
+  it('does not repeat cleanup when a stamped producer lacks interruption data', () => {
+    const interrupted = new Error('stamped cleanup interruption')
+    const malformed = Object.assign(
+      new AggregateError(
+        [interrupted],
+        `rich message; interrupted failure: ${interrupted.message}`,
+      ),
+      {
+        diagnosticSummary: 'structural summary',
+        [TTYD_NON_CAUSAL_INTERRUPTION]: true,
+      },
+    )
+    const described = describeTtydFailure(malformed)
+
+    expect(described).toBe(
+      'structural summary; errors: [stamped cleanup interruption]',
+    )
+    expect(described.split(interrupted.message)).toHaveLength(2)
+  })
+
+  it('never throws when a diagnostic getter is hostile', () => {
+    const hostile = new Error('hostile interruption')
+    Object.defineProperty(hostile, 'cause', {
+      get() {
+        throw new Error('cause getter failed')
+      },
+    })
+
+    expect(describeTtydFailure(hostile)).toBe('[diagnostic unavailable]')
   })
 
   it('renders a cancellation reason and its non-causal interruption once', () => {

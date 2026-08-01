@@ -9,7 +9,6 @@ import {
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
   isExpectedTtydStartInterruption,
-  findTtydStartCancelledError,
   findTtydStartSupersededError,
   onTtydRestart,
   orphanTtydPidsToReap,
@@ -409,9 +408,6 @@ describe('fenced ttyd start attempts', () => {
     )).toBe(true)
     expect(isExpectedTtydStartInterruption(diagnostic)).toBe(false)
     expect(findTtydStartSupersededError(cancellation)).toBeNull()
-    expect(findTtydStartCancelledError(new Error('wrapped', {
-      cause: cancellation,
-    }))).toBe(cancellation)
     expect(cancellation.cause).toBeUndefined()
     expect(cancellation.reason).toBe('session stop requested')
     expect(cancellation.interrupted).toBe(interrupted)
@@ -426,12 +422,40 @@ describe('fenced ttyd start attempts', () => {
       interrupted,
     )
     expect(findTtydStartSupersededError(missingReceipt)).toBeNull()
-    expect(findTtydStartCancelledError(missingReceipt)).toBeNull()
     expect(isExpectedTtydStartInterruption(missingReceipt)).toBe(false)
     expect(missingReceipt.cause).toBeUndefined()
     expect(missingReceipt.interrupted).toBe(interrupted)
     expect(missingReceipt.message).toContain(interrupted.message)
     expect(missingReceipt.message).toContain(diagnostic.message)
+  })
+
+  it('keeps cancellation classification when interruption rendering fails', () => {
+    const hostile = new Error('hostile interruption')
+    Object.defineProperty(hostile, 'cause', {
+      get() {
+        throw new Error('cause getter failed')
+      },
+    })
+
+    const cancellation = new TtydStartCancelledError(
+      opts.sessionName,
+      'post-spawn',
+      'session stop requested',
+      hostile,
+    )
+    expect(cancellation.message).toContain(
+      '; interrupted failure: [diagnostic unavailable]',
+    )
+    expect(isExpectedTtydStartInterruption(cancellation)).toBe(true)
+
+    const missingReceipt = new TtydStartCancellationReceiptError(
+      opts.sessionName,
+      hostile,
+    )
+    expect(missingReceipt.message).toContain(
+      '; interrupted failure: [diagnostic unavailable]',
+    )
+    expect(isExpectedTtydStartInterruption(missingReceipt)).toBe(false)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {

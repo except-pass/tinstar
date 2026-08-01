@@ -1204,6 +1204,14 @@ export class TtydStartSupersededError extends Error {
   }
 }
 
+function describeTtydInterruptionForMessage(interrupted: unknown): string {
+  try {
+    return describeTtydFailure(interrupted)
+  } catch {
+    return '[interruption diagnostic unavailable]'
+  }
+}
+
 export class TtydStartCancelledError
   extends Error
   implements NonCausalInterruptionError {
@@ -1225,7 +1233,8 @@ export class TtydStartCancelledError
       `ttyd start for ${sessionName} was cancelled at ${stage}`
       + `; cancellation reason: ${reason}`
     super(
-      summary + `; interrupted failure: ${describeTtydFailure(interrupted)}`,
+      summary + '; interrupted failure: '
+        + describeTtydInterruptionForMessage(interrupted),
       options,
     )
     this.name = 'TtydStartCancelledError'
@@ -1249,7 +1258,8 @@ export class TtydStartCancellationReceiptError
     const summary =
       `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
     super(
-      summary + `; interrupted failure: ${describeTtydFailure(interrupted)}`,
+      summary + '; interrupted failure: '
+        + describeTtydInterruptionForMessage(interrupted),
       options,
     )
     this.name = 'TtydStartCancellationReceiptError'
@@ -1284,16 +1294,6 @@ function findTtydStartCause<T extends Error>(
     candidate = candidate.cause
   }
   return null
-}
-
-export function findTtydStartCancelledError(
-  err: unknown,
-): TtydStartCancelledError | null {
-  return findTtydStartCause(
-    err,
-    (candidate): candidate is TtydStartCancelledError =>
-      candidate instanceof TtydStartCancelledError,
-  )
 }
 
 function markTtydIdentityInspectionAvailable(
