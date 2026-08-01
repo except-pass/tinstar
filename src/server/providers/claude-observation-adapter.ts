@@ -4,6 +4,7 @@ import type {
   ProviderObservationKind,
   ProviderObservationRequestFor,
   ProviderObservationSnapshotFor,
+  ProviderSnapshotFreshness,
   ProviderSource,
 } from '../../domain/provider-capabilities'
 import type { MetricSink } from '../cc-quota/metrics'
@@ -169,23 +170,49 @@ export class ClaudeObservationAdapter {
       )
     }
     try {
-      const value = request.scope.kind === 'session'
-        ? historicalFromSessionSeries(await query.sessionSeries({
+      if (request.scope.kind === 'session') {
+        const value = historicalFromSessionSeries(await query.sessionSeries({
             sessionId: request.scope.sessionId,
             userEmail: this.getDefaultUserEmail(),
             endSec: Math.floor(this.now() / 1_000),
             windowSec: 300,
             stepSec: 5,
           }))
-        : historicalFromHud(await query.todayHud({
-            userEmail: this.getDefaultUserEmail(),
-            tzOffsetMinutes: new Date(this.now()).getTimezoneOffset(),
-          }), this.now())
+        return this.available(
+          'historical-telemetry',
+          request.scope,
+          CLAUDE_PROMETHEUS_SOURCE,
+          value,
+        )
+      }
+
+      const requestedAt = this.now()
+      const hud = await query.todayHud({
+        userEmail: this.getDefaultUserEmail(),
+        tzOffsetMinutes: new Date(requestedAt).getTimezoneOffset(),
+      })
+      const checkedAt = this.now()
+      const staleSeconds = hud.staleSeconds
+      const observedAt = staleSeconds === undefined
+        ? checkedAt
+        : checkedAt - Math.max(0, staleSeconds) * 1_000
+      const freshness: ProviderSnapshotFreshness = staleSeconds === undefined
+        ? {
+            state: 'fresh',
+            observedAt: new Date(observedAt).toISOString(),
+            checkedAt: new Date(checkedAt).toISOString(),
+          }
+        : {
+            state: 'stale',
+            observedAt: new Date(observedAt).toISOString(),
+            checkedAt: new Date(checkedAt).toISOString(),
+          }
       return this.available(
         'historical-telemetry',
         request.scope,
         CLAUDE_PROMETHEUS_SOURCE,
-        value,
+        historicalFromHud(hud, observedAt),
+        freshness,
       )
     } catch (error) {
       return this.unavailable(
@@ -236,6 +263,7 @@ export class ClaudeObservationAdapter {
     value: K extends 'historical-telemetry'
       ? ProviderHistoricalTelemetry
       : ProviderContextBreakdown,
+    freshness?: ProviderSnapshotFreshness,
   ): ProviderObservationSnapshotFor<K, ClaudeObservationDetail> {
     const observedAt = new Date(this.now()).toISOString()
     return {
@@ -243,7 +271,7 @@ export class ClaudeObservationAdapter {
       providerId: CLAUDE_PROVIDER_ID,
       scope,
       source,
-      freshness: { state: 'fresh', observedAt, checkedAt: observedAt },
+      freshness: freshness ?? { state: 'fresh', observedAt, checkedAt: observedAt },
       availability: { state: 'available', value },
     } as ProviderObservationSnapshotFor<K, ClaudeObservationDetail>
   }

@@ -178,4 +178,48 @@ describe('Claude observation adapter', () => {
     expect(stores.quotas.get('claude', 'default')?.freshness.observedAt)
       .toBe(firstQuotaAt)
   })
+
+  it('preserves cached Prometheus HUD age instead of reporting stale data as fresh', async () => {
+    const now = Date.parse('2026-08-01T12:00:00.000Z')
+    const stores = new ProviderCurrentObservationStores({ now: () => now })
+    const observations = createClaudeObservationAdapter({
+      stores,
+      now: () => now,
+      getTelemetryQuery: () => ({
+        todayHud: vi.fn(async () => ({
+          window: 'today' as const,
+          state: 'ready' as const,
+          cost: { total: 1.25, byModel: {} },
+          tokens: { total: 1_200 },
+          rate: { perMin: 20, perHour: 900 },
+          cacheHitPct: 0.4,
+          dutyCycle: { value: 0.5, windowMinutes: 5 },
+          staleSeconds: 60,
+        })),
+        burningSessions: vi.fn(async () => []),
+        sessionSeries: vi.fn(async () => { throw new Error('unused') }),
+      }),
+      getDefaultUserEmail: () => 'person@example.com',
+      getDetailedContext: async () => { throw new Error('unused') },
+    })
+
+    const historical = await observations.adapter.observe['historical-telemetry']({
+      kind: 'historical-telemetry',
+      scope: { kind: 'provider', accountRef: 'default' },
+    })
+
+    expect(historical.freshness).toEqual({
+      state: 'stale',
+      observedAt: '2026-08-01T11:59:00.000Z',
+      checkedAt: '2026-08-01T12:00:00.000Z',
+    })
+    expect(historical.availability.state).toBe('available')
+    if (historical.availability.state === 'available') {
+      for (const series of historical.availability.value.series) {
+        expect(series.points).toEqual([
+          expect.objectContaining({ at: '2026-08-01T11:59:00.000Z' }),
+        ])
+      }
+    }
+  })
 })
