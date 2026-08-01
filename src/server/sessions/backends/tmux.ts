@@ -1,6 +1,6 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
+import { chmodSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
 import type { Session, SessionNats } from '../session'
@@ -24,9 +24,14 @@ import { natsBrokerUrl } from '../../nats/url'
 import {
   messageRouterSubject,
   TINSTAR_AGENT_INCARNATION_ENV,
+  TINSTAR_MESSAGE_ROUTER_AUTH_ENV,
   TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV,
   TINSTAR_NATS_URL_ENV,
 } from '../../messaging/message-router-address'
+import {
+  deriveMessageRouterSessionKey,
+  messageRouterMasterKey,
+} from '../../messaging/message-router-auth'
 
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
@@ -444,13 +449,14 @@ export function generateNatsMcpConfig(opts: {
   jetstream?: boolean
   natsUrl: string
   routerSubject: string
+  routerAuth: string
 }): string {
   // Per-session topics file (one subject per line) — keeps the variable-length
   // subscription list out of the mcp config. Lives outside the git tree.
   const topicsPath = natsTopicsFilePath(opts.sessionsDir, opts.sessionName)
   const controlSocket = natsControlSocketPath(opts.sessionName)
   mkdirSync(join(opts.sessionsDir, opts.sessionName), { recursive: true })
-  writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n')
+  writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n', 0o600)
 
   // Literal per-session args — the file is per-session, so there is no reason to
   // route these through env tokens. --control-socket wires up the hot
@@ -474,6 +480,7 @@ export function generateNatsMcpConfig(opts: {
         env: {
           [TINSTAR_NATS_URL_ENV]: opts.natsUrl,
           [TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]: opts.routerSubject,
+          [TINSTAR_MESSAGE_ROUTER_AUTH_ENV]: opts.routerAuth,
         },
       },
     },
@@ -482,14 +489,18 @@ export function generateNatsMcpConfig(opts: {
   // Per-session config dir, outside any git tree. Passed to Claude via
   // --mcp-config so it never has to live in the workspace. Written idempotently.
   const mcpConfigPath = join(opts.sessionsDir, opts.sessionName, 'nats-mcp.json')
-  writeIfChanged(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
+  writeIfChanged(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 0o600)
   return mcpConfigPath
 }
 
 /** Write only when content differs, so a stable config leaves mtime untouched. */
-function writeIfChanged(path: string, content: string): void {
-  if (existsSync(path) && readFileSync(path, 'utf-8') === content) return
-  writeFileSync(path, content)
+function writeIfChanged(path: string, content: string, mode: number): void {
+  if (existsSync(path) && readFileSync(path, 'utf-8') === content) {
+    chmodSync(path, mode)
+    return
+  }
+  writeFileSync(path, content, { mode })
+  chmodSync(path, mode)
 }
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
@@ -783,12 +794,13 @@ export async function createTmuxSession(
 
   // Inject session identity + secrets into tmux environment
   await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, 'TINSTAR_SESSION_NAME', opts.session.name])
+  const agentIncarnation = randomUUID()
   await execFileAsync('tmux', [
     'set-environment',
     '-t',
     tmuxTarget,
     TINSTAR_AGENT_INCARNATION_ENV,
-    randomUUID(),
+    agentIncarnation,
   ])
   for (const [key, value] of Object.entries(opts.secrets)) {
     if (value) {
@@ -834,6 +846,10 @@ export async function createTmuxSession(
       jetstream: config.nats.jetstream,
       natsUrl: natsBrokerUrl(),
       routerSubject: messageRouterSubject(config.dirs.root),
+      routerAuth: deriveMessageRouterSessionKey(
+        messageRouterMasterKey(config.dirs.root),
+        { sessionId: opts.session.name, incarnation: agentIncarnation },
+      ).toString('hex'),
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
@@ -920,12 +936,13 @@ export async function startTmuxSession(
 
   // A restart in the same pane keeps the shell PID, so give every managed
   // agent launch its own tmux-persisted identity before sending the command.
+  const agentIncarnation = randomUUID()
   await execFileAsync('tmux', [
     'set-environment',
     '-t',
     exactTmuxSessionTarget(tmuxName),
     TINSTAR_AGENT_INCARNATION_ENV,
-    randomUUID(),
+    agentIncarnation,
   ])
 
   // Existing tmux sessions retain session-scoped variables across agent
@@ -961,6 +978,10 @@ export async function startTmuxSession(
       jetstream: config.nats.jetstream,
       natsUrl: natsBrokerUrl(),
       routerSubject: messageRouterSubject(config.dirs.root),
+      routerAuth: deriveMessageRouterSessionKey(
+        messageRouterMasterKey(config.dirs.root),
+        { sessionId: opts.session.name, incarnation: agentIncarnation },
+      ).toString('hex'),
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
@@ -1161,7 +1182,6 @@ export async function getTmuxAgentIdentity(
 ): Promise<string | null> {
   const tmuxName = tmuxSessionName(config, sessionName)
   let shellPid: string
-  let launchToken = ''
   try {
     const { stdout } = await execFileAsync('tmux', [
       'display-message',
@@ -1198,6 +1218,29 @@ export async function getTmuxAgentIdentity(
     throw error
   }
 
+  // Sessions launched before managed tokens existed still use process birth.
+  const launchToken = await getTmuxAgentLaunchToken(config, sessionName) ?? ''
+
+  const { stdout: processBirth } = await execFileAsync(
+    'ps',
+    ['-o', 'lstart=', '-p', agentPid],
+    { timeout: 2_000 },
+  )
+  if (!processBirth.trim()) return null
+  const nativeIdentity = JSON.stringify([
+    launchToken,
+    agentPid,
+    processBirth.trim(),
+  ])
+  return createHash('sha256').update(nativeIdentity).digest('hex')
+}
+
+/** Read the private launch token inherited by this session's managed MCPs. */
+export async function getTmuxAgentLaunchToken(
+  config: TinstarConfig,
+  sessionName: string,
+): Promise<string | null> {
+  const tmuxName = tmuxSessionName(config, sessionName)
   try {
     const { stdout } = await execFileAsync('tmux', [
       'show-environment',
@@ -1212,12 +1255,13 @@ export async function getTmuxAgentIdentity(
         `tmux returned an invalid ${TINSTAR_AGENT_INCARNATION_ENV} value for ${tmuxName}`,
       )
     }
-    launchToken = environmentLine.slice(prefix.length)
+    const launchToken = environmentLine.slice(prefix.length)
     if (!launchToken || launchToken.includes('\n') || launchToken.includes('\r')) {
       throw new Error(
         `tmux returned an invalid ${TINSTAR_AGENT_INCARNATION_ENV} value for ${tmuxName}`,
       )
     }
+    return launchToken
   } catch (error) {
     const failure = error as {
       code?: string | number
@@ -1236,23 +1280,9 @@ export async function getTmuxAgentIdentity(
       && failure.signal == null
       && stderr === `unknown variable: ${TINSTAR_AGENT_INCARNATION_ENV}`
     )
-    // Sessions launched before managed tokens existed still use process birth.
-    // Operational inspection failures are inconclusive and must fail closed.
-    if (!variableMissing) throw error
+    if (variableMissing || isOrdinaryTmuxSessionMiss(failure, failure.stderr)) return null
+    throw error
   }
-
-  const { stdout: processBirth } = await execFileAsync(
-    'ps',
-    ['-o', 'lstart=', '-p', agentPid],
-    { timeout: 2_000 },
-  )
-  if (!processBirth.trim()) return null
-  const nativeIdentity = JSON.stringify([
-    launchToken,
-    agentPid,
-    processBirth.trim(),
-  ])
-  return createHash('sha256').update(nativeIdentity).digest('hex')
 }
 
 // --- ttyd management ---

@@ -74,6 +74,12 @@ export type LiveDeliveryResult =
         subject: string
       }
       | {
+        code: 'sender-unavailable'
+        subject: string
+        sessionId: string
+        reason: RecipientExclusionReason | 'incarnation-mismatch'
+      }
+      | {
         code: 'recipient-unavailable' | 'empty-live-set'
         destinationKind: DestinationKind
         subject: string

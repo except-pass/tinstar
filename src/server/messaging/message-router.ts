@@ -12,18 +12,36 @@ import type {
   RecipientExclusion,
 } from './live-recipient-resolution'
 import {
+  TINSTAR_MESSAGE_ROUTER_AUTH_ENV,
   TINSTAR_AGENT_INCARNATION_ENV,
   TINSTAR_SESSION_NAME_ENV,
 } from './message-router-address'
+import {
+  deriveMessageRouterSessionKey,
+  messageRouterAuthKeyFromHex,
+  signMessageRoutePayload,
+  verifyMessageRouteEnvelope,
+  type AuthenticatedMessageRoute,
+} from './message-router-auth'
 
 export {
   messageRouterSubject,
+  MESSAGE_ROUTER_AUTH_FILE,
   MESSAGE_ROUTE_SUBJECT_PREFIX,
   TINSTAR_AGENT_INCARNATION_ENV,
+  TINSTAR_MESSAGE_ROUTER_AUTH_ENV,
   TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV,
   TINSTAR_NATS_URL_ENV,
   TINSTAR_SESSION_NAME_ENV,
 } from './message-router-address'
+export {
+  deriveMessageRouterSessionKey,
+  messageRouterAuthKeyFromHex,
+  messageRouterMasterKey,
+  signMessageRoutePayload,
+  verifyMessageRouteEnvelope,
+} from './message-router-auth'
+export type { AuthenticatedMessageRoute } from './message-router-auth'
 
 export const MESSAGE_ROUTE_PROTOCOL_VERSION = 1 as const
 export const DEFAULT_MESSAGE_ROUTE_TIMEOUT_MS = 15_000
@@ -60,6 +78,8 @@ export interface MessageRouteErrorDetail {
   message: string
   destinationKind?: 'dm' | 'broadcast' | 'breakout'
   subject?: string
+  sessionId?: string
+  reason?: string
   exclusions?: RecipientExclusion[]
   rejection?: {
     reason: string
@@ -83,6 +103,7 @@ function errorMessage(result: Extract<LiveDeliveryResult, { ok: false }>): strin
     case 'invalid-request': return result.error.detail
     case 'invalid-destination': return `Invalid destination ${result.error.subject}.`
     case 'session-config-unavailable': return 'Managed sessions are unavailable.'
+    case 'sender-unavailable': return `Managed sender ${result.error.sessionId} is unavailable (${result.error.reason}).`
     case 'recipient-unavailable': return 'No live recipient accepted the message.'
     case 'empty-live-set': return 'No live subscribers accepted the message.'
     case 'ambiguous-recipient': return 'The direct destination matched multiple sessions.'
@@ -121,6 +142,10 @@ export function routeResponse(
     detail.destinationKind = result.error.destinationKind
   }
   if ('subject' in result.error) detail.subject = result.error.subject
+  if (result.error.code === 'sender-unavailable') {
+    detail.sessionId = result.error.sessionId
+    detail.reason = result.error.reason
+  }
   if ('exclusions' in result.error) {
     detail.exclusions = result.error.exclusions.map(exclusion => ({ ...exclusion }))
   }
@@ -149,9 +174,9 @@ function invalidResponse(message: string, requestId: string | null = null): Mess
   }
 }
 
-function parseRouteRequest(data: Uint8Array):
-  | { ok: true; request: MessageRouteRequest }
-  | { ok: false; response: MessageRouteErrorResponse } {
+function parseRouteRequest(data: Uint8Array, masterKey: Uint8Array):
+  | { ok: true; request: MessageRouteRequest; authKey: Buffer }
+  | { ok: false; response: MessageRouteErrorResponse; authKey?: Buffer } {
   if (data.byteLength > MAX_MESSAGE_ROUTE_REQUEST_BYTES) {
     return {
       ok: false,
@@ -166,14 +191,33 @@ function parseRouteRequest(data: Uint8Array):
   } catch {
     return { ok: false, response: invalidResponse('request must be valid UTF-8 JSON') }
   }
-  if (!parsed || typeof parsed !== 'object') {
+  if (!isRecord(parsed) || !isRecord(parsed.payload)) {
     return { ok: false, response: invalidResponse('request must be an object') }
   }
-  const candidate = parsed as Partial<MessageRouteRequest>
+  const envelope = parsed as Partial<AuthenticatedMessageRoute<unknown>>
+  const candidate = envelope.payload as Partial<MessageRouteRequest>
   const requestId = typeof candidate.requestId === 'string'
     && candidate.requestId.trim()
     ? candidate.requestId
     : null
+  const sender = isRecord(candidate.sender)
+    && isNonEmptyString(candidate.sender.sessionId)
+    && isNonEmptyString(candidate.sender.incarnation)
+    ? {
+        sessionId: candidate.sender.sessionId,
+        incarnation: candidate.sender.incarnation,
+      }
+    : null
+  const authKey = sender
+    ? deriveMessageRouterSessionKey(masterKey, sender)
+    : undefined
+  if (typeof envelope.auth !== 'string') {
+    return {
+      ok: false,
+      response: invalidResponse('request authentication is missing', requestId),
+      authKey,
+    }
+  }
   if (candidate.version !== MESSAGE_ROUTE_PROTOCOL_VERSION) {
     return {
       ok: false,
@@ -181,14 +225,30 @@ function parseRouteRequest(data: Uint8Array):
         `unsupported message route version ${String(candidate.version)}`,
         requestId,
       ),
+      authKey,
     }
   }
   const problem = validateDeliveryAcceptIntent(candidate)
-  if (problem) return { ok: false, response: invalidResponse(problem, requestId) }
-  return { ok: true, request: candidate as MessageRouteRequest }
+  if (problem) {
+    return { ok: false, response: invalidResponse(problem, requestId), authKey }
+  }
+  if (!authKey || !verifyMessageRouteEnvelope({
+    payload: candidate,
+    auth: envelope.auth,
+  }, authKey)) {
+    return {
+      ok: false,
+      response: invalidResponse('request authentication failed', requestId),
+      authKey,
+    }
+  }
+  return { ok: true, request: candidate as MessageRouteRequest, authKey }
 }
 
-function parseRouteResponse(data: Uint8Array): MessageRouteResponse {
+function parseRouteResponse(
+  data: Uint8Array,
+  authKey: Uint8Array,
+): MessageRouteResponse {
   let parsed: unknown
   try {
     parsed = JSON.parse(textDecoder.decode(data))
@@ -198,19 +258,22 @@ function parseRouteResponse(data: Uint8Array): MessageRouteResponse {
       'Tinstar message router returned invalid UTF-8 JSON',
     )
   }
-  if (!parsed || typeof parsed !== 'object') {
+  if (!isRecord(parsed)
+    || !('payload' in parsed)
+    || typeof parsed.auth !== 'string'
+    || !verifyMessageRouteEnvelope({ payload: parsed.payload, auth: parsed.auth }, authKey)) {
     throw new MessageRouteTransportError(
       'invalid-response',
-      'Tinstar message router returned a non-object response',
+      'Tinstar message router returned an unauthenticated response',
     )
   }
-  if (!isMessageRouteResponse(parsed)) {
+  if (!isMessageRouteResponse(parsed.payload)) {
     throw new MessageRouteTransportError(
       'invalid-response',
       'Tinstar message router returned an unsupported response',
     )
   }
-  return parsed
+  return parsed.payload
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -308,13 +371,14 @@ export async function requestMessageRoute(
   client: NatsRouteRequestClient,
   subject: string,
   request: MessageRouteRequest,
+  authKey: Uint8Array,
   timeoutMs = DEFAULT_MESSAGE_ROUTE_TIMEOUT_MS,
 ): Promise<MessageRouteResponse> {
   let response: { data: Uint8Array }
   try {
     response = await client.request(
       subject,
-      textEncoder.encode(JSON.stringify(request)),
+      textEncoder.encode(JSON.stringify(signMessageRoutePayload(request, authKey))),
       { timeout: timeoutMs },
     )
   } catch (error) {
@@ -330,7 +394,7 @@ export async function requestMessageRoute(
       { cause: error },
     )
   }
-  const decoded = parseRouteResponse(response.data)
+  const decoded = parseRouteResponse(response.data, authKey)
   if (decoded.requestId !== request.requestId) {
     throw new MessageRouteTransportError(
       'invalid-response',
@@ -355,7 +419,10 @@ export interface ReplyMcpToolResult {
 
 export interface ReplyMcpHandlerDependencies {
   sender: DeliverySessionRef
-  route: (request: MessageRouteRequest) => Promise<MessageRouteResponse>
+  authKey: Uint8Array
+  route: (
+    request: AuthenticatedMessageRoute<MessageRouteRequest>,
+  ) => Promise<AuthenticatedMessageRoute<MessageRouteResponse>>
   createRequestId?: () => string
 }
 
@@ -371,6 +438,17 @@ export function deliverySenderFromEnvironment(
     )
   }
   return { sessionId, incarnation }
+}
+
+/** Read and validate the launch-scoped request authentication key. */
+export function deliveryAuthKeyFromEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): Buffer {
+  const value = env[TINSTAR_MESSAGE_ROUTER_AUTH_ENV]?.trim() ?? ''
+  if (!value) {
+    throw new Error(`managed reply requires ${TINSTAR_MESSAGE_ROUTER_AUTH_ENV}`)
+  }
+  return messageRouterAuthKeyFromHex(value)
 }
 
 /**
@@ -399,7 +477,18 @@ export function createReplyMcpHandler(
       }
       const problem = validateDeliveryAcceptIntent(request)
       if (problem) throw new Error(problem)
-      const response = await dependencies.route(request)
+      const responseEnvelope = await dependencies.route(
+        signMessageRoutePayload(request, dependencies.authKey),
+      )
+      if (!verifyMessageRouteEnvelope(responseEnvelope, dependencies.authKey)
+        || !isMessageRouteResponse(responseEnvelope.payload)
+        || responseEnvelope.payload.requestId !== request.requestId) {
+        throw new MessageRouteTransportError(
+          'invalid-response',
+          'Tinstar message router returned an unauthenticated response',
+        )
+      }
+      const response = responseEnvelope.payload
       if (response.status === 'error') {
         return {
           isError: true,
@@ -451,6 +540,7 @@ export interface NatsRouteConnection {
 
 export interface NatsMessageRouterDependencies {
   subject: string
+  authMasterKey: Uint8Array
   route: (request: MessageRouteRequest) => Promise<LiveDeliveryResult>
   connect?: () => Promise<NatsRouteConnection>
   natsUrl?: string
@@ -459,6 +549,116 @@ export interface NatsMessageRouterDependencies {
     request: MessageRouteRequest,
     response: MessageRouteAcceptedResponse,
   ) => void
+}
+
+interface ProcessRouterOwner {
+  generation: number
+  active: NatsMessageRouterService | null
+  transition: Promise<void>
+}
+
+const PROCESS_ROUTER_OWNERS = Symbol.for('tinstar.message-router-owners.v1')
+
+function processRouterOwners(): Map<string, ProcessRouterOwner> {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  let owners = processGlobal[PROCESS_ROUTER_OWNERS] as
+    | Map<string, ProcessRouterOwner>
+    | undefined
+  if (!owners) {
+    owners = new Map()
+    processGlobal[PROCESS_ROUTER_OWNERS] = owners
+  }
+  return owners
+}
+
+export interface MessageRouterOwnerLease {
+  /** Start only if this is still the newest backend for the config root. */
+  start(service: NatsMessageRouterService): Promise<boolean>
+  /** Stop this lease's responder without disturbing a newer backend. */
+  stop(): Promise<void>
+}
+
+/**
+ * Reserve the one process-local responder slot for a config root.
+ *
+ * Vite can invoke backend initialization again without terminating the Node
+ * process. Keeping this registry on globalThis makes it survive module reloads;
+ * serialized replacement ensures two ledgers never answer the same queue.
+ */
+export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwnerLease {
+  const owners = processRouterOwners()
+  const state = owners.get(configRoot) ?? {
+    generation: 0,
+    active: null,
+    transition: Promise.resolve(),
+  }
+  owners.set(configRoot, state)
+  const generation = ++state.generation
+
+  state.transition = state.transition.then(async () => {
+    const active = state.active
+    state.active = null
+    if (active) await active.stop()
+  })
+
+  return {
+    async start(service) {
+      let started = false
+      const activation = state.transition.then(async () => {
+        if (state.generation !== generation) return
+        await service.start()
+        if (state.generation !== generation) {
+          await service.stop()
+          return
+        }
+        state.active = service
+        started = true
+      })
+      state.transition = activation.catch(() => {})
+      await activation
+      return started
+    },
+    async stop() {
+      if (state.generation !== generation) return
+      ++state.generation
+      const stopping = state.transition.then(async () => {
+        const active = state.active
+        state.active = null
+        if (active) await active.stop()
+      })
+      state.transition = stopping.catch(() => {})
+      await stopping
+      if (owners.get(configRoot) === state && state.active === null) {
+        owners.delete(configRoot)
+      }
+    },
+  }
+}
+
+/** Test-only reset for process-global ownership left by HMR lifecycle tests. */
+export async function resetMessageRouterOwnersForTests(): Promise<void> {
+  const owners = processRouterOwners()
+  const states = [...owners.values()]
+  owners.clear()
+  await Promise.all(states.map(async (state) => {
+    ++state.generation
+    await state.transition
+    await state.active?.stop()
+    state.active = null
+  }))
+}
+
+/** Stop every responder owned by this process (signal shutdown). */
+export async function stopAllMessageRouters(): Promise<void> {
+  const owners = processRouterOwners()
+  const states = [...owners.values()]
+  owners.clear()
+  await Promise.all(states.map(async (state) => {
+    ++state.generation
+    await state.transition
+    await state.active?.stop()
+    state.active = null
+  }))
 }
 
 function natsConnection(url: string): Promise<NatsRouteConnection> {
@@ -613,7 +813,7 @@ export class NatsMessageRouterService {
       return
     }
 
-    const parsed = parseRouteRequest(message.data)
+    const parsed = parseRouteRequest(message.data, this.dependencies.authMasterKey)
     let response: MessageRouteResponse
     if (!parsed.ok) {
       response = parsed.response
@@ -646,7 +846,10 @@ export class NatsMessageRouterService {
     }
 
     try {
-      if (!message.respond(textEncoder.encode(JSON.stringify(response)))) {
+      const envelope: AuthenticatedMessageRoute<MessageRouteResponse> = parsed.authKey
+        ? signMessageRoutePayload(response, parsed.authKey)
+        : { payload: response, auth: '' }
+      if (!message.respond(textEncoder.encode(JSON.stringify(envelope)))) {
         log.warn('message-router', `reply inbox rejected response for ${response.requestId ?? 'unknown request'}`)
       }
     } catch (error) {

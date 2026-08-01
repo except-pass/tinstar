@@ -445,6 +445,16 @@ describe('live delivery recipient resolution', () => {
 describe('managed-session to durable-ledger integration', () => {
   const roots: string[] = []
 
+  function createManagedSender(sessionsDir: string): void {
+    createSession(sessionsDir, {
+      name: 'sender',
+      backend: 'tmux',
+      adapter: 'codex',
+      nats: { enabled: true, subscriptions: [`${TASK}.sender`] },
+    })
+    setState(sessionsDir, 'sender', 'running')
+  }
+
   afterEach(() => {
     resetSessionBackendOwnersForTests()
     for (const root of roots.splice(0)) {
@@ -468,6 +478,7 @@ describe('managed-session to durable-ledger integration', () => {
         secrets: join(root, 'secrets.json'),
       },
     } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
     createSession(sessionsDir, {
       name: 'codex-live',
       backend: 'tmux',
@@ -482,21 +493,41 @@ describe('managed-session to durable-ledger integration', () => {
       now: () => 1_000,
     })
     const registry = createDefaultProviderRegistry()
+    const context = {
+      sessionConfig: cfg,
+      providerRegistry: registry,
+      docStore: { getAllTombstones: () => [] },
+    } as unknown as RouteContext
+    const observations = {
+      observeSender: async () => ({ state: 'alive' as const, incarnation: 'sender-v1' }),
+      observeProcess: async () => ({
+        state: 'alive' as const,
+        incarnation: 'codex-live-process',
+      }),
+    }
+
+    await expect(acceptForManagedSessionRecipients(
+      context,
+      ledger,
+      {
+        ...request(`${TASK}.codex-live`, 'req-forged-sender'),
+        sender: { sessionId: 'sender', incarnation: 'forged-token' },
+      },
+      observations,
+    )).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'sender-unavailable',
+        sessionId: 'sender',
+        reason: 'incarnation-mismatch',
+      },
+    })
 
     const result = await acceptForManagedSessionRecipients(
-      {
-        sessionConfig: cfg,
-        providerRegistry: registry,
-        docStore: { getAllTombstones: () => [] },
-      } as unknown as RouteContext,
+      context,
       ledger,
       request(`${TASK}.codex-live`, 'req-integrated'),
-      {
-        observeProcess: async () => ({
-          state: 'alive',
-          incarnation: 'codex-live-process',
-        }),
-      },
+      observations,
     )
 
     expect(result).toMatchObject({
@@ -536,7 +567,10 @@ describe('managed-session to durable-ledger integration', () => {
       } as unknown as RouteContext,
       reloadedLedger,
       request(`${TASK}.codex-live`, 'req-integrated'),
-      { observeProcess },
+      {
+        observeProcess,
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
+      },
     )
     expect(replayed).toMatchObject({
       ok: true,
@@ -566,6 +600,7 @@ describe('managed-session to durable-ledger integration', () => {
         secrets: join(root, 'secrets.json'),
       },
     } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
     for (const name of ['live-agent', 'stopped-agent']) {
       createSession(sessionsDir, {
         name,
@@ -590,6 +625,7 @@ describe('managed-session to durable-ledger integration', () => {
     })
 
     const first = await acceptForManagedSessionRecipients(context, ledger, intent, {
+      observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
       observeProcess: async () => ({
         state: 'alive',
         incarnation: 'live-agent-process',
@@ -609,7 +645,10 @@ describe('managed-session to durable-ledger integration', () => {
       context,
       reloaded,
       intent,
-      { observeProcess },
+      {
+        observeProcess,
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
+      },
     )
 
     expect(replay).toMatchObject({
@@ -651,6 +690,7 @@ describe('managed-session to durable-ledger integration', () => {
         secrets: join(root, 'secrets.json'),
       },
     } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
     createSession(sessionsDir, {
       name: 'generation-race',
       backend: 'tmux',
@@ -677,6 +717,7 @@ describe('managed-session to durable-ledger integration', () => {
       { accept, replayAcceptance: async () => null },
       request(`${TASK}.generation-race`, 'req-generation-race'),
       {
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
         observeProcess: async () => ({
           state: 'alive',
           incarnation: 'generation-race-process',

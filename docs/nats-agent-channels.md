@@ -16,8 +16,8 @@ tinstar.work-space.init-001.epic-xyz.task-abc       ← task broadcast (all agen
 tinstar.work-space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I see)
 ```
 
-**Publishing:**
-| Target | Publish to |
+**Sending through the managed `reply` tool:**
+| Target | Address |
 |--------|------------|
 | One agent (DM) | `tinstar.<space>.<init>.<epic>.<task>.<agent>` |
 | All on task (broadcast) | `tinstar.<space>.<init>.<epic>.<task>` |
@@ -27,7 +27,9 @@ tinstar.work-space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I see)
 
 ## What This Is
 
-A system for wiring Claude Code agents together via NATS pub/sub, so multiple agents can communicate with each other and with Clawson — the same way multiple people can message Clawson over Telegram.
+A system for wiring managed agents together through a provider-neutral Tinstar
+router carried over NATS. The router accepts a send only after it has resolved
+the current live recipients and committed their delivery obligations durably.
 
 The milestone test:
 ```
@@ -43,7 +45,7 @@ Each Tinstar session gets a **NATS channel server** — a small MCP server subpr
 
 1. Subscribes to one or more NATS subjects
 2. Bridges incoming messages into the Claude session as `<channel>` tags (via `notifications/claude/channel`)
-3. Exposes a **reply tool** so Claude can publish messages back to NATS
+3. Exposes a **reply tool** that asks Tinstar to accept an addressed message
 
 Claude's view of an incoming message:
 ```xml
@@ -52,7 +54,9 @@ Claude's view of an incoming message:
 </channel>
 ```
 
-Claude reads it, acts on it, and uses the reply tool to publish to another subject.
+Claude reads it, acts on it, and uses the reply tool to send to another subject.
+Other providers use the same reply contract even when their inbound delivery
+adapter is terminal-based rather than a Claude development channel.
 
 The MCP server `instructions` string (set at spawn time) tells Claude:
 - What subjects it's on and why
@@ -85,7 +89,35 @@ GET    /api/sessions/:name/subscriptions     → ["tinstar.agent.a1", "tinstar.t
 
 ### Architecture Boundary
 
-NATS is the **data plane** only. Tinstar never touches the NATS connection — that lives entirely inside the channel server subprocess. Management is HTTP/Unix socket only.
+NATS carries two deliberately separate paths:
+
+- Provider adapters subscribe to managed `tinstar.*` subjects for inbound
+  delivery. The adapter owns the provider-specific final mile.
+- The Tinstar backend owns a private, config-root-scoped request/reply subject.
+  The managed `reply` tool sends an authenticated `{payload, auth}` envelope;
+  `payload` contains `{sender, destination, text, requestId}` and `auth` is the
+  launch-scoped HMAC. Tinstar verifies it before consulting the live set or
+  writing the ledger, then returns a signed accepted, partial, or error receipt.
+  Raw publication to the router subject is ignored because it cannot receive an
+  acceptance receipt.
+
+The router subject is derived from a persistent private instance identity, so it
+survives rebuilds and restarts without colliding with another Tinstar instance
+on a shared broker. A process-global owner serializes replacement during Vite
+hot reload; shutdown drains the current responder. The per-session MCP config
+is private (`0600`) and lives outside the workspace.
+
+The authentication boundary protects against other clients that can publish or
+subscribe on the shared NATS broker. It does not isolate mutually hostile
+processes running as the same operating-system user: such a process can inspect
+another session's environment or private config files. Tinstar therefore treats
+co-resident managed agents as trusted peers. Deploy untrusted agents under
+separate OS users or containers; broker authentication alone cannot create that
+local isolation boundary.
+
+Tinstar's default `nats.channelServerPackage` is pinned to the reviewed companion
+revision. Operators may override it for local development, but a replacement
+must implement the same authenticated request/reply protocol.
 
 ### Session State
 
@@ -114,11 +146,15 @@ A1 knows about A2's subject. A2 knows nothing about A1 — just "process what ar
 
 Two paths for checking on a running agent:
 
-**In-band** (through the channel): Publish `{"type": "status"}` to `tinstar.agent.<name>`. Agent receives it as a `<channel>` tag and responds via reply tool. Good for: semantic status ("working on X, ~60% done").
+**In-band** (through the channel): Send `{"type": "status"}` to an agent's
+direct subject. The agent receives it through its provider adapter and responds
+through the durable reply tool. Good for semantic status ("working on X, ~60%
+done").
 
 **Out-of-band** (around the side): Tinstar peek / `tmux capture-pane`. Raw terminal output. Good for: ground truth, diagnosing stuck agents, works even when agent can't respond.
 
-For long-running tasks: Clawson subscribes to `tinstar.done.<chain-id>` and notifies Will when the chain completes. No polling.
+For long-running tasks, a coordinator can subscribe to a completion subject and
+notify the user when the chain completes.
 
 ---
 

@@ -79,7 +79,11 @@ import { createDefaultProviderRegistry } from './providers/lifecycle'
 import { DeliveryLedger } from './messaging/delivery-ledger'
 import {
   NatsMessageRouterService,
+  messageRouterMasterKey,
   messageRouterSubject,
+  reserveMessageRouterOwner,
+  stopAllMessageRouters,
+  type MessageRouterOwnerLease,
 } from './messaging/message-router'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
@@ -725,7 +729,7 @@ export function initBackend(): RouteContext {
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
-  let messageRouter: NatsMessageRouterService | undefined
+  let messageRouterOwner: MessageRouterOwnerLease | undefined
   let deliveryLedger: DeliveryLedger | undefined
   let backendContext: RouteContext | null = null
   let markBackendContextReady!: () => void
@@ -739,7 +743,7 @@ export function initBackend(): RouteContext {
     shutdownRegistered = true
     const shutdown = async () => {
       try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
-      try { await messageRouter?.stop() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
+      try { await stopAllMessageRouters() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
       try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
@@ -753,10 +757,9 @@ export function initBackend(): RouteContext {
     process.once('SIGTERM', shutdown)
   }
 
-  // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
-  // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
-  // remote on subsequent `bun x` calls — without this, hands can run stale
-  // channel-server code (e.g. missing upstream fixes like self-echo suppression).
+  // Clear bun's cached nats-channel-mcp so freshly spawned hands resolve the
+  // configured package spec. Bun caches git specs by commit hash and can leave
+  // a prior configured revision in the bunx resolution cache.
   // We clear BOTH the install cache AND the bunx tmp resolutions — the latter
   // is what `bun x` actually serves from, and the former alone wasn't enough.
   try {
@@ -791,8 +794,9 @@ export function initBackend(): RouteContext {
     // connection. Requests are scoped to this data root, resolved against the
     // managed live set, and durably accepted before a response says success.
     if (backendContext && deliveryLedger && sessionConfig) {
-      messageRouter = new NatsMessageRouterService({
+      const messageRouter = new NatsMessageRouterService({
         subject: messageRouterSubject(sessionConfig.dirs.root),
+        authMasterKey: messageRouterMasterKey(sessionConfig.dirs.root),
         natsUrl: natsManager!.url,
         route: request => acceptForManagedSessionRecipients(
           backendContext!,
@@ -807,7 +811,9 @@ export function initBackend(): RouteContext {
           )
         },
       })
-      void messageRouter.start()
+      void messageRouterOwner?.start(messageRouter).catch(error => {
+        log.warn('message-router', `failed to start: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
 
     // Re-register every persisted session's subs with the bridge. Saloon entries
@@ -890,6 +896,7 @@ export function initBackend(): RouteContext {
       // boot makes accepted-but-not-yet-final deliveries survive Tinstar
       // rebuilds and restarts before any NATS responder can claim success.
       deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
+      messageRouterOwner = reserveMessageRouterOwner(sessionConfig.dirs.root)
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
