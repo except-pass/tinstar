@@ -117,6 +117,12 @@ import {
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
+import type { DeliveryLedger } from '../messaging/delivery-ledger'
+import {
+  acceptForLiveRecipients,
+  type LiveDeliveryRequest,
+  type LiveDeliveryResult,
+} from '../messaging/live-recipient-resolution'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -1233,6 +1239,7 @@ export function invalidatePersistedSessionBackendGenerationForConfig(
     || owner.sessionName !== name
     || owner.state !== 'persisted'
     || owner.token !== expectedGeneration
+    || owner.activeLeases > 0
   ) return false
   owner.token = randomUUID()
   return true
@@ -2095,6 +2102,57 @@ function listAllSessions(ctx: RouteContext): Session[] {
     if (sess) out.push(sess)
   }
   return out
+}
+
+/**
+ * Bind provider-neutral recipient resolution to the real managed-session
+ * lifecycle. The lifecycle lease is the race boundary: stop, start, and delete
+ * all refuse while the definitive tmux probe and ledger acceptance are in
+ * flight, so a durable recipient snapshot cannot describe a session that
+ * crossed an incarnation boundary during acceptance.
+ */
+export function acceptForManagedSessionRecipients(
+  ctx: RouteContext,
+  ledger: Pick<DeliveryLedger, 'accept'>,
+  request: LiveDeliveryRequest,
+  options: {
+    probeProcess?: (sessionId: string) => Promise<'alive' | 'dead'>
+  } = {},
+): Promise<LiveDeliveryResult> {
+  const cfg = ctx.sessionConfig
+  if (!cfg) {
+    return Promise.resolve({
+      ok: false,
+      error: {
+        code: 'session-config-unavailable',
+        subject: request.destination.subject,
+      },
+    })
+  }
+  const registry = ctx.providerRegistry ?? defaultProviderRegistry
+  return acceptForLiveRecipients(request, {
+    listSessions: () => listAllSessions(ctx),
+    readSession: sessionId => getSession(cfg.dirs.sessions, sessionId),
+    isDeleting: sessionId =>
+      existsSync(join(cfg.dirs.sessions, sessionId, '.deleting')),
+    graveyardSessionNames: () =>
+      ctx.docStore.getAllTombstones().map(tombstone => tombstone.sessionName),
+    acquireLease: sessionId =>
+      acquirePersistedSessionBackendLeaseForConfig(cfg, sessionId),
+    leaseIsCurrent: (sessionId, token) =>
+      persistedSessionBackendGenerationForConfig(cfg, sessionId) === token,
+    probeProcess: options.probeProcess ?? (async sessionId => {
+      const state = await tmuxBackend.getTmuxSessionState(cfg, sessionId)
+      return state === 'exists' ? 'alive' : 'dead'
+    }),
+    providerIdFor: session => {
+      const template = session.cliTemplate
+        ? cfg.cliTemplates.find(candidate => candidate.id === session.cliTemplate)
+        : undefined
+      return registry.resolveSession(session, template).provider.id
+    },
+    accept: input => ledger.accept(input),
+  })
 }
 
 /**
