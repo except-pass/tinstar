@@ -119,6 +119,26 @@ describe('session-scoped tmux targets', () => {
       .rejects.toThrow('tmux timed out')
   })
 
+  it.each([
+    ['empty', 'TINSTAR_AGENT_INCARNATION=\n'],
+    ['multiline', 'TINSTAR_AGENT_INCARNATION=launch-one\nunexpected\n'],
+  ])('rejects a %s managed launch token instead of treating it as legacy', async (
+    _label,
+    environmentOutput,
+  ) => {
+    execFileMock.mockImplementation(async (file: string, args: string[]) => {
+      if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
+      if (args[0] === 'show-environment') {
+        return { stdout: environmentOutput, stderr: '' }
+      }
+      return { stdout: '4242\n', stderr: '' }
+    })
+
+    await expect(getTmuxAgentIdentity(config, 'parent'))
+      .rejects.toThrow('returned an invalid TINSTAR_AGENT_INCARNATION value')
+    expect(execFileMock.mock.calls.some(([file]) => file === 'ps')).toBe(false)
+  })
+
   it('uses process birth for legacy sessions whose launch token is absent', async () => {
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
       if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
@@ -139,6 +159,7 @@ describe('session-scoped tmux targets', () => {
   })
 
   it('leaves a live tmux agent unchanged on a redundant start', async () => {
+    const ensureTtyd = vi.fn(async () => 8383)
     execFileMock.mockImplementation(async (file: string, args: string[]) => {
       if (file === 'pgrep') return { stdout: '5252\n', stderr: '' }
       if (file === 'ps') {
@@ -163,12 +184,20 @@ describe('session-scoped tmux targets', () => {
       secrets: {},
       port: 6123,
       provider: {} as never,
-    })).resolves.toEqual({ port: 6123, ttydPid: 7373 })
-    expect(execFileMock).not.toHaveBeenCalledWith(
-      'tmux',
-      expect.arrayContaining(['set-environment']),
-      expect.anything(),
-    )
+    }, {
+      startTtyd: ensureTtyd,
+    })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
+    expect(ensureTtyd).toHaveBeenCalledWith({
+      tmuxName: 'tinstar-parent',
+      port: 6123,
+      sessionName: 'parent',
+    })
+    const mutatingTmuxCalls = execFileMock.mock.calls.filter((call) => {
+      const [file, args] = call as [string, string[]]
+      return file === 'tmux'
+        && (args[0] === 'set-environment' || args[0] === 'send-keys')
+    })
+    expect(mutatingTmuxCalls).toEqual([])
   })
 
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {

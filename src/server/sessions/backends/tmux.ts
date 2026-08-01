@@ -862,6 +862,12 @@ export async function createTmuxSession(
   return { port: opts.port, ttydPid }
 }
 
+interface StartTmuxSessionDeps {
+  startTtyd: typeof startTtyd
+}
+
+const startTmuxSessionDeps: StartTmuxSessionDeps = { startTtyd }
+
 export async function startTmuxSession(
   config: TinstarConfig,
   opts: {
@@ -873,6 +879,7 @@ export async function startTmuxSession(
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
+  deps: StartTmuxSessionDeps = startTmuxSessionDeps,
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const provider = opts.provider ?? defaultProviderRegistry.resolveSession(
     opts.session,
@@ -887,11 +894,17 @@ export async function startTmuxSession(
 
   // Retrying /start against a live child is idempotent: do not rotate the
   // durable delivery incarnation or inject a second CLI into the same terminal.
+  // Re-establish the exact-target terminal surface because the prior ttyd may
+  // have exited independently while the agent survived.
   if (await getTmuxAgentIdentity(config, opts.session.name) !== null) {
+    const ttydPid = await deps.startTtyd({
+      tmuxName,
+      port: opts.port,
+      sessionName: opts.session.name,
+    })
     return {
       port: opts.port,
-      ttydPid: opts.session.ttydPid
-        ?? managedTtyd.get(opts.session.name)?.child.pid,
+      ttydPid,
     }
   }
 
@@ -969,7 +982,11 @@ export async function startTmuxSession(
   }
 
   // Restart ttyd
-  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  const ttydPid = await deps.startTtyd({
+    tmuxName,
+    port: opts.port,
+    sessionName: opts.session.name,
+  })
   return { port: opts.port, ttydPid }
 }
 
@@ -1153,6 +1170,11 @@ export async function getTmuxAgentIdentity(
       )
     }
     launchToken = environmentLine.slice(prefix.length)
+    if (!launchToken || launchToken.includes('\n') || launchToken.includes('\r')) {
+      throw new Error(
+        `tmux returned an invalid ${AGENT_INCARNATION_ENV} value for ${tmuxName}`,
+      )
+    }
   } catch (error) {
     const failure = error as {
       code?: string | number
