@@ -158,7 +158,6 @@ export interface RefreshWiringInput {
   cfg: TinstarConfig
   docStore: DocumentStore
   service: SurfaceService
-  terminalStops?: RefreshWorkerTerminalStops
   /** Re-run the source reconciler for one run and await it — the barrier's
    *  re-observation. */
   reobserveRun: (runId: string) => Promise<void>
@@ -183,11 +182,13 @@ export function buildRefreshWorkerTerminalStops(
   }
 }
 
-/** Build the coordinator with the real host effects behind it. */
-export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefreshCoordinator {
+/** Build the coordinator's real host effects; exported as a typed wiring seam. */
+export function buildRefreshCoordinatorDeps(
+  input: RefreshWiringInput,
+): RefreshCoordinatorDeps {
   const { cfg, docStore, service, reobserveRun } = input
   const jobs = SurfaceRefreshJobStore.open(cfg.dirs.root)
-  const terminalStops = input.terminalStops ?? buildRefreshWorkerTerminalStops()
+  const terminalStops = buildRefreshWorkerTerminalStops()
   // A broken port/cap config degrades the engine to owner delivery rather than
   // stopping it: freshness still tracks, jobs still queue, and a live owner still
   // gets the work — only the background fleet is withheld, which is the part the
@@ -322,7 +323,14 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
 
   try { mkdirSync(jobs.stagingDir, { recursive: true }) } catch { /* reported by the store */ }
   if (problem) log.warn('refresh', `background refresh workers disabled — ${problem}`)
-  return new SurfaceRefreshCoordinator(deps)
+  return deps
+}
+
+/** Build the coordinator with the real host effects behind it. */
+export function buildRefreshCoordinator(
+  input: RefreshWiringInput,
+): SurfaceRefreshCoordinator {
+  return new SurfaceRefreshCoordinator(buildRefreshCoordinatorDeps(input))
 }
 
 /**

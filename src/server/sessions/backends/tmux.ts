@@ -1176,7 +1176,6 @@ export type TtydStartInterruptionStage =
   | 'settlement'
 
 export type TtydStartCancellationReason =
-  | 'terminal ownership cleared'
   | 'session stop requested'
   | 'session deletion requested'
   | 'reattach inconclusive-surface compensation'
@@ -1214,6 +1213,20 @@ export class TtydStartCancelledError extends Error {
   ) {
     super(`ttyd start for ${sessionName} was cancelled at ${stage}`, options)
     this.name = 'TtydStartCancelledError'
+  }
+}
+
+export class TtydStartCancellationReceiptError extends Error {
+  constructor(
+    sessionName: string,
+    /** Original interruption kept non-causal so supersession cannot be inferred. */
+    readonly interrupted: unknown,
+  ) {
+    super(
+      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
+        + (interrupted instanceof Error ? `: ${interrupted.message}` : ''),
+    )
+    this.name = 'TtydStartCancellationReceiptError'
   }
 }
 
@@ -1677,13 +1690,17 @@ function enqueueTtydStart(
           )
       if (!replacementPending) {
         if (superseded) {
+          const cancellationReason = ttydStartCancellationReasons.get(startToken)
+          if (!cancellationReason) {
+            throw new TtydStartCancellationReceiptError(
+              opts.sessionName,
+              err,
+            )
+          }
           throw new TtydStartCancelledError(
             opts.sessionName,
             superseded.stage,
-            // Defensive fallback: every in-tree invalidation stamps all
-            // pending tokens before clearing ownership.
-            ttydStartCancellationReasons.get(startToken)
-              ?? 'terminal ownership cleared',
+            cancellationReason,
             err,
             combinedFailure ? { cause: combinedFailure } : undefined,
           )

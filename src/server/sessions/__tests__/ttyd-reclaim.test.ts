@@ -15,6 +15,7 @@ import {
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
+  TtydStartCancellationReceiptError,
   TtydStartCancelledError,
   TtydStartSupersededError,
   TtydIdentityInspectionError,
@@ -381,7 +382,7 @@ describe('fenced ttyd start attempts', () => {
 
   afterEach(() => {
     stopManagedTtyd(opts.sessionName, {
-      cancellationReason: 'terminal ownership cleared',
+      cancellationReason: 'session stop requested',
     })
   })
 
@@ -411,6 +412,16 @@ describe('fenced ttyd start attempts', () => {
     expect(cancellation.cause).toBeUndefined()
     expect(cancellation.reason).toBe('session stop requested')
     expect(cancellation.interrupted).toBe(interrupted)
+
+    const missingReceipt = new TtydStartCancellationReceiptError(
+      opts.sessionName,
+      interrupted,
+    )
+    expect(findTtydStartSupersededError(missingReceipt)).toBeNull()
+    expect(findTtydStartCancelledError(missingReceipt)).toBeNull()
+    expect(missingReceipt.cause).toBeUndefined()
+    expect(missingReceipt.interrupted).toBe(interrupted)
+    expect(missingReceipt.message).toContain(interrupted.message)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {

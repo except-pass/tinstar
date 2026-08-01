@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  buildRefreshCoordinator, buildRefreshWorkerTerminalStops,
+  buildRefreshCoordinatorDeps, buildRefreshWorkerTerminalStops,
   isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult,
   refreshDispatchPrompt, retireRefreshWorker,
 } from '../refresh-wiring'
@@ -211,8 +211,6 @@ describe('buildRefreshWorkerTerminalStops', () => {
         refreshCount: 8,
       },
     }
-    const compensateLaunch = vi.fn()
-    const retire = vi.fn()
     const docStore = {
       getAllSurfaces: () => [],
       upsertRun: vi.fn(() => {
@@ -220,18 +218,18 @@ describe('buildRefreshWorkerTerminalStops', () => {
       }),
       deleteRun: vi.fn(),
     }
-    const coordinator = buildRefreshCoordinator({
+    const stopManagedTtyd = vi.spyOn(tmuxBackend, 'stopManagedTtyd')
+      .mockImplementation(() => undefined)
+    const deps = buildRefreshCoordinatorDeps({
       cfg,
       docStore: docStore as unknown as Parameters<
-        typeof buildRefreshCoordinator
+        typeof buildRefreshCoordinatorDeps
       >[0]['docStore'],
-      service: {} as Parameters<typeof buildRefreshCoordinator>[0]['service'],
-      terminalStops: { compensateLaunch, retire },
+      service: {} as Parameters<
+        typeof buildRefreshCoordinatorDeps
+      >[0]['service'],
       reobserveRun: async () => undefined,
     })
-    const deps = (coordinator as unknown as {
-      deps: RefreshCoordinatorDeps
-    }).deps
     vi.spyOn(tmuxBackend, 'findPort').mockResolvedValue(19_941)
     vi.spyOn(tmuxBackend, 'createTmuxSession')
       .mockResolvedValue({ port: 19_941, ttydPid: 4242 })
@@ -255,10 +253,18 @@ describe('buildRefreshWorkerTerminalStops', () => {
         ok: false,
         message: expect.stringContaining('run projection failed'),
       })
-      expect(compensateLaunch).toHaveBeenCalledWith('refresh-wired-launch')
+      expect(stopManagedTtyd).toHaveBeenNthCalledWith(
+        1,
+        'refresh-wired-launch',
+        { cancellationReason: 'surface refresh launch compensation' },
+      )
 
       await deps.retireWorker('refresh-retired')
-      expect(retire).toHaveBeenCalledWith('refresh-retired')
+      expect(stopManagedTtyd).toHaveBeenNthCalledWith(
+        2,
+        'refresh-retired',
+        { cancellationReason: 'surface refresh retirement' },
+      )
     } finally {
       vi.restoreAllMocks()
       rmSync(root, { recursive: true, force: true })
