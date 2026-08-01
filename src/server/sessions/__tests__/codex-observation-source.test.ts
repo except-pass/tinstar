@@ -225,4 +225,23 @@ describe('CodexRolloutObservationSource', () => {
     expect(afterReplacement).toHaveLength(1)
     expect(afterReplacement[0]?.sessionUsage?.cumulativeTokens?.total).toBe(9_000)
   })
+
+  it('discards an oversized partial record and resumes at the next newline', () => {
+    const source = new CodexRolloutObservationSource()
+    const path = join(scratch, 'rollout.jsonl')
+    writeFileSync(
+      path,
+      `{"type":"response_item","payload":"${'x'.repeat(1_100_000)}`,
+    )
+
+    expect(source.read('session-a', path)).toEqual([])
+    appendFileSync(
+      path,
+      `"}\n${line(tokenCountRecord('2026-08-01T12:02:00.000Z', 10_000))}`,
+    )
+
+    const events = source.read('session-a', path)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.sessionUsage?.cumulativeTokens?.total).toBe(10_000)
+  })
 })

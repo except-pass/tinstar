@@ -222,6 +222,8 @@ interface CodexFileCursor {
   offset: number
   /** Small fingerprint of bytes immediately before `offset`. */
   anchor: string
+  /** The prior read crossed the safe record-size bound before finding a newline. */
+  discardingOversizedLine: boolean
 }
 
 interface CodexObservationSessionState {
@@ -231,6 +233,7 @@ interface CodexObservationSessionState {
 }
 
 const MAX_SEEN_OBSERVATION_IDS = 4_096
+const MAX_OBSERVATION_RECORD_BYTES = 1024 * 1024
 
 function asRecord(value: unknown): UnknownRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -471,14 +474,24 @@ export class CodexRolloutObservationSource {
         && previous.device === stats.dev
         && previous.inode === stats.ino
       let start = sameFile ? previous.offset : 0
-      if (stats.size < start) start = 0
-      if (sameFile && start > 0 && readAnchor(fd, start) !== previous.anchor) start = 0
+      let continuingSameFile = sameFile
+      if (stats.size < start) {
+        start = 0
+        continuingSameFile = false
+      }
+      if (sameFile && start > 0 && readAnchor(fd, start) !== previous.anchor) {
+        start = 0
+        continuingSameFile = false
+      }
 
       const events: CodexObservationEvent[] = []
       const emittedIds = new Set<string>()
       const chunkSize = 256 * 1024
       const buffer = Buffer.alloc(chunkSize)
-      let pending = Buffer.alloc(0)
+      let pendingChunks: Buffer[] = []
+      let pendingBytes = 0
+      let discardingOversizedLine = continuingSameFile
+        && (previous?.discardingOversizedLine ?? false)
       let position = start
 
       while (position < stats.size) {
@@ -488,28 +501,60 @@ export class CodexRolloutObservationSource {
         position += bytesRead
 
         const chunk = buffer.subarray(0, bytesRead)
-        const bytes = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk
-        let lineStart = 0
-        for (let index = 0; index < bytes.length; index += 1) {
-          if (bytes[index] !== 0x0a) continue
-          const rawLine = bytes.subarray(lineStart, index).toString('utf-8')
-          lineStart = index + 1
+        let cursor = 0
+        while (cursor < chunk.length) {
+          const newline = chunk.indexOf(0x0a, cursor)
+          const segmentEnd = newline === -1 ? chunk.length : newline
+          const segment = chunk.subarray(cursor, segmentEnd)
+
+          if (discardingOversizedLine) {
+            if (newline === -1) break
+            discardingOversizedLine = false
+            cursor = newline + 1
+            continue
+          }
+
+          if (pendingBytes + segment.length > MAX_OBSERVATION_RECORD_BYTES) {
+            pendingChunks = []
+            pendingBytes = 0
+            if (newline === -1) discardingOversizedLine = true
+            cursor = newline === -1 ? chunk.length : newline + 1
+            continue
+          }
+
+          if (newline === -1) {
+            if (segment.length > 0) {
+              pendingChunks.push(Buffer.from(segment))
+              pendingBytes += segment.length
+            }
+            break
+          }
+
+          const rawLine = pendingBytes === 0
+            ? segment.toString('utf-8')
+            : Buffer.concat(
+                [...pendingChunks, segment],
+                pendingBytes + segment.length,
+              ).toString('utf-8')
+          pendingChunks = []
+          pendingBytes = 0
+          cursor = newline + 1
           if (!rawLine.trim()) continue
           const event = parseCodexObservationLine(rawLine)
           if (!event || state.seenIds.has(event.id) || emittedIds.has(event.id)) continue
           emittedIds.add(event.id)
           events.push(event)
         }
-        pending = Buffer.from(bytes.subarray(lineStart))
       }
 
-      const offset = position - pending.length
+      const offset = discardingOversizedLine ? position : position - pendingBytes
       state.cursor = {
         path: transcriptPath,
         device: stats.dev,
         inode: stats.ino,
         offset,
         anchor: readAnchor(fd, offset),
+        discardingOversizedLine,
       }
       for (const id of emittedIds) {
         state.seenIds.add(id)
@@ -527,19 +572,6 @@ export class CodexRolloutObservationSource {
   reset(sessionName: string): void {
     this.sessions.delete(sessionName)
   }
-}
-
-const codexObservationSource = new CodexRolloutObservationSource()
-
-export function readCodexObservationEvents(
-  sessionName: string,
-  transcriptPath: string,
-): CodexObservationEvent[] {
-  return codexObservationSource.read(sessionName, transcriptPath)
-}
-
-export function resetCodexObservationSource(sessionName: string): void {
-  codexObservationSource.reset(sessionName)
 }
 
 // --- Recap entries ---
