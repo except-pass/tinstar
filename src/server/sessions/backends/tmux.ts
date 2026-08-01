@@ -8,6 +8,7 @@ import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-tru
 import { serializeByKey } from './serializeByKey'
 import {
   describeTtydFailure,
+  type NonCausalInterruptionError,
   TTYD_NON_CAUSAL_INTERRUPTION,
 } from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
@@ -1203,7 +1204,12 @@ export class TtydStartSupersededError extends Error {
   }
 }
 
-export class TtydStartCancelledError extends Error {
+export class TtydStartCancelledError
+  extends Error
+  implements NonCausalInterruptionError {
+  readonly diagnosticSummary: string
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION] = true as const
+
   constructor(
     sessionName: string,
     /** Boundary stage inherited from the supersession this cancellation replaces. */
@@ -1215,14 +1221,23 @@ export class TtydStartCancelledError extends Error {
     /** Reserved for an additional failure while cleaning up the interrupted start. */
     options?: ErrorOptions,
   ) {
-    super(`ttyd start for ${sessionName} was cancelled at ${stage}`, options)
+    const summary =
+      `ttyd start for ${sessionName} was cancelled at ${stage}`
+      + `; cancellation reason: ${reason}`
+    super(
+      summary + `; interrupted failure: ${describeTtydFailure(interrupted)}`,
+      options,
+    )
     this.name = 'TtydStartCancelledError'
+    this.diagnosticSummary = summary
   }
 }
 
-export class TtydStartCancellationReceiptError extends Error {
+export class TtydStartCancellationReceiptError
+  extends Error
+  implements NonCausalInterruptionError {
   readonly diagnosticSummary: string
-  readonly [TTYD_NON_CAUSAL_INTERRUPTION]: unknown
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION] = true as const
 
   constructor(
     sessionName: string,
@@ -1234,12 +1249,11 @@ export class TtydStartCancellationReceiptError extends Error {
     const summary =
       `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
     super(
-      summary + (interrupted instanceof Error ? `: ${interrupted.message}` : ''),
+      summary + `; interrupted failure: ${describeTtydFailure(interrupted)}`,
       options,
     )
     this.name = 'TtydStartCancellationReceiptError'
     this.diagnosticSummary = summary
-    this[TTYD_NON_CAUSAL_INTERRUPTION] = interrupted
   }
 }
 

@@ -415,6 +415,11 @@ describe('fenced ttyd start attempts', () => {
     expect(cancellation.cause).toBeUndefined()
     expect(cancellation.reason).toBe('session stop requested')
     expect(cancellation.interrupted).toBe(interrupted)
+    expect(cancellation.message).toContain(
+      '; cancellation reason: session stop requested',
+    )
+    expect(cancellation.message).toContain(interrupted.message)
+    expect(cancellation.message).toContain(diagnostic.message)
 
     const missingReceipt = new TtydStartCancellationReceiptError(
       opts.sessionName,
@@ -426,6 +431,7 @@ describe('fenced ttyd start attempts', () => {
     expect(missingReceipt.cause).toBeUndefined()
     expect(missingReceipt.interrupted).toBe(interrupted)
     expect(missingReceipt.message).toContain(interrupted.message)
+    expect(missingReceipt.message).toContain(diagnostic.message)
   })
 
   it('reports a preflight supersession before inspecting or mutating', async () => {

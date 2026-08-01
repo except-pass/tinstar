@@ -5,8 +5,6 @@ import { join } from 'node:path'
 import {
   afterBootDeletionCleanups,
   createSessionTtydReattachSingleFlight,
-  describeTtydFailure,
-  describeTtydReattachFailure,
   getLiveSessionForBoot,
   reconcileDeletingSessionOnBoot,
   reattachVerifiedSessionTtydAttempt,
@@ -35,7 +33,6 @@ import {
 import {
   findTtydStartSupersededError,
   TtydIdentityInspectionError,
-  TtydStartCancellationReceiptError,
   TtydStartCancelledError,
   TtydStartSupersededError,
 } from '../sessions/backends/tmux'
@@ -94,109 +91,6 @@ describe('sessionNatsProjection', () => {
       port: null,
       agentIcon: 'old-icon',
     })
-  })
-})
-
-describe('describeTtydFailure', () => {
-  const cyclic = new Error('cycle')
-  Object.defineProperty(cyclic, 'cause', { value: cyclic })
-  const shared = new Error('shared')
-
-  it.each([
-    ['non-error', 'plain failure', 'plain failure'],
-    [
-      'cause chain',
-      new Error('outer', { cause: new Error('inner', { cause: 'root' }) }),
-      'outer; caused by: inner; caused by: root',
-    ],
-    [
-      'aggregate',
-      new AggregateError(
-        [new Error('left'), new Error('right', { cause: 'detail' })],
-        'combined',
-      ),
-      'combined; errors: [left | right; caused by: detail]',
-    ],
-    [
-      'shared-node diamond',
-      new AggregateError(
-        [shared, new Error('branch', { cause: shared })],
-        'diamond',
-      ),
-      'diamond; errors: [shared | branch; caused by: shared]',
-    ],
-    ['cause cycle', cyclic, 'cycle; caused by: [cycle: cycle]'],
-  ])('renders a %s diagnostic', (_case, failure, expected) => {
-    expect(describeTtydFailure(failure)).toBe(expected)
-  })
-
-  it('adds the non-causal interruption only when cleanup did not carry it', () => {
-    const interrupted = new TtydStartSupersededError(
-      'diagnostic-session',
-      'post-spawn',
-    )
-    const cancellation = new TtydStartCancelledError(
-      'diagnostic-session',
-      'post-spawn',
-      'session stop requested',
-      interrupted,
-    )
-
-    expect(describeTtydReattachFailure(cancellation)).toContain(
-      '; interrupted failure: ttyd start for diagnostic-session '
-        + 'was superseded at post-spawn',
-    )
-
-    const withCleanup = new TtydStartCancelledError(
-      'diagnostic-session',
-      'post-spawn',
-      'session stop requested',
-      interrupted,
-      {
-        cause: new AggregateError(
-          [interrupted, new Error('cleanup failed')],
-          'cleanup aggregate',
-        ),
-      },
-    )
-    const described = describeTtydReattachFailure(withCleanup)
-    expect(described).toContain(
-      'cleanup aggregate; errors: [ttyd start for diagnostic-session '
-        + 'was superseded at post-spawn | cleanup failed]',
-    )
-    expect(described).not.toContain('interrupted failure:')
-
-    const missingReceipt = new TtydStartCancellationReceiptError(
-      'diagnostic-session',
-      interrupted,
-    )
-    const interruptionMessage = 'ttyd start for diagnostic-session '
-      + 'was superseded at post-spawn'
-    const missingReceiptDescription = describeTtydReattachFailure(
-      missingReceipt,
-    )
-    expect(missingReceiptDescription).toContain(
-      `; interrupted failure: ${interruptionMessage}`,
-    )
-    expect(missingReceiptDescription.split(interruptionMessage)).toHaveLength(2)
-
-    const receiptWithCleanup = new TtydStartCancellationReceiptError(
-      'diagnostic-session',
-      interrupted,
-      {
-        cause: new AggregateError(
-          [interrupted, new Error('receipt cleanup failed')],
-          'receipt cleanup aggregate',
-        ),
-      },
-    )
-    const receiptDescription = describeTtydReattachFailure(receiptWithCleanup)
-    expect(receiptDescription).toContain(
-      'receipt cleanup aggregate; errors: [ttyd start for diagnostic-session '
-        + 'was superseded at post-spawn | receipt cleanup failed]',
-    )
-    expect(receiptDescription).not.toContain('interrupted failure:')
-    expect(receiptDescription.split(interruptionMessage)).toHaveLength(2)
   })
 })
 
@@ -801,7 +695,8 @@ describe('getLiveSessionForBoot', () => {
       'reattach',
       expect.stringContaining(
         'provider adapter failed; caused by: ttyd start for '
-          + 'cancelled-reattach was cancelled at post-spawn; caused by: '
+          + 'cancelled-reattach was cancelled at post-spawn; '
+          + 'cancellation reason: session deletion requested; caused by: '
           + 'stale ttyd start cleanup failed for cancelled-reattach; errors: '
           + '[ttyd start for cancelled-reattach was superseded at post-spawn '
           + `| ${cleanupFailure.message}]`,

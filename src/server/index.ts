@@ -63,7 +63,6 @@ import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
 import {
   describeTtydFailure,
-  ttydFailureContains,
 } from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
@@ -339,20 +338,6 @@ const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
   onTtydRestart: tmuxBackend.onTtydRestart,
 }
 
-export { describeTtydFailure }
-
-export function describeTtydReattachFailure(failure: unknown): string {
-  const cancelled = tmuxBackend.findTtydStartCancelledError(failure)
-  if (!cancelled) return describeTtydFailure(failure)
-  const interruption = cancelled.interrupted
-  const interrupted = ttydFailureContains(failure, interruption)
-    ? ''
-    : `; interrupted failure: ${describeTtydFailure(interruption)}`
-  return `${describeTtydFailure(failure)}; cancellation reason: `
-    + cancelled.reason
-    + interrupted
-}
-
 /**
  * Restore one strictly observed live session's terminal surface.
  *
@@ -625,7 +610,7 @@ export async function reattachVerifiedSessionTtydAttempt(
     }
     log.warn(
       'reattach',
-      `${name}: failed to reattach: ${describeTtydReattachFailure(err)}`,
+      `${name}: failed to reattach: ${describeTtydFailure(err)}`,
     )
     return false
   } finally {

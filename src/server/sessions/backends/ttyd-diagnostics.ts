@@ -3,17 +3,19 @@ export const TTYD_NON_CAUSAL_INTERRUPTION = Symbol(
   'tinstar.ttyd.non-causal-interruption',
 )
 
-interface NonCausalInterruptionError extends Error {
-  diagnosticSummary: string
-  [TTYD_NON_CAUSAL_INTERRUPTION]: unknown
+export interface NonCausalInterruptionError extends Error {
+  readonly diagnosticSummary: string
+  readonly interrupted: unknown
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION]: true
 }
 
 function hasNonCausalInterruption(
   failure: Error,
 ): failure is NonCausalInterruptionError {
-  return TTYD_NON_CAUSAL_INTERRUPTION in failure
-    && typeof (failure as Partial<NonCausalInterruptionError>)
-      .diagnosticSummary === 'string'
+  const candidate = failure as Partial<NonCausalInterruptionError>
+  return candidate[TTYD_NON_CAUSAL_INTERRUPTION] === true
+    && typeof candidate.diagnosticSummary === 'string'
+    && 'interrupted' in failure
 }
 
 export function ttydFailureContains(
@@ -48,11 +50,11 @@ export function describeTtydFailure(
     const interrupted = hasNonCausalInterruption(failure)
       && !ttydFailureContains(
         failure.cause,
-        failure[TTYD_NON_CAUSAL_INTERRUPTION],
+        failure.interrupted,
       )
       ? '; interrupted failure: '
         + describeTtydFailure(
-          failure[TTYD_NON_CAUSAL_INTERRUPTION],
+          failure.interrupted,
           path,
         )
       : ''
