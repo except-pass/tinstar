@@ -117,7 +117,10 @@ import {
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
-import type { DeliveryLedger } from '../messaging/delivery-ledger'
+import {
+  validateDeliveryAcceptIntent,
+  type DeliveryLedger,
+} from '../messaging/delivery-ledger'
 import {
   acceptForLiveRecipients,
   type LiveDeliveryRequest,
@@ -1239,7 +1242,6 @@ export function invalidatePersistedSessionBackendGenerationForConfig(
     || owner.sessionName !== name
     || owner.state !== 'persisted'
     || owner.token !== expectedGeneration
-    || owner.activeLeases > 0
   ) return false
   owner.token = randomUUID()
   return true
@@ -2113,12 +2115,22 @@ function listAllSessions(ctx: RouteContext): Session[] {
  */
 export function acceptForManagedSessionRecipients(
   ctx: RouteContext,
-  ledger: Pick<DeliveryLedger, 'accept'>,
+  ledger: Pick<DeliveryLedger, 'accept' | 'replayAcceptance'>,
   request: LiveDeliveryRequest,
   options: {
-    probeProcess?: (sessionId: string) => Promise<'alive' | 'dead'>
+    observeProcess?: (sessionId: string) => Promise<
+      | { state: 'alive'; incarnation: string }
+      | { state: 'dead' }
+    >
   } = {},
 ): Promise<LiveDeliveryResult> {
+  const requestProblem = validateDeliveryAcceptIntent(request)
+  if (requestProblem) {
+    return Promise.resolve({
+      ok: false,
+      error: { code: 'invalid-request', detail: requestProblem },
+    })
+  }
   const cfg = ctx.sessionConfig
   if (!cfg) {
     return Promise.resolve({
@@ -2141,9 +2153,11 @@ export function acceptForManagedSessionRecipients(
       acquirePersistedSessionBackendLeaseForConfig(cfg, sessionId),
     leaseIsCurrent: (sessionId, token) =>
       persistedSessionBackendGenerationForConfig(cfg, sessionId) === token,
-    probeProcess: options.probeProcess ?? (async sessionId => {
-      const state = await tmuxBackend.getTmuxSessionState(cfg, sessionId)
-      return state === 'exists' ? 'alive' : 'dead'
+    observeProcess: options.observeProcess ?? (async sessionId => {
+      const incarnation = await tmuxBackend.getTmuxSessionIdentity(cfg, sessionId)
+      return incarnation === null
+        ? { state: 'dead' }
+        : { state: 'alive', incarnation }
     }),
     providerIdFor: session => {
       const template = session.cliTemplate
@@ -2151,6 +2165,7 @@ export function acceptForManagedSessionRecipients(
         : undefined
       return registry.resolveSession(session, template).provider.id
     },
+    replayAcceptance: input => ledger.replayAcceptance(input),
     accept: input => ledger.accept(input),
   })
 }

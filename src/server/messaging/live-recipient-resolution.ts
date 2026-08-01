@@ -2,12 +2,14 @@ import type { Session } from '../sessions/session'
 import { parseSubject, type ParsedSubject } from '../nats/subjects'
 import { sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import type {
+  DeliveryAcceptIntent,
   DeliveryAcceptInput,
   DeliveryAcceptResult,
   DeliveryLedgerRecipient,
 } from './delivery-ledger'
+import { validateDeliveryAcceptIntent } from './delivery-ledger'
 
-export type LiveDeliveryRequest = Omit<DeliveryAcceptInput, 'recipients'>
+export type LiveDeliveryRequest = DeliveryAcceptIntent
 
 export type RecipientExclusionReason =
   | 'missing'
@@ -43,9 +45,15 @@ export interface LiveDeliveryDependencies {
   /** Reconciliation may invalidate a generation when the process dies. */
   leaseIsCurrent: (sessionId: string, token: string) => boolean
   /** Definitive managed-process observation made while the lease is held. */
-  probeProcess: (sessionId: string) => Promise<'alive' | 'dead'>
+  observeProcess: (sessionId: string) => Promise<
+    | { state: 'alive'; incarnation: string }
+    | { state: 'dead' }
+  >
   /** Provider identity comes from the open registry, never a shared provider union. */
   providerIdFor: (session: Session) => string
+  replayAcceptance: (
+    input: DeliveryAcceptIntent,
+  ) => Promise<DeliveryAcceptResult | null>
   accept: (input: DeliveryAcceptInput) => Promise<DeliveryAcceptResult>
 }
 
@@ -63,6 +71,10 @@ export type LiveDeliveryResult =
   | {
     ok: false
     error:
+      | {
+        code: 'invalid-request'
+        detail: string
+      }
       | {
         code: 'invalid-destination'
         subject: string
@@ -172,10 +184,50 @@ export async function acceptForLiveRecipients(
   request: LiveDeliveryRequest,
   deps: LiveDeliveryDependencies,
 ): Promise<LiveDeliveryResult> {
+  const requestProblem = validateDeliveryAcceptIntent(request)
+  if (requestProblem) {
+    return { ok: false, error: { code: 'invalid-request', detail: requestProblem } }
+  }
   const subject = request.destination.subject
   const parsed = parseSubject(subject)
   if (!parsed) {
     return { ok: false, error: { code: 'invalid-destination', subject } }
+  }
+
+  let replay: DeliveryAcceptResult | null
+  try {
+    replay = await deps.replayAcceptance(request)
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: 'ledger-failed',
+        destinationKind: parsed.kind,
+        subject,
+        exclusions: [],
+        detail: error instanceof Error ? error.message : String(error),
+      },
+    }
+  }
+  if (replay) {
+    if (!replay.accepted) {
+      return {
+        ok: false,
+        error: {
+          code: 'ledger-rejected',
+          destinationKind: parsed.kind,
+          subject,
+          exclusions: [],
+          rejection: replay,
+        },
+      }
+    }
+    return {
+      ok: true,
+      destinationKind: parsed.kind,
+      exclusions: [],
+      acceptance: replay,
+    }
   }
 
   const discovered = destinationSessions(
@@ -254,14 +306,16 @@ export async function acceptForLiveRecipients(
         continue
       }
 
-      let processState: 'alive' | 'dead'
+      let processObservation:
+        | { state: 'alive'; incarnation: string }
+        | { state: 'dead' }
       try {
-        processState = await deps.probeProcess(sessionId)
+        processObservation = await deps.observeProcess(sessionId)
       } catch {
         exclusions.push({ sessionId, reason: 'liveness-check-failed' })
         continue
       }
-      if (processState === 'dead') {
+      if (processObservation.state === 'dead') {
         exclusions.push({ sessionId, reason: 'process-dead' })
         continue
       }
@@ -270,7 +324,7 @@ export async function acceptForLiveRecipients(
         continue
       }
 
-      if (!lease.token.trim()) {
+      if (!processObservation.incarnation.trim()) {
         exclusions.push({ sessionId, reason: 'identity-unavailable' })
         continue
       }
@@ -285,13 +339,22 @@ export async function acceptForLiveRecipients(
         exclusions.push({ sessionId, reason: 'provider-unavailable' })
         continue
       }
-      recipients.push({ providerId, sessionId, incarnation: lease.token })
+      recipients.push({
+        providerId,
+        sessionId,
+        incarnation: processObservation.incarnation,
+      })
     }
 
     sortExclusions(exclusions)
+    const leaseTokens = new Map(leased.map(({ sessionId, lease }) => [
+      sessionId,
+      lease.token,
+    ]))
     for (let index = recipients.length - 1; index >= 0; index--) {
       const recipient = recipients[index]!
-      if (deps.leaseIsCurrent(recipient.sessionId, recipient.incarnation)) continue
+      const leaseToken = leaseTokens.get(recipient.sessionId)
+      if (leaseToken && deps.leaseIsCurrent(recipient.sessionId, leaseToken)) continue
       recipients.splice(index, 1)
       exclusions.push({
         sessionId: recipient.sessionId,

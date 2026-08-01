@@ -79,7 +79,7 @@ function dependencies(
 ): LiveDeliveryDependencies {
   const byName = new Map(sessions.map(session => [session.name, session]))
   return {
-    listSessions: async () => sessions,
+    listSessions: vi.fn(async () => sessions),
     readSession: name => byName.get(name) ?? null,
     isDeleting: () => false,
     graveyardSessionNames: () => [],
@@ -87,8 +87,12 @@ function dependencies(
       ? { token: `${name}-generation`, release: () => {} }
       : null,
     leaseIsCurrent: () => true,
-    probeProcess: async () => 'alive',
+    observeProcess: async name => ({
+      state: 'alive',
+      incarnation: `${name}-process`,
+    }),
     providerIdFor: session => session.adapter ?? 'claude',
+    replayAcceptance: vi.fn(async () => null),
     accept: vi.fn(async input => ({
       accepted: true as const,
       replayed: false,
@@ -123,6 +127,56 @@ function dependencies(
 }
 
 describe('live delivery recipient resolution', () => {
+  it('rejects malformed runtime requests before dereferencing or resolving', async () => {
+    const deps = dependencies([])
+
+    await expect(acceptForLiveRecipients(
+      undefined as unknown as LiveDeliveryRequest,
+      deps,
+    )).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid-request', detail: 'request must be an object' },
+    })
+    await expect(acceptForLiveRecipients(
+      { requestId: 'broken' } as unknown as LiveDeliveryRequest,
+      deps,
+    )).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid-request' },
+    })
+    expect(deps.listSessions).not.toHaveBeenCalled()
+    expect(deps.replayAcceptance).not.toHaveBeenCalled()
+    expect(deps.accept).not.toHaveBeenCalled()
+  })
+
+  it('replays a durable acceptance before consulting the changed live set', async () => {
+    const deps = dependencies([])
+    const accepted = await deps.accept({
+      ...request(`${TASK}.agent-2`),
+      recipients: [{
+        providerId: 'claude',
+        sessionId: 'agent-2',
+        incarnation: 'agent-2-process',
+      }],
+    })
+    expect(accepted.accepted).toBe(true)
+    deps.listSessions = vi.fn(() => {
+      throw new Error('live resolution must not run for a replay')
+    })
+    deps.replayAcceptance = vi.fn(async () => accepted)
+    vi.mocked(deps.accept).mockClear()
+
+    await expect(acceptForLiveRecipients(
+      request(`${TASK}.agent-2`),
+      deps,
+    )).resolves.toMatchObject({
+      ok: true,
+      acceptance: { accepted: true },
+    })
+    expect(deps.listSessions).not.toHaveBeenCalled()
+    expect(deps.accept).not.toHaveBeenCalled()
+  })
+
   it('accepts a direct destination only for the named live subscriber', async () => {
     const target = managedSession('agent-2')
     const eavesdropper = managedSession('agent-3', 'running', [
@@ -147,7 +201,7 @@ describe('live delivery recipient resolution', () => {
       recipients: [{
         providerId: 'claude',
         sessionId: 'agent-2',
-        incarnation: 'agent-2-generation',
+        incarnation: 'agent-2-process',
       }],
     }))
   })
@@ -211,7 +265,7 @@ describe('live delivery recipient resolution', () => {
       isDeleting: () => true,
     }],
     ['process-dead', {
-      probeProcess: async () => 'dead' as const,
+      observeProcess: async () => ({ state: 'dead' as const }),
     }],
   ] as const)('rejects a direct recipient that is %s', async (reason, override) => {
     const deps = dependencies([managedSession('agent-2')], override)
@@ -238,7 +292,9 @@ describe('live delivery recipient resolution', () => {
       managedSession('other-task', 'running', ['tinstar.space.init.epic.other']),
     ]
     const deps = dependencies(sessions, {
-      probeProcess: async name => name === 'dead-agent' ? 'dead' : 'alive',
+      observeProcess: async name => name === 'dead-agent'
+        ? { state: 'dead' }
+        : { state: 'alive', incarnation: `${name}-process` },
     })
 
     const result = await acceptForLiveRecipients(request(TASK), deps)
@@ -256,12 +312,12 @@ describe('live delivery recipient resolution', () => {
         {
           providerId: 'claude',
           sessionId: 'claude-live',
-          incarnation: 'claude-live-generation',
+          incarnation: 'claude-live-process',
         },
         {
           providerId: 'codex',
           sessionId: 'codex-live',
-          incarnation: 'codex-live-generation',
+          incarnation: 'codex-live-process',
         },
       ],
     }))
@@ -292,7 +348,9 @@ describe('live delivery recipient resolution', () => {
       managedSession('stopped-agent', 'stopped'),
       managedSession('dead-agent'),
     ], {
-      probeProcess: async name => name === 'dead-agent' ? 'dead' : 'alive',
+      observeProcess: async name => name === 'dead-agent'
+        ? { state: 'dead' }
+        : { state: 'alive', incarnation: `${name}-process` },
     })
 
     await expect(acceptForLiveRecipients(request(TASK), deps)).resolves.toEqual({
@@ -322,11 +380,11 @@ describe('live delivery recipient resolution', () => {
         held = true
         return { token: 'generation-1', release: () => { held = false } }
       },
-      probeProcess: async () => {
+      observeProcess: async () => {
         expect(held).toBe(true)
         probeEntered()
         await probing
-        return 'alive'
+        return { state: 'alive', incarnation: 'agent-2-process' }
       },
       accept: vi.fn(async () => {
         expect(held).toBe(true)
@@ -397,7 +455,10 @@ describe('managed-session to durable-ledger integration', () => {
       ledger,
       request(`${TASK}.codex-live`, 'req-integrated'),
       {
-        probeProcess: async () => 'alive',
+        observeProcess: async () => ({
+          state: 'alive',
+          incarnation: 'codex-live-process',
+        }),
       },
     )
 
@@ -420,11 +481,58 @@ describe('managed-session to durable-ledger integration', () => {
     expect(persisted.deliveries[0].recipient).toEqual({
       providerId: 'codex',
       sessionId: 'codex-live',
-      incarnation: persistedSessionBackendGenerationForConfig(cfg, 'codex-live'),
+      incarnation: 'codex-live-process',
     })
+
+    // A Tinstar restart rebuilds in-memory lifecycle owners, but the surviving
+    // tmux process and the durable acceptance retain their identities.
+    resetSessionBackendOwnersForTests()
+    const reloadedLedger = DeliveryLedger.open({ dir: root, lockPath })
+    const observeProcess = vi.fn(async () => {
+      throw new Error('a durable retry must not re-resolve liveness')
+    })
+    const replayed = await acceptForManagedSessionRecipients(
+      {
+        sessionConfig: cfg,
+        providerRegistry: registry,
+        docStore: { getAllTombstones: () => [] },
+      } as unknown as RouteContext,
+      reloadedLedger,
+      request(`${TASK}.codex-live`, 'req-integrated'),
+      { observeProcess },
+    )
+    expect(replayed).toMatchObject({
+      ok: true,
+      acceptance: {
+        accepted: true,
+        replayed: true,
+        deliveries: [{
+          recipient: { incarnation: 'codex-live-process' },
+        }],
+      },
+    })
+    expect(observeProcess).not.toHaveBeenCalled()
   })
 
-  it('blocks reconciliation invalidation while ledger acceptance holds the lease', async () => {
+  it('validates malformed input even when session configuration is unavailable', async () => {
+    const ledger = {
+      accept: vi.fn(),
+      replayAcceptance: vi.fn(),
+    }
+
+    await expect(acceptForManagedSessionRecipients(
+      { sessionConfig: null } as unknown as RouteContext,
+      ledger,
+      undefined as unknown as LiveDeliveryRequest,
+    )).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid-request', detail: 'request must be an object' },
+    })
+    expect(ledger.accept).not.toHaveBeenCalled()
+    expect(ledger.replayAcceptance).not.toHaveBeenCalled()
+  })
+
+  it('allows dead-process reconciliation while preserving the probed process identity', async () => {
     const root = mkdtempSync(join(tmpdir(), 'live-recipient-generation-race-'))
     roots.push(root)
     const sessionsDir = join(root, 'sessions')
@@ -460,10 +568,13 @@ describe('managed-session to durable-ledger integration', () => {
         providerRegistry: createDefaultProviderRegistry(),
         docStore: { getAllTombstones: () => [] },
       } as unknown as RouteContext,
-      { accept },
+      { accept, replayAcceptance: async () => null },
       request(`${TASK}.generation-race`, 'req-generation-race'),
       {
-        probeProcess: async () => 'alive',
+        observeProcess: async () => ({
+          state: 'alive',
+          incarnation: 'generation-race-process',
+        }),
       },
     )
 
@@ -477,7 +588,7 @@ describe('managed-session to durable-ledger integration', () => {
       cfg,
       'generation-race',
       generation!,
-    )).toBe(false)
+    )).toBe(true)
     releaseAccept()
 
     await expect(resultPromise).resolves.toEqual({
@@ -492,11 +603,6 @@ describe('managed-session to durable-ledger integration', () => {
     })
     expect(accept).toHaveBeenCalledOnce()
     expect(persistedSessionBackendGenerationForConfig(cfg, 'generation-race'))
-      .toBe(generation)
-    expect(invalidatePersistedSessionBackendGenerationForConfig(
-      cfg,
-      'generation-race',
-      generation!,
-    )).toBe(true)
+      .not.toBe(generation)
   })
 })

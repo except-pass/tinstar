@@ -1,4 +1,5 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
@@ -1066,6 +1067,35 @@ export async function getTmuxSessionState(config: TinstarConfig, sessionName: st
   const tmuxName = tmuxSessionName(config, sessionName)
   const exists = await tmuxHasSessionStrict(tmuxName)
   return exists ? 'exists' : 'missing'
+}
+
+/**
+ * Stable identity for the currently running tmux backend. It survives a
+ * Tinstar restart because it comes from tmux, but changes when the tmux
+ * session/pane is replaced. The native tuple is hashed before it enters
+ * provider-neutral delivery records.
+ */
+export async function getTmuxSessionIdentity(
+  config: TinstarConfig,
+  sessionName: string,
+): Promise<string | null> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  try {
+    const { stdout } = await execFileAsync('tmux', [
+      'display-message',
+      '-p',
+      '-t',
+      exactTmuxPaneTarget(tmuxName),
+      '#{session_id}:#{session_created}:#{pane_id}:#{pane_pid}',
+    ])
+    const nativeIdentity = stdout.trim()
+    if (!nativeIdentity) throw new Error(`tmux returned an empty identity for ${tmuxName}`)
+    return createHash('sha256').update(nativeIdentity).digest('hex')
+  } catch (error) {
+    const failure = error as { stderr?: string | Buffer }
+    if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) return null
+    throw error
+  }
 }
 
 // --- ttyd management ---

@@ -8,6 +8,7 @@ vi.mock('node:util', async (orig) => {
 
 import {
   deleteTmuxSession,
+  getTmuxSessionIdentity,
   getTmuxSessionState,
   healthCheck,
   stopTmuxSession,
@@ -26,6 +27,30 @@ beforeEach(() => {
 })
 
 describe('session-scoped tmux targets', () => {
+  it('derives a restart-stable opaque identity from the exact tmux pane', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '$1:1785592800:%3:4242\n',
+      stderr: '',
+    })
+
+    const first = await getTmuxSessionIdentity(config, 'parent')
+    const second = await getTmuxSessionIdentity(config, 'parent')
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/)
+    expect(second).toBe(first)
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      [
+        'display-message',
+        '-p',
+        '-t',
+        '=tinstar-parent:',
+        '#{session_id}:#{session_created}:#{pane_id}:#{pane_pid}',
+      ],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+  })
+
   it('checks liveness by exact name so a live parent-hand does not make a missing parent look alive', async () => {
     await tmuxHasSession('tinstar-parent')
 

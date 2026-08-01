@@ -82,6 +82,8 @@ export interface DeliveryAcceptInput {
   recipients: readonly DeliveryLedgerRecipient[]
 }
 
+export type DeliveryAcceptIntent = Omit<DeliveryAcceptInput, 'recipients'>
+
 export type DeliveryState =
   | 'accepted'
   | 'pending'
@@ -685,18 +687,25 @@ function acceptanceReceipt(message: DeliveryMessage): DeliveryAcceptanceReceipt 
   }
 }
 
-function validateAcceptInput(input: DeliveryAcceptInput): string | null {
+export function validateDeliveryAcceptIntent(input: unknown): string | null {
   if (!input || typeof input !== 'object') return 'request must be an object'
-  if (!nonEmpty(input.requestId)) return 'requestId must not be empty'
-  if (!hasSessionRefFields(input.sender)) {
+  const candidate = input as Partial<DeliveryAcceptIntent>
+  if (!nonEmpty(candidate.requestId)) return 'requestId must not be empty'
+  if (!hasSessionRefFields(candidate.sender)) {
     return 'sender must name a session and incarnation'
   }
-  if (!input.destination || !nonEmpty(input.destination.subject)) {
+  if (!candidate.destination || !nonEmpty(candidate.destination.subject)) {
     return 'destination subject must not be empty'
   }
-  if (typeof input.text !== 'string' || input.text.length < 1) {
+  if (typeof candidate.text !== 'string' || candidate.text.length < 1) {
     return 'text must not be empty'
   }
+  return null
+}
+
+function validateAcceptInput(input: DeliveryAcceptInput): string | null {
+  const intentProblem = validateDeliveryAcceptIntent(input)
+  if (intentProblem) return intentProblem
   if (!Array.isArray(input.recipients) || input.recipients.length < 1) {
     return 'at least one recipient is required'
   }
@@ -872,6 +881,18 @@ function copyAcceptInput(input: DeliveryAcceptInput): DeliveryAcceptInput {
   }
 }
 
+function copyAcceptIntent(input: DeliveryAcceptIntent): DeliveryAcceptIntent {
+  return {
+    requestId: input.requestId,
+    sender: {
+      sessionId: input.sender.sessionId,
+      incarnation: input.sender.incarnation,
+    },
+    destination: { subject: input.destination.subject },
+    text: input.text,
+  }
+}
+
 function copyTransitionInput(input: DeliveryTransitionInput): DeliveryTransitionInput {
   return {
     deliveryId: input.deliveryId,
@@ -996,6 +1017,68 @@ export class DeliveryLedger {
       .sort((a, b) => Date.parse(a.acceptedAt) - Date.parse(b.acceptedAt)
         || a.id.localeCompare(b.id))
       .map(clone)
+  }
+
+  /**
+   * Replay a prior durable acceptance using caller-owned intent only. This
+   * lookup runs before recipient resolution so a retry cannot drift with the
+   * current live set. `null` means the request ID has never been accepted.
+   */
+  replayAcceptance(input: DeliveryAcceptIntent): Promise<DeliveryAcceptResult | null> {
+    let captured: DeliveryAcceptIntent | undefined
+    let captureProblem: string | null = null
+    try {
+      captureProblem = validateDeliveryAcceptIntent(input)
+      if (!captureProblem) captured = copyAcceptIntent(input)
+    } catch (error) {
+      captureProblem = `request could not be captured: ${safeErrorMessage(error)}`
+    }
+    return this.enqueue(async () => {
+      const health = this.mutationHealthRejection()
+      if (health) return { accepted: false, ...health }
+      if (captureProblem || !captured) {
+        return {
+          accepted: false,
+          reason: 'invalid-request',
+          detail: captureProblem ?? 'request could not be captured',
+        }
+      }
+      const prior = this.messagesByRequestId.get(captured.requestId)
+      if (!prior) return null
+      if (prior.sender.sessionId !== captured.sender.sessionId
+        || prior.sender.incarnation !== captured.sender.incarnation
+        || prior.destination.subject !== captured.destination.subject
+        || prior.text !== captured.text) {
+        return {
+          accepted: false,
+          reason: 'request-id-reuse',
+          detail: `request ${captured.requestId} already belongs to message ${prior.id}`,
+        }
+      }
+      let wrote = false
+      if (!this.copiesSynchronized) {
+        const persisted = await this.persist(this.snapshot())
+        if (!persisted.ok) return { accepted: false, ...persisted.rejection }
+        wrote = true
+      }
+      const envelope = this.getMessage(prior.id)
+      if (!envelope) {
+        this.currentHealth = 'faulted-read-only'
+        return {
+          accepted: false,
+          reason: 'faulted-read-only',
+          detail: `request ${prior.requestId} references a missing message`,
+        }
+      }
+      return {
+        accepted: true,
+        replayed: true,
+        wrote,
+        details: 'retained',
+        receipt: acceptanceReceipt(prior),
+        ...envelope,
+      }
+    })
   }
 
   accept(input: DeliveryAcceptInput): Promise<DeliveryAcceptResult> {
