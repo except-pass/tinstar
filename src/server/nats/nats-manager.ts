@@ -7,8 +7,7 @@ import { resolveNatsTarget } from './manifest.js'
 import { log } from '../logger.js'
 import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
-
-const DEFAULT_PORT = 4222
+import { DEFAULT_NATS_PORT, natsBrokerUrl } from './url.js'
 
 export class NatsManager {
   state: ServiceState = 'idle'
@@ -24,8 +23,8 @@ export class NatsManager {
     this.external = !!externalUrl
     this.port = externalUrl
       ? 0
-      : parseInt(process.env.NATS_PORT ?? String(opts?.port ?? DEFAULT_PORT), 10)
-    this.url = externalUrl ?? `nats://127.0.0.1:${this.port}`
+      : parseInt(process.env.NATS_PORT ?? String(opts?.port ?? DEFAULT_NATS_PORT), 10)
+    this.url = natsBrokerUrl(process.env, opts?.port)
     this.configRoot = opts?.configRoot ?? getConfigRoot()
   }
 

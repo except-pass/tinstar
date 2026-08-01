@@ -475,7 +475,7 @@ describe('DeliveryLedger acceptance', () => {
         throw new Error('expected retained owned acceptance')
       }
       expect(Object.keys(owned.message).sort()).toEqual([
-        'acceptedAt', 'deliveryIds', 'destination', 'id', 'requestFingerprint',
+        'acceptedAt', 'deliveryIds', 'destination', 'exclusions', 'id', 'requestFingerprint',
         'requestId', 'sender', 'text',
       ])
       expect(Object.keys(owned.message.sender).sort()).toEqual([

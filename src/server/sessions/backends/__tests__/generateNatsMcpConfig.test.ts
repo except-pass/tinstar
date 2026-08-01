@@ -13,6 +13,8 @@ function nats(subs: string[]): SessionNats {
 const COMMON = {
   channelServerPackage: 'github:except-pass/nats-channel-mcp',
   bunPath: '/home/ubuntu/.bun/bin/bun',
+  natsUrl: 'nats://127.0.0.1:4666',
+  routerSubject: '_TINSTAR.delivery.route.v1.instance',
 }
 
 describe('generateNatsMcpConfig', () => {
@@ -46,6 +48,10 @@ describe('generateNatsMcpConfig', () => {
     // The variable-length subscription list is NOT inlined as --subscribe args.
     expect(text).not.toContain('--subscribe')
     expect(text).toContain('--topics-file')
+    expect(text).toContain('--nats')
+    expect(text).toContain(COMMON.natsUrl)
+    expect(text).toContain('TINSTAR_MESSAGE_ROUTER_SUBJECT')
+    expect(text).toContain(COMMON.routerSubject)
   })
 
   it('produces different bytes per session (per-session file, no cross-session churn concern)', () => {

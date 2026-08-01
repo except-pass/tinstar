@@ -6,28 +6,16 @@ import type {
   DeliveryAcceptInput,
   DeliveryAcceptResult,
   DeliveryLedgerRecipient,
+  DeliveryRecipientExclusion,
+  DeliveryRecipientExclusionReason,
 } from './delivery-ledger'
 import { validateDeliveryAcceptIntent } from './delivery-ledger'
 
 export type LiveDeliveryRequest = DeliveryAcceptIntent
 
-export type RecipientExclusionReason =
-  | 'missing'
-  | 'graveyarded'
-  | 'not-started'
-  | 'stopped'
-  | 'deleting'
-  | 'not-subscribed'
-  | 'lifecycle-conflict'
-  | 'process-dead'
-  | 'liveness-check-failed'
-  | 'provider-unavailable'
-  | 'identity-unavailable'
+export type RecipientExclusionReason = DeliveryRecipientExclusionReason
 
-export interface RecipientExclusion {
-  sessionId: string
-  reason: RecipientExclusionReason
-}
+export interface RecipientExclusion extends DeliveryRecipientExclusion {}
 
 export interface DeliveryRecipientLease {
   token: string
@@ -302,7 +290,9 @@ async function acceptForLiveRecipientsOwned(
     return {
       ok: true,
       destinationKind: parsed.kind,
-      exclusions: [],
+      exclusions: (replay.message.exclusions ?? []).map(exclusion => ({
+        ...exclusion,
+      })),
       acceptance: replay,
     }
   }
@@ -453,7 +443,7 @@ async function acceptForLiveRecipientsOwned(
 
     let acceptance: DeliveryAcceptResult
     try {
-      acceptance = await deps.accept({ ...request, recipients })
+      acceptance = await deps.accept({ ...request, recipients, exclusions })
     } catch (error) {
       return {
         ok: false,

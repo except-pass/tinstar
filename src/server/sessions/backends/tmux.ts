@@ -20,6 +20,13 @@ import {
   requireProviderCapability,
   type TerminalProviderAdapter,
 } from '../../providers/lifecycle'
+import { natsBrokerUrl } from '../../nats/url'
+import {
+  messageRouterSubject,
+  TINSTAR_AGENT_INCARNATION_ENV,
+  TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV,
+  TINSTAR_NATS_URL_ENV,
+} from '../../messaging/message-router-address'
 
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
@@ -35,7 +42,6 @@ const rawExecFileAsync = promisify(execFile)
 // that run no tmux commands stay responsive throughout, which is exactly the reported
 // symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
 const TMUX_EXEC_TIMEOUT_MS = 10_000
-const AGENT_INCARNATION_ENV = 'TINSTAR_AGENT_INCARNATION'
 const strictProbeWarnings = new Set<string>()
 function execFileAsync(
   file: string,
@@ -436,6 +442,8 @@ export function generateNatsMcpConfig(opts: {
   channelServerPackage: string  // npm package or github:user/repo
   bunPath: string
   jetstream?: boolean
+  natsUrl: string
+  routerSubject: string
 }): string {
   // Per-session topics file (one subject per line) — keeps the variable-length
   // subscription list out of the mcp config. Lives outside the git tree.
@@ -452,6 +460,7 @@ export function generateNatsMcpConfig(opts: {
   const args: string[] = [
     'x', opts.channelServerPackage,
     '--name', opts.sessionName,
+    '--nats', opts.natsUrl,
     '--topics-file', topicsPath,
     '--control-socket', controlSocket,
   ]
@@ -462,6 +471,10 @@ export function generateNatsMcpConfig(opts: {
       nats: {
         command: opts.bunPath,
         args,
+        env: {
+          [TINSTAR_NATS_URL_ENV]: opts.natsUrl,
+          [TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]: opts.routerSubject,
+        },
       },
     },
   }
@@ -774,7 +787,7 @@ export async function createTmuxSession(
     'set-environment',
     '-t',
     tmuxTarget,
-    AGENT_INCARNATION_ENV,
+    TINSTAR_AGENT_INCARNATION_ENV,
     randomUUID(),
   ])
   for (const [key, value] of Object.entries(opts.secrets)) {
@@ -819,6 +832,8 @@ export async function createTmuxSession(
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
+      natsUrl: natsBrokerUrl(),
+      routerSubject: messageRouterSubject(config.dirs.root),
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
@@ -891,7 +906,7 @@ export async function startTmuxSession(
     'set-environment',
     '-t',
     exactTmuxSessionTarget(tmuxName),
-    AGENT_INCARNATION_ENV,
+    TINSTAR_AGENT_INCARNATION_ENV,
     randomUUID(),
   ])
 
@@ -926,6 +941,8 @@ export async function startTmuxSession(
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
+      natsUrl: natsBrokerUrl(),
+      routerSubject: messageRouterSubject(config.dirs.root),
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
@@ -1133,9 +1150,9 @@ export async function getTmuxAgentIdentity(
       'show-environment',
       '-t',
       exactTmuxSessionTarget(tmuxName),
-      AGENT_INCARNATION_ENV,
+      TINSTAR_AGENT_INCARNATION_ENV,
     ])
-    const prefix = `${AGENT_INCARNATION_ENV}=`
+    const prefix = `${TINSTAR_AGENT_INCARNATION_ENV}=`
     launchToken = stdout.trim().startsWith(prefix)
       ? stdout.trim().slice(prefix.length)
       : ''

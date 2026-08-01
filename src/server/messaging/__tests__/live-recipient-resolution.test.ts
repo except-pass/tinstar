@@ -551,6 +551,75 @@ describe('managed-session to durable-ledger integration', () => {
     expect(observeProcess).not.toHaveBeenCalled()
   })
 
+  it('replays the same persisted exclusions for a partial live-set acceptance', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'live-recipient-partial-replay-'))
+    roots.push(root)
+    const sessionsDir = join(root, 'sessions')
+    const lockPath = join(root, 'server.lock')
+    expect(acquireBackendSingleton(lockPath).acquired).toBe(true)
+    const cfg = {
+      sessions: { prefix: 'tinstar-' },
+      cliTemplates: [],
+      dirs: {
+        root,
+        sessions: sessionsDir,
+        secrets: join(root, 'secrets.json'),
+      },
+    } as unknown as TinstarConfig
+    for (const name of ['live-agent', 'stopped-agent']) {
+      createSession(sessionsDir, {
+        name,
+        backend: 'tmux',
+        adapter: 'codex',
+        nats: { enabled: true, subscriptions: [TASK, `${TASK}.${name}`] },
+      })
+    }
+    setState(sessionsDir, 'live-agent', 'running')
+    setState(sessionsDir, 'stopped-agent', 'stopped')
+    const context = {
+      sessionConfig: cfg,
+      providerRegistry: createDefaultProviderRegistry(),
+      docStore: { getAllTombstones: () => [] },
+    } as unknown as RouteContext
+    const intent = request(TASK, 'req-partial-replay')
+    const ledger = DeliveryLedger.open({
+      dir: root,
+      lockPath,
+      createMessageId: () => 'msg-partial-replay',
+      now: () => 1_000,
+    })
+
+    const first = await acceptForManagedSessionRecipients(context, ledger, intent, {
+      observeProcess: async () => ({
+        state: 'alive',
+        incarnation: 'live-agent-process',
+      }),
+    })
+    expect(first).toMatchObject({
+      ok: true,
+      exclusions: [{ sessionId: 'stopped-agent', reason: 'stopped' }],
+    })
+
+    resetSessionBackendOwnersForTests()
+    const reloaded = DeliveryLedger.open({ dir: root, lockPath })
+    const observeProcess = vi.fn(async () => {
+      throw new Error('a durable partial retry must not re-resolve liveness')
+    })
+    const replay = await acceptForManagedSessionRecipients(
+      context,
+      reloaded,
+      intent,
+      { observeProcess },
+    )
+
+    expect(replay).toMatchObject({
+      ok: true,
+      exclusions: [{ sessionId: 'stopped-agent', reason: 'stopped' }],
+      acceptance: { accepted: true, replayed: true },
+    })
+    expect(observeProcess).not.toHaveBeenCalled()
+  })
+
   it('validates malformed input even when session configuration is unavailable', async () => {
     const ledger = {
       accept: vi.fn(),
