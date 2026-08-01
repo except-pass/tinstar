@@ -700,8 +700,10 @@ function validateAcceptInput(input: DeliveryAcceptInput): string | null {
   if (!Array.isArray(input.recipients) || input.recipients.length < 1) {
     return 'at least one recipient is required'
   }
-  if (!input.recipients.every(hasRecipientFields)) {
-    return 'every recipient must be complete'
+  for (let index = 0; index < input.recipients.length; index++) {
+    if (!hasRecipientFields(input.recipients[index])) {
+      return 'every recipient must be complete'
+    }
   }
   const keys = input.recipients.map(recipientKey)
   if (new Set(keys).size !== keys.length) {

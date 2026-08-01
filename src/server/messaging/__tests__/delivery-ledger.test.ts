@@ -1003,6 +1003,19 @@ describe('DeliveryLedger transitions and retention', () => {
         reason: 'invalid-request',
       })
 
+      const sparseRecipients = new Array<
+        DeliveryAcceptInput['recipients'][number]
+      >(1)
+      await expect(ledger.accept({
+        ...input('req-sparse-recipients'),
+        recipients: sparseRecipients,
+      })).resolves.toMatchObject({
+        accepted: false,
+        reason: 'invalid-request',
+        detail: 'every recipient must be complete',
+      })
+      expect(ledger.health).toBe('healthy')
+
       const accepted = await ledger.accept(input('req-malformed-transition'))
       if (!accepted.accepted || accepted.details !== 'retained') {
         throw new Error('expected retained acceptance')
