@@ -73,7 +73,7 @@ describe('acquireBackendSingleton', () => {
       acquired: false,
       action: 'takeover',
       ownerPid: 42,
-      failure: 'owner-retirement-unconfirmed',
+      failure: 'owner-retirement-permission-denied',
     })
     expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
     expect(kill).toHaveBeenCalledWith(42, 0)

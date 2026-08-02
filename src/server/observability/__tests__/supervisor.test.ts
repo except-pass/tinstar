@@ -90,8 +90,14 @@ describe('Supervisor adoption', () => {
     expect(sup.pid).toBe(42)
     expect(sup.state).toBe('ready')
     expect(kill).toHaveBeenCalledWith(42, 0)
-    await new Promise(resolve => setTimeout(resolve, 35))
-    expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThan(1)
+    const deadline = Date.now() + 1_000
+    while (
+      kill.mock.calls.filter(([, signal]) => signal === 0).length < 3
+      && Date.now() < deadline
+    ) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThanOrEqual(3)
     expect(sup.pid).toBe(42)
     expect(sup.state).toBe('ready')
     await sup.stop()

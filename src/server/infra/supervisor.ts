@@ -2,7 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
-import { processMayBeAlive } from './process-liveness.js'
+import { isSupportedProcessId, processMayBeAlive } from './process-liveness.js'
 
 export interface SupervisorOpts {
   name: string
@@ -245,7 +245,7 @@ export class Supervisor {
     if (!existsSync(this.stateFile())) return null
     try {
       const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
-      if (!Number.isInteger(s.pid) || s.pid <= 0) return null
+      if (!isSupportedProcessId(s.pid)) return null
       if (!processMayBeAlive(s.pid)) return null
       // Validate the binary name if an expected name was provided
       if (this.opts.expectedBinaryName) {

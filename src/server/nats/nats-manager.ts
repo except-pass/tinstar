@@ -8,7 +8,7 @@ import { log } from '../logger.js'
 import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
 import { DEFAULT_NATS_PORT, natsBrokerUrl } from './url.js'
-import { probeProcessLiveness, processMayBeAlive } from '../infra/process-liveness.js'
+import { probeProcessLiveness } from '../infra/process-liveness.js'
 
 export class NatsManager {
   state: ServiceState = 'idle'
@@ -42,7 +42,10 @@ export class NatsManager {
           // Keep retrying retirement of a supervisor that may still own a
           // process. Dropping the reference here would let the next start()
           // create a competing broker after an unconfirmed stop.
-          if (staleSupervisor.pid > 0 && processMayBeAlive(staleSupervisor.pid)) {
+          if (
+            staleSupervisor.pid !== 0
+            && probeProcessLiveness(staleSupervisor.pid).state !== 'gone'
+          ) {
             this.supervisor = staleSupervisor
           }
           throw error
@@ -189,8 +192,11 @@ function legacyNatsManagerOwnershipBlocker(manager: NatsManager): string | null 
   if (typeof legacySupervisor.pid !== 'number') return 'the legacy supervisor process identity is unknown'
   if (legacySupervisor.pid <= 0) return null
   const liveness = probeProcessLiveness(legacySupervisor.pid)
-  if (liveness.state === 'gone' || liveness.state === 'invalid') return null
+  if (liveness.state === 'gone') return null
   if (liveness.state === 'alive') return `broker process ${legacySupervisor.pid} is still alive`
+  if (liveness.state === 'invalid') {
+    return `broker process identity is invalid: ${liveness.reason}`
+  }
   return `broker process ${legacySupervisor.pid} liveness is unknown: ${liveness.reason}`
 }
 

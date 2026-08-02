@@ -68,7 +68,7 @@ describe('NatsManager', () => {
     const mgr = new NatsManager()
     const staleStop = vi.fn(async () => { throw new Error('old stop failed') })
     Object.assign(mgr as unknown as Record<string, unknown>, {
-      supervisor: { stop: staleStop },
+      supervisor: { pid: 0, stop: staleStop },
       supervisorStarted: false,
     })
 
@@ -85,6 +85,29 @@ describe('NatsManager', () => {
     const mgr = new NatsManager()
     const staleSupervisor = {
       pid: 42,
+      stop: vi.fn<() => Promise<void>>(),
+    }
+    staleSupervisor.stop
+      .mockRejectedValueOnce(new Error('stop was not confirmed'))
+      .mockImplementationOnce(async () => { staleSupervisor.pid = 0 })
+    Object.assign(mgr as unknown as Record<string, unknown>, {
+      supervisor: staleSupervisor,
+      supervisorStarted: false,
+    })
+
+    await mgr.start()
+    expect(mgr.state).toBe('degraded')
+    await mgr.start()
+
+    expect(mgr.state).toBe('ready')
+    expect(staleSupervisor.stop).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains an incomplete supervisor with an invalid pid after an unconfirmed stop', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const mgr = new NatsManager()
+    const staleSupervisor = {
+      pid: Number.MAX_SAFE_INTEGER,
       stop: vi.fn<() => Promise<void>>(),
     }
     staleSupervisor.stop
@@ -278,6 +301,26 @@ describe('NatsManager', () => {
       'failed to retire legacy nats manager before retry: legacy stop failed; '
         + 'the legacy supervisor process identity is unknown',
     )
+  })
+
+  it('refuses a replacement when failed legacy retirement has an invalid numeric pid', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const start = vi.spyOn(NatsManager.prototype, 'start')
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: null, pid: Number.MAX_SAFE_INTEGER },
+      start: vi.fn(async () => {}),
+      stop: vi.fn()
+        .mockRejectedValueOnce(new Error('legacy stop failed'))
+        .mockResolvedValue(undefined),
+    } as unknown as NatsManager
+    const owner = installLegacyOwner(legacy)
+
+    await expect(startProcessNatsManager()).rejects.toThrow(
+      'broker process identity is invalid: unsupported process id',
+    )
+    expect(owner.manager).toBe(legacy)
+    expect(start).not.toHaveBeenCalled()
   })
 
   it('replaces a failed legacy manager that never installed a supervisor', async () => {

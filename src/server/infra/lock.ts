@@ -1,6 +1,10 @@
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { isSupportedProcessId, processMayBeAlive } from './process-liveness.js'
+import {
+  isSupportedProcessId,
+  probeProcessLiveness,
+  processMayBeAlive,
+} from './process-liveness.js'
 
 export type ReleaseFn = () => Promise<void>
 
@@ -111,26 +115,48 @@ function readOwnerPid(dir: string): number | null {
   }
 }
 
-function killAndWait(pid: number, timeoutMs = 3_000): boolean {
+export type SingletonFailure =
+  | 'owner-retirement-permission-denied'
+  | 'owner-retirement-unconfirmed'
+  | 'owner-survived-sigkill'
+  | 'marker-recreation-failed'
+
+function uncertainRetirementFailure(pid: number): SingletonFailure | null {
+  const liveness = probeProcessLiveness(pid)
+  if (liveness.state === 'gone') return null
+  if (liveness.state === 'unknown' && liveness.reason.includes('EPERM')) {
+    return 'owner-retirement-permission-denied'
+  }
+  return 'owner-retirement-unconfirmed'
+}
+
+function killAndWait(pid: number, timeoutMs = 3_000): SingletonFailure | null {
   try {
     process.kill(pid, 'SIGTERM')
   } catch {
-    return !processMayBeAlive(pid)
+    return uncertainRetirementFailure(pid)
   }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (!processMayBeAlive(pid)) return true
+    if (!processMayBeAlive(pid)) return null
     const start = Date.now()
     while (Date.now() - start < 50) { /* brief spin — boot path, no event loop yet */ }
   }
   try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
   const drainDeadline = Date.now() + 500
   while (Date.now() < drainDeadline) {
-    if (!processMayBeAlive(pid)) return true
+    if (!processMayBeAlive(pid)) return null
     const start = Date.now()
     while (Date.now() - start < 25) { /* brief spin — boot path, no event loop yet */ }
   }
-  return !processMayBeAlive(pid)
+  const liveness = probeProcessLiveness(pid)
+  if (liveness.state === 'gone') return null
+  if (liveness.state === 'unknown' && liveness.reason.includes('EPERM')) {
+    return 'owner-retirement-permission-denied'
+  }
+  return liveness.state === 'alive'
+    ? 'owner-survived-sigkill'
+    : 'owner-retirement-unconfirmed'
 }
 
 /**
@@ -152,10 +178,11 @@ export function backendSingletonOwner(path: string): number | null {
 
 export interface SingletonResult {
   acquired: boolean
+  /** Action selected before acquisition; `acquired` and `failure` are its outcome. */
   action: SingletonAction
-  /** pid of the live owner when we refused. */
+  /** Previously recorded owner PID when it remains relevant to the outcome. */
   ownerPid?: number
-  failure?: 'owner-retirement-unconfirmed'
+  failure?: SingletonFailure
 }
 
 /**
@@ -180,17 +207,17 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
     return { acquired: false, action, ownerPid: ownerPid ?? undefined }
   }
   if (action === 'takeover' && ownerPid) {
-    if (!killAndWait(ownerPid)) {
+    const failure = killAndWait(ownerPid)
+    if (failure) {
       return {
         acquired: false,
         action: 'takeover',
         ownerPid,
-        failure: 'owner-retirement-unconfirmed',
+        failure,
       }
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
-  return stealLock(dir)
-    ? { acquired: true, action }
-    : { acquired: false, action, ownerPid: ownerPid ?? undefined }
+  if (stealLock(dir)) return { acquired: true, action }
+  return { acquired: false, action, failure: 'marker-recreation-failed' }
 }
