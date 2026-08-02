@@ -5,7 +5,7 @@ import { fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 import { apiFetch } from '../../apiClient'
 import { StatSpark } from './StatSpark'
-import { computeDeltaChip } from './computeDeltaChip'
+import { computeDeltaChip, type DeltaChip } from './computeDeltaChip'
 import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { TurnLengthPanel } from './TurnLengthPanel'
@@ -126,11 +126,6 @@ function SessionSection({
   const series = useTelemetrySeries(sessionId)
   const hasLegacyTelemetry = snap?.state === 'ready'
   if (!hasLegacyTelemetry && providerSessions.length === 0) return null
-  const hasCumulativeProviderUsage = providerSessions.some((provider) => {
-    if (provider.usage?.availability.state !== 'available') return false
-    const usage = provider.usage.availability.value
-    return providerTokenTotal(usage.cumulativeTokens) !== null
-  })
   const visibleProviderSessions = providerSessions.filter(provider => (
     (panels.tokens && provider.usage !== undefined)
     || provider.context !== undefined
@@ -184,16 +179,17 @@ function SessionSection({
             provider={provider}
             showTokens={panels.tokens}
             refreshError={providerRefreshError}
+            legacyTokens={hasLegacyTelemetry ? {
+              value: tokensValue,
+              series: tokenSeries,
+              delta: tokensDelta,
+            } : null}
           />
         ))}
         {hasLegacyTelemetry && panels.cost && (
           <StatSpark accent="gold" label="COST · PROMETHEUS" value={costValue} series={costSeries} delta={costDelta} />
         )}
-        {hasLegacyTelemetry && panels.tokens && (
-          !hasCumulativeProviderUsage
-          || tokenTotal !== null
-          || tokenSeries.some(value => value !== null)
-        ) && (
+        {hasLegacyTelemetry && visibleProviderSessions.length === 0 && panels.tokens && (
           <StatSpark accent="blue" label="TOKENS · PROMETHEUS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
         )}
         {hasLegacyTelemetry && panels.cacheHit && (
@@ -212,10 +208,16 @@ function ProviderSessionSignal({
   provider,
   showTokens,
   refreshError,
+  legacyTokens,
 }: {
   provider: ProviderSessionObservations
   showTokens: boolean
   refreshError: string | null
+  legacyTokens: {
+    value: string
+    series: Array<number | null>
+    delta: DeltaChip
+  } | null
 }) {
   const usage = provider.usage
   const context = provider.context
@@ -232,6 +234,11 @@ function ProviderSessionSignal({
     : null
   const history = useProviderTelemetrySeries(provider.providerId, sessionId)
   const tokenSeries = history?.tokens ?? []
+  const hasUsableCumulativeHistory = (
+    providerTokenTotal(availableUsage?.cumulativeTokens) !== null
+    && history?.error === null
+    && tokenSeries.some(value => value !== null)
+  )
   const historyDelta = history?.error
     ? { text: 'history unavailable', tone: 'flat' as const }
     : computeDeltaChip(
@@ -249,7 +256,7 @@ function ProviderSessionSignal({
         fontFamily: 'JetBrains Mono, monospace',
       }}
     >
-      {showTokens && (
+      {showTokens && usage && (
         <>
           <StatSpark
             accent="blue"
@@ -268,6 +275,15 @@ function ProviderSessionSignal({
             />
           )}
         </>
+      )}
+      {showTokens && legacyTokens && !hasUsableCumulativeHistory && (
+        <StatSpark
+          accent="blue"
+          label="TOKENS · PROMETHEUS"
+          value={legacyTokens.value}
+          series={legacyTokens.series}
+          delta={legacyTokens.delta}
+        />
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
         <span style={{ color: '#cbd5e1', fontSize: 9, fontWeight: 700 }}>

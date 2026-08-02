@@ -284,6 +284,16 @@ describe('<TelemetryPanel> provider observations', () => {
     expect(view.getByText('10')).toBeTruthy()
   })
 
+  it('suppresses legacy tokens when cumulative provider history is usable', () => {
+    testState.legacySnapshot = legacySnapshot(4_200)
+
+    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
+
+    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
+    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
+    expect(view.queryByText('4.2k')).toBeNull()
+  })
+
   it('respects the token panel preference while retaining provider context', () => {
     testState.tokensEnabled = false
 
