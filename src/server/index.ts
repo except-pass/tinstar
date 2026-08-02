@@ -1507,10 +1507,20 @@ export function initBackend(): RouteContext {
  * down a dev server the user may be running for unrelated reasons — Vite surfaces
  * the throw as a startup failure, which is the same outcome with a readable cause.
  */
-export function acquireBackendSingletonForPlugin(configDir = getConfigRoot()): () => void {
+export function acquireBackendSingletonForPlugin(
+  configDir = getConfigRoot(),
+  deps: { acquire?: typeof acquireBackendSingleton } = {},
+): () => void {
   const lockPath = join(configDir, 'server.lock')
-  const result = acquireBackendSingleton(lockPath)
+  const result = (deps.acquire ?? acquireBackendSingleton)(lockPath)
   if (!result.acquired) {
+    if (result.failure === 'marker-recreation-failed') {
+      throw new Error(
+        `could not claim the tinstar backend marker on ${configDir}; ` +
+        'another backend may have won the startup race or the marker may be unremovable. ' +
+        'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+      )
+    }
     const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
     throw new Error(
       `another tinstar backend is already running on ${configDir}${who}. ` +

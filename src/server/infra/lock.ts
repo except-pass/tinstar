@@ -44,9 +44,19 @@ function isOwnerAlive(dir: string): boolean {
   return processMayBeAlive(pid)
 }
 
-function stealLock(dir: string): boolean {
-  try { rmSync(dir, { recursive: true, force: true }) } catch { /* someone else cleaned it */ }
-  return tryCreateMarker(dir)
+interface MarkerReplacementOps {
+  removeMarker: (dir: string) => void
+  createMarker: (dir: string) => boolean
+}
+
+const markerReplacementOps: MarkerReplacementOps = {
+  removeMarker: dir => rmSync(dir, { recursive: true, force: true }),
+  createMarker: tryCreateMarker,
+}
+
+function stealLock(dir: string, ops: MarkerReplacementOps = markerReplacementOps): boolean {
+  try { ops.removeMarker(dir) } catch { /* someone else cleaned it */ }
+  return ops.createMarker(dir)
 }
 
 function makeRelease(dir: string): ReleaseFn {
@@ -193,7 +203,7 @@ export interface SingletonResult {
 export function acquireBackendSingleton(
   path: string,
   opts: { force?: boolean } = {},
-  deps: { replaceMarker: (dir: string) => boolean } = { replaceMarker: stealLock },
+  deps: { markerReplacement?: MarkerReplacementOps } = {},
 ): SingletonResult {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
@@ -219,7 +229,7 @@ export function acquireBackendSingleton(
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
-  if (deps.replaceMarker(dir)) return { acquired: true, action }
+  if (stealLock(dir, deps.markerReplacement)) return { acquired: true, action }
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.
   return {

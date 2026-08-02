@@ -144,12 +144,19 @@ describe('acquireBackendSingleton', () => {
     mkdirSync(mark)
     writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 1 }))
 
+    const removeMarker = vi.fn(() => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    })
+    const createMarker = vi.fn(() => false)
+
     expect(acquireBackendSingleton(lockPath(), {}, {
-      replaceMarker: () => false,
+      markerReplacement: { removeMarker, createMarker },
     })).toEqual({
       acquired: false,
       action: 'steal',
       failure: 'marker-recreation-failed',
     })
+    expect(removeMarker).toHaveBeenCalledWith(mark)
+    expect(createMarker).toHaveBeenCalledWith(mark)
   })
 })

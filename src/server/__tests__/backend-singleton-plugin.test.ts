@@ -82,4 +82,16 @@ describe('acquireBackendSingletonForPlugin', () => {
       }
     })
   })
+
+  it('reports an unresolved marker instead of claiming a backend is running', () => {
+    withRoot(dir => {
+      expect(() => acquireBackendSingletonForPlugin(dir, {
+        acquire: () => ({
+          acquired: false,
+          action: 'steal',
+          failure: 'marker-recreation-failed',
+        }),
+      })).toThrow(/could not claim the tinstar backend marker.*marker may be unremovable/)
+    })
+  })
 })
