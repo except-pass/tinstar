@@ -508,6 +508,21 @@ describe('DeliveryLedger acceptance', () => {
     })
   })
 
+  it('rejects whitespace-only text without creating a durable acceptance', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open()
+      await expect(ledger.accept(input('req-blank-text', {
+        text: ' \n\t ',
+      }))).resolves.toEqual({
+        accepted: false,
+        reason: 'invalid-request',
+        detail: 'text must not be empty',
+      })
+      expect(ledger.listRecoverable()).toEqual([])
+      expect(existsSync(paths.primary)).toBe(false)
+    })
+  })
+
   it('applies explicit backpressure without revoking an accepted request replay', async () => {
     await withLedger(async ({ paths, open }) => {
       const ledger = open({

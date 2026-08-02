@@ -211,13 +211,19 @@ export function createClaudeDeliveryAdapter(
         }
       }
       return {
-        state: 'accepted',
+        state: 'delivered',
         providerId: 'claude',
         messageId: request.messageId,
         attempt: request.attempt,
         recipient: request.recipient,
-        acceptedAt: response.acceptedAt,
-        attemptRef: request.deliveryId,
+        deliveredAt: response.acceptedAt,
+        evidence: {
+          source: {
+            id: 'claude-channel-receipt',
+            label: 'Claude channel receipt',
+          },
+          reference: request.deliveryId,
+        },
       }
     },
   }

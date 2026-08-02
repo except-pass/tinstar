@@ -97,11 +97,15 @@ describe('Claude channel delivery adapter', () => {
     }))
 
     await expect(adapter.accept(request())).resolves.toMatchObject({
-      state: 'accepted',
+      state: 'delivered',
       providerId: 'claude',
       messageId: 'msg-7',
       attempt: 1,
-      attemptRef: 'msg-7/d/1',
+      deliveredAt: CHECKED_AT,
+      evidence: {
+        source: { id: 'claude-channel-receipt', label: 'Claude channel receipt' },
+        reference: 'msg-7/d/1',
+      },
     })
     expect(seen).toHaveLength(1)
     expect(seen[0]?.socket).toBe('/control/receiver.sock')

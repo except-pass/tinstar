@@ -448,6 +448,56 @@ describe('NATS request/reply boundary', () => {
     expect(verifyMessageRouteEnvelope(response, AUTH_KEY)).toBe(true)
   })
 
+  it('rejects whitespace-only text at the router boundary before durable routing', async () => {
+    const responses: Uint8Array[] = []
+    const whitespaceRequest = { ...REQUEST, text: ' \n\t ' }
+    const subscription: NatsRouteSubscription = {
+      unsubscribe: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: encodedRequest(whitespaceRequest),
+          reply: '_INBOX.blank',
+          respond: (data: Uint8Array) => {
+            responses.push(data)
+            return true
+          },
+        }
+        await new Promise(() => {})
+      },
+    }
+    let closeConnection!: () => void
+    const closed = new Promise<void>(resolve => { closeConnection = resolve })
+    const connection: NatsRouteConnection = {
+      subscribe: () => subscription,
+      closed: () => closed,
+      flush: vi.fn(async () => {}),
+      drain: vi.fn(async () => { closeConnection() }),
+    }
+    const route = vi.fn(async () => accepted())
+    const service = new NatsMessageRouterService({
+      subject: '_route',
+      authMasterKey: MASTER_KEY,
+      connect: async () => connection,
+      route,
+      reconnectDelayMs: 1,
+    })
+
+    await service.start()
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    await service.stop()
+
+    expect(route).not.toHaveBeenCalled()
+    const response = JSON.parse(textDecoder.decode(responses[0]))
+    expect(response).toMatchObject({
+      payload: {
+        status: 'error',
+        requestId: REQUEST.requestId,
+        error: { code: 'invalid-request', message: 'text must not be empty' },
+      },
+    })
+    expect(verifyMessageRouteEnvelope(response, AUTH_KEY)).toBe(true)
+  })
+
   it('rejects a forged request before routing or durable mutation', async () => {
     const responses: Uint8Array[] = []
     const subscription: NatsRouteSubscription = {

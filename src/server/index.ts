@@ -79,8 +79,10 @@ import { createDefaultProviderRegistry } from './providers/lifecycle'
 import { createClaudeDeliveryAdapter } from './providers/claude-delivery'
 import { DeliveryLedger } from './messaging/delivery-ledger'
 import {
-  dispatchAcceptedMessage,
-  recoverAcceptedMessages,
+  DeliveryRetryScheduler,
+  replaceDeliveryRetryScheduler,
+  runDeliveryRetrySchedulerNow,
+  stopDeliveryRetryScheduler,
 } from './messaging/delivery-dispatch'
 import { deriveMessageRouterSessionKey } from './messaging/message-router-auth'
 import {
@@ -750,6 +752,7 @@ export function initBackend(): RouteContext {
     const shutdown = async () => {
       try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
       try { await stopAllMessageRouters() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
+      try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('shutdown', `deliveryRetry: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
       try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
@@ -796,15 +799,27 @@ export function initBackend(): RouteContext {
     // the rest of this function remaining synchronous forever.
     await backendContextReady
 
+    // An HMR replacement may still own a retry sweep over the same persisted
+    // ledger. Stop it before opening a fresh in-memory view, otherwise the old
+    // sweep can commit after hydration and the replacement can later overwrite
+    // that newer state with its stale snapshot.
+    await stopDeliveryRetryScheduler()
+    if (sessionConfig) {
+      deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
+    }
+
     // The control-plane responder is separate from Saloon's observer
     // connection. Requests are scoped to this data root, resolved against the
     // managed live set, and durably accepted before a response says success.
     if (backendContext && deliveryLedger && sessionConfig) {
-      // Finish crash recovery before accepting new route requests. This only
-      // resumes accepted/0 obligations, so an ambiguous provider attempt is
-      // never duplicated blindly. The persisted recipient incarnation remains
-      // the dispatch target even when a session name has since been reused.
-      const recovered = await recoverAcceptedMessages(deliveryLedger, providerRegistry)
+      // Finish the first crash-recovery sweep before accepting new route
+      // requests, then keep one retry loop alive. Only accepted/0 and due,
+      // explicitly retry-safe failures/deferrals are attempted; ambiguous
+      // in-flight work is never duplicated blindly. The persisted recipient
+      // incarnation remains the target when a session name has been reused.
+      const recovered = await replaceDeliveryRetryScheduler(
+        new DeliveryRetryScheduler(deliveryLedger, providerRegistry),
+      )
       for (const outcome of recovered) {
         if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
           log.warn('message-router', `recovered delivery ${outcome.deliveryId} ${outcome.state}`, {
@@ -828,12 +843,10 @@ export function initBackend(): RouteContext {
             request.sender.sessionId,
           )
         },
-        dispatchAccepted: async (_request, response) => {
-          const outcomes = await dispatchAcceptedMessage(
-            response.receipt.messageId,
-            deliveryLedger!,
-            providerRegistry,
-          )
+        dispatchAccepted: async () => {
+          // New acceptance and older due retries enter one ledger-ordered sweep,
+          // preserving the process-wide FIFO and concurrency cap.
+          const outcomes = await runDeliveryRetrySchedulerNow()
           for (const outcome of outcomes) {
             if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
               log.warn('message-router', `delivery ${outcome.deliveryId} ${outcome.state}`, {
@@ -924,10 +937,6 @@ export function initBackend(): RouteContext {
       // TINSTAR_CONFIG_HOME (preferred) and TINSTAR_DATA_DIR (legacy alias).
       sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
-      // The ledger shares the backend singleton and config root. Opening it at
-      // boot makes accepted-but-not-yet-final deliveries survive Tinstar
-      // rebuilds and restarts before any NATS responder can claim success.
-      deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
       messageRouterOwner = reserveMessageRouterOwner(sessionConfig.dirs.root)
       providerRegistry.registerDelivery('claude', createClaudeDeliveryAdapter({
         authKeyFor: request => deriveMessageRouterSessionKey(

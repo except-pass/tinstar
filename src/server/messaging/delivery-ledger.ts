@@ -761,7 +761,7 @@ export function validateDeliveryAcceptIntent(input: unknown): string | null {
   if (!candidate.destination || !nonEmpty(candidate.destination.subject)) {
     return 'destination subject must not be empty'
   }
-  if (typeof candidate.text !== 'string' || candidate.text.length < 1) {
+  if (typeof candidate.text !== 'string' || candidate.text.trim().length < 1) {
     return 'text must not be empty'
   }
   return null

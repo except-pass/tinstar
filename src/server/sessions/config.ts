@@ -366,7 +366,7 @@ export const BASE_CONFIG = {
     // Pin the managed reply protocol peer so Tinstar and the external MCP
     // server cannot silently drift to incompatible wire contracts.
     // Override in ~/.config/tinstar/config.json for local dev
-    channelServerPackage: 'github:except-pass/nats-channel-mcp#2fd40c1a6fc90514b2bf0a461a4cb2bde17c34a6',
+    channelServerPackage: 'github:except-pass/nats-channel-mcp#8efcf0baf520360962b45c199dce1cd1ca877c54',
     bunPath: join(homedir(), '.bun/bin/bun'),
     // Off by default; requires nats-server -js
     jetstream: false,

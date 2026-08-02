@@ -100,6 +100,16 @@ const CONFIRM_OPERATION = {
 
 export type ProviderDeliveryAcceptance<TDetail extends object = object> =
   | ProviderDeliveryResult<{
+      /**
+       * The synchronous provider receipt proves the final-mile enqueue. This
+       * is terminal delivery evidence, not merely acceptance for later work.
+       */
+      state: 'delivered'
+      deliveredAt: string
+      evidence: ProviderDeliveryEvidence
+      detail?: TDetail
+    }>
+  | ProviderDeliveryResult<{
       state: 'accepted'
       acceptedAt: string
       attemptRef?: string
