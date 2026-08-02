@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decideSingletonAction, acquireBackendSingleton } from '../lock'
@@ -94,7 +94,7 @@ describe('acquireBackendSingleton', () => {
     })
     vi.spyOn(Date, 'now').mockImplementation((() => {
       let now = 0
-      return () => { now += 1_000; return now }
+      return () => { now += 10; return now }
     })())
 
     expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
@@ -114,7 +114,7 @@ describe('acquireBackendSingleton', () => {
     const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
     vi.spyOn(Date, 'now').mockImplementation((() => {
       let now = 0
-      return () => { now += 1_000; return now }
+      return () => { now += 10; return now }
     })())
 
     expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
@@ -143,16 +143,13 @@ describe('acquireBackendSingleton', () => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)
     writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 1 }))
-    chmodSync(dir, 0o555)
 
-    try {
-      expect(acquireBackendSingleton(lockPath())).toEqual({
-        acquired: false,
-        action: 'steal',
-        failure: 'marker-recreation-failed',
-      })
-    } finally {
-      chmodSync(dir, 0o755)
-    }
+    expect(acquireBackendSingleton(lockPath(), {}, {
+      replaceMarker: () => false,
+    })).toEqual({
+      acquired: false,
+      action: 'steal',
+      failure: 'marker-recreation-failed',
+    })
   })
 })

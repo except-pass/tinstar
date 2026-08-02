@@ -190,7 +190,11 @@ export interface SingletonResult {
  * up to listen(). On `force`, the live owner is SIGTERM'd (then SIGKILL'd) and
  * the lock stolen. Without `force`, a live owner means we refuse.
  */
-export function acquireBackendSingleton(path: string, opts: { force?: boolean } = {}): SingletonResult {
+export function acquireBackendSingleton(
+  path: string,
+  opts: { force?: boolean } = {},
+  deps: { replaceMarker: (dir: string) => boolean } = { replaceMarker: stealLock },
+): SingletonResult {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
 
@@ -215,7 +219,7 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
-  if (stealLock(dir)) return { acquired: true, action }
+  if (deps.replaceMarker(dir)) return { acquired: true, action }
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.
   return {
