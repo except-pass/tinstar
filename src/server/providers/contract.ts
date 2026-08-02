@@ -11,6 +11,13 @@ import type {
 export interface ProviderDeliveryRecipient {
   providerId: string
   sessionId: string
+  /**
+   * Session names are reusable. Durable dispatchers should carry the live
+   * process incarnation so provider-local queues cannot leak across a restart.
+   * Optional keeps adapters compatible with callers that have no lifecycle
+   * identity, while delivery-ledger recipients always provide it.
+   */
+  incarnation?: string
 }
 
 export interface ProviderDeliveryTarget extends ProviderDeliveryRecipient {
@@ -517,6 +524,18 @@ function assertDeliveryIdentity(
     throw deliveryResultIdentityError(
       `Provider "${providerId}" delivery ${operation.name} returned recipient sessionId `
       + `"${actual.recipient.sessionId}", expected "${expected.recipient.sessionId}"`,
+      {
+        operation,
+        actual,
+        expected,
+        actualProviderId: null,
+      },
+    )
+  }
+  if (actual.recipient.incarnation !== expected.recipient.incarnation) {
+    throw deliveryResultIdentityError(
+      `Provider "${providerId}" delivery ${operation.name} returned recipient incarnation `
+      + `"${actual.recipient.incarnation}", expected "${expected.recipient.incarnation}"`,
       {
         operation,
         actual,

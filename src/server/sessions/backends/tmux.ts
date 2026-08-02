@@ -501,6 +501,36 @@ function writeIfChanged(path: string, content: string, mode: number): void {
   chmodSync(path, mode)
 }
 
+function managedMessageRouterEnvironment(
+  config: TinstarConfig,
+  sessionName: string,
+  agentIncarnation: string,
+): Record<string, string> {
+  return {
+    [TINSTAR_NATS_URL_ENV]: natsBrokerUrl(),
+    [TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]: messageRouterSubject(config.dirs.root),
+    [TINSTAR_MESSAGE_ROUTER_AUTH_ENV]: deriveMessageRouterSessionKey(
+      messageRouterMasterKey(config.dirs.root),
+      { sessionId: sessionName, incarnation: agentIncarnation },
+    ).toString('hex'),
+  }
+}
+
+async function syncManagedMessageRouterEnvironment(
+  tmuxTarget: string,
+  environment: Readonly<Record<string, string>> | null,
+): Promise<void> {
+  for (const name of [
+    TINSTAR_NATS_URL_ENV,
+    TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV,
+    TINSTAR_MESSAGE_ROUTER_AUTH_ENV,
+  ]) {
+    await execFileAsync('tmux', environment
+      ? ['set-environment', '-t', tmuxTarget, name, environment[name]!]
+      : ['set-environment', '-t', tmuxTarget, '-r', name])
+  }
+}
+
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
   provider?: TerminalProviderAdapter
@@ -572,12 +602,7 @@ export function buildAgentCommand(opts: {
       // it. The disabledPattern belongs to the provider for the same reason the
       // inserted flags do: shared assembly must not know provider CLI syntax.
       head = head.replace(nats.command.disabledPattern, '')
-      preFlags.push(nats.command.enableFlag)
-      if (opts.nats.mcpConfigPath) {
-        preFlags.push(
-          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
-        )
-      }
+      preFlags.push(...nats.command.launchFlags(opts.nats.mcpConfigPath))
     } else if (provider.terminal.capabilities.nats.state === 'supported') {
       head = head.replace(
         provider.terminal.capabilities.nats.detail.command.disabledPattern,
@@ -602,12 +627,7 @@ export function buildAgentCommand(opts: {
     // the per-session nats-mcp.json passed via --mcp-config.
     if (opts.nats?.enabled) {
       const nats = requireProviderCapability(provider, 'nats')
-      cmd += ` ${nats.command.enableFlag}`
-      if (opts.nats.mcpConfigPath) {
-        preFlags.push(
-          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
-        )
-      }
+      preFlags.push(...nats.command.launchFlags(opts.nats.mcpConfigPath))
     }
     if (opts.appendSystemPrompt) {
       preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
@@ -806,6 +826,18 @@ export async function createTmuxSession(
     }
   }
 
+  const provisionedNats = opts.session.nats?.enabled
+    && opts.session.nats.subscriptions.length > 0
+    ? requireProviderCapability(provider, 'nats')
+    : null
+  const messageRouterEnv = provisionedNats
+    ? managedMessageRouterEnvironment(config, opts.session.name, agentIncarnation)
+    : null
+  await syncManagedMessageRouterEnvironment(
+    tmuxTarget,
+    provisionedNats?.command.forwardServerEnvironment ? messageRouterEnv : null,
+  )
+
   await syncProviderTelemetryEnvironment(
     tmuxTarget,
     opts.session.name,
@@ -842,12 +874,9 @@ export async function createTmuxSession(
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
-      natsUrl: natsBrokerUrl(),
-      routerSubject: messageRouterSubject(config.dirs.root),
-      routerAuth: deriveMessageRouterSessionKey(
-        messageRouterMasterKey(config.dirs.root),
-        { sessionId: opts.session.name, incarnation: agentIncarnation },
-      ).toString('hex'),
+      natsUrl: messageRouterEnv![TINSTAR_NATS_URL_ENV]!,
+      routerSubject: messageRouterEnv![TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]!,
+      routerAuth: messageRouterEnv![TINSTAR_MESSAGE_ROUTER_AUTH_ENV]!,
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
@@ -943,6 +972,18 @@ export async function startTmuxSession(
     agentIncarnation,
   ])
 
+  const provisionedNats = opts.session.nats?.enabled
+    && opts.session.nats.subscriptions.length > 0
+    ? requireProviderCapability(provider, 'nats')
+    : null
+  const messageRouterEnv = provisionedNats
+    ? managedMessageRouterEnvironment(config, opts.session.name, agentIncarnation)
+    : null
+  await syncManagedMessageRouterEnvironment(
+    exactTmuxSessionTarget(tmuxName),
+    provisionedNats?.command.forwardServerEnvironment ? messageRouterEnv : null,
+  )
+
   // Existing tmux sessions retain session-scoped variables across agent
   // restarts. Reconcile both sides of the policy: inject newly enabled
   // provider telemetry and remove provider-owned variables when disabled.
@@ -974,12 +1015,9 @@ export async function startTmuxSession(
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
-      natsUrl: natsBrokerUrl(),
-      routerSubject: messageRouterSubject(config.dirs.root),
-      routerAuth: deriveMessageRouterSessionKey(
-        messageRouterMasterKey(config.dirs.root),
-        { sessionId: opts.session.name, incarnation: agentIncarnation },
-      ).toString('hex'),
+      natsUrl: messageRouterEnv![TINSTAR_NATS_URL_ENV]!,
+      routerSubject: messageRouterEnv![TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]!,
+      routerAuth: messageRouterEnv![TINSTAR_MESSAGE_ROUTER_AUTH_ENV]!,
     })
     natsOpts = { enabled: true, mcpConfigPath }
     autoAcceptNatsWarning = nats.command.autoAcceptWarning

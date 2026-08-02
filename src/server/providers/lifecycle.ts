@@ -20,6 +20,7 @@ import {
   defineProviderDeliveryAdapter,
   type ProviderDeliveryAdapter,
 } from './contract'
+import { codexMcpLaunchFlags } from './codex-mcp'
 
 export interface ProviderTranscriptStatus {
   state: 'running' | 'idle'
@@ -58,8 +59,10 @@ interface ProviderNatsLaunchCapability {
   /** Provider-defined diagnostic label; shared lifecycle code never branches on it. */
   transport: string
   command: {
-    enableFlag: string
-    configFlag: string
+    /** Provider-owned shell fragments injected before the prompt separator. */
+    launchFlags: (mcpConfigPath?: string | null) => readonly string[]
+    /** The provider reads descriptor env values from its inherited environment. */
+    forwardServerEnvironment: boolean
     disabledPattern: RegExp
     autoAcceptWarning: boolean
   }
@@ -280,6 +283,10 @@ const codexTranscript: ProviderTranscriptAdapter = {
   parseRecapWhileIdle: true,
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 const unsupportedNats = (provider: string): TerminalProviderCapabilities['nats'] => ({
   state: 'unsupported',
   reason: `${provider} has no managed NATS launch transport`,
@@ -302,8 +309,11 @@ export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
         detail: {
           transport: 'claude-development-channel',
           command: {
-            enableFlag: '--dangerously-load-development-channels server:nats',
-            configFlag: '--mcp-config',
+            launchFlags: (mcpConfigPath) => [
+              '--dangerously-load-development-channels server:nats',
+              ...(mcpConfigPath ? [`--mcp-config ${shellQuote(mcpConfigPath)}`] : []),
+            ],
+            forwardServerEnvironment: false,
             disabledPattern: /\s*--dangerously-load-development-channels\s+server:nats/g,
             autoAcceptWarning: true,
           },
@@ -336,7 +346,22 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
   sessionLifecycle: 'terminal',
   terminal: {
     capabilities: {
-      nats: unsupportedNats('Codex'),
+      nats: {
+        state: 'supported',
+        detail: {
+          transport: 'codex-stdio-mcp',
+          command: {
+            launchFlags: (mcpConfigPath) => (
+              mcpConfigPath ? codexMcpLaunchFlags(mcpConfigPath) : []
+            ),
+            forwardServerEnvironment: true,
+            // Managed flags are always generated from the current descriptor;
+            // there is no provider flag that belongs baked into templates.
+            disabledPattern: /\b\B/g,
+            autoAcceptWarning: false,
+          },
+        },
+      },
       telemetry: unsupportedTelemetry('Codex'),
     },
     defaultTelemetry: false,
