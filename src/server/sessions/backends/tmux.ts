@@ -32,6 +32,8 @@ import {
   deriveMessageRouterSessionKey,
   messageRouterMasterKey,
 } from '../../messaging/message-router-auth'
+import { natsControlSocketPath } from '../nats-control'
+export { natsControlSocketPath } from '../nats-control'
 
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
@@ -112,10 +114,6 @@ function getClipboardCommand(): string | null {
  * Must match the --control-socket arg passed to nats-channel-mcp in
  * generateNatsMcpConfig below. Exported so both sides use the same source.
  */
-export function natsControlSocketPath(sessionName: string): string {
-  return `/tmp/tinstar-nats-${sessionName}.sock`
-}
-
 /**
  * Path to the session's NATS topics file (one subject per line). The per-session
  * nats-mcp.json passes this to the channel server via --topics-file, keeping the

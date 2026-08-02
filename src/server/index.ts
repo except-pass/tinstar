@@ -76,7 +76,13 @@ import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
+import { createClaudeDeliveryAdapter } from './providers/claude-delivery'
 import { DeliveryLedger } from './messaging/delivery-ledger'
+import {
+  dispatchAcceptedMessage,
+  recoverAcceptedMessages,
+} from './messaging/delivery-dispatch'
+import { deriveMessageRouterSessionKey } from './messaging/message-router-auth'
 import {
   NatsMessageRouterService,
   messageRouterMasterKey,
@@ -794,6 +800,18 @@ export function initBackend(): RouteContext {
     // connection. Requests are scoped to this data root, resolved against the
     // managed live set, and durably accepted before a response says success.
     if (backendContext && deliveryLedger && sessionConfig) {
+      // Finish crash recovery before accepting new route requests. This only
+      // resumes accepted/0 obligations, so an ambiguous provider attempt is
+      // never duplicated blindly. The persisted recipient incarnation remains
+      // the dispatch target even when a session name has since been reused.
+      const recovered = await recoverAcceptedMessages(deliveryLedger, providerRegistry)
+      for (const outcome of recovered) {
+        if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+          log.warn('message-router', `recovered delivery ${outcome.deliveryId} ${outcome.state}`, {
+            reason: outcome.reason,
+          })
+        }
+      }
       const messageRouter = new NatsMessageRouterService({
         subject: messageRouterSubject(sessionConfig.dirs.root),
         authMasterKey: messageRouterMasterKey(sessionConfig.dirs.root),
@@ -809,6 +827,20 @@ export function initBackend(): RouteContext {
             request.text,
             request.sender.sessionId,
           )
+        },
+        dispatchAccepted: async (_request, response) => {
+          const outcomes = await dispatchAcceptedMessage(
+            response.receipt.messageId,
+            deliveryLedger!,
+            providerRegistry,
+          )
+          for (const outcome of outcomes) {
+            if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+              log.warn('message-router', `delivery ${outcome.deliveryId} ${outcome.state}`, {
+                reason: outcome.reason,
+              })
+            }
+          }
         },
       })
       void messageRouterOwner?.start(messageRouter).catch(error => {
@@ -897,6 +929,15 @@ export function initBackend(): RouteContext {
       // rebuilds and restarts before any NATS responder can claim success.
       deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
       messageRouterOwner = reserveMessageRouterOwner(sessionConfig.dirs.root)
+      providerRegistry.registerDelivery('claude', createClaudeDeliveryAdapter({
+        authKeyFor: request => deriveMessageRouterSessionKey(
+          messageRouterMasterKey(sessionConfig!.dirs.root),
+          {
+            sessionId: request.recipient.sessionId,
+            incarnation: request.recipient.incarnation,
+          },
+        ),
+      }))
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches

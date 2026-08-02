@@ -549,6 +549,11 @@ export interface NatsMessageRouterDependencies {
     request: MessageRouteRequest,
     response: MessageRouteAcceptedResponse,
   ) => void
+  /** Starts provider final-mile work only after the durable receipt is returned. */
+  dispatchAccepted?: (
+    request: MessageRouteRequest,
+    response: MessageRouteAcceptedResponse,
+  ) => Promise<void>
 }
 
 interface ProcessRouterOwner {
@@ -857,6 +862,17 @@ export class NatsMessageRouterService {
       // request ID replays it, so this failed final response is safe and visible
       // to the caller as a timeout rather than a false success.
       log.warn('message-router', `failed to respond: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    if (parsed.ok && response.status !== 'error' && this.dependencies.dispatchAccepted) {
+      try {
+        await this.dependencies.dispatchAccepted(parsed.request, response)
+      } catch (error) {
+        // Durable acceptance has already been returned. The provider attempt
+        // owns its ledger state; transport failures must never become a false
+        // router rejection or disappear as a silent publication success.
+        log.warn('message-router', `final-mile dispatch failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
   }
 

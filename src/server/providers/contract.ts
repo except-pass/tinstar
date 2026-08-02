@@ -13,6 +13,11 @@ export interface ProviderDeliveryRecipient {
   sessionId: string
 }
 
+export interface ProviderDeliveryTarget extends ProviderDeliveryRecipient {
+  /** Fences a reused session name to the process selected by the router. */
+  incarnation: string
+}
+
 /**
  * The adapter may already have performed its final-mile side effect before a
  * malformed result is detected. Callers must not blind-retry when
@@ -54,10 +59,17 @@ export class ProviderDeliveryIdentityError extends Error {
  */
 export interface ProviderDeliveryRequest {
   messageId: string
+  deliveryId: string
   attempt: number
   acceptedAt: string
-  senderSessionId: string
-  recipient: ProviderDeliveryRecipient
+  sender: {
+    sessionId: string
+    incarnation: string
+  }
+  destination: {
+    subject: string
+  }
+  recipient: ProviderDeliveryTarget
   text: string
 }
 
@@ -184,6 +196,17 @@ export type ProviderDeliveryAdapter<TDetail extends object = object> =
   | ProviderAcceptanceOnlyDeliveryAdapter<TDetail>
   | ProviderConfirmingDeliveryAdapter<TDetail>
 
+/** Apply the router-stamp and stable-identity guards to a delivery-only adapter. */
+export function defineProviderDeliveryAdapter<TDetail extends object = object>(
+  providerId: string,
+  delivery: ProviderDeliveryAdapter<TDetail>,
+): ProviderDeliveryAdapter<TDetail> {
+  if (!providerId.trim() || providerId !== providerId.trim()) {
+    throw new TypeError('Provider delivery adapter id must be non-empty and trimmed')
+  }
+  return guardDeliveryAdapter(providerId, delivery)
+}
+
 export type ProviderObservationHandlers<TDetail extends object = object> = {
   [K in ProviderObservationKind]: (
     request: ProviderObservationRequestFor<K>,
@@ -287,6 +310,12 @@ function guardDeliveryAdapter<TDetail extends object>(
 ): ProviderDeliveryAdapter<TDetail> {
   const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
   const accept = async (request: ProviderDeliveryRequest) => {
+    const problem = providerDeliveryRequestProblem(request)
+    if (problem) {
+      throw new TypeError(
+        `Provider "${providerId}" delivery request is not router-stamped: ${problem}`,
+      )
+    }
     if (request.recipient.providerId !== providerId) {
       throw preflightDeliveryIdentityError(
         `Provider "${providerId}" delivery request is addressed to provider `
@@ -346,6 +375,25 @@ function guardDeliveryAdapter<TDetail extends object>(
   }
   rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
   return { accept, confirm }
+}
+
+function providerDeliveryRequestProblem(request: ProviderDeliveryRequest): string | null {
+  if (!request || typeof request !== 'object') return 'request must be an object'
+  if (!request.messageId?.trim()) return 'messageId must not be empty'
+  if (!request.deliveryId?.trim()) return 'deliveryId must not be empty'
+  if (!Number.isInteger(request.attempt) || request.attempt < 1) return 'attempt must be positive'
+  if (!request.acceptedAt?.trim() || Number.isNaN(Date.parse(request.acceptedAt))) {
+    return 'acceptedAt must be an ISO timestamp'
+  }
+  if (!request.sender?.sessionId?.trim() || !request.sender.incarnation?.trim()) {
+    return 'sender identity is incomplete'
+  }
+  if (!request.destination?.subject?.trim()) return 'destination subject must not be empty'
+  if (!request.recipient?.providerId?.trim()
+    || !request.recipient.sessionId?.trim()
+    || !request.recipient.incarnation?.trim()) return 'recipient identity is incomplete'
+  if (typeof request.text !== 'string' || !request.text.trim()) return 'text must not be empty'
+  return null
 }
 
 function preflightDeliveryIdentityError(

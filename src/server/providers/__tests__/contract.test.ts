@@ -444,10 +444,14 @@ describe('provider capability contract', () => {
 
     const acceptance = await acceptanceOnly.delivery!.accept({
       messageId: 'msg-boundary',
+      deliveryId: 'msg-boundary/d/1',
       attempt: 1,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.boundary' },
+      recipient: {
+        providerId: 'boundary', sessionId: 'run-boundary', incarnation: 'boundary-v1',
+      },
       text: 'Queued?',
     })
 
@@ -512,12 +516,15 @@ describe('provider capability contract', () => {
   it('keeps router acceptance separate from final-mile acceptance and confirmation', async () => {
     const request = {
       messageId: 'msg-7a51',
+      deliveryId: 'msg-7a51/d/1',
       attempt: 2,
       acceptedAt: '2026-07-30T11:59:59.000Z',
-      senderSessionId: 'run-sender',
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
       recipient: {
         providerId: 'forge',
         sessionId: 'run-forge',
+        incarnation: 'forge-v1',
       },
       text: 'Status?',
     }
@@ -707,10 +714,12 @@ describe('provider capability contract', () => {
     })
     const request = {
       messageId: 'msg-stable',
+      deliveryId: 'msg-stable/d/1',
       attempt: 3,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge', incarnation: 'forge-v1' },
       text: 'Still there?',
     }
 
@@ -777,10 +786,12 @@ describe('provider capability contract', () => {
     })
     const request = {
       messageId: 'msg-conservative-retry',
+      deliveryId: 'msg-conservative-retry/d/1',
       attempt: 1,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge', incarnation: 'forge-v1' },
       text: 'Do not duplicate me',
     }
 
@@ -831,10 +842,12 @@ describe('provider capability contract', () => {
     })
     const request = {
       messageId: 'msg-session-bound',
+      deliveryId: 'msg-session-bound/d/1',
       attempt: 1,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge', incarnation: 'forge-v1' },
       text: 'Right session?',
     }
 
@@ -893,10 +906,14 @@ describe('provider capability contract', () => {
 
     const misrouted = guarded.delivery!.accept({
       messageId: 'msg-wrong-provider',
+      deliveryId: 'msg-wrong-provider/d/1',
       attempt: 1,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'boundary', sessionId: 'run-boundary' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.boundary' },
+      recipient: {
+        providerId: 'boundary', sessionId: 'run-boundary', incarnation: 'boundary-v1',
+      },
       text: 'Do not send this',
     })
     await expect(misrouted).rejects.toThrow('addressed to provider "boundary"')
@@ -934,10 +951,12 @@ describe('provider capability contract', () => {
     })
     const acceptance = await delivery.accept({
       messageId: 'msg-cross-provider-confirm',
+      deliveryId: 'msg-cross-provider-confirm/d/1',
       attempt: 1,
       acceptedAt: CHECKED_AT,
-      senderSessionId: 'run-sender',
-      recipient: { providerId: 'forge', sessionId: 'run-forge' },
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge', incarnation: 'forge-v1' },
       text: 'Confirm?',
     })
     if (acceptance.state !== 'accepted') throw new Error('expected accepted delivery attempt')

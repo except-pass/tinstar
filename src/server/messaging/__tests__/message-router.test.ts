@@ -381,6 +381,7 @@ describe('NATS request/reply boundary', () => {
 
   it('rejects raw publications before acceptance and responds to valid requests', async () => {
     const responses: Uint8Array[] = []
+    const boundaryOrder: string[] = []
     const raw: NatsRouteMessage = {
       data: encodedRequest(),
       respond: vi.fn(() => false),
@@ -390,6 +391,7 @@ describe('NATS request/reply boundary', () => {
       reply: '_INBOX.reply',
       respond: vi.fn(data => {
         responses.push(data)
+        boundaryOrder.push('receipt')
         return true
       }),
     }
@@ -411,12 +413,17 @@ describe('NATS request/reply boundary', () => {
     }
     const route = vi.fn(async () => accepted())
     const observeAccepted = vi.fn()
+    const dispatchAccepted = vi.fn(async () => {
+      expect(responses).toHaveLength(1)
+      boundaryOrder.push('dispatch')
+    })
     const service = new NatsMessageRouterService({
       subject: '_route',
       authMasterKey: MASTER_KEY,
       connect: async () => connection,
       route,
       observeAccepted,
+      dispatchAccepted,
       reconnectDelayMs: 1,
     })
 
@@ -429,6 +436,11 @@ describe('NATS request/reply boundary', () => {
       REQUEST,
       expect.objectContaining({ status: 'accepted' }),
     )
+    expect(dispatchAccepted).toHaveBeenCalledWith(
+      REQUEST,
+      expect.objectContaining({ status: 'accepted' }),
+    )
+    expect(boundaryOrder).toEqual(['receipt', 'dispatch'])
     const response = JSON.parse(textDecoder.decode(responses[0]))
     expect(response).toMatchObject({
       payload: { status: 'accepted', requestId: 'req-7' },
