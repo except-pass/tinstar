@@ -25,7 +25,10 @@ export function ProviderQuotaCards({ observations, error, nowMs }: Props) {
       )}
       {observations.map(observation => (
         <ProviderQuotaCard
-          key={`${observation.providerId}\u0000${observation.scope.accountRef}`}
+          key={JSON.stringify([
+            observation.providerId,
+            observation.scope.accountRef,
+          ])}
           observation={observation}
           nowMs={now}
           refreshError={error}

@@ -100,18 +100,13 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
         zIndex: 30,
       }
 
-  if (snapshot?.state !== 'ready' && !hasProviderData) {
-    return (
-      <HudShell wrapStyle={wrapStyle} onClose={toggle}>
-        <TelemetryBootstrap snap={snapshot!} onRetry={handleRetry} />
-      </HudShell>
-    )
-  }
-
   const modelChips = Object.entries(snapshot?.cost.byModel ?? {}).slice(0, 2)
 
   return (
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
+      {snapshot && snapshot.state !== 'ready' && (
+        <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
+      )}
       <ProviderFleetObservations
         observations={providerObservations.observations}
         managedSessions={providerObservations.managedSessions}

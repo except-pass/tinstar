@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
 import type { ProviderAccountQuotaObservationWire } from '../../../domain/provider-observation-wire'
 import { ProviderQuotaCards } from '../ProviderQuotaCards'
@@ -80,6 +80,38 @@ describe('<ProviderQuotaCards>', () => {
     expect(within(codexTeamB).getByText('team-b')).toBeTruthy()
     expect(within(codexTeamB).getByText('75% left')).toBeTruthy()
     expect(within(codexTeamB).queryByText(/Primary window/)).toBeNull()
+  })
+
+  it('keeps tuple identities distinct when provider or account IDs contain NUL', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const observations = [
+        quota('provider\u0000account', 'suffix', [{
+          id: 'first',
+          label: 'First window',
+          windowMinutes: 300,
+          usedPercent: 10,
+        }]),
+        quota('provider', 'account\u0000suffix', [{
+          id: 'second',
+          label: 'Second window',
+          windowMinutes: 300,
+          usedPercent: 20,
+        }]),
+      ]
+
+      const view = render(<ProviderQuotaCards observations={observations} nowMs={NOW} />)
+      const titles = [...view.container.querySelectorAll<HTMLElement>('.provider-quota-card')]
+        .map(card => card.title)
+
+      expect(titles).toContain('provider\u0000account · suffix\nprovider\u0000account native quota\nfresh · 2m ago')
+      expect(titles).toContain('provider · account\u0000suffix\nprovider native quota\nfresh · 2m ago')
+      expect(errorSpy.mock.calls.some(call => (
+        call.some(value => String(value).includes('same key'))
+      ))).toBe(false)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('shows stale freshness and provider source directly on the card', () => {
