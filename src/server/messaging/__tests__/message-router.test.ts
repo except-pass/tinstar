@@ -17,6 +17,7 @@ import {
   deliveryAuthKeyFromEnvironment,
   deliverySenderFromEnvironment,
   messageRouterMasterKey,
+  messageRouterActivationDecision,
   messageRouterSubject,
   reserveMessageRouterOwner,
   resetMessageRouterOwnersForTests,
@@ -309,6 +310,15 @@ describe('provider-neutral reply MCP handler', () => {
 })
 
 describe('NATS request/reply boundary', () => {
+  it.each([
+    [undefined, { cleanup: false, continueStartup: true, warnFailure: false }],
+    ['activated', { cleanup: false, continueStartup: true, warnFailure: false }],
+    ['superseded', { cleanup: true, continueStartup: false, warnFailure: false }],
+    ['failed', { cleanup: true, continueStartup: false, warnFailure: true }],
+  ] as const)('makes the backend cleanup decision explicit for %s', (result, expected) => {
+    expect(messageRouterActivationDecision(result)).toEqual(expected)
+  })
+
   it('serially replaces the process responder when backend initialization repeats', async () => {
     const calls: string[] = []
     let releaseFirstStop!: () => void

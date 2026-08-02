@@ -91,6 +91,7 @@ import {
 import { deriveMessageRouterSessionKey } from './messaging/message-router-auth'
 import {
   NatsMessageRouterService,
+  messageRouterActivationDecision,
   messageRouterMasterKey,
   messageRouterSubject,
   reserveMessageRouterOwner,
@@ -743,6 +744,7 @@ export function initBackend(): RouteContext {
   let natsHealth: NatsHealthMonitor | undefined
   let messageRouterOwner: MessageRouterOwnerLease | undefined
   let deliveryLedger: DeliveryLedger | undefined
+  let deliveryRetryScheduler: DeliveryRetryScheduler | undefined
   let backendContext: RouteContext | null = null
   let markBackendContextReady!: () => void
   const backendContextReady = new Promise<void>(resolve => {
@@ -755,7 +757,11 @@ export function initBackend(): RouteContext {
     if (natsBackendCleanup) return natsBackendCleanup
     natsBackendCleanup = (async () => {
       try { natsHealth?.stop() } catch (e) { log.debug('nats-backend', `health stop: ${(e as Error).message}`) }
-      try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('nats-backend', `delivery retry stop: ${(e as Error).message}`) }
+      try {
+        if (deliveryRetryScheduler) {
+          await stopDeliveryRetryScheduler(deliveryRetryScheduler)
+        }
+      } catch (e) { log.debug('nats-backend', `delivery retry stop: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('nats-backend', `traffic stop: ${(e as Error).message}`) }
     })()
     return natsBackendCleanup
@@ -820,7 +826,6 @@ export function initBackend(): RouteContext {
     // responder. A newer HMR backend can supersede this lease before NATS is
     // ready; in that case none of this stale backend's setup runs.
     const activated = await messageRouterOwner?.activate(async () => {
-      await stopDeliveryRetryScheduler()
       if (sessionConfig) {
         deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
       }
@@ -834,9 +839,8 @@ export function initBackend(): RouteContext {
       // explicitly retry-safe failures/deferrals are attempted; ambiguous
       // in-flight work is never duplicated blindly. The persisted recipient
       // incarnation remains the target when a session name has been reused.
-      const recovered = await replaceDeliveryRetryScheduler(
-        new DeliveryRetryScheduler(deliveryLedger, providerRegistry),
-      )
+      deliveryRetryScheduler = new DeliveryRetryScheduler(deliveryLedger, providerRegistry)
+      const recovered = await replaceDeliveryRetryScheduler(deliveryRetryScheduler)
       for (const outcome of recovered) {
         if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
           log.warn('message-router', `recovered delivery ${outcome.deliveryId} ${outcome.state}`, {
@@ -883,11 +887,14 @@ export function initBackend(): RouteContext {
         cleanup: stopNatsBackendResources,
       }
     })
-    if (messageRouterOwner && activated !== 'activated') {
+    const activationDecision = messageRouterActivationDecision(activated)
+    if (activationDecision.cleanup) {
       await stopNatsBackendResources()
-      if (activated === 'failed') {
+      if (activationDecision.warnFailure) {
         log.warn('message-router', 'backend NATS activation failed; Saloon rehydration and health monitoring were skipped')
       }
+    }
+    if (!activationDecision.continueStartup) {
       return
     }
 

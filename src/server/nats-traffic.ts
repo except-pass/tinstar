@@ -27,7 +27,7 @@ export class NatsTrafficBridge {
   private nc: NatsConnection | null = null
   private sc = StringCodec()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private running = false
+  private generation = 0
 
   // Per-widget subscriptions
   private widgetSubscriptions = new Map<string, Set<string>>()
@@ -46,25 +46,32 @@ export class NatsTrafficBridge {
   }
 
   async start(): Promise<void> {
-    this.running = true
+    const generation = ++this.generation
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     try {
       const connection = await connect({ servers: this.natsUrl })
-      if (!this.running) {
-        await connection.drain()
+      if (this.generation !== generation) {
+        await this.drainStaleConnection(connection)
         return
       }
+      const previous = this.nc
+      for (const sub of this.activeSubs.values()) sub.unsubscribe()
+      this.activeSubs.clear()
       this.nc = connection
       log.info('nats-traffic', `connected to ${this.natsUrl}`)
 
       // Handle connection close
       void connection.closed().then(() => {
         log.info('nats-traffic', 'connection closed')
-        const wasCurrent = this.nc === connection
+        const wasCurrent = this.generation === generation && this.nc === connection
         if (wasCurrent) {
           this.nc = null
           this.activeSubs.clear()
         }
-        if (this.running && wasCurrent) this.scheduleReconnect()
+        if (wasCurrent) this.scheduleReconnect(generation)
       })
 
       // Re-establish any subscriptions that were declared while we were
@@ -72,9 +79,12 @@ export class NatsTrafficBridge {
       // preserved across stop()/start() so an explicit bounce resumes
       // observing without callers having to re-register.
       this.syncSubscriptions()
+      if (previous && previous !== connection) {
+        await this.drainStaleConnection(previous)
+      }
     } catch (err) {
       log.warn('nats-traffic', `failed to connect: ${(err as Error).message}`)
-      if (this.running) this.scheduleReconnect()
+      if (this.generation === generation) this.scheduleReconnect(generation)
     }
   }
 
@@ -192,12 +202,20 @@ export class NatsTrafficBridge {
     }
   }
 
-  private scheduleReconnect(): void {
-    if (!this.running || this.reconnectTimer) return
+  private scheduleReconnect(generation: number): void {
+    if (this.generation !== generation || this.reconnectTimer) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      if (this.running) void this.start()
+      if (this.generation === generation) void this.start()
     }, 5000)
+  }
+
+  private async drainStaleConnection(connection: NatsConnection): Promise<void> {
+    try {
+      await connection.drain()
+    } catch (err) {
+      log.warn('nats-traffic', `failed to drain stale connection: ${(err as Error).message}`)
+    }
   }
 
   /**
@@ -206,7 +224,7 @@ export class NatsTrafficBridge {
    * need on the next connect, and is preserved across an explicit bounce.
    */
   async stop(): Promise<void> {
-    this.running = false
+    ++this.generation
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -215,9 +233,8 @@ export class NatsTrafficBridge {
       sub.unsubscribe()
     }
     this.activeSubs.clear()
-    if (this.nc) {
-      await this.nc.drain()
-      this.nc = null
-    }
+    const connection = this.nc
+    this.nc = null
+    if (connection) await connection.drain()
   }
 }

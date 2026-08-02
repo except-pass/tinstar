@@ -368,8 +368,25 @@ export async function replaceDeliveryRetryScheduler(
   return outcomes
 }
 
-export async function stopDeliveryRetryScheduler(): Promise<void> {
+export async function stopDeliveryRetryScheduler(
+  expected?: DeliveryRetryScheduler,
+): Promise<void> {
   const owner = processDeliveryRetryOwner()
+  if (expected) {
+    // Generation cleanup must only retire the scheduler that generation
+    // installed. Do not advance the global generation: a newer replacement may
+    // already be queued behind the current transition.
+    const stoppingExpected = owner.transition.then(async () => {
+      if (owner.active !== expected) return
+      owner.active = null
+      await expected.stop()
+    })
+    owner.transition = stoppingExpected.catch(() => {})
+    await stoppingExpected
+    return
+  }
+
+  // Unscoped stop is reserved for whole-process shutdown/test reset.
   ++owner.generation
   const stopping = owner.transition.then(async () => {
     const current = owner.active

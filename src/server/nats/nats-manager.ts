@@ -14,6 +14,7 @@ export class NatsManager {
   url: string
 
   private supervisor: Supervisor | null = null
+  private supervisorStarted = false
   private readonly port: number
   private readonly configRoot: string
   private readonly external: boolean
@@ -29,6 +30,10 @@ export class NatsManager {
   }
 
   async start(): Promise<void> {
+    if (this.supervisor && !this.supervisorStarted) {
+      await this.supervisor.stop()
+      this.supervisor = null
+    }
     if (this.external) {
       this.state = 'ready'
       log.info('nats', `using external NATS server at ${this.url}`)
@@ -77,6 +82,7 @@ export class NatsManager {
       })
 
       await this.supervisor.start()
+      this.supervisorStarted = true
       this.state = this.supervisor.state
       if (this.state === 'ready') {
         log.info('nats', `nats-server ready on ${this.url}`, { pid: this.supervisor.pid })
@@ -94,8 +100,14 @@ export class NatsManager {
       await this.supervisor.stop()
       this.supervisor = null
     }
+    this.supervisorStarted = false
     if (!this.external) this.state = 'idle'
     log.info('nats', 'nats-server stopped')
+  }
+
+  /** A started degraded supervisor owns its health/restart loop and is reused. */
+  hasSelfHealingSupervisor(): boolean {
+    return this.supervisor !== null && this.supervisorStarted
   }
 
   private async probe(): Promise<boolean> {
@@ -141,7 +153,15 @@ function processNatsManagerOwner(): ProcessNatsManagerOwner {
  */
 export async function startProcessNatsManager(): Promise<NatsManager> {
   const owner = processNatsManagerOwner()
-  if (owner.manager.state !== 'idle' && !owner.startPromise) return owner.manager
+  const canInspectSupervisor = typeof owner.manager.hasSelfHealingSupervisor === 'function'
+  const retryableFailedInitialization = owner.manager.state === 'degraded'
+    && canInspectSupervisor
+    && !owner.manager.hasSelfHealingSupervisor()
+  if (
+    owner.manager.state !== 'idle'
+    && !retryableFailedInitialization
+    && !owner.startPromise
+  ) return owner.manager
   if (!owner.startPromise) {
     let settled!: Promise<void>
     settled = owner.manager.start().finally(() => {

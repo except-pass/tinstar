@@ -600,6 +600,27 @@ export type MessageRouterActivationResult =
   | 'superseded'
   | 'failed'
 
+export interface MessageRouterActivationDecision {
+  cleanup: boolean
+  continueStartup: boolean
+  warnFailure: boolean
+}
+
+/** Backend policy for the router-owner outcome; undefined means no owner. */
+export function messageRouterActivationDecision(
+  result: MessageRouterActivationResult | undefined,
+): MessageRouterActivationDecision {
+  switch (result) {
+    case 'superseded':
+      return { cleanup: true, continueStartup: false, warnFailure: false }
+    case 'failed':
+      return { cleanup: true, continueStartup: false, warnFailure: true }
+    case 'activated':
+    case undefined:
+      return { cleanup: false, continueStartup: true, warnFailure: false }
+  }
+}
+
 interface PreparedMessageRouter {
   service: NatsMessageRouterService
   cleanup?: () => Promise<void>

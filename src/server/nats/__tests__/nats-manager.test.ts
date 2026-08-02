@@ -61,4 +61,23 @@ describe('NatsManager', () => {
     await stopProcessNatsManager()
     expect(stop).toHaveBeenCalledOnce()
   })
+
+  it('retries degraded initialization without duplicating a recovered manager', async () => {
+    const start = vi.spyOn(NatsManager.prototype, 'start')
+      .mockImplementationOnce(async function (this: NatsManager) {
+        this.state = 'degraded'
+      })
+      .mockImplementationOnce(async function (this: NatsManager) {
+        this.state = 'ready'
+      })
+
+    const failed = await startProcessNatsManager()
+    expect(failed.state).toBe('degraded')
+    const recovered = await startProcessNatsManager()
+    const reused = await startProcessNatsManager()
+
+    expect(recovered).toBe(failed)
+    expect(reused).toBe(recovered)
+    expect(start).toHaveBeenCalledTimes(2)
+  })
 })

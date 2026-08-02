@@ -74,6 +74,38 @@ describe('NatsTrafficBridge.start() re-syncs subscriptions', () => {
     expect(nats.__fakeNc.drain).toHaveBeenCalledOnce()
     expect(bridge.status()).toEqual({ connection: 'down' })
   })
+
+  it('keeps the newest connection across overlapping start-stop-start calls', async () => {
+    const nats = await import('nats') as any
+    const connection = () => ({
+      ...nats.__fakeNc,
+      drain: vi.fn(async () => {}),
+      closed: vi.fn(() => new Promise(() => {})),
+      isClosed: vi.fn(() => false),
+    })
+    const stale = connection()
+    const current = connection()
+    let releaseStale!: (connection: typeof stale) => void
+    let releaseCurrent!: (connection: typeof current) => void
+    const staleGate = new Promise<typeof stale>(resolve => { releaseStale = resolve })
+    const currentGate = new Promise<typeof current>(resolve => { releaseCurrent = resolve })
+    nats.connect
+      .mockImplementationOnce(() => staleGate)
+      .mockImplementationOnce(() => currentGate)
+    const bridge = new NatsTrafficBridge(fakeSse)
+
+    const staleStart = bridge.start()
+    await bridge.stop()
+    const currentStart = bridge.start()
+    releaseCurrent(current)
+    await currentStart
+    releaseStale(stale)
+    await staleStart
+
+    expect(stale.drain).toHaveBeenCalledOnce()
+    expect(current.drain).not.toHaveBeenCalled()
+    expect(bridge.status()).toEqual({ connection: 'up' })
+  })
 })
 
 describe('bounceNatsTraffic(bridge)', () => {

@@ -9,6 +9,8 @@ import {
   DeliveryRetryScheduler,
   dispatchAcceptedMessage,
   recoverAcceptedMessages,
+  replaceDeliveryRetryScheduler,
+  runDeliveryRetrySchedulerNow,
   stopDeliveryRetryScheduler,
 } from '../delivery-dispatch'
 import { DeliveryLedger } from '../delivery-ledger'
@@ -336,6 +338,41 @@ describe('durable provider dispatch', () => {
     expect(second.ledger.getDelivery('msg-7/d/1')).toMatchObject({
       state: 'delivered', attempt: 1,
     })
+  })
+
+  it('does not let stale generation cleanup stop the newer retry scheduler', async () => {
+    let firstStarted!: () => void
+    let releaseFirst!: () => void
+    const firstStartedGate = new Promise<void>(resolve => { firstStarted = resolve })
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const first = {
+      start: vi.fn(async () => {
+        firstStarted()
+        await firstGate
+        return []
+      }),
+      stop: vi.fn(async () => {}),
+      runNow: vi.fn(async () => []),
+    } as unknown as DeliveryRetryScheduler
+    const second = {
+      start: vi.fn(async () => []),
+      stop: vi.fn(async () => {}),
+      runNow: vi.fn(async () => []),
+    } as unknown as DeliveryRetryScheduler
+
+    const firstActivation = replaceDeliveryRetryScheduler(first)
+    await firstStartedGate
+    const secondActivation = replaceDeliveryRetryScheduler(second)
+    releaseFirst()
+    await firstActivation
+    await secondActivation
+
+    await stopDeliveryRetryScheduler(first)
+    await runDeliveryRetrySchedulerNow()
+
+    expect(first.stop).toHaveBeenCalledOnce()
+    expect(second.stop).not.toHaveBeenCalled()
+    expect(second.runNow).toHaveBeenCalledOnce()
   })
 
   it('recovers accepted work after restart with the persisted recipient incarnation', async () => {
