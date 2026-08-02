@@ -370,7 +370,7 @@ describe('durable provider dispatch', () => {
     await stopDeliveryRetryScheduler(first)
     await runDeliveryRetrySchedulerNow()
 
-    expect(first.stop).toHaveBeenCalled()
+    expect(first.stop).toHaveBeenCalledTimes(2)
     expect(second.stop).not.toHaveBeenCalled()
     expect(second.runNow).toHaveBeenCalledOnce()
   })
@@ -387,6 +387,17 @@ describe('durable provider dispatch', () => {
     await expect(replaceDeliveryRetryScheduler(scheduler)).rejects.toThrow('ledger read failed')
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reports both scheduler start and rollback failures', async () => {
+    const scheduler = {
+      start: vi.fn(async () => { throw new Error('initial sweep failed') }),
+      stop: vi.fn(async () => { throw new Error('timer cleanup failed') }),
+    } as unknown as DeliveryRetryScheduler
+
+    await expect(replaceDeliveryRetryScheduler(scheduler)).rejects.toThrow(
+      'retry scheduler start failed (initial sweep failed); rollback failed (timer cleanup failed)',
+    )
   })
 
   it('recovers accepted work after restart with the persisted recipient incarnation', async () => {

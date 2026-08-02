@@ -47,14 +47,19 @@ describe('NatsManager', () => {
   })
 
   it('contains cleanup failure from an incomplete prior supervisor', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const mgr = new NatsManager()
+    const staleStop = vi.fn(async () => { throw new Error('old stop failed') })
     Object.assign(mgr as unknown as Record<string, unknown>, {
-      supervisor: { stop: vi.fn(async () => { throw new Error('old stop failed') }) },
+      supervisor: { stop: staleStop },
       supervisorStarted: false,
     })
 
     await expect(mgr.start()).resolves.toBeUndefined()
     expect(mgr.state).toBe('degraded')
+    await expect(mgr.start()).resolves.toBeUndefined()
+    expect(mgr.state).toBe('ready')
+    expect(staleStop).toHaveBeenCalledOnce()
   })
 
   it('reuses one process manager across HMR generations until process shutdown', async () => {
@@ -107,9 +112,10 @@ describe('NatsManager', () => {
   })
 
   it('retries a degraded legacy manager with no supervisor capability or instance', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const legacy = {
       state: 'degraded',
-      start: vi.fn(async function (this: { state: string }) { this.state = 'ready' }),
+      start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } as unknown as NatsManager
     const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
@@ -120,14 +126,38 @@ describe('NatsManager', () => {
 
     const recovered = await startProcessNatsManager()
 
-    expect(recovered).toBe(legacy)
-    expect(legacy.start).toHaveBeenCalledOnce()
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+    expect(legacy.stop).toHaveBeenCalledOnce()
+    expect(legacy.start).not.toHaveBeenCalled()
   })
 
-  it('reuses a degraded legacy manager that already owns a supervisor', async () => {
+  it('replaces a degraded legacy manager whose supervisor never started health', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const legacy = {
       state: 'degraded',
-      supervisor: {},
+      supervisor: { healthTimer: null },
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsManager
+    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
+      manager: legacy,
+      startPromise: null,
+    }
+
+    const recovered = await startProcessNatsManager()
+
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+    expect(legacy.stop).toHaveBeenCalledOnce()
+    expect(legacy.start).not.toHaveBeenCalled()
+  })
+
+  it('reuses a degraded legacy manager with a running supervisor health loop', async () => {
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: {} },
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } as unknown as NatsManager
@@ -142,6 +172,7 @@ describe('NatsManager', () => {
 
     expect(first).toBe(legacy)
     expect(second).toBe(legacy)
+    expect(legacy.stop).not.toHaveBeenCalled()
     expect(legacy.start).not.toHaveBeenCalled()
   })
 })

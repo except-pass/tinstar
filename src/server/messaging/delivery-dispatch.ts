@@ -362,9 +362,11 @@ export async function replaceDeliveryRetryScheduler(
       try {
         await scheduler.stop()
       } catch (stopError) {
+        const startMessage = error instanceof Error ? error.message : String(error)
+        const stopMessage = stopError instanceof Error ? stopError.message : String(stopError)
         throw new AggregateError(
           [error, stopError],
-          'retry scheduler start and rollback both failed',
+          `retry scheduler start failed (${startMessage}); rollback failed (${stopMessage})`,
         )
       }
       throw error

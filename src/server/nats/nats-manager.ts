@@ -32,8 +32,10 @@ export class NatsManager {
   async start(): Promise<void> {
     try {
       if (this.supervisor && !this.supervisorStarted) {
-        await this.supervisor.stop()
+        const staleSupervisor = this.supervisor
         this.supervisor = null
+        this.supervisorStarted = false
+        await staleSupervisor.stop()
       }
       if (this.external) {
         this.state = 'ready'
@@ -154,11 +156,17 @@ function processNatsManagerOwner(): ProcessNatsManagerOwner {
 export async function startProcessNatsManager(): Promise<NatsManager> {
   const owner = processNatsManagerOwner()
   const canInspectSupervisor = typeof owner.manager.hasSelfHealingSupervisor === 'function'
-  const legacySupervisor = (owner.manager as unknown as { supervisor?: unknown }).supervisor
+  const legacySupervisor = (owner.manager as unknown as {
+    supervisor?: { healthTimer?: unknown } | null
+  }).supervisor
+  const legacySelfHealing = legacySupervisor?.healthTimer != null
+  const replaceLegacyManager = owner.manager.state === 'degraded'
+    && !canInspectSupervisor
+    && !legacySelfHealing
   const retryableFailedInitialization = owner.manager.state === 'degraded'
     && (canInspectSupervisor
       ? !owner.manager.hasSelfHealingSupervisor()
-      : legacySupervisor == null)
+      : !legacySelfHealing)
   if (
     owner.manager.state !== 'idle'
     && !retryableFailedInitialization
@@ -166,7 +174,22 @@ export async function startProcessNatsManager(): Promise<NatsManager> {
   ) return owner.manager
   if (!owner.startPromise) {
     let settled!: Promise<void>
-    settled = owner.manager.start().finally(() => {
+    settled = (async () => {
+      if (replaceLegacyManager) {
+        const legacyManager = owner.manager
+        try {
+          await legacyManager.stop()
+        } catch (error) {
+          log.error(
+            'nats',
+            `failed to retire legacy nats manager before retry: ${error instanceof Error ? error.message : String(error)}`,
+          )
+          return
+        }
+        if (owner.manager === legacyManager) owner.manager = new NatsManager()
+      }
+      await owner.manager.start()
+    })().finally(() => {
       if (owner.startPromise === settled) owner.startPromise = null
     })
     owner.startPromise = settled
