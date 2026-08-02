@@ -356,7 +356,19 @@ export async function replaceDeliveryRetryScheduler(
     if (previous && previous !== scheduler) await previous.stop()
     if (owner.generation !== generation) return
 
-    outcomes = await scheduler.start()
+    try {
+      outcomes = await scheduler.start()
+    } catch (error) {
+      try {
+        await scheduler.stop()
+      } catch (stopError) {
+        throw new AggregateError(
+          [error, stopError],
+          'retry scheduler start and rollback both failed',
+        )
+      }
+      throw error
+    }
     if (owner.generation !== generation) {
       await scheduler.stop()
       return
@@ -377,8 +389,7 @@ export async function stopDeliveryRetryScheduler(
     // installed. Do not advance the global generation: a newer replacement may
     // already be queued behind the current transition.
     const stoppingExpected = owner.transition.then(async () => {
-      if (owner.active !== expected) return
-      owner.active = null
+      if (owner.active === expected) owner.active = null
       await expected.stop()
     })
     owner.transition = stoppingExpected.catch(() => {})

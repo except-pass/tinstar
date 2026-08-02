@@ -370,9 +370,23 @@ describe('durable provider dispatch', () => {
     await stopDeliveryRetryScheduler(first)
     await runDeliveryRetrySchedulerNow()
 
-    expect(first.stop).toHaveBeenCalledOnce()
+    expect(first.stop).toHaveBeenCalled()
     expect(second.stop).not.toHaveBeenCalled()
     expect(second.runNow).toHaveBeenCalledOnce()
+  })
+
+  it('clears the retry interval when the initial recovery sweep rejects', async () => {
+    vi.useFakeTimers()
+    const scheduler = new DeliveryRetryScheduler({
+      listRecoverable: () => { throw new Error('ledger read failed') },
+      getMessage: vi.fn(),
+      getDelivery: vi.fn(),
+      transition: vi.fn(),
+    }, createDefaultProviderRegistry(), { pollMs: 10 })
+
+    await expect(replaceDeliveryRetryScheduler(scheduler)).rejects.toThrow('ledger read failed')
+
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('recovers accepted work after restart with the persisted recipient incarnation', async () => {

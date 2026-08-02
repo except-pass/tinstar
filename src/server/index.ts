@@ -888,13 +888,11 @@ export function initBackend(): RouteContext {
       }
     })
     const activationDecision = messageRouterActivationDecision(activated)
-    if (activationDecision.cleanup) {
+    if (!activationDecision.continueStartup) {
       await stopNatsBackendResources()
       if (activationDecision.warnFailure) {
         log.warn('message-router', 'backend NATS activation failed; Saloon rehydration and health monitoring were skipped')
       }
-    }
-    if (!activationDecision.continueStartup) {
       return
     }
 

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 import { NatsTrafficBridge } from '../nats-traffic'
 import { bounceNatsTraffic } from '../api/natsTrafficBounce'
 
@@ -36,6 +36,10 @@ const fakeSse = { broadcastEvent: vi.fn() } as any
 describe('NatsTrafficBridge.start() re-syncs subscriptions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('re-subscribes to known widget subjects on start() after a stop()', async () => {
@@ -104,6 +108,72 @@ describe('NatsTrafficBridge.start() re-syncs subscriptions', () => {
 
     expect(stale.drain).toHaveBeenCalledOnce()
     expect(current.drain).not.toHaveBeenCalled()
+    expect(bridge.status()).toEqual({ connection: 'up' })
+  })
+
+  it('ignores stale closes after stop but reconnects the current generation', async () => {
+    vi.useFakeTimers()
+    const nats = await import('nats') as any
+    const controlledConnection = () => {
+      let close!: () => void
+      const closed = new Promise<void>(resolve => { close = resolve })
+      return {
+        ...nats.__fakeNc,
+        drain: vi.fn(async () => {}),
+        closed: vi.fn(() => closed),
+        isClosed: vi.fn(() => false),
+        close,
+      }
+    }
+    const stopped = controlledConnection()
+    const current = controlledConnection()
+    nats.connect
+      .mockResolvedValueOnce(stopped)
+      .mockResolvedValueOnce(current)
+    const bridge = new NatsTrafficBridge(fakeSse)
+
+    await bridge.start()
+    await bridge.stop()
+    stopped.close()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(nats.connect).toHaveBeenCalledOnce()
+
+    await bridge.start()
+    current.close()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(nats.connect).toHaveBeenCalledTimes(3)
+  })
+
+  it('ignores a replaced connection close while the current connection stays live', async () => {
+    vi.useFakeTimers()
+    const nats = await import('nats') as any
+    const controlledConnection = () => {
+      let close!: () => void
+      const closed = new Promise<void>(resolve => { close = resolve })
+      return {
+        ...nats.__fakeNc,
+        drain: vi.fn(async () => {}),
+        closed: vi.fn(() => closed),
+        isClosed: vi.fn(() => false),
+        close,
+      }
+    }
+    const replaced = controlledConnection()
+    const current = controlledConnection()
+    nats.connect
+      .mockResolvedValueOnce(replaced)
+      .mockResolvedValueOnce(current)
+    const bridge = new NatsTrafficBridge(fakeSse)
+
+    await bridge.start()
+    await bridge.start()
+    replaced.close()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(nats.connect).toHaveBeenCalledTimes(2)
     expect(bridge.status()).toEqual({ connection: 'up' })
   })
 })

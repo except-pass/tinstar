@@ -311,10 +311,10 @@ describe('provider-neutral reply MCP handler', () => {
 
 describe('NATS request/reply boundary', () => {
   it.each([
-    [undefined, { cleanup: false, continueStartup: true, warnFailure: false }],
-    ['activated', { cleanup: false, continueStartup: true, warnFailure: false }],
-    ['superseded', { cleanup: true, continueStartup: false, warnFailure: false }],
-    ['failed', { cleanup: true, continueStartup: false, warnFailure: true }],
+    [undefined, { continueStartup: true, warnFailure: false }],
+    ['activated', { continueStartup: true, warnFailure: false }],
+    ['superseded', { continueStartup: false, warnFailure: false }],
+    ['failed', { continueStartup: false, warnFailure: true }],
   ] as const)('makes the backend cleanup decision explicit for %s', (result, expected) => {
     expect(messageRouterActivationDecision(result)).toEqual(expected)
   })

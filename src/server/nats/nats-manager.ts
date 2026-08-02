@@ -30,39 +30,39 @@ export class NatsManager {
   }
 
   async start(): Promise<void> {
-    if (this.supervisor && !this.supervisorStarted) {
-      await this.supervisor.stop()
-      this.supervisor = null
-    }
-    if (this.external) {
-      this.state = 'ready'
-      log.info('nats', `using external NATS server at ${this.url}`)
-      return
-    }
-
-    if (process.env.TINSTAR_FAST_SIM === '1') {
-      this.state = 'ready'
-      log.info('nats', 'fast-sim mode: skipping real NATS server')
-      return
-    }
-
-    if (process.platform !== 'darwin' && process.platform !== 'linux') {
-      this.state = 'disabled'
-      log.info('nats', `disabled: unsupported platform ${process.platform}`)
-      return
-    }
-
-    const binRoot = join(this.configRoot, 'bin')
-    const stateDir = join(this.configRoot, 'nats')
-    // JetStream needs its own dir for stream storage; keep it under the
-    // existing nats state dir but separate from the supervisor's state files.
-    // Always-on so channel-servers passing --jetstream just work; clients
-    // that don't pass it use core pub/sub unchanged.
-    const jetstreamDir = join(stateDir, 'jetstream')
-    mkdirSync(stateDir, { recursive: true })
-    mkdirSync(jetstreamDir, { recursive: true })
-
     try {
+      if (this.supervisor && !this.supervisorStarted) {
+        await this.supervisor.stop()
+        this.supervisor = null
+      }
+      if (this.external) {
+        this.state = 'ready'
+        log.info('nats', `using external NATS server at ${this.url}`)
+        return
+      }
+
+      if (process.env.TINSTAR_FAST_SIM === '1') {
+        this.state = 'ready'
+        log.info('nats', 'fast-sim mode: skipping real NATS server')
+        return
+      }
+
+      if (process.platform !== 'darwin' && process.platform !== 'linux') {
+        this.state = 'disabled'
+        log.info('nats', `disabled: unsupported platform ${process.platform}`)
+        return
+      }
+
+      const binRoot = join(this.configRoot, 'bin')
+      const stateDir = join(this.configRoot, 'nats')
+      // JetStream needs its own dir for stream storage; keep it under the
+      // existing nats state dir but separate from the supervisor's state files.
+      // Always-on so channel-servers passing --jetstream just work; clients
+      // that don't pass it use core pub/sub unchanged.
+      const jetstreamDir = join(stateDir, 'jetstream')
+      mkdirSync(stateDir, { recursive: true })
+      mkdirSync(jetstreamDir, { recursive: true })
+
       this.state = 'downloading'
       const target = resolveNatsTarget(process.platform, process.arch)
       log.info('nats', `installing nats-server@${target.version}`)
@@ -154,9 +154,11 @@ function processNatsManagerOwner(): ProcessNatsManagerOwner {
 export async function startProcessNatsManager(): Promise<NatsManager> {
   const owner = processNatsManagerOwner()
   const canInspectSupervisor = typeof owner.manager.hasSelfHealingSupervisor === 'function'
+  const legacySupervisor = (owner.manager as unknown as { supervisor?: unknown }).supervisor
   const retryableFailedInitialization = owner.manager.state === 'degraded'
-    && canInspectSupervisor
-    && !owner.manager.hasSelfHealingSupervisor()
+    && (canInspectSupervisor
+      ? !owner.manager.hasSelfHealingSupervisor()
+      : legacySupervisor == null)
   if (
     owner.manager.state !== 'idle'
     && !retryableFailedInitialization

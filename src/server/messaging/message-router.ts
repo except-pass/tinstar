@@ -601,7 +601,6 @@ export type MessageRouterActivationResult =
   | 'failed'
 
 export interface MessageRouterActivationDecision {
-  cleanup: boolean
   continueStartup: boolean
   warnFailure: boolean
 }
@@ -612,12 +611,12 @@ export function messageRouterActivationDecision(
 ): MessageRouterActivationDecision {
   switch (result) {
     case 'superseded':
-      return { cleanup: true, continueStartup: false, warnFailure: false }
+      return { continueStartup: false, warnFailure: false }
     case 'failed':
-      return { cleanup: true, continueStartup: false, warnFailure: true }
+      return { continueStartup: false, warnFailure: true }
     case 'activated':
     case undefined:
-      return { cleanup: false, continueStartup: true, warnFailure: false }
+      return { continueStartup: true, warnFailure: false }
   }
 }
 
