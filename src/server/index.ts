@@ -1515,7 +1515,8 @@ export function acquireBackendSingletonForPlugin(
   const result = (deps.acquire ?? acquireBackendSingleton)(lockPath)
   if (!result.acquired) {
     const description = describeSingletonFailure(result, configDir, { allowForce: false })
-    throw new Error(`${description.headline} ${description.guidance}`)
+    const detail = description.detail ? ` ${description.detail}` : ''
+    throw new Error(`${description.headline}${detail} ${description.guidance}`)
   }
   // The marker outlives only this process; drop it on exit exactly as
   // standalone.ts does, so the next start sees a clean (or stealable) lock.

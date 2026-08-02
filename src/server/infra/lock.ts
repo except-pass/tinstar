@@ -92,7 +92,14 @@ function makeRelease(dir: string): ReleaseFn {
   }
 }
 
-export async function acquireLock(path: string): Promise<ReleaseFn> {
+interface LockAcquireDependencies {
+  markerReplacement?: Partial<MarkerReplacementOps>
+}
+
+export async function acquireLock(
+  path: string,
+  deps: LockAcquireDependencies = {},
+): Promise<ReleaseFn> {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS
@@ -101,18 +108,21 @@ export async function acquireLock(path: string): Promise<ReleaseFn> {
     if (tryCreateMarker(dir)) return makeRelease(dir)
     if (!stealAttempted && !isOwnerAlive(dir)) {
       stealAttempted = true
-      if (stealLock(dir)) return makeRelease(dir)
+      if (stealLock(dir, deps.markerReplacement)) return makeRelease(dir)
     }
     if (Date.now() >= deadline) throw new Error(`timed out acquiring lock at ${path}`)
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
 }
 
-export async function tryAcquireLock(path: string): Promise<ReleaseFn | null> {
+export async function tryAcquireLock(
+  path: string,
+  deps: LockAcquireDependencies = {},
+): Promise<ReleaseFn | null> {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
   if (tryCreateMarker(dir)) return makeRelease(dir)
-  if (!isOwnerAlive(dir) && stealLock(dir)) return makeRelease(dir)
+  if (!isOwnerAlive(dir) && stealLock(dir, deps.markerReplacement)) return makeRelease(dir)
   return null
 }
 
@@ -222,6 +232,7 @@ export interface SingletonFailureDescription {
   logMessage: string
   headline: string
   guidance: string
+  detail?: string
 }
 
 /** One operator-facing mapping shared by standalone and Vite-plugin startup. */
@@ -255,6 +266,7 @@ export function describeSingletonFailure(
         logMessage: `could not claim the tinstar backend marker on ${configDir}${result.detail ? `: ${result.detail}` : ''}`,
         headline: `Could not claim the tinstar backend marker on ${configDir}.`,
         guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+        ...(result.detail ? { detail: result.detail } : {}),
       }
     case undefined:
       return {
@@ -266,7 +278,11 @@ export function describeSingletonFailure(
       }
     default: {
       const exhaustiveFailure: never = result.failure
-      return exhaustiveFailure
+      return {
+        logMessage: `unrecognized tinstar backend singleton failure on ${configDir}: ${String(exhaustiveFailure)}`,
+        headline: `Could not acquire the tinstar backend marker on ${configDir}.`,
+        guidance: 'Inspect the marker and backend logs before retrying, or use a different TINSTAR_CONFIG_HOME.',
+      }
     }
   }
 }
@@ -275,7 +291,9 @@ function describeMarkerError(error: unknown): string | undefined {
   if (error === undefined) return undefined
   if (error instanceof Error) {
     const code = (error as NodeJS.ErrnoException).code
-    return code ? `${code}: ${error.message}` : error.message
+    return code && !error.message.startsWith(`${code}:`)
+      ? `${code}: ${error.message}`
+      : error.message
   }
   return String(error)
 }

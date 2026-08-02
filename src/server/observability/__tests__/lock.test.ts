@@ -59,6 +59,23 @@ describe('observability lock', () => {
     await release!()
   })
 
+  it('surfaces an unexpected marker creation error while stealing', async () => {
+    const dir = join(tmp, 'o.lock.mark')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    const error = Object.assign(
+      new Error(`EACCES: permission denied, mkdir '${dir}'`),
+      { code: 'EACCES' },
+    )
+
+    await expect(tryAcquireLock(join(tmp, 'o.lock'), {
+      markerReplacement: {
+        removeMarker: () => {},
+        createMarker: () => { throw error },
+      },
+    })).rejects.toBe(error)
+  })
+
   it('does not steal a lock when the owner probe is permission denied', async () => {
     const dir = join(tmp, 'o.lock.mark')
     mkdirSync(dir)

@@ -97,8 +97,11 @@ describe('acquireBackendSingletonForPlugin', () => {
           acquired: false,
           action: 'steal',
           failure: 'marker-recreation-failed',
+          detail: 'EACCES: permission denied, mkdir server.lock.mark',
         }),
-      })).toThrow(/Could not claim the tinstar backend marker.*marker may be unremovable/)
+      })).toThrow(
+        /Could not claim the tinstar backend marker.*EACCES: permission denied.*marker may be unremovable/,
+      )
     })
   })
 })

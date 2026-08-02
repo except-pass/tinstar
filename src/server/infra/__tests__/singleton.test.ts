@@ -172,14 +172,16 @@ describe('acquireBackendSingleton', () => {
       markerReplacement: {
         removeMarker: () => {},
         createMarker: () => {
-          throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+          throw Object.assign(new Error(
+            `EACCES: permission denied, mkdir '${mark}'`,
+          ), { code: 'EACCES' })
         },
       },
     })).toEqual({
       acquired: false,
       action: 'steal',
       failure: 'marker-recreation-failed',
-      detail: 'EACCES: permission denied',
+      detail: `EACCES: permission denied, mkdir '${mark}'`,
     })
   })
 })
@@ -241,6 +243,7 @@ describe('describeSingletonFailure', () => {
         logMessage: 'could not claim the tinstar backend marker on /tmp/tinstar-test: EACCES: permission denied',
         headline: 'Could not claim the tinstar backend marker on /tmp/tinstar-test.',
         guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+        detail: 'EACCES: permission denied',
       },
     },
     {
@@ -259,5 +262,20 @@ describe('describeSingletonFailure', () => {
     expect(describeSingletonFailure({ acquired: false, action: 'refuse' }, configDir, {
       allowForce: false,
     }).guidance).toBe('Stop it first, or use a different TINSTAR_CONFIG_HOME.')
+  })
+
+  it('fails honestly for a runtime failure code newer than this binary', () => {
+    const result = {
+      acquired: false,
+      action: 'refuse',
+      failure: 'future-singleton-failure',
+    } as unknown as SingletonResult
+
+    expect(describeSingletonFailure(result, configDir)).toEqual({
+      logMessage: 'unrecognized tinstar backend singleton failure on /tmp/tinstar-test: '
+        + 'future-singleton-failure',
+      headline: 'Could not acquire the tinstar backend marker on /tmp/tinstar-test.',
+      guidance: 'Inspect the marker and backend logs before retrying, or use a different TINSTAR_CONFIG_HOME.',
+    })
   })
 })

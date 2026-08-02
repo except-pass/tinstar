@@ -78,7 +78,8 @@ export function startServer(opts: ServerOptions) {
   if (!lockResult.acquired) {
     const description = describeSingletonFailure(lockResult, configDir)
     log.error('server', description.logMessage)
-    console.error(`\n✗ ${description.headline}\n  ${description.guidance}\n`)
+    const detail = description.detail ? `\n  ${description.detail}` : ''
+    console.error(`\n✗ ${description.headline}${detail}\n  ${description.guidance}\n`)
     process.exit(1)
   }
   // The lock marker outlives only this process; drop it on exit so the next
