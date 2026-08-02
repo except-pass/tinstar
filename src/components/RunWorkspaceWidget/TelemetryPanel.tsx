@@ -14,10 +14,7 @@ import {
   type ProviderSessionObservations,
 } from '../../hooks/providerObservationsStore'
 import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
-import {
-  providerSessionTokenTotal,
-  providerTokenTotal,
-} from '../../domain/provider-capabilities'
+import { providerSessionTokenTotal } from '../../domain/provider-capabilities'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -105,6 +102,14 @@ function labelColor(opacity: number): string {
   return opacity >= 0.30
     ? 'rgba(255,255,255,0.7)'
     : 'rgba(255,255,255,0.4)'
+}
+
+function latestNonNull(values: Array<number | null>): number | null {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index]
+    if (value !== null && value !== undefined) return value
+  }
+  return null
 }
 
 /* ------------------------------------------------------------------ */
@@ -234,11 +239,9 @@ function ProviderSessionSignal({
     : null
   const history = useProviderTelemetrySeries(provider.providerId, sessionId)
   const tokenSeries = history?.tokens ?? []
-  const hasUsableCumulativeHistory = (
-    providerTokenTotal(availableUsage?.cumulativeTokens) !== null
-    && history?.error === null
-    && tokenSeries.some(value => value !== null)
-  )
+  const historyTotal = latestNonNull(tokenSeries)
+  const hasNativeTokenHistory = historyTotal !== null
+  const displayedTotal = total ?? historyTotal
   const historyDelta = history?.error
     ? { text: 'history unavailable', tone: 'flat' as const }
     : computeDeltaChip(
@@ -256,12 +259,12 @@ function ProviderSessionSignal({
         fontFamily: 'JetBrains Mono, monospace',
       }}
     >
-      {showTokens && usage && (
+      {showTokens && (usage || hasNativeTokenHistory) && (
         <>
           <StatSpark
             accent="blue"
             label={`${formatProviderLabel(provider.providerId)} TOKENS`}
-            value={total === null ? '--' : fmtRate(total)}
+            value={displayedTotal === null ? '--' : fmtRate(displayedTotal)}
             series={tokenSeries}
             delta={historyDelta}
           />
@@ -276,7 +279,7 @@ function ProviderSessionSignal({
           )}
         </>
       )}
-      {showTokens && legacyTokens && !hasUsableCumulativeHistory && (
+      {showTokens && legacyTokens && !hasNativeTokenHistory && (
         <StatSpark
           accent="blue"
           label="TOKENS · PROMETHEUS"

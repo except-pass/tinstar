@@ -9,6 +9,7 @@ const testState = vi.hoisted(() => ({
   legacySnapshot: null as Record<string, unknown> | null,
   tokensEnabled: true,
   providerError: null as string | null,
+  providerHistoryRequests: [] as Array<[string | null, string | null]>,
   providerHistory: {
     tsSec: [1, 2],
     tokens: [1_000, 1_200] as Array<number | null>,
@@ -90,7 +91,10 @@ function codexProviderSession() {
   }
 }
 vi.mock('../../../hooks/useProviderTelemetrySeries', () => ({
-  useProviderTelemetrySeries: () => testState.providerHistory,
+  useProviderTelemetrySeries: (providerId: string | null, sessionId: string | null) => {
+    testState.providerHistoryRequests.push([providerId, sessionId])
+    return testState.providerHistory
+  },
 }))
 vi.mock('../TurnLengthPanel', () => ({ TurnLengthPanel: () => null }))
 
@@ -105,6 +109,7 @@ describe('<TelemetryPanel> provider observations', () => {
     testState.legacySnapshot = null
     testState.tokensEnabled = true
     testState.providerError = null
+    testState.providerHistoryRequests = []
     testState.providerHistory = {
       tsSec: [1, 2],
       tokens: [1_000, 1_200],
@@ -238,6 +243,13 @@ describe('<TelemetryPanel> provider observations', () => {
       burningRunIds: [],
       window: 'today',
     }
+    testState.providerHistory = {
+      tsSec: [],
+      tokens: [],
+      source: 'Tinstar provider observation history',
+      freshness: 'unknown',
+      error: 'not observed',
+    }
 
     const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
 
@@ -292,6 +304,24 @@ describe('<TelemetryPanel> provider observations', () => {
     expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
     expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
     expect(view.queryByText('4.2k')).toBeNull()
+  })
+
+  it('renders native token history for a context-only observation without legacy duplication', () => {
+    const provider = codexProviderSession()
+    testState.providerSessions = [{
+      providerId: provider.providerId,
+      context: provider.context,
+    }]
+    testState.legacySnapshot = legacySnapshot(4_200)
+
+    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
+
+    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
+    expect(view.getByText('1.2k')).toBeTruthy()
+    expect(view.getByText('37% context')).toBeTruthy()
+    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
+    expect(view.queryByText('4.2k')).toBeNull()
+    expect(testState.providerHistoryRequests).toContainEqual(['codex', 'run-1'])
   })
 
   it('respects the token panel preference while retaining provider context', () => {
