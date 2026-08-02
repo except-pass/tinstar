@@ -110,6 +110,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
       <ProviderFleetObservations
         observations={providerObservations.observations}
+        managedSessions={providerObservations.managedSessions}
         error={providerObservations.error}
       />
       {(() => {

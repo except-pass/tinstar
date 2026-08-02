@@ -157,4 +157,25 @@ describe('managed provider observation aliases', () => {
       providerSessionIds: ['codex-run', 'thread-2'],
     }])
   })
+
+  it('keeps a modern persisted adapter authoritative after its template changes provider', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'codex-run',
+      adapter: 'codex',
+      cliTemplate: 'edited-template',
+      conversation: { id: 'thread-3' },
+    }], createDefaultProviderRegistry(), [{
+      id: 'edited-template',
+      name: 'Edited template',
+      adapter: 'claude',
+      startCmd: 'claude',
+      resumeCmd: 'claude --resume',
+    }])
+
+    expect(view).toEqual([{
+      hostSessionId: 'codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['codex-run', 'thread-3'],
+    }])
+  })
 })

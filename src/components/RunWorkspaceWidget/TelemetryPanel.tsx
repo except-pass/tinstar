@@ -14,7 +14,10 @@ import {
   type ProviderSessionObservations,
 } from '../../hooks/providerObservationsStore'
 import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
-import { providerSessionTokenTotal } from '../../domain/provider-capabilities'
+import {
+  providerSessionTokenTotal,
+  providerTokenTotal,
+} from '../../domain/provider-capabilities'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -123,10 +126,10 @@ function SessionSection({
   const series = useTelemetrySeries(sessionId)
   const hasLegacyTelemetry = snap?.state === 'ready'
   if (!hasLegacyTelemetry && providerSessions.length === 0) return null
-  const hasAvailableProviderUsage = providerSessions.some((provider) => {
+  const hasCumulativeProviderUsage = providerSessions.some((provider) => {
     if (provider.usage?.availability.state !== 'available') return false
     const usage = provider.usage.availability.value
-    return providerSessionTokenTotal(usage) !== null
+    return providerTokenTotal(usage.cumulativeTokens) !== null
   })
   const visibleProviderSessions = providerSessions.filter(provider => (
     (panels.tokens && provider.usage !== undefined)
@@ -186,8 +189,12 @@ function SessionSection({
         {hasLegacyTelemetry && panels.cost && (
           <StatSpark accent="gold" label="COST · PROMETHEUS" value={costValue} series={costSeries} delta={costDelta} />
         )}
-        {hasLegacyTelemetry && !hasAvailableProviderUsage && panels.tokens && (
-          <StatSpark accent="blue" label="TOKENS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
+        {hasLegacyTelemetry && panels.tokens && (
+          !hasCumulativeProviderUsage
+          || tokenTotal !== null
+          || tokenSeries.some(value => value !== null)
+        ) && (
+          <StatSpark accent="blue" label="TOKENS · PROMETHEUS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
         )}
         {hasLegacyTelemetry && panels.cacheHit && (
           <StatSpark accent="green" label="CACHE HIT · PROMETHEUS" value={cacheValue} series={cacheSeries} delta={cacheDelta} />
@@ -668,6 +675,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
         <h3 className="panel-label">Telemetry</h3>
       </div>
       <SessionSection
+        key={sessionId}
         sessionId={sessionId}
         providerSessions={providerSessions}
         providerRefreshError={providerState.error}

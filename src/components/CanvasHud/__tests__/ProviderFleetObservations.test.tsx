@@ -34,7 +34,12 @@ describe('<ProviderFleetObservations>', () => {
       ],
     }
 
-    const view = render(<ProviderFleetObservations observations={observations} />)
+    const view = render(
+      <ProviderFleetObservations
+        observations={observations}
+        managedSessions={managedFor(observations)}
+      />,
+    )
 
     expect(within(view.getByTestId('provider-fleet-row-claude')).getByText('1.0k tok')).toBeTruthy()
     expect(within(view.getByTestId('provider-fleet-row-codex')).getByText('2.0k tok')).toBeTruthy()
@@ -49,7 +54,11 @@ describe('<ProviderFleetObservations>', () => {
       sessionUsage: [usage('codex', 'codex-1', 2_000, 'gpt-5.4')],
     }
     const view = render(
-      <ProviderFleetObservations observations={observations} error="HTTP 503" />,
+      <ProviderFleetObservations
+        observations={observations}
+        managedSessions={managedFor(observations)}
+        error="HTTP 503"
+      />,
     )
 
     expect(view.getByText('refresh failed')).toBeTruthy()
@@ -73,11 +82,58 @@ describe('<ProviderFleetObservations>', () => {
       sessionUsage: [partial],
     }
 
-    const view = render(<ProviderFleetObservations observations={observations} />)
+    const view = render(
+      <ProviderFleetObservations
+        observations={observations}
+        managedSessions={managedFor(observations)}
+      />,
+    )
 
     expect(within(view.getByTestId('provider-fleet-row-forge')).getByText('10 tok')).toBeTruthy()
   })
+
+  it('excludes deleted aliases and deduplicates a restarted session onto its current host', () => {
+    const observations: ProviderCurrentObservationsWire = {
+      ...base,
+      sessionUsage: [
+        usage('claude', 'deleted-conversation', 9_000, 'claude-old'),
+        usage('claude', 'run-1', 1_000, 'claude-current'),
+        {
+          ...usage('claude', 'current-conversation', 1_200, 'claude-current'),
+          freshness: {
+            state: 'fresh',
+            observedAt: '2026-08-01T12:00:01.000Z',
+            checkedAt: '2026-08-01T12:00:01.000Z',
+          },
+        },
+      ],
+    }
+
+    const view = render(
+      <ProviderFleetObservations
+        observations={observations}
+        managedSessions={[{
+          hostSessionId: 'run-1',
+          providerId: 'claude',
+          providerSessionIds: ['run-1', 'current-conversation'],
+        }]}
+      />,
+    )
+
+    const row = within(view.getByTestId('provider-fleet-row-claude'))
+    expect(row.getByText(/1 session/)).toBeTruthy()
+    expect(row.getByText('1.2k tok')).toBeTruthy()
+    expect(view.queryByText('10.2k tok')).toBeNull()
+  })
 })
+
+function managedFor(observations: ProviderCurrentObservationsWire) {
+  return observations.sessionUsage.map(observation => ({
+    hostSessionId: observation.scope.sessionId,
+    providerId: observation.providerId,
+    providerSessionIds: [observation.scope.sessionId],
+  }))
+}
 
 function usage(providerId: string, sessionId: string, total: number, model: string) {
   return {

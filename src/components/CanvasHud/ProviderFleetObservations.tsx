@@ -1,4 +1,5 @@
 import type {
+  ManagedProviderSessionWire,
   ProviderCurrentObservationsWire,
   ProviderSessionUsageObservationWire,
 } from '../../domain/provider-observation-wire'
@@ -7,6 +8,7 @@ import { fmtRate } from './fmt'
 
 interface Props {
   observations: ProviderCurrentObservationsWire
+  managedSessions: readonly ManagedProviderSessionWire[]
   error?: string | null
 }
 
@@ -20,8 +22,8 @@ interface ProviderFleetRow {
   freshness: 'fresh' | 'stale' | 'unknown'
 }
 
-export function ProviderFleetObservations({ observations, error }: Props) {
-  const rows = buildProviderFleetRows(observations.sessionUsage)
+export function ProviderFleetObservations({ observations, managedSessions, error }: Props) {
+  const rows = buildProviderFleetRows(observations.sessionUsage, managedSessions)
   if (rows.length === 0 && !error) return null
 
   return (
@@ -78,6 +80,7 @@ export function ProviderFleetObservations({ observations, error }: Props) {
 
 export function buildProviderFleetRows(
   observations: readonly ProviderSessionUsageObservationWire[],
+  managedSessions: readonly ManagedProviderSessionWire[],
 ): ProviderFleetRow[] {
   const grouped = new Map<string, {
     sessions: Set<string>
@@ -88,7 +91,31 @@ export function buildProviderFleetRows(
     freshness: Set<'fresh' | 'stale' | 'unknown'>
   }>()
 
+  const hostByAlias = new Map<string, string>()
+  for (const session of managedSessions) {
+    for (const providerSessionId of session.providerSessionIds) {
+      hostByAlias.set(
+        JSON.stringify([session.providerId, providerSessionId]),
+        session.hostSessionId,
+      )
+    }
+  }
+  const currentByHost = new Map<string, ProviderSessionUsageObservationWire>()
   for (const observation of observations) {
+    const hostSessionId = hostByAlias.get(JSON.stringify([
+      observation.providerId,
+      observation.scope.sessionId,
+    ]))
+    if (!hostSessionId) continue
+    const key = JSON.stringify([observation.providerId, hostSessionId])
+    const existing = currentByHost.get(key)
+    if (!existing || observationTimestamp(observation) >= observationTimestamp(existing)) {
+      currentByHost.set(key, observation)
+    }
+  }
+
+  for (const [hostKey, observation] of currentByHost) {
+    const [, hostSessionId] = JSON.parse(hostKey) as [string, string]
     let group = grouped.get(observation.providerId)
     if (!group) {
       group = {
@@ -101,7 +128,7 @@ export function buildProviderFleetRows(
       }
       grouped.set(observation.providerId, group)
     }
-    group.sessions.add(observation.scope.sessionId)
+    group.sessions.add(hostSessionId)
     group.freshness.add(observation.freshness.state)
     if (observation.source) group.sources.add(observation.source.label)
     if (observation.availability.state !== 'available') {
@@ -131,6 +158,12 @@ export function buildProviderFleetRows(
           : 'unknown' as const,
     }))
     .sort((left, right) => left.providerId.localeCompare(right.providerId))
+}
+
+function observationTimestamp(observation: ProviderSessionUsageObservationWire): number {
+  const at = observation.freshness.observedAt ?? observation.freshness.checkedAt
+  const parsed = Date.parse(at)
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY
 }
 
 function formatProviderLabel(providerId: string): string {

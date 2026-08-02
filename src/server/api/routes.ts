@@ -156,7 +156,9 @@ export function buildManagedProviderSessionView(
       // deleted template must not make their provider identity disappear.
       // Legacy adapter-less sessions still require the template to resolve.
       if (!session.adapter && session.cliTemplate && !template) return []
-      const providerId = registry.resolveSession(session, template).provider.id
+      const providerId = session.adapter
+        ? registry.resolveSession(session).provider.id
+        : registry.resolveSession(session, template).provider.id
       const providerSessionIds = [...new Set([
         session.name,
         session.conversation?.id,
