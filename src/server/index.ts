@@ -799,20 +799,20 @@ export function initBackend(): RouteContext {
     // the rest of this function remaining synchronous forever.
     await backendContextReady
 
-    // An HMR replacement may still have a responder draining or a retry sweep
-    // writing the same persisted ledger. Fence both before opening a fresh
-    // in-memory view, otherwise the replacement can hydrate stale state and
-    // later overwrite an acceptance or transition committed by the old backend.
-    await messageRouterOwner?.waitForPreviousDrain()
-    await stopDeliveryRetryScheduler()
-    if (sessionConfig) {
-      deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
-    }
+    // One owner-generation transaction drains the prior responder and retry
+    // sweep, opens the shared ledger, recovers due work, and starts the new
+    // responder. A newer HMR backend can supersede this lease before NATS is
+    // ready; in that case none of this stale backend's setup runs.
+    const activated = await messageRouterOwner?.activate(async () => {
+      await stopDeliveryRetryScheduler()
+      if (sessionConfig) {
+        deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
+      }
 
-    // The control-plane responder is separate from Saloon's observer
-    // connection. Requests are scoped to this data root, resolved against the
-    // managed live set, and durably accepted before a response says success.
-    if (backendContext && deliveryLedger && sessionConfig) {
+      // The control-plane responder is separate from Saloon's observer
+      // connection. Requests are scoped to this data root, resolved against the
+      // managed live set, and durably accepted before a response says success.
+      if (!backendContext || !deliveryLedger || !sessionConfig) return null
       // Finish the first crash-recovery sweep before accepting new route
       // requests, then keep one retry loop alive. Only accepted/0 and due,
       // explicitly retry-safe failures/deferrals are attempted; ambiguous
@@ -857,10 +857,12 @@ export function initBackend(): RouteContext {
           }
         },
       })
-      void messageRouterOwner?.start(messageRouter).catch(error => {
-        log.warn('message-router', `failed to start: ${error instanceof Error ? error.message : String(error)}`)
-      })
-    }
+      return {
+        service: messageRouter,
+        cleanup: stopDeliveryRetryScheduler,
+      }
+    })
+    if (messageRouterOwner && !activated) return
 
     // Re-register every persisted session's subs with the bridge. Saloon entries
     // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs.

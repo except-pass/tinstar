@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { log } from '../../logger'
 import type {
   LiveDeliveryResult,
   RecipientExclusion,
@@ -31,6 +32,7 @@ import {
 
 afterEach(async () => {
   await resetMessageRouterOwnersForTests()
+  vi.restoreAllMocks()
 })
 
 const REQUEST: MessageRouteRequest = {
@@ -347,6 +349,131 @@ describe('NATS request/reply boundary', () => {
       'second:start',
       'second:stop',
     ])
+  })
+
+  it('skips an older activation when the newer backend becomes ready first', async () => {
+    const calls: string[] = []
+    const service = (name: string) => ({
+      start: vi.fn(async () => { calls.push(`${name}:start`) }),
+      stop: vi.fn(async () => { calls.push(`${name}:stop`) }),
+    }) as unknown as NatsMessageRouterService
+    const first = service('first')
+    const stale = service('stale')
+    const current = service('current')
+    const firstLease = reserveMessageRouterOwner('/cfg/ready-order')
+    await firstLease.start(first)
+
+    const staleLease = reserveMessageRouterOwner('/cfg/ready-order')
+    const currentLease = reserveMessageRouterOwner('/cfg/ready-order')
+    const currentPrepare = vi.fn(async () => {
+      calls.push('current:prepare')
+      return { service: current }
+    })
+    const stalePrepare = vi.fn(async () => {
+      calls.push('stale:prepare')
+      return { service: stale }
+    })
+
+    await expect(currentLease.activate(currentPrepare)).resolves.toBe(true)
+    await expect(staleLease.activate(stalePrepare)).resolves.toBe(false)
+
+    expect(currentPrepare).toHaveBeenCalledOnce()
+    expect(stalePrepare).not.toHaveBeenCalled()
+    expect(calls).toEqual([
+      'first:start',
+      'first:stop',
+      'current:prepare',
+      'current:start',
+    ])
+  })
+
+  it('starts the replacement after a prior drain fails only once handlers settle', async () => {
+    const order: string[] = []
+    let releaseRoute!: () => void
+    const routeGate = new Promise<void>(resolve => { releaseRoute = resolve })
+    const subscription: NatsRouteSubscription = {
+      unsubscribe: vi.fn(() => { order.push('unsubscribe') }),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: encodedRequest(),
+          reply: '_INBOX.drain-failure',
+          respond: () => true,
+        }
+        await new Promise(() => {})
+      },
+    }
+    const connection: NatsRouteConnection = {
+      subscribe: () => subscription,
+      closed: () => new Promise(() => {}),
+      flush: async () => {},
+      drain: vi.fn(async () => {
+        order.push('drain')
+        throw new Error('broker disappeared during drain')
+      }),
+    }
+    const route = vi.fn(async () => {
+      order.push('route:start')
+      await routeGate
+      order.push('route:settled')
+      return accepted()
+    })
+    const prior = new NatsMessageRouterService({
+      subject: '_route',
+      authMasterKey: MASTER_KEY,
+      connect: async () => connection,
+      route,
+    })
+    const priorLease = reserveMessageRouterOwner('/cfg/drain-failure')
+    await priorLease.start(prior)
+    await vi.waitFor(() => expect(route).toHaveBeenCalledOnce())
+
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const replacement = {
+      start: vi.fn(async () => { order.push('replacement:start') }),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsMessageRouterService
+    const replacementLease = reserveMessageRouterOwner('/cfg/drain-failure')
+    const activation = replacementLease.start(replacement)
+
+    await vi.waitFor(() => expect(subscription.unsubscribe).toHaveBeenCalledOnce())
+    expect(replacement.start).not.toHaveBeenCalled()
+    releaseRoute()
+    await expect(activation).resolves.toBe(true)
+
+    expect(order).toEqual([
+      'route:start',
+      'unsubscribe',
+      'route:settled',
+      'drain',
+      'replacement:start',
+    ])
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      'failed to drain stopped responder: broker disappeared during drain',
+    )
+  })
+
+  it('continues replacement when a prior HMR module propagates its drain failure', async () => {
+    const prior = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('legacy drain rejection') }),
+    } as unknown as NatsMessageRouterService
+    const firstLease = reserveMessageRouterOwner('/cfg/legacy-drain')
+    await firstLease.start(prior)
+
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const replacement = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsMessageRouterService
+    const replacementLease = reserveMessageRouterOwner('/cfg/legacy-drain')
+
+    await expect(replacementLease.start(replacement)).resolves.toBe(true)
+    expect(replacement.start).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      'previous responder drain failed: legacy drain rejection',
+    )
   })
 
   it('makes no-responder and timeout failures visible to the sender', async () => {

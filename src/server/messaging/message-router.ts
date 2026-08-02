@@ -559,6 +559,8 @@ export interface NatsMessageRouterDependencies {
 interface ProcessRouterOwner {
   generation: number
   active: NatsMessageRouterService | null
+  /** Stops activation-scoped companions, such as the durable retry scheduler. */
+  cleanup: (() => Promise<void>) | null
   transition: Promise<void>
 }
 
@@ -579,6 +581,16 @@ function processRouterOwners(): Map<string, ProcessRouterOwner> {
 export interface MessageRouterOwnerLease {
   /** Wait until the responder owned by the prior backend has fully drained. */
   waitForPreviousDrain(): Promise<void>
+  /**
+   * Prepare and start one complete backend activation under this generation.
+   * A superseded lease never invokes prepare.
+   */
+  activate(
+    prepare: () => Promise<{
+      service: NatsMessageRouterService
+      cleanup?: () => Promise<void>
+    } | null>,
+  ): Promise<boolean>
   /** Start only if this is still the newest backend for the config root. */
   start(service: NatsMessageRouterService): Promise<boolean>
   /** Stop this lease's responder without disturbing a newer backend. */
@@ -597,45 +609,91 @@ export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwne
   const state = owners.get(configRoot) ?? {
     generation: 0,
     active: null,
+    cleanup: null,
     transition: Promise.resolve(),
   }
+  // The registry survives module reloads. Owners created by the previous
+  // module shape have no companion cleanup field.
+  state.cleanup ??= null
   owners.set(configRoot, state)
   const generation = ++state.generation
 
   const previousDrain = state.transition.then(async () => {
     const active = state.active
+    const cleanup = state.cleanup
     state.active = null
-    if (active) await active.stop()
+    state.cleanup = null
+    if (active) {
+      try {
+        await active.stop()
+      } catch (error) {
+        // Older HMR module instances allowed connection.drain() to reject from
+        // stop(). Their subscription is already removed and handlers settled,
+        // so a transport teardown error must not strand the replacement.
+        log.warn('message-router', `previous responder drain failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (cleanup) {
+      try {
+        await cleanup()
+      } catch (error) {
+        log.warn('message-router', `previous responder cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
   })
   state.transition = previousDrain.catch(() => {})
+
+  const activate: MessageRouterOwnerLease['activate'] = async (prepare) => {
+    let started = false
+    const activation = state.transition.then(async () => {
+      if (state.generation !== generation) return
+      const prepared = await prepare()
+      if (!prepared) return
+      if (state.generation !== generation) {
+        await prepared.cleanup?.()
+        return
+      }
+      let committed = false
+      try {
+        await prepared.service.start()
+        if (state.generation !== generation) return
+        state.active = prepared.service
+        state.cleanup = prepared.cleanup ?? null
+        committed = true
+        started = true
+      } finally {
+        if (!committed) {
+          try {
+            await prepared.service.stop()
+          } finally {
+            await prepared.cleanup?.()
+          }
+        }
+      }
+    })
+    state.transition = activation.catch(() => {})
+    await activation
+    return started
+  }
 
   return {
     async waitForPreviousDrain() {
       await previousDrain
     },
-    async start(service) {
-      let started = false
-      const activation = state.transition.then(async () => {
-        if (state.generation !== generation) return
-        await service.start()
-        if (state.generation !== generation) {
-          await service.stop()
-          return
-        }
-        state.active = service
-        started = true
-      })
-      state.transition = activation.catch(() => {})
-      await activation
-      return started
+    activate,
+    start(service) {
+      return activate(async () => ({ service }))
     },
     async stop() {
       if (state.generation !== generation) return
       ++state.generation
       const stopping = state.transition.then(async () => {
         const active = state.active
+        const cleanup = state.cleanup
         state.active = null
+        state.cleanup = null
         if (active) await active.stop()
+        await cleanup?.()
       })
       state.transition = stopping.catch(() => {})
       await stopping
@@ -655,7 +713,9 @@ export async function resetMessageRouterOwnersForTests(): Promise<void> {
     ++state.generation
     await state.transition
     await state.active?.stop()
+    await state.cleanup?.()
     state.active = null
+    state.cleanup = null
   }))
 }
 
@@ -668,7 +728,9 @@ export async function stopAllMessageRouters(): Promise<void> {
     ++state.generation
     await state.transition
     await state.active?.stop()
+    await state.cleanup?.()
     state.active = null
+    state.cleanup = null
   }))
 }
 
@@ -904,6 +966,12 @@ export class NatsMessageRouterService {
     this.connection = null
     subscription?.unsubscribe()
     await Promise.allSettled([...this.inFlight])
-    if (connection) await connection.drain()
+    if (connection) {
+      try {
+        await connection.drain()
+      } catch (error) {
+        log.warn('message-router', `failed to drain stopped responder: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
   }
 }
