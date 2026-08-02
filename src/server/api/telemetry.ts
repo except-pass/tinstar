@@ -5,6 +5,11 @@ import { log } from '../logger.js'
 import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
 import { getRecentObservations } from '../observability/turn-length.js'
 import type { ClaudeTelemetryQuery } from '../providers/claude-observation-adapter.js'
+import type { TelemetryQuery } from '../observability/query.js'
+import type {
+  ProviderHistoricalTelemetry,
+  ProviderObservationSnapshotFor,
+} from '../../domain/provider-capabilities.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
@@ -13,6 +18,8 @@ export interface TelemetryApiDeps {
   sse: SSEBroadcaster
   /** Provider-owned compatibility projection over the historical observation source. */
   query: ClaudeTelemetryQuery | null // null when state is 'disabled' or 'downloading'
+  /** Provider-neutral history emitted from normalized native observation events. */
+  providerQuery?: Pick<TelemetryQuery, 'providerSessionSeries'> | null
   getState: () => ObservabilityState
   getProgress: () => HudSnapshot['progress']
   /** Last captured startup/runtime error from the observability stack. Null when healthy or never attempted. */
@@ -125,6 +132,74 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       const snap = await buildSnapshot()
       res.writeHead(200, json)
       res.end(JSON.stringify(snap))
+      return true
+    }
+    const providerSeriesMatch = pathname.match(
+      /^\/api\/telemetry\/provider\/([^/]+)\/session\/([^/]+)\/series$/,
+    )
+    if (providerSeriesMatch && req.method === 'GET') {
+      let providerId: string
+      let sessionId: string
+      try {
+        providerId = decodeURIComponent(providerSeriesMatch[1] ?? '')
+        sessionId = decodeURIComponent(providerSeriesMatch[2] ?? '')
+      } catch {
+        res.writeHead(400, json)
+        res.end(JSON.stringify({ error: 'invalid provider or session encoding' }))
+        return true
+      }
+      const checkedAt = new Date().toISOString()
+      const source = { id: 'provider-metrics', label: 'Tinstar provider observation history' }
+      const unavailable = (
+        reason: 'not-observed' | 'temporarily-unavailable' | 'source-error',
+        message: string,
+      ): ProviderObservationSnapshotFor<'historical-telemetry'> => ({
+        kind: 'historical-telemetry',
+        providerId,
+        scope: { kind: 'session', sessionId },
+        source,
+        freshness: { state: 'unknown', observedAt: null, checkedAt },
+        availability: { state: 'unavailable', reason, message },
+      })
+      if (deps.getState() !== 'ready' || !deps.providerQuery) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(unavailable(
+          'temporarily-unavailable',
+          'Provider history is not ready',
+        )))
+        return true
+      }
+      try {
+        const value = await deps.providerQuery.providerSessionSeries({
+          providerId,
+          sessionId,
+          endSec: Math.floor(Date.now() / 1_000),
+          windowSec: 300,
+          stepSec: 5,
+        })
+        const observedAt = latestProviderPoint(value)
+        if (!observedAt) {
+          res.writeHead(200, json)
+          res.end(JSON.stringify(unavailable(
+            'not-observed',
+            'No provider history has been observed for this session',
+          )))
+          return true
+        }
+        const snapshot: ProviderObservationSnapshotFor<'historical-telemetry'> = {
+          kind: 'historical-telemetry',
+          providerId,
+          scope: { kind: 'session', sessionId },
+          source,
+          freshness: { state: 'fresh', observedAt, checkedAt },
+          availability: { state: 'available', value },
+        }
+        res.writeHead(200, json)
+        res.end(JSON.stringify(snapshot))
+      } catch (error) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(unavailable('source-error', (error as Error).message)))
+      }
       return true
     }
     const seriesMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)\/series$/)
@@ -245,6 +320,21 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
   }
 
   return { handle, startPolling, stopPolling }
+}
+
+function latestProviderPoint(value: ProviderHistoricalTelemetry): string | null {
+  let latest = Number.NEGATIVE_INFINITY
+  let latestAt: string | null = null
+  for (const series of value.series) {
+    for (const point of series.points) {
+      const timestamp = Date.parse(point.at)
+      if (timestamp > latest) {
+        latest = timestamp
+        latestAt = point.at
+      }
+    }
+  }
+  return latestAt
 }
 
 export type TelemetryRoutes = ReturnType<typeof createTelemetryRoutes>

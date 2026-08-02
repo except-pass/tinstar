@@ -13,6 +13,8 @@ import { computeDeltaChip } from '../RunWorkspaceWidget/computeDeltaChip'
 import { useFleetTelemetrySeries } from '../../hooks/useFleetTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { getPref, setPref } from '../../lib/uiPrefs'
+import { useProviderObservations } from '../../hooks/providerObservationsStore'
+import { ProviderFleetObservations } from './ProviderFleetObservations'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
@@ -25,6 +27,7 @@ interface Props {
 
 export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embedded = false }: Props) {
   const { snapshot } = useTelemetryHud()
+  const providerObservations = useProviderObservations()
   const fleetSeries = useFleetTelemetrySeries(snapshot)
   const { snapshot: ccQuota } = useCcQuota()
   const config = useConfig()
@@ -69,7 +72,9 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
       </button>
     )
   }
-  if (!snapshot || snapshot.state === 'disabled') return null
+  const hasProviderData = providerObservations.observations.sessionUsage.length > 0
+    || providerObservations.observations.sessionContext.length > 0
+  if ((!snapshot || snapshot.state === 'disabled') && !hasProviderData) return null
 
   const wrapStyle: React.CSSProperties = embedded
     ? {
@@ -91,19 +96,24 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
         zIndex: 30,
       }
 
-  if (snapshot.state !== 'ready') {
+  if (snapshot?.state !== 'ready' && !hasProviderData) {
     return (
       <HudShell wrapStyle={wrapStyle} onClose={toggle}>
-        <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
+        <TelemetryBootstrap snap={snapshot!} onRetry={handleRetry} />
       </HudShell>
     )
   }
 
-  const modelChips = Object.entries(snapshot.cost.byModel).slice(0, 2)
+  const modelChips = Object.entries(snapshot?.cost.byModel ?? {}).slice(0, 2)
 
   return (
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
+      <ProviderFleetObservations
+        observations={providerObservations.observations}
+        error={providerObservations.error}
+      />
       {(() => {
+        if (snapshot?.state !== 'ready') return null
         const costTotal  = snapshot.cost.total
         const tokenTotal = snapshot.tokens.total
         const tokenRate  = snapshot.rate.perMin
@@ -149,7 +159,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
       {onFocusRun && (
         <AgentQuadrant
           runMap={runMap}
-          burningRunIds={new Set(snapshot.burningRunIds ?? [])}
+          burningRunIds={new Set(snapshot?.burningRunIds ?? [])}
           onFocusRun={onFocusRun}
           selectedRunIds={selectedRunIds}
         />
