@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Supervisor } from '../../infra/supervisor'
@@ -57,7 +57,7 @@ describe('Supervisor spawn + readiness', () => {
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
-  it('treats permission-denied liveness as possibly alive and adopts the recorded pid', async () => {
+  it('keeps an adopted process healthy when liveness probes are permission denied', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: 42, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
     }))
@@ -82,6 +82,7 @@ describe('Supervisor adoption', () => {
       stateDir: tmp,
       port: 9999,
       probe: async () => true,
+      healthIntervalMs: 10,
     })
 
     await sup.start()
@@ -89,7 +90,36 @@ describe('Supervisor adoption', () => {
     expect(sup.pid).toBe(42)
     expect(sup.state).toBe('ready')
     expect(kill).toHaveBeenCalledWith(42, 0)
+    await new Promise(resolve => setTimeout(resolve, 35))
+    expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThan(1)
+    expect(sup.pid).toBe(42)
+    expect(sup.state).toBe('ready')
     await sup.stop()
+  })
+
+  it('rejects an unconfirmed stop without clearing the tracked pid or state file', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+    }))
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      shutdownGraceMs: 0,
+      healthIntervalMs: 60_000,
+    })
+    await sup.start()
+
+    await expect(sup.stop()).rejects.toThrow('fake process 42 did not stop')
+
+    expect(sup.pid).toBe(42)
+    expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8'))).toMatchObject({ pid: 42 })
   })
 
   it('adopts a live pid recorded in the state file instead of spawning', async () => {
@@ -137,6 +167,24 @@ describe('Supervisor adoption', () => {
     const sup = shSupervisor('sleep 5', tmp)
     await sup.start()
     expect(sup.pid).toBeGreaterThan(0)
+    expect(sup.state).toBe('ready')
+    await sup.stop()
+  })
+
+  it('ignores a malformed pidfile whose pid exceeds the supported range', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: Number.MAX_SAFE_INTEGER,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: 0,
+    }))
+    const sup = shSupervisor('sleep 5', tmp)
+
+    await sup.start()
+
+    expect(sup.pid).toBeGreaterThan(0)
+    expect(sup.pid).not.toBe(Number.MAX_SAFE_INTEGER)
     expect(sup.state).toBe('ready')
     await sup.stop()
   })

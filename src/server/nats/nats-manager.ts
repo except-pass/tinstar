@@ -189,7 +189,7 @@ function legacyNatsManagerOwnershipBlocker(manager: NatsManager): string | null 
   if (typeof legacySupervisor.pid !== 'number') return 'the legacy supervisor process identity is unknown'
   if (legacySupervisor.pid <= 0) return null
   const liveness = probeProcessLiveness(legacySupervisor.pid)
-  if (liveness.state === 'gone') return null
+  if (liveness.state === 'gone' || liveness.state === 'invalid') return null
   if (liveness.state === 'alive') return `broker process ${legacySupervisor.pid} is still alive`
   return `broker process ${legacySupervisor.pid} liveness is unknown: ${liveness.reason}`
 }

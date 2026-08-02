@@ -69,9 +69,26 @@ describe('acquireBackendSingleton', () => {
 
     const result = acquireBackendSingleton(lockPath(), { force: true })
 
-    expect(result).toEqual({ acquired: false, action: 'refuse', ownerPid: 42 })
+    expect(result).toEqual({
+      acquired: false,
+      action: 'takeover',
+      ownerPid: 42,
+      failure: 'owner-retirement-unconfirmed',
+    })
     expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
     expect(kill).toHaveBeenCalledWith(42, 0)
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({ pid: 42 })
+  })
+
+  it.each([42.5, Number.MAX_SAFE_INTEGER])('steals a malformed lock pid %s as stale', (pid) => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid, startedAt: 1 }))
+    const kill = vi.spyOn(process, 'kill')
+
+    const result = acquireBackendSingleton(lockPath())
+
+    expect(result).toMatchObject({ acquired: true, action: 'steal' })
+    expect(kill).not.toHaveBeenCalled()
   })
 })

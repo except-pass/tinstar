@@ -77,12 +77,20 @@ export function startServer(opts: ServerOptions) {
   const lockResult = acquireBackendSingleton(lockPath, { force: opts.force })
   if (!lockResult.acquired) {
     const who = lockResult.ownerPid ? ` (pid ${lockResult.ownerPid})` : ''
-    log.error('server', `another tinstar backend is already running on ${configDir}${who}`)
-    console.error(
-      `\n✗ tinstar is already running on ${configDir}${who}.\n` +
-      `  Stop it first, run a second instance under a different TINSTAR_CONFIG_HOME,\n` +
-      `  or pass --force to take over.\n`,
-    )
+    if (lockResult.failure === 'owner-retirement-unconfirmed') {
+      log.error('server', `could not confirm prior tinstar backend stopped on ${configDir}${who}`)
+      console.error(
+        `\n✗ Could not confirm that tinstar${who} stopped after --force.\n` +
+        `  Check process ownership/permissions and stop it manually before retrying.\n`,
+      )
+    } else {
+      log.error('server', `another tinstar backend is already running on ${configDir}${who}`)
+      console.error(
+        `\n✗ tinstar is already running on ${configDir}${who}.\n` +
+        `  Stop it first, run a second instance under a different TINSTAR_CONFIG_HOME,\n` +
+        `  or pass --force to take over.\n`,
+      )
+    }
     process.exit(1)
   }
   // The lock marker outlives only this process; drop it on exit so the next

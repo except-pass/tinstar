@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { processMayBeAlive } from './process-liveness.js'
+import { isSupportedProcessId, processMayBeAlive } from './process-liveness.js'
 
 export type ReleaseFn = () => Promise<void>
 
@@ -33,7 +33,7 @@ function isOwnerAlive(dir: string): boolean {
     const raw = readFileSync(ownerFile(dir), 'utf-8')
     const owner = JSON.parse(raw) as { pid: number }
     pid = owner.pid
-    if (typeof pid !== 'number' || pid <= 0) return false
+    if (!isSupportedProcessId(pid)) return false
   } catch {
     return false
   }
@@ -105,7 +105,7 @@ export function decideSingletonAction(opts: {
 function readOwnerPid(dir: string): number | null {
   try {
     const { pid } = JSON.parse(readFileSync(ownerFile(dir), 'utf-8')) as { pid: number }
-    return typeof pid === 'number' && pid > 0 ? pid : null
+    return isSupportedProcessId(pid) ? pid : null
   } catch {
     return null
   }
@@ -155,6 +155,7 @@ export interface SingletonResult {
   action: SingletonAction
   /** pid of the live owner when we refused. */
   ownerPid?: number
+  failure?: 'owner-retirement-unconfirmed'
 }
 
 /**
@@ -180,7 +181,12 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
   }
   if (action === 'takeover' && ownerPid) {
     if (!killAndWait(ownerPid)) {
-      return { acquired: false, action: 'refuse', ownerPid }
+      return {
+        acquired: false,
+        action: 'takeover',
+        ownerPid,
+        failure: 'owner-retirement-unconfirmed',
+      }
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
