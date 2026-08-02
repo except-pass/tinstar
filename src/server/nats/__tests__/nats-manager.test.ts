@@ -3,13 +3,25 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Supervisor } from '../../infra/supervisor'
+import { log } from '../../logger'
 import {
   legacyNatsManagerHasRunningHealthLoop,
   NatsManager,
+  PROCESS_NATS_MANAGER_KEY,
   resetProcessNatsManagerForTests,
   startProcessNatsManager,
   stopProcessNatsManager,
 } from '../nats-manager'
+
+function installLegacyOwner(manager: NatsManager) {
+  const owner: { manager: NatsManager; startPromise: Promise<void> | null } = {
+    manager,
+    startPromise: null,
+  }
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  processGlobal[PROCESS_NATS_MANAGER_KEY] = owner
+  return owner
+}
 
 describe('NatsManager', () => {
   afterEach(async () => {
@@ -123,11 +135,7 @@ describe('NatsManager', () => {
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } as unknown as NatsManager
-    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
-      manager: legacy,
-      startPromise: null,
-    }
+    installLegacyOwner(legacy)
 
     const recovered = await startProcessNatsManager()
 
@@ -145,11 +153,7 @@ describe('NatsManager', () => {
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } as unknown as NatsManager
-    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
-      manager: legacy,
-      startPromise: null,
-    }
+    installLegacyOwner(legacy)
 
     const recovered = await startProcessNatsManager()
 
@@ -166,11 +170,7 @@ describe('NatsManager', () => {
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } as unknown as NatsManager
-    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
-      manager: legacy,
-      startPromise: null,
-    }
+    installLegacyOwner(legacy)
 
     const first = await startProcessNatsManager()
     const second = await startProcessNatsManager()
@@ -209,22 +209,49 @@ describe('NatsManager', () => {
 
   it('starts a fresh manager even when retiring a failed legacy manager rejects', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const logError = vi.spyOn(log, 'error').mockImplementation(() => {})
     const legacy = {
       state: 'degraded',
-      supervisor: { healthTimer: null },
+      supervisor: { healthTimer: null, pid: 0 },
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => { throw new Error('legacy stop failed') }),
     } as unknown as NatsManager
-    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
-      manager: legacy,
-      startPromise: null,
-    }
+    installLegacyOwner(legacy)
 
     const recovered = await startProcessNatsManager()
 
     expect(recovered).not.toBe(legacy)
     expect(recovered.state).toBe('ready')
     expect(legacy.stop).toHaveBeenCalledOnce()
+    expect(legacy.start).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith(
+      'nats',
+      'failed to retire legacy nats manager before retry: legacy stop failed',
+    )
+  })
+
+  it('refuses a replacement when failed legacy retirement may still own a broker', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const supervisor = { healthTimer: null, pid: process.pid }
+    const stop = vi.fn()
+      .mockRejectedValueOnce(new Error('legacy stop failed'))
+      .mockImplementationOnce(async () => { supervisor.pid = 0 })
+    const legacy = {
+      state: 'degraded',
+      supervisor,
+      start: vi.fn(async () => {}),
+      stop,
+    } as unknown as NatsManager
+    const owner = installLegacyOwner(legacy)
+
+    await expect(startProcessNatsManager()).rejects.toThrow(
+      'legacy nats manager retirement was not confirmed',
+    )
+    expect(owner.manager).toBe(legacy)
+
+    const recovered = await startProcessNatsManager()
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+    expect(stop).toHaveBeenCalledTimes(2)
   })
 })

@@ -128,17 +128,17 @@ interface ProcessNatsManagerOwner {
   startPromise: Promise<void> | null
 }
 
-const PROCESS_NATS_MANAGER = Symbol.for('tinstar.nats-manager-owner.v1')
+export const PROCESS_NATS_MANAGER_KEY = Symbol.for('tinstar.nats-manager-owner.v1')
 
 function processNatsManagerOwner(): ProcessNatsManagerOwner {
   const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-  let owner = processGlobal[PROCESS_NATS_MANAGER] as ProcessNatsManagerOwner | undefined
+  let owner = processGlobal[PROCESS_NATS_MANAGER_KEY] as ProcessNatsManagerOwner | undefined
   if (!owner) {
     owner = {
       manager: new NatsManager(),
       startPromise: null,
     }
-    processGlobal[PROCESS_NATS_MANAGER] = owner
+    processGlobal[PROCESS_NATS_MANAGER_KEY] = owner
   }
   // The owner survives module reloads; normalize instances created before the
   // start-promise field existed.
@@ -159,6 +159,31 @@ export function legacyNatsManagerHasRunningHealthLoop(manager: NatsManager): boo
     supervisor?: { healthTimer?: unknown } | null
   }).supervisor
   return legacySupervisor?.healthTimer != null
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A failed legacy stop is safe to abandon only when its runtime Supervisor
+ * proves it no longer owns recovery state or a live process. Missing runtime
+ * fields are treated as unknown, not inactive, so HMR cannot create two broker
+ * owners merely to recover availability.
+ */
+function legacyNatsManagerResourcesAreInactive(manager: NatsManager): boolean {
+  const legacySupervisor = (manager as unknown as {
+    supervisor?: { healthTimer?: unknown; pid?: unknown } | null
+  }).supervisor
+  if (legacySupervisor == null) return true
+  if (legacySupervisor.healthTimer != null) return false
+  if (typeof legacySupervisor.pid !== 'number') return false
+  return legacySupervisor.pid <= 0 || !processIsAlive(legacySupervisor.pid)
 }
 
 /**
@@ -195,6 +220,12 @@ export async function startProcessNatsManager(): Promise<NatsManager> {
             'nats',
             `failed to retire legacy nats manager before retry: ${error instanceof Error ? error.message : String(error)}`,
           )
+          if (!legacyNatsManagerResourcesAreInactive(legacyManager)) {
+            throw new Error(
+              'legacy nats manager retirement was not confirmed; refusing duplicate broker ownership',
+              { cause: error },
+            )
+          }
         }
         if (owner.manager === legacyManager) owner.manager = new NatsManager()
       }
@@ -211,12 +242,12 @@ export async function startProcessNatsManager(): Promise<NatsManager> {
 /** Stop the shared broker only at process shutdown, never during HMR cleanup. */
 export async function stopProcessNatsManager(): Promise<void> {
   const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
-  const owner = processGlobal[PROCESS_NATS_MANAGER] as ProcessNatsManagerOwner | undefined
+  const owner = processGlobal[PROCESS_NATS_MANAGER_KEY] as ProcessNatsManagerOwner | undefined
   if (!owner) return
   await owner.startPromise
   await owner.manager.stop()
-  if (processGlobal[PROCESS_NATS_MANAGER] === owner) {
-    delete processGlobal[PROCESS_NATS_MANAGER]
+  if (processGlobal[PROCESS_NATS_MANAGER_KEY] === owner) {
+    delete processGlobal[PROCESS_NATS_MANAGER_KEY]
   }
 }
 
