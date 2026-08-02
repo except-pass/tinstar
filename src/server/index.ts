@@ -85,6 +85,7 @@ import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
 import { createClaudeDeliveryAdapter } from './providers/claude-delivery'
+import { registerCodexDelivery } from './providers/codex-delivery-wiring'
 import { DeliveryLedger } from './messaging/delivery-ledger'
 import {
   DeliveryRetryScheduler,
@@ -992,6 +993,7 @@ export function initBackend(): RouteContext {
           },
         ),
       }))
+      registerCodexDelivery(providerRegistry, sessionConfig)
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches

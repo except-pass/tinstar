@@ -1,5 +1,9 @@
 import type { ProviderAdapterRegistry } from '../providers/lifecycle'
 import type {
+  AcceptedProviderDeliveryIdentity,
+  ProviderDeliveryRequest,
+} from '../providers/contract'
+import type {
   DeliveryEnvelope,
   DeliveryLedger,
   DeliveryRecord,
@@ -16,10 +20,13 @@ type RecoveryLedger = DispatchLedger & Pick<DeliveryLedger, 'listRecoverable'>
 export const DELIVERY_DISPATCH_CONCURRENCY = 16
 export const DELIVERY_RETRY_DELAY_MS = 1_000
 export const DELIVERY_RETRY_POLL_MS = 250
+export const DELIVERY_CONFIRMATION_MAX_CHECKS = 6
+export const DELIVERY_CONFIRMATION_MAX_DELAY_MS = 8_000
 
 export interface DeliveryDispatchOptions {
   now?: () => number
   retryDelayMs?: number
+  confirmationMaxChecks?: number
 }
 
 class DeliveryDispatchScheduler {
@@ -69,6 +76,22 @@ async function transition(
   return (await ledger.transition(input)).updated
 }
 
+function deliveryRequest(
+  envelope: DeliveryEnvelope,
+  delivery: DeliveryRecord,
+): ProviderDeliveryRequest {
+  return {
+    messageId: envelope.message.id,
+    deliveryId: delivery.id,
+    attempt: delivery.attempt,
+    acceptedAt: envelope.message.acceptedAt,
+    sender: { ...envelope.message.sender },
+    destination: { ...envelope.message.destination },
+    recipient: { ...delivery.recipient },
+    text: envelope.message.text,
+  }
+}
+
 async function dispatchOne(
   envelope: DeliveryEnvelope,
   captured: DeliveryRecord,
@@ -106,16 +129,10 @@ async function dispatchOne(
   }
 
   try {
-    const result = await adapter.accept({
-      messageId: envelope.message.id,
-      deliveryId: current.id,
+    const result = await adapter.accept(deliveryRequest(envelope, {
+      ...current,
       attempt,
-      acceptedAt: envelope.message.acceptedAt,
-      sender: { ...envelope.message.sender },
-      destination: { ...envelope.message.destination },
-      recipient: { ...current.recipient },
-      text: envelope.message.text,
-    })
+    }))
     if (result.state === 'delivered') {
       const recorded = await transition(ledger, {
         deliveryId: current.id,
@@ -142,6 +159,12 @@ async function dispatchOne(
           state: 'accepted',
           attempt,
           ...(result.attemptRef ? { attemptRef: result.attemptRef } : {}),
+          retryAt: retryAtFor(
+            result.acceptedAt,
+            undefined,
+            options.retryDelayMs,
+            now,
+          ),
         },
       })
       return recorded
@@ -219,10 +242,38 @@ function lastEvent(delivery: DeliveryRecord) {
   return delivery.history[delivery.history.length - 1]!
 }
 
+function durableAcceptanceEvent(delivery: DeliveryRecord) {
+  return [...delivery.history].reverse().find(event => (
+    event.state === 'accepted'
+    && event.attempt === delivery.attempt
+    && event.attemptRef
+  ))
+}
+
 function isAttemptDue(delivery: DeliveryRecord, now: number): boolean {
   if (delivery.state === 'accepted') return delivery.attempt === 0
-  if (delivery.state === 'failed' && lastEvent(delivery).retryable !== true) return false
-  if (delivery.state !== 'pending' && delivery.state !== 'failed') return false
+  if (delivery.state === 'failed') {
+    if (lastEvent(delivery).retryable !== true) return false
+    const retryAt = lastEvent(delivery).retryAt
+    return !retryAt || Date.parse(retryAt) <= now
+  }
+  // Once a provider has durably accepted an attempt, only its read-only
+  // confirmation path may advance it. Never turn a later pending confirmation
+  // into a duplicate final-mile accept.
+  if (durableAcceptanceEvent(delivery)) return false
+  if (delivery.state !== 'pending') return false
+  const retryAt = lastEvent(delivery).retryAt
+  return !retryAt || Date.parse(retryAt) <= now
+}
+
+function isConfirmationDue(delivery: DeliveryRecord, now: number): boolean {
+  if (!durableAcceptanceEvent(delivery)) return false
+  if (delivery.state === 'accepted') {
+    const retryAt = lastEvent(delivery).retryAt
+    return !retryAt || Date.parse(retryAt) <= now
+  }
+  if (delivery.state === 'in-flight') return true
+  if (delivery.state !== 'pending') return false
   const retryAt = lastEvent(delivery).retryAt
   return !retryAt || Date.parse(retryAt) <= now
 }
@@ -237,6 +288,181 @@ function retryAtFor(
   const checkedAtMs = Date.parse(checkedAt)
   const base = Number.isFinite(checkedAtMs) ? Math.max(checkedAtMs, now) : now
   return new Date(base + retryDelayMs).toISOString()
+}
+
+function durableAcceptance(
+  envelope: DeliveryEnvelope,
+  delivery: DeliveryRecord,
+): AcceptedProviderDeliveryIdentity | null {
+  const accepted = durableAcceptanceEvent(delivery)
+  if (!accepted) return null
+  return {
+    providerId: delivery.recipient.providerId,
+    messageId: envelope.message.id,
+    attempt: delivery.attempt,
+    recipient: { ...delivery.recipient },
+    state: 'accepted',
+    acceptedAt: accepted.at,
+    attemptRef: accepted.attemptRef,
+  }
+}
+
+async function confirmOne(
+  captured: DeliveryRecord,
+  ledger: DispatchLedger,
+  registry: ProviderAdapterRegistry,
+  options: DeliveryDispatchOptions = {},
+): Promise<DeliveryDispatchOutcome> {
+  const current = ledger.getDelivery(captured.id)
+  if (!current || current.attempt < 1 || current.state === 'delivered') {
+    return { deliveryId: captured.id, state: 'skipped' }
+  }
+  const envelope = ledger.getMessage(current.messageId)
+  if (!envelope) return { deliveryId: current.id, state: 'skipped' }
+  const adapter = registry.deliveryFor(current.recipient.providerId)
+  const acceptance = durableAcceptance(envelope, current)
+  if (!adapter?.confirm || !acceptance) {
+    return { deliveryId: current.id, state: 'skipped' }
+  }
+
+  try {
+    const result = await adapter.confirm(acceptance)
+    if (result.state === 'confirmed') {
+      const recorded = await transition(ledger, {
+        deliveryId: current.id,
+        expected: { state: current.state, attempt: current.attempt },
+        next: {
+          state: 'delivered',
+          attempt: current.attempt,
+          evidence: result.evidence,
+        },
+      })
+      return recorded
+        ? { deliveryId: current.id, state: 'delivered' }
+        : { deliveryId: current.id, state: 'ambiguous', reason: 'could not record delivery evidence' }
+    }
+    if (result.state === 'pending') {
+      return recordPendingConfirmation(
+        current,
+        ledger,
+        result.reason,
+        result.checkedAt,
+        result.retryAt,
+        options,
+      )
+    }
+    const recorded = await transition(ledger, {
+      deliveryId: current.id,
+      expected: { state: current.state, attempt: current.attempt },
+      next: {
+        state: 'failed',
+        attempt: current.attempt,
+        reason: result.reason,
+        retryable: result.retryable,
+        ...(result.retryable
+          ? {
+              retryAt: retryAtFor(
+                result.checkedAt,
+                undefined,
+                options.retryDelayMs,
+                options.now?.() ?? Date.now(),
+              ),
+            }
+          : {}),
+      },
+    })
+    return recorded
+      ? { deliveryId: current.id, state: 'failed', reason: result.reason }
+      : { deliveryId: current.id, state: 'ambiguous', reason: 'could not record failed confirmation' }
+  } catch (error) {
+    const now = options.now?.() ?? Date.now()
+    return recordPendingConfirmation(
+      current,
+      ledger,
+      error instanceof Error ? error.message : String(error),
+      new Date(now).toISOString(),
+      undefined,
+      options,
+    )
+  }
+}
+
+function confirmationCheckCount(delivery: DeliveryRecord): number {
+  let acceptedIndex = -1
+  for (let index = delivery.history.length - 1; index >= 0; index -= 1) {
+    const event = delivery.history[index]!
+    if (
+      event.state === 'accepted'
+      && event.attempt === delivery.attempt
+      && event.attemptRef
+    ) {
+      acceptedIndex = index
+      break
+    }
+  }
+  if (acceptedIndex < 0) return 0
+  return delivery.history.slice(acceptedIndex + 1).filter(event => (
+    event.state === 'pending' && event.attempt === delivery.attempt
+  )).length
+}
+
+async function recordPendingConfirmation(
+  current: DeliveryRecord,
+  ledger: DispatchLedger,
+  reason: string,
+  checkedAt: string,
+  explicitRetryAt: string | undefined,
+  options: DeliveryDispatchOptions,
+): Promise<DeliveryDispatchOutcome> {
+  const now = options.now?.() ?? Date.now()
+  const checkCount = confirmationCheckCount(current) + 1
+  const maxChecks = options.confirmationMaxChecks ?? DELIVERY_CONFIRMATION_MAX_CHECKS
+  const exhausted = checkCount >= maxChecks
+  const baseDelay = options.retryDelayMs ?? DELIVERY_RETRY_DELAY_MS
+  const confirmationDelay = Math.min(
+    baseDelay * (2 ** Math.max(0, checkCount - 1)),
+    DELIVERY_CONFIRMATION_MAX_DELAY_MS,
+  )
+  const retryAt = retryAtFor(
+    checkedAt,
+    explicitRetryAt,
+    exhausted ? baseDelay : confirmationDelay,
+    now,
+  )
+  const recorded = await transition(ledger, {
+    deliveryId: current.id,
+    expected: { state: current.state, attempt: current.attempt },
+    next: exhausted
+      ? {
+          state: 'failed',
+          attempt: current.attempt,
+          reason: `Provider confirmation remained pending after ${checkCount} checks: ${reason}`,
+          retryable: true,
+          retryAt,
+        }
+      : {
+          state: 'pending',
+          attempt: current.attempt,
+          reason,
+          retryAt,
+        },
+  })
+  if (!recorded) {
+    return {
+      deliveryId: current.id,
+      state: 'ambiguous',
+      reason: exhausted
+        ? 'could not record exhausted provider confirmation'
+        : 'could not record pending confirmation',
+    }
+  }
+  return exhausted
+    ? {
+        deliveryId: current.id,
+        state: 'failed',
+        reason: `Provider confirmation remained pending after ${checkCount} checks: ${reason}`,
+      }
+    : { deliveryId: current.id, state: 'pending', reason }
 }
 
 /**
@@ -260,9 +486,9 @@ export async function dispatchAcceptedMessage(
 }
 
 /**
- * Resume every due, retry-safe obligation in global acceptance/id FIFO order.
- * In-flight attempts and provider-accepted attempts remain fenced because
- * their side effect may already have occurred or requires confirmation.
+ * Resume due, retry-safe obligations and probe durable provider evidence in
+ * global acceptance/id FIFO order. Confirmation is read-only, so recovery
+ * never blindly repeats an ambiguous final-mile side effect.
  */
 export async function recoverAcceptedMessages(
   ledger: RecoveryLedger,
@@ -270,12 +496,24 @@ export async function recoverAcceptedMessages(
   options: DeliveryDispatchOptions = {},
 ): Promise<DeliveryDispatchOutcome[]> {
   const now = options.now?.() ?? Date.now()
-  const due = ledger.listRecoverable().filter(delivery => isAttemptDue(delivery, now))
-  return Promise.all(due.map(delivery => deliveryDispatchScheduler.run(async () => {
+  const work: Array<() => Promise<DeliveryDispatchOutcome>> = []
+  for (const delivery of ledger.listRecoverable()) {
     const envelope = ledger.getMessage(delivery.messageId)
-    if (!envelope) return { deliveryId: delivery.id, state: 'skipped' as const }
-    return dispatchOne(envelope, delivery, ledger, registry, options)
-  })))
+    if (!envelope) continue
+    if (isAttemptDue(delivery, now)) {
+      work.push(() => dispatchOne(envelope, delivery, ledger, registry, options))
+      continue
+    }
+    const adapter = registry.deliveryFor(delivery.recipient.providerId)
+    if (
+      adapter?.confirm
+      && durableAcceptance(envelope, delivery)
+      && isConfirmationDue(delivery, now)
+    ) {
+      work.push(() => confirmOne(delivery, ledger, registry, options))
+    }
+  }
+  return Promise.all(work.map(operation => deliveryDispatchScheduler.run(operation)))
 }
 
 /** Polls the durable ledger for due retries; each sweep is single-flight. */

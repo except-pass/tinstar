@@ -1,16 +1,18 @@
+import { createHash } from 'node:crypto'
 import type {
   ProviderCapabilities,
   ProviderObservationKind,
   ProviderObservationRequestFor,
   ProviderObservationSnapshotFor,
 } from '../../domain/provider-capabilities'
-import { findCodexUserMessage } from '../sessions/codex-transcript'
+import { scanCodexUserMessages } from '../sessions/codex-transcript'
 import {
   defineProviderAdapter,
   type AcceptedProviderDeliveryIdentity,
   type ProviderAdapter,
   type ProviderDeliveryAcceptance,
   type ProviderDeliveryConfirmation,
+  type ProviderDeliveryResultIdentity,
   type ProviderDeliveryRequest,
 } from './contract'
 
@@ -24,26 +26,42 @@ const ROLLOUT_EVIDENCE = {
 export interface CodexMessageEnvelope {
   schema: 'tinstar.message.v1'
   message_id: string
+  delivery_id: string
   attempt: number
   accepted_at: string
-  sender_session_id: string
+  sender: {
+    session_id: string
+    incarnation: string
+  }
+  destination: {
+    subject: string
+  }
   recipient: {
     provider_id: string
     session_id: string
-    incarnation?: string
+    incarnation: string
   }
   text: string
 }
 
+export interface CodexSessionInput {
+  captureScreen(scrollback?: number): Promise<string>
+  submitPrompt(prompt: string, beforeEnter: () => Promise<boolean>): Promise<boolean>
+}
+
 export interface CodexDeliveryDependencies {
   now?: () => string
-  captureScreen: (sessionId: string) => Promise<string>
-  sendPrompt: (sessionId: string, prompt: string) => Promise<void>
+  withSessionInput: <T>(
+    sessionId: string,
+    operation: (input: CodexSessionInput) => Promise<T>,
+  ) => Promise<T>
+  currentIncarnation: (sessionId: string) => Promise<string | null>
   resolveTranscript: (sessionId: string) => Promise<string | null>
 }
 
 interface QueuedAttempt {
   key: string
+  deliveryKey: string
   request: ProviderDeliveryRequest
   prompt: string
 }
@@ -87,15 +105,18 @@ export function renderCodexMessageEnvelope(request: ProviderDeliveryRequest): st
   const envelope: CodexMessageEnvelope = {
     schema: 'tinstar.message.v1',
     message_id: request.messageId,
+    delivery_id: request.deliveryId,
     attempt: request.attempt,
     accepted_at: request.acceptedAt,
-    sender_session_id: request.senderSessionId,
+    sender: {
+      session_id: request.sender.sessionId,
+      incarnation: request.sender.incarnation,
+    },
+    destination: { subject: request.destination.subject },
     recipient: {
       provider_id: request.recipient.providerId,
       session_id: request.recipient.sessionId,
-      ...(request.recipient.incarnation !== undefined
-        ? { incarnation: request.recipient.incarnation }
-        : {}),
+      incarnation: request.recipient.incarnation,
     },
     text: request.text,
   }
@@ -110,16 +131,22 @@ export function parseCodexMessageEnvelope(message: string): CodexMessageEnvelope
     if (
       value.schema !== 'tinstar.message.v1'
       || typeof value.message_id !== 'string'
+      || typeof value.delivery_id !== 'string'
       || !Number.isSafeInteger(value.attempt)
       || typeof value.accepted_at !== 'string'
-      || typeof value.sender_session_id !== 'string'
+      || value.sender === null
+      || typeof value.sender !== 'object'
+      || typeof value.sender.session_id !== 'string'
+      || typeof value.sender.incarnation !== 'string'
+      || value.destination === null
+      || typeof value.destination !== 'object'
+      || typeof value.destination.subject !== 'string'
       || typeof value.text !== 'string'
       || value.recipient === null
       || typeof value.recipient !== 'object'
       || typeof value.recipient.provider_id !== 'string'
       || typeof value.recipient.session_id !== 'string'
-      || (value.recipient.incarnation !== undefined
-        && typeof value.recipient.incarnation !== 'string')
+      || typeof value.recipient.incarnation !== 'string'
     ) return null
     return value as CodexMessageEnvelope
   } catch {
@@ -127,16 +154,36 @@ export function parseCodexMessageEnvelope(message: string): CodexMessageEnvelope
   }
 }
 
-function attemptKey(request: Pick<ProviderDeliveryRequest, 'messageId' | 'attempt' | 'recipient'>): string {
+function attemptKey(request: {
+  messageId: string
+  attempt: number
+  recipient: { sessionId: string; incarnation?: string }
+}): string {
   return `${request.recipient.sessionId}\u0000${request.recipient.incarnation ?? ''}`
     + `\u0000${request.messageId}\u0000${request.attempt}`
 }
 
-function attemptRef(messageId: string, attempt: number): string {
-  return `tinstar-message-v1:${messageId}:${attempt}`
+function logicalDeliveryKey(
+  request: Pick<ProviderDeliveryRequest, 'messageId' | 'deliveryId' | 'recipient'>,
+): string {
+  return `${request.recipient.sessionId}\u0000${request.recipient.incarnation ?? ''}`
+    + `\u0000${request.messageId}\u0000${request.deliveryId}`
 }
 
-function resultIdentity(request: Pick<ProviderDeliveryRequest, 'messageId' | 'attempt' | 'recipient'>) {
+function recipientIncarnationKey(
+  recipient: { sessionId: string; incarnation?: string },
+): string {
+  return `${recipient.sessionId}\u0000${recipient.incarnation ?? ''}`
+}
+
+function attemptRef(prompt: string): string {
+  const digest = createHash('sha256').update(prompt, 'utf8').digest('hex')
+  return `tinstar-message-v1:sha256:${digest}`
+}
+
+function resultIdentity(
+  request: Pick<ProviderDeliveryResultIdentity, 'messageId' | 'attempt' | 'recipient'>,
+) {
   return {
     providerId: CODEX_PROVIDER_ID,
     messageId: request.messageId,
@@ -154,6 +201,12 @@ function resultIdentity(request: Pick<ProviderDeliveryRequest, 'messageId' | 'at
 export class CodexDeliveryAdapter {
   private readonly queues = new Map<string, QueuedAttempt[]>()
   private readonly chains = new Map<string, Promise<unknown>>()
+  private readonly transcriptPaths = new Map<string, string>()
+  private readonly confirmationOffsets = new Map<string, {
+    path: string
+    identity: string
+    offset: number
+  }>()
   private readonly now: () => string
 
   constructor(private readonly deps: CodexDeliveryDependencies) {
@@ -164,13 +217,14 @@ export class CodexDeliveryAdapter {
     return this.queues.get(sessionId)?.length ?? 0
   }
 
-  accept(request: ProviderDeliveryRequest): Promise<ProviderDeliveryAcceptance> {
+  accept = (request: ProviderDeliveryRequest): Promise<ProviderDeliveryAcceptance> => {
     return this.serialize(request.recipient.sessionId, () => this.acceptSerial(request))
   }
 
   private async acceptSerial(request: ProviderDeliveryRequest): Promise<ProviderDeliveryAcceptance> {
     const identity = resultIdentity(request)
     const key = attemptKey(request)
+    const deliveryKey = logicalDeliveryKey(request)
     const prompt = renderCodexMessageEnvelope(request)
     let queue = this.queues.get(request.recipient.sessionId) ?? []
     const queuedIncarnation = queue[0]?.request.recipient.incarnation
@@ -197,7 +251,24 @@ export class CodexDeliveryAdapter {
       }
     }
     if (!queued) {
-      queue.push({ key, request, prompt })
+      const retryIndex = queue.findIndex(item => item.deliveryKey === deliveryKey)
+      if (retryIndex >= 0) {
+        const prior = queue[retryIndex]!
+        if (request.attempt <= prior.request.attempt) {
+          return {
+            ...identity,
+            state: 'rejected',
+            checkedAt: this.now(),
+            reason: 'Codex delivery retry did not advance the durable attempt number',
+            retryable: false,
+          }
+        }
+        // A safe retry is the same logical FIFO item with a new stamped
+        // attempt. Replace it in place so N+1 cannot queue behind stale N.
+        queue[retryIndex] = { key, deliveryKey, request, prompt }
+      } else {
+        queue.push({ key, deliveryKey, request, prompt })
+      }
       this.queues.set(request.recipient.sessionId, queue)
     }
 
@@ -210,19 +281,42 @@ export class CodexDeliveryAdapter {
       }
     }
 
-    let safety: CodexTerminalSafety
     try {
-      safety = classifyCodexTerminalSafety(
-        await this.deps.captureScreen(request.recipient.sessionId),
+      return await this.deps.withSessionInput(
+        request.recipient.sessionId,
+        input => this.deliverQueuedHead(input, request, queue, identity),
       )
     } catch (error) {
       return {
         ...identity,
         state: 'deferred',
         checkedAt: this.now(),
-        reason: `Codex terminal state could not be inspected: ${(error as Error).message}`,
+        reason: `Codex terminal input could not be inspected: ${(error as Error).message}`,
       }
     }
+  }
+
+  private async deliverQueuedHead(
+    input: CodexSessionInput,
+    request: ProviderDeliveryRequest,
+    queue: QueuedAttempt[],
+    identity: ReturnType<typeof resultIdentity>,
+  ): Promise<ProviderDeliveryAcceptance> {
+    const prompt = queue[0]!.prompt
+    const liveIncarnation = await this.deps.currentIncarnation(request.recipient.sessionId)
+    if (liveIncarnation !== request.recipient.incarnation) {
+      queue.shift()
+      if (queue.length === 0) this.queues.delete(request.recipient.sessionId)
+      return {
+        ...identity,
+        state: 'rejected',
+        checkedAt: this.now(),
+        reason: 'The accepted Codex recipient process has been replaced or stopped',
+        retryable: false,
+      }
+    }
+
+    const safety = classifyCodexTerminalSafety(await input.captureScreen())
     if (safety.state === 'unsafe') {
       return {
         ...identity,
@@ -232,8 +326,29 @@ export class CodexDeliveryAdapter {
       }
     }
 
+    let boundaryFailure: string | null = null
     try {
-      await this.deps.sendPrompt(request.recipient.sessionId, queue[0]!.prompt)
+      const submitted = await input.submitPrompt(prompt, async () => {
+        const current = await this.deps.currentIncarnation(request.recipient.sessionId)
+        if (current !== request.recipient.incarnation) {
+          boundaryFailure = 'The accepted Codex recipient process changed before submission'
+          return false
+        }
+        const boundarySafety = classifyCodexTerminalSafety(await input.captureScreen())
+        if (boundarySafety.state === 'unsafe') {
+          boundaryFailure = boundarySafety.reason
+          return false
+        }
+        return true
+      })
+      if (!submitted) {
+        return {
+          ...identity,
+          state: 'deferred',
+          checkedAt: this.now(),
+          reason: boundaryFailure ?? 'Codex terminal changed before submission',
+        }
+      }
     } catch (error) {
       // A rejected attempt has reached a terminal outcome for this invocation.
       // The durable router may retry it as a new attempt, but retaining this
@@ -256,16 +371,16 @@ export class CodexDeliveryAdapter {
       ...identity,
       state: 'accepted',
       acceptedAt: this.now(),
-      attemptRef: attemptRef(request.messageId, request.attempt),
+      attemptRef: attemptRef(prompt),
     }
   }
 
-  async confirm(
+  confirm = async (
     acceptance: AcceptedProviderDeliveryIdentity,
-  ): Promise<ProviderDeliveryConfirmation> {
+  ): Promise<ProviderDeliveryConfirmation> => {
     const identity = resultIdentity(acceptance)
-    const expectedRef = attemptRef(acceptance.messageId, acceptance.attempt)
-    if (acceptance.attemptRef !== expectedRef) {
+    const expectedRef = acceptance.attemptRef
+    if (!expectedRef || !/^tinstar-message-v1:sha256:[a-f0-9]{64}$/.test(expectedRef)) {
       return {
         ...identity,
         state: 'failed',
@@ -275,15 +390,39 @@ export class CodexDeliveryAdapter {
       }
     }
 
-    let transcriptPath: string | null
     try {
-      transcriptPath = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
+      const liveIncarnation = await this.deps.currentIncarnation(acceptance.recipient.sessionId)
+      if (liveIncarnation !== acceptance.recipient.incarnation) {
+        return {
+          ...identity,
+          state: 'failed',
+          checkedAt: this.now(),
+          reason: 'The accepted Codex recipient process has been replaced or stopped',
+          retryable: false,
+        }
+      }
     } catch (error) {
       return {
         ...identity,
         state: 'pending',
         checkedAt: this.now(),
-        reason: `Codex rollout could not be resolved: ${(error as Error).message}`,
+        reason: `Codex recipient liveness could not be inspected: ${(error as Error).message}`,
+      }
+    }
+
+    let transcriptPath: string | null
+    const recipientKey = recipientIncarnationKey(acceptance.recipient)
+    transcriptPath = this.transcriptPaths.get(recipientKey) ?? null
+    if (!transcriptPath) {
+      try {
+        transcriptPath = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
+      } catch (error) {
+        return {
+          ...identity,
+          state: 'pending',
+          checkedAt: this.now(),
+          reason: `Codex rollout could not be resolved: ${(error as Error).message}`,
+        }
       }
     }
     if (!transcriptPath) {
@@ -295,16 +434,41 @@ export class CodexDeliveryAdapter {
       }
     }
 
-    const evidence = findCodexUserMessage(transcriptPath, (message) => {
-      const envelope = parseCodexMessageEnvelope(message)
-      return envelope !== null
-        && envelope.message_id === acceptance.messageId
-        && envelope.attempt === acceptance.attempt
-        && envelope.recipient.provider_id === acceptance.recipient.providerId
-        && envelope.recipient.session_id === acceptance.recipient.sessionId
-        && envelope.recipient.incarnation === acceptance.recipient.incarnation
-    })
-    if (!evidence) {
+    const confirmationKey = attemptKey(acceptance)
+    const priorScan = this.confirmationOffsets.get(confirmationKey)
+    const scan = await scanCodexUserMessages(
+      transcriptPath,
+      priorScan?.path === transcriptPath ? priorScan.offset : 0,
+      (message) => {
+        const envelope = parseCodexMessageEnvelope(message)
+        return envelope !== null
+          && attemptRef(message) === expectedRef
+          && envelope.message_id === acceptance.messageId
+          && envelope.attempt === acceptance.attempt
+          && envelope.recipient.provider_id === acceptance.recipient.providerId
+          && envelope.recipient.session_id === acceptance.recipient.sessionId
+          && envelope.recipient.incarnation === acceptance.recipient.incarnation
+      },
+      priorScan?.path === transcriptPath ? priorScan.identity : undefined,
+    )
+    if (!scan.available) {
+      this.transcriptPaths.delete(recipientKey)
+      this.confirmationOffsets.delete(confirmationKey)
+      return {
+        ...identity,
+        state: 'pending',
+        checkedAt: this.now(),
+        reason: 'Codex rollout is not available yet',
+      }
+    }
+    if (scan.identity) {
+      this.confirmationOffsets.set(confirmationKey, {
+        path: transcriptPath,
+        identity: scan.identity,
+        offset: scan.nextOffset,
+      })
+    }
+    if (!scan.evidence) {
       return {
         ...identity,
         state: 'pending',
@@ -312,10 +476,15 @@ export class CodexDeliveryAdapter {
         reason: 'Codex rollout has not recorded this message as user input',
       }
     }
+    // Discovery can fall back to the newest same-workdir rollout when several
+    // sessions share a worktree. Bind the path to this incarnation only after
+    // exact envelope evidence proves it belongs to the accepted delivery.
+    this.transcriptPaths.set(recipientKey, transcriptPath)
+    this.confirmationOffsets.delete(confirmationKey)
     return {
       ...identity,
       state: 'confirmed',
-      confirmedAt: evidence.timestamp ?? this.now(),
+      confirmedAt: scan.evidence.timestamp ?? this.now(),
       evidence: {
         source: ROLLOUT_EVIDENCE,
         reference: expectedRef,
@@ -332,6 +501,12 @@ export class CodexDeliveryAdapter {
     }).catch(() => undefined)
     return current
   }
+}
+
+export function createCodexDeliveryAdapter(
+  deps: CodexDeliveryDependencies,
+): CodexDeliveryAdapter {
+  return new CodexDeliveryAdapter(deps)
 }
 
 const capabilities = {

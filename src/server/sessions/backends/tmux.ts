@@ -2315,8 +2315,7 @@ async function exitAnyMode(tmuxName: string): Promise<void> {
   }
 }
 
-export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
-  const tmuxName = tmuxSessionName(config, sessionName)
+async function doSendKeys(tmuxName: string, keys: string[]): Promise<void> {
   await exitAnyMode(tmuxName)
   await execFileAsync('tmux', ['send-keys', '-t', exactTmuxPaneTarget(tmuxName), ...keys])
 }
@@ -2328,21 +2327,63 @@ export async function sendKeys(config: TinstarConfig, sessionName: string, keys:
 // session's keystrokes stay intact. Different sessions still send in parallel.
 const sendChains = new Map<string, Promise<unknown>>()
 
-export function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
-  const tmuxName = tmuxSessionName(config, sessionName)
-  return serializeByKey(sendChains, tmuxName, () => doSendPrompt(tmuxName, prompt))
+export interface SerializedSessionInput {
+  captureScreen(scrollback?: number): Promise<string>
+  /** Run the last safety check, then inject text and Enter as one tmux operation. */
+  submitPrompt(prompt: string, beforeEnter?: () => Promise<boolean>): Promise<boolean>
 }
 
-async function doSendPrompt(tmuxName: string, prompt: string): Promise<void> {
+/**
+ * Run a terminal-input transaction under the same per-session lock used by
+ * every prompt and key injection. Provider adapters use this to keep pane
+ * inspection and the resulting keystrokes in one critical section.
+ */
+export function withSessionInput<T>(
+  config: TinstarConfig,
+  sessionName: string,
+  operation: (input: SerializedSessionInput) => Promise<T>,
+): Promise<T> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  return serializeByKey(sendChains, tmuxName, () => operation({
+    captureScreen: scrollback => captureScreen(tmuxName, scrollback),
+    submitPrompt: (prompt, beforeEnter) => doSendPrompt(tmuxName, prompt, beforeEnter),
+  }))
+}
+
+export function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  return serializeByKey(sendChains, tmuxName, () => doSendKeys(tmuxName, keys))
+}
+
+export function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
+  return withSessionInput(config, sessionName, async input => {
+    await input.submitPrompt(prompt)
+  })
+}
+
+async function doSendPrompt(
+  tmuxName: string,
+  prompt: string,
+  beforeEnter?: () => Promise<boolean>,
+): Promise<boolean> {
   // The pane enters copy-mode when the user scrolls in the ttyd terminal.
   // While in copy-mode (or a nested sub-prompt like search/jump), send-keys
   // text goes to the mode handler instead of the underlying process — which
   // is how a prompt starting with 'F' silently triggers "jump backward".
   await exitAnyMode(tmuxName)
   const target = exactTmuxPaneTarget(tmuxName)
+  if (beforeEnter) {
+    if (!await beforeEnter()) return false
+    // Keep provider-controlled delivery all-or-nothing from tmux's point of
+    // view. If the boundary changed, no text is left in the composer; if it is
+    // still safe, prompt and Enter enter the pane in one ordered command.
+    await execFileAsync('tmux', ['send-keys', '-t', target, prompt, '', 'Enter'])
+    return true
+  }
   await execFileAsync('tmux', ['send-keys', '-t', target, prompt, ''])
   await new Promise(r => setTimeout(r, 300))
   await execFileAsync('tmux', ['send-keys', '-t', target, '', 'Enter'])
+  return true
 }
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {

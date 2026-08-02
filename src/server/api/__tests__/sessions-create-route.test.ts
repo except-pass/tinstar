@@ -334,7 +334,7 @@ describe('POST /api/sessions', () => {
     expect(opts.session.nats?.enabled ?? false).toBe(false)
   })
 
-  it('rejects explicit NATS for a provider that has no NATS launch capability before provisioning', async () => {
+  it('allows explicit NATS for Codex through its stdio MCP capability', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({
@@ -344,16 +344,17 @@ describe('POST /api/sessions', () => {
       }),
     })
 
-    expect(res.status).toBe(400)
-    expect(await res.json()).toMatchObject({
-      error: {
-        message: expect.stringContaining(
-          'Provider "codex" does not support terminal capability "nats"',
-        ),
-      },
+    expect(res.status).toBe(201)
+    expect(getSession(join(tmpRoot, 'sessions'), 'codex-with-unsupported-nats')).toMatchObject({
+      adapter: 'codex',
+      nats: { enabled: true },
     })
-    expect(createTmuxSessionMock).not.toHaveBeenCalled()
-    expect(getSession(join(tmpRoot, 'sessions'), 'codex-with-unsupported-nats')).toBeNull()
+    const launch = createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as {
+      provider: { provider: { id: string } }
+      session: { nats?: { enabled: boolean } | null }
+    }
+    expect(launch.provider.provider.id).toBe('codex')
+    expect(launch.session.nats?.enabled).toBe(true)
   })
 
   it('rejects a supplied but missing template name before provisioning', async () => {
@@ -380,9 +381,9 @@ describe('POST /api/sessions', () => {
     expect(res.status).toBe(201)
     expect(getSession(join(tmpRoot, 'sessions'), 'task-codex')).toMatchObject({
       adapter: 'codex',
-      nats: null,
+      nats: { enabled: true },
     })
-    expect((testCtx.docStore.getRun('task-codex') as Run).natsEnabled).toBe(false)
+    expect((testCtx.docStore.getRun('task-codex') as Run).natsEnabled).toBe(true)
   })
 
   it('lets the task-scoped route derive NATS from a runtime provider capability', async () => {
@@ -2461,7 +2462,7 @@ describe('POST /api/sessions', () => {
     expect(createTmuxSessionMock).not.toHaveBeenCalled()
   })
 
-  it('spawns an unsupported child provider without inheriting parent NATS', async () => {
+  it('spawns a Codex child with inherited NATS through its stdio MCP capability', async () => {
     const parent = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'nats-parent', nats: { enabled: true } }),
@@ -2481,11 +2482,9 @@ describe('POST /api/sessions', () => {
     const { data } = body
     const child = getSession(join(tmpRoot, 'sessions'), data.session)
     expect(child).toMatchObject({ adapter: 'codex' })
-    expect(child?.nats?.enabled ?? false).toBe(false)
-    expect(data.room).toBeNull()
-    expect(body.warnings?.nats).toEqual([
-      expect.stringContaining('Parent NATS was not inherited'),
-    ])
+    expect(child?.nats?.enabled).toBe(true)
+    expect(data.room).toEqual(expect.any(String))
+    expect(body.warnings?.nats).toBeUndefined()
 
     const launch = createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as {
       provider: { provider: { id: string } }
@@ -2493,8 +2492,8 @@ describe('POST /api/sessions', () => {
     }
     expect(launch.provider.provider.id).toBe('codex')
     expect(launch.session.adapter).toBe('codex')
-    expect(launch.session.nats?.enabled ?? false).toBe(false)
-    expect((testCtx.docStore.getRun(data.session) as Run).natsEnabled).toBe(false)
+    expect(launch.session.nats?.enabled).toBe(true)
+    expect((testCtx.docStore.getRun(data.session) as Run).natsEnabled).toBe(true)
   })
 
   it('rejects hand spawn when its named provider template was deleted', async () => {

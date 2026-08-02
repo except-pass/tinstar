@@ -1,4 +1,5 @@
 import { readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { open as openFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -169,6 +170,108 @@ export function readCodexStatus(transcriptPath: string): 'running' | 'idle' | nu
 export interface CodexUserMessageEvidence {
   message: string
   timestamp: string | null
+}
+
+export interface CodexUserMessageScan {
+  available: boolean
+  evidence: CodexUserMessageEvidence | null
+  identity: string | null
+  /** Byte boundary after the last complete JSONL record inspected. */
+  nextOffset: number
+}
+
+function userMessageEvidence(
+  line: string,
+  matches: (message: string) => boolean,
+): CodexUserMessageEvidence | null {
+  if (!line.trim()) return null
+  try {
+    const event = JSON.parse(line)
+    const message = event.type === 'event_msg'
+      && event.payload?.type === 'user_message'
+      && typeof event.payload.message === 'string'
+      ? event.payload.message
+      : null
+    if (message === null || !matches(message)) return null
+    return {
+      message,
+      timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Incrementally scan complete rollout records without monopolizing the event
+ * loop between chunks. `nextOffset` deliberately stops before an incomplete
+ * trailing record so the next confirmation can finish it after append.
+ */
+export async function scanCodexUserMessages(
+  transcriptPath: string,
+  startOffset: number,
+  matches: (message: string) => boolean,
+  expectedIdentity?: string,
+): Promise<CodexUserMessageScan> {
+  let file
+  try {
+    file = await openFile(transcriptPath, 'r')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { available: false, evidence: null, identity: null, nextOffset: 0 }
+    }
+    throw error
+  }
+  try {
+    const stat = await file.stat()
+    const size = stat.size
+    const identity = `${stat.dev}:${stat.ino}`
+    let position = expectedIdentity && expectedIdentity !== identity
+      ? 0
+      : (startOffset >= 0 && startOffset <= size ? startOffset : 0)
+    let committedOffset = position
+    let carry = Buffer.alloc(0)
+    const chunk = Buffer.alloc(256 * 1024)
+
+    while (position < size) {
+      const count = Math.min(chunk.length, size - position)
+      const { bytesRead } = await file.read(chunk, 0, count, position)
+      if (bytesRead <= 0) break
+      const bufferStart = position - carry.length
+      position += bytesRead
+      const combined = carry.length === 0
+        ? Buffer.from(chunk.subarray(0, bytesRead))
+        : Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+      let lineStart = 0
+      let newline = combined.indexOf(0x0a, lineStart)
+      while (newline >= 0) {
+        const evidence = userMessageEvidence(
+          combined.subarray(lineStart, newline).toString('utf8'),
+          matches,
+        )
+        committedOffset = bufferStart + newline + 1
+        if (evidence) {
+          return { available: true, evidence, identity, nextOffset: committedOffset }
+        }
+        lineStart = newline + 1
+        newline = combined.indexOf(0x0a, lineStart)
+      }
+      carry = Buffer.from(combined.subarray(lineStart))
+      await new Promise<void>(resolve => setImmediate(resolve))
+    }
+
+    if (carry.length > 0) {
+      const evidence = userMessageEvidence(carry.toString('utf8'), matches)
+      if (evidence) return { available: true, evidence, identity, nextOffset: size }
+      try {
+        JSON.parse(carry.toString('utf8'))
+        committedOffset = size
+      } catch { /* retain the incomplete record for the next scan */ }
+    }
+    return { available: true, evidence: null, identity, nextOffset: committedOffset }
+  } finally {
+    await file.close()
+  }
 }
 
 /**
