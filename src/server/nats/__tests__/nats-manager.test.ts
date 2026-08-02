@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Supervisor } from '../../infra/supervisor'
 import {
+  legacyNatsManagerHasRunningHealthLoop,
   NatsManager,
   resetProcessNatsManagerForTests,
   startProcessNatsManager,
@@ -174,5 +179,52 @@ describe('NatsManager', () => {
     expect(second).toBe(legacy)
     expect(legacy.stop).not.toHaveBeenCalled()
     expect(legacy.start).not.toHaveBeenCalled()
+  })
+
+  it('pins the legacy health-loop probe to a real Supervisor lifecycle', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'nats-manager-legacy-supervisor-'))
+    const supervisor = new Supervisor({
+      name: 'legacy-health-probe',
+      binaryPath: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      stateDir,
+      port: 0,
+      probe: async () => true,
+      shutdownGraceMs: 1_000,
+      healthIntervalMs: 60_000,
+    })
+    const legacy = { state: 'degraded', supervisor } as unknown as NatsManager
+
+    try {
+      expect(legacyNatsManagerHasRunningHealthLoop(legacy)).toBe(false)
+      await supervisor.start()
+      expect(legacyNatsManagerHasRunningHealthLoop(legacy)).toBe(true)
+      await supervisor.stop()
+      expect(legacyNatsManagerHasRunningHealthLoop(legacy)).toBe(false)
+    } finally {
+      await supervisor.stop()
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  it('starts a fresh manager even when retiring a failed legacy manager rejects', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: null },
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('legacy stop failed') }),
+    } as unknown as NatsManager
+    const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+    processGlobal[Symbol.for('tinstar.nats-manager-owner.v1')] = {
+      manager: legacy,
+      startPromise: null,
+    }
+
+    const recovered = await startProcessNatsManager()
+
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+    expect(legacy.stop).toHaveBeenCalledOnce()
   })
 })

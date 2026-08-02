@@ -147,6 +147,21 @@ function processNatsManagerOwner(): ProcessNatsManagerOwner {
 }
 
 /**
+ * Compatibility probe for a NatsManager instance created by an older HMR
+ * module generation. Those instances predate hasSelfHealingSupervisor(), so
+ * the only durable signal that Supervisor.start() reached its recovery loop is
+ * the runtime healthTimer field. Keep the coupling named and covered by a real
+ * Supervisor lifecycle test; changing Supervisor's runtime representation must
+ * update this cross-generation probe deliberately.
+ */
+export function legacyNatsManagerHasRunningHealthLoop(manager: NatsManager): boolean {
+  const legacySupervisor = (manager as unknown as {
+    supervisor?: { healthTimer?: unknown } | null
+  }).supervisor
+  return legacySupervisor?.healthTimer != null
+}
+
+/**
  * Start or reuse the one broker supervisor owned by this process.
  *
  * HMR backends share it deliberately: two independent Supervisors can adopt
@@ -156,17 +171,13 @@ function processNatsManagerOwner(): ProcessNatsManagerOwner {
 export async function startProcessNatsManager(): Promise<NatsManager> {
   const owner = processNatsManagerOwner()
   const canInspectSupervisor = typeof owner.manager.hasSelfHealingSupervisor === 'function'
-  const legacySupervisor = (owner.manager as unknown as {
-    supervisor?: { healthTimer?: unknown } | null
-  }).supervisor
-  const legacySelfHealing = legacySupervisor?.healthTimer != null
   const replaceLegacyManager = owner.manager.state === 'degraded'
     && !canInspectSupervisor
-    && !legacySelfHealing
-  const retryableFailedInitialization = owner.manager.state === 'degraded'
-    && (canInspectSupervisor
-      ? !owner.manager.hasSelfHealingSupervisor()
-      : !legacySelfHealing)
+    && !legacyNatsManagerHasRunningHealthLoop(owner.manager)
+  const retryableFailedInitialization = replaceLegacyManager
+    || (owner.manager.state === 'degraded'
+      && canInspectSupervisor
+      && !owner.manager.hasSelfHealingSupervisor())
   if (
     owner.manager.state !== 'idle'
     && !retryableFailedInitialization
@@ -184,7 +195,6 @@ export async function startProcessNatsManager(): Promise<NatsManager> {
             'nats',
             `failed to retire legacy nats manager before retry: ${error instanceof Error ? error.message : String(error)}`,
           )
-          return
         }
         if (owner.manager === legacyManager) owner.manager = new NatsManager()
       }
