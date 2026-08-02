@@ -165,8 +165,10 @@ function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    // ESRCH is the only definitive evidence that the process is gone. EPERM
+    // and unknown failures must fail closed so we never start a second broker.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
 
@@ -174,14 +176,16 @@ function processIsAlive(pid: number): boolean {
  * A failed legacy stop is safe to abandon only when its runtime Supervisor
  * proves it no longer owns recovery state or a live process. Missing runtime
  * fields are treated as unknown, not inactive, so HMR cannot create two broker
- * owners merely to recover availability.
+ * owners merely to recover availability. A missing Supervisor is the one safe
+ * exception: initialization can fail before one is installed, leaving no
+ * recovery loop or broker process for that manager to own.
  */
 function legacyNatsManagerResourcesAreInactive(manager: NatsManager): boolean {
   const legacySupervisor = (manager as unknown as {
     supervisor?: { healthTimer?: unknown; pid?: unknown } | null
   }).supervisor
   if (legacySupervisor == null) return true
-  if (legacySupervisor.healthTimer != null) return false
+  if (legacyNatsManagerHasRunningHealthLoop(manager)) return false
   if (typeof legacySupervisor.pid !== 'number') return false
   return legacySupervisor.pid <= 0 || !processIsAlive(legacySupervisor.pid)
 }

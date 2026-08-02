@@ -230,6 +230,80 @@ describe('NatsManager', () => {
     )
   })
 
+  it('refuses a replacement when failed legacy retirement has an unknown supervisor shape', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: null },
+      start: vi.fn(async () => {}),
+      stop: vi.fn()
+        .mockRejectedValueOnce(new Error('legacy stop failed'))
+        .mockResolvedValue(undefined),
+    } as unknown as NatsManager
+    const owner = installLegacyOwner(legacy)
+
+    await expect(startProcessNatsManager()).rejects.toThrow(
+      'legacy nats manager retirement was not confirmed',
+    )
+    expect(owner.manager).toBe(legacy)
+  })
+
+  it('replaces a failed legacy manager that never installed a supervisor', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const legacy = {
+      state: 'degraded',
+      supervisor: null,
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('legacy stop failed') }),
+    } as unknown as NatsManager
+    installLegacyOwner(legacy)
+
+    const recovered = await startProcessNatsManager()
+
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+  })
+
+  it('treats permission-denied process probes as possibly alive', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: null, pid: 42 },
+      start: vi.fn(async () => {}),
+      stop: vi.fn()
+        .mockRejectedValueOnce(new Error('legacy stop failed'))
+        .mockResolvedValue(undefined),
+    } as unknown as NatsManager
+    const owner = installLegacyOwner(legacy)
+
+    await expect(startProcessNatsManager()).rejects.toThrow(
+      'legacy nats manager retirement was not confirmed',
+    )
+    expect(owner.manager).toBe(legacy)
+  })
+
+  it('replaces a failed legacy manager when its process is definitively gone', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
+    })
+    const legacy = {
+      state: 'degraded',
+      supervisor: { healthTimer: null, pid: 42 },
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('legacy stop failed') }),
+    } as unknown as NatsManager
+    installLegacyOwner(legacy)
+
+    const recovered = await startProcessNatsManager()
+
+    expect(recovered).not.toBe(legacy)
+    expect(recovered.state).toBe('ready')
+  })
+
   it('refuses a replacement when failed legacy retirement may still own a broker', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const supervisor = { healthTimer: null, pid: process.pid }
