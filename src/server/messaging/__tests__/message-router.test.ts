@@ -308,9 +308,14 @@ describe('provider-neutral reply MCP handler', () => {
 describe('NATS request/reply boundary', () => {
   it('serially replaces the process responder when backend initialization repeats', async () => {
     const calls: string[] = []
+    let releaseFirstStop!: () => void
+    const firstStopGate = new Promise<void>(resolve => { releaseFirstStop = resolve })
     const service = (name: string) => ({
       start: vi.fn(async () => { calls.push(`${name}:start`) }),
-      stop: vi.fn(async () => { calls.push(`${name}:stop`) }),
+      stop: vi.fn(async () => {
+        calls.push(`${name}:stop`)
+        if (name === 'first') await firstStopGate
+      }),
     }) as unknown as NatsMessageRouterService
     const first = service('first')
     const second = service('second')
@@ -318,6 +323,18 @@ describe('NATS request/reply boundary', () => {
     await expect(firstLease.start(first)).resolves.toBe(true)
 
     const secondLease = reserveMessageRouterOwner('/cfg/hmr')
+    let previousDrained = false
+    const previousDrain = secondLease.waitForPreviousDrain().then(() => {
+      previousDrained = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(calls).toEqual(['first:start', 'first:stop'])
+    expect(previousDrained).toBe(false)
+
+    releaseFirstStop()
+    await previousDrain
+    expect(previousDrained).toBe(true)
     await expect(secondLease.start(second)).resolves.toBe(true)
 
     expect(calls).toEqual(['first:start', 'first:stop', 'second:start'])

@@ -577,6 +577,8 @@ function processRouterOwners(): Map<string, ProcessRouterOwner> {
 }
 
 export interface MessageRouterOwnerLease {
+  /** Wait until the responder owned by the prior backend has fully drained. */
+  waitForPreviousDrain(): Promise<void>
   /** Start only if this is still the newest backend for the config root. */
   start(service: NatsMessageRouterService): Promise<boolean>
   /** Stop this lease's responder without disturbing a newer backend. */
@@ -600,13 +602,17 @@ export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwne
   owners.set(configRoot, state)
   const generation = ++state.generation
 
-  state.transition = state.transition.then(async () => {
+  const previousDrain = state.transition.then(async () => {
     const active = state.active
     state.active = null
     if (active) await active.stop()
   })
+  state.transition = previousDrain.catch(() => {})
 
   return {
+    async waitForPreviousDrain() {
+      await previousDrain
+    },
     async start(service) {
       let started = false
       const activation = state.transition.then(async () => {

@@ -314,7 +314,31 @@ export class DeliveryRetryScheduler {
   }
 }
 
-let activeDeliveryRetryScheduler: DeliveryRetryScheduler | null = null
+interface ProcessDeliveryRetryOwner {
+  generation: number
+  active: DeliveryRetryScheduler | null
+  transition: Promise<void>
+}
+
+const PROCESS_DELIVERY_RETRY_OWNER = Symbol.for(
+  'tinstar.delivery-retry-scheduler-owner.v1',
+)
+
+function processDeliveryRetryOwner(): ProcessDeliveryRetryOwner {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  let owner = processGlobal[PROCESS_DELIVERY_RETRY_OWNER] as
+    | ProcessDeliveryRetryOwner
+    | undefined
+  if (!owner) {
+    owner = {
+      generation: 0,
+      active: null,
+      transition: Promise.resolve(),
+    }
+    processGlobal[PROCESS_DELIVERY_RETRY_OWNER] = owner
+  }
+  return owner
+}
 
 /**
  * Replace the process-wide retry loop during backend/HMR replacement. The old
@@ -323,20 +347,40 @@ let activeDeliveryRetryScheduler: DeliveryRetryScheduler | null = null
 export async function replaceDeliveryRetryScheduler(
   scheduler: DeliveryRetryScheduler,
 ): Promise<DeliveryDispatchOutcome[]> {
-  const previous = activeDeliveryRetryScheduler
-  activeDeliveryRetryScheduler = scheduler
-  if (previous && previous !== scheduler) await previous.stop()
-  if (activeDeliveryRetryScheduler !== scheduler) return []
-  return scheduler.start()
+  const owner = processDeliveryRetryOwner()
+  const generation = ++owner.generation
+  let outcomes: DeliveryDispatchOutcome[] = []
+  const activation = owner.transition.then(async () => {
+    const previous = owner.active
+    owner.active = null
+    if (previous && previous !== scheduler) await previous.stop()
+    if (owner.generation !== generation) return
+
+    outcomes = await scheduler.start()
+    if (owner.generation !== generation) {
+      await scheduler.stop()
+      return
+    }
+    owner.active = scheduler
+  })
+  owner.transition = activation.catch(() => {})
+  await activation
+  return outcomes
 }
 
 export async function stopDeliveryRetryScheduler(): Promise<void> {
-  const current = activeDeliveryRetryScheduler
-  activeDeliveryRetryScheduler = null
-  await current?.stop()
+  const owner = processDeliveryRetryOwner()
+  ++owner.generation
+  const stopping = owner.transition.then(async () => {
+    const current = owner.active
+    owner.active = null
+    await current?.stop()
+  })
+  owner.transition = stopping.catch(() => {})
+  await stopping
 }
 
 /** Route newly accepted work through the same FIFO sweep as due retries. */
 export function runDeliveryRetrySchedulerNow(): Promise<DeliveryDispatchOutcome[]> {
-  return activeDeliveryRetryScheduler?.runNow() ?? Promise.resolve([])
+  return processDeliveryRetryOwner().active?.runNow() ?? Promise.resolve([])
 }

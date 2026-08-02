@@ -799,10 +799,11 @@ export function initBackend(): RouteContext {
     // the rest of this function remaining synchronous forever.
     await backendContextReady
 
-    // An HMR replacement may still own a retry sweep over the same persisted
-    // ledger. Stop it before opening a fresh in-memory view, otherwise the old
-    // sweep can commit after hydration and the replacement can later overwrite
-    // that newer state with its stale snapshot.
+    // An HMR replacement may still have a responder draining or a retry sweep
+    // writing the same persisted ledger. Fence both before opening a fresh
+    // in-memory view, otherwise the replacement can hydrate stale state and
+    // later overwrite an acceptance or transition committed by the old backend.
+    await messageRouterOwner?.waitForPreviousDrain()
     await stopDeliveryRetryScheduler()
     if (sessionConfig) {
       deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })

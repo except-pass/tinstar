@@ -9,7 +9,6 @@ import {
   DeliveryRetryScheduler,
   dispatchAcceptedMessage,
   recoverAcceptedMessages,
-  replaceDeliveryRetryScheduler,
   stopDeliveryRetryScheduler,
 } from '../delivery-dispatch'
 import { DeliveryLedger } from '../delivery-ledger'
@@ -273,8 +272,13 @@ describe('durable provider dispatch', () => {
     })
   })
 
-  it('stops the prior retry loop when HMR installs a replacement scheduler', async () => {
+  it('stops a prior-module retry loop when HMR installs a separately evaluated scheduler', async () => {
     vi.useFakeTimers()
+    const firstEvaluation = await import('../delivery-dispatch')
+    vi.resetModules()
+    const secondEvaluation = await import('../delivery-dispatch')
+    expect(firstEvaluation.DeliveryRetryScheduler)
+      .not.toBe(secondEvaluation.DeliveryRetryScheduler)
     const now = Date.parse('2026-08-01T12:00:00.000Z')
     const first = await acceptedLedger(undefined, { now: () => now })
     const second = await acceptedLedger(undefined, { now: () => now })
@@ -310,17 +314,21 @@ describe('durable provider dispatch', () => {
       },
     })
 
-    await replaceDeliveryRetryScheduler(new DeliveryRetryScheduler(
-      first.ledger,
-      firstRegistry,
-      { now: () => now, pollMs: 10 },
-    ))
+    await firstEvaluation.replaceDeliveryRetryScheduler(
+      new firstEvaluation.DeliveryRetryScheduler(
+        first.ledger,
+        firstRegistry,
+        { now: () => now, pollMs: 10 },
+      ),
+    )
     expect(firstCalls).toBe(1)
-    await replaceDeliveryRetryScheduler(new DeliveryRetryScheduler(
-      second.ledger,
-      secondRegistry,
-      { now: () => now, pollMs: 10 },
-    ))
+    await secondEvaluation.replaceDeliveryRetryScheduler(
+      new secondEvaluation.DeliveryRetryScheduler(
+        second.ledger,
+        secondRegistry,
+        { now: () => now, pollMs: 10 },
+      ),
+    )
     const callsAtReplacement = firstCalls
 
     await vi.advanceTimersByTimeAsync(50)
