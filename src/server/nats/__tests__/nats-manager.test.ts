@@ -79,6 +79,30 @@ describe('NatsManager', () => {
     expect(staleStop).toHaveBeenCalledOnce()
   })
 
+  it('retains an incomplete supervisor while its process may still be alive', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    vi.spyOn(process, 'kill').mockReturnValue(true)
+    const mgr = new NatsManager()
+    const staleSupervisor = {
+      pid: 42,
+      stop: vi.fn<() => Promise<void>>(),
+    }
+    staleSupervisor.stop
+      .mockRejectedValueOnce(new Error('stop was not confirmed'))
+      .mockImplementationOnce(async () => { staleSupervisor.pid = 0 })
+    Object.assign(mgr as unknown as Record<string, unknown>, {
+      supervisor: staleSupervisor,
+      supervisorStarted: false,
+    })
+
+    await mgr.start()
+    expect(mgr.state).toBe('degraded')
+    await mgr.start()
+
+    expect(mgr.state).toBe('ready')
+    expect(staleSupervisor.stop).toHaveBeenCalledTimes(2)
+  })
+
   it('reuses one process manager across HMR generations until process shutdown', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const start = vi.spyOn(NatsManager.prototype, 'start')
@@ -232,6 +256,8 @@ describe('NatsManager', () => {
 
   it('refuses a replacement when failed legacy retirement has an unknown supervisor shape', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const start = vi.spyOn(NatsManager.prototype, 'start')
+    const logError = vi.spyOn(log, 'error').mockImplementation(() => {})
     const legacy = {
       state: 'degraded',
       supervisor: { healthTimer: null },
@@ -246,6 +272,12 @@ describe('NatsManager', () => {
       'legacy nats manager retirement was not confirmed',
     )
     expect(owner.manager).toBe(legacy)
+    expect(start).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith(
+      'nats',
+      'failed to retire legacy nats manager before retry: legacy stop failed; '
+        + 'the legacy supervisor process identity is unknown',
+    )
   })
 
   it('replaces a failed legacy manager that never installed a supervisor', async () => {
@@ -266,7 +298,9 @@ describe('NatsManager', () => {
 
   it('treats permission-denied process probes as possibly alive', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
-    vi.spyOn(process, 'kill').mockImplementation(() => {
+    const start = vi.spyOn(NatsManager.prototype, 'start')
+    const logError = vi.spyOn(log, 'error').mockImplementation(() => {})
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
     })
     const legacy = {
@@ -283,6 +317,13 @@ describe('NatsManager', () => {
       'legacy nats manager retirement was not confirmed',
     )
     expect(owner.manager).toBe(legacy)
+    expect(start).not.toHaveBeenCalled()
+    expect(kill).toHaveBeenCalledWith(42, 0)
+    expect(logError).toHaveBeenCalledWith(
+      'nats',
+      'failed to retire legacy nats manager before retry: legacy stop failed; '
+        + 'broker process 42 liveness is unknown: process probe failed with EPERM',
+    )
   })
 
   it('replaces a failed legacy manager when its process is definitively gone', async () => {

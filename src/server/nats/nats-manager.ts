@@ -8,6 +8,7 @@ import { log } from '../logger.js'
 import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
 import { DEFAULT_NATS_PORT, natsBrokerUrl } from './url.js'
+import { probeProcessLiveness, processMayBeAlive } from '../infra/process-liveness.js'
 
 export class NatsManager {
   state: ServiceState = 'idle'
@@ -35,7 +36,17 @@ export class NatsManager {
         const staleSupervisor = this.supervisor
         this.supervisor = null
         this.supervisorStarted = false
-        await staleSupervisor.stop()
+        try {
+          await staleSupervisor.stop()
+        } catch (error) {
+          // Keep retrying retirement of a supervisor that may still own a
+          // process. Dropping the reference here would let the next start()
+          // create a competing broker after an unconfirmed stop.
+          if (staleSupervisor.pid > 0 && processMayBeAlive(staleSupervisor.pid)) {
+            this.supervisor = staleSupervisor
+          }
+          throw error
+        }
       }
       if (this.external) {
         this.state = 'ready'
@@ -161,17 +172,6 @@ export function legacyNatsManagerHasRunningHealthLoop(manager: NatsManager): boo
   return legacySupervisor?.healthTimer != null
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // ESRCH is the only definitive evidence that the process is gone. EPERM
-    // and unknown failures must fail closed so we never start a second broker.
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
-  }
-}
-
 /**
  * A failed legacy stop is safe to abandon only when its runtime Supervisor
  * proves it no longer owns recovery state or a live process. Missing runtime
@@ -180,14 +180,18 @@ function processIsAlive(pid: number): boolean {
  * exception: initialization can fail before one is installed, leaving no
  * recovery loop or broker process for that manager to own.
  */
-function legacyNatsManagerResourcesAreInactive(manager: NatsManager): boolean {
+function legacyNatsManagerOwnershipBlocker(manager: NatsManager): string | null {
   const legacySupervisor = (manager as unknown as {
     supervisor?: { healthTimer?: unknown; pid?: unknown } | null
   }).supervisor
-  if (legacySupervisor == null) return true
-  if (legacyNatsManagerHasRunningHealthLoop(manager)) return false
-  if (typeof legacySupervisor.pid !== 'number') return false
-  return legacySupervisor.pid <= 0 || !processIsAlive(legacySupervisor.pid)
+  if (legacySupervisor == null) return null
+  if (legacyNatsManagerHasRunningHealthLoop(manager)) return 'the legacy health loop is still running'
+  if (typeof legacySupervisor.pid !== 'number') return 'the legacy supervisor process identity is unknown'
+  if (legacySupervisor.pid <= 0) return null
+  const liveness = probeProcessLiveness(legacySupervisor.pid)
+  if (liveness.state === 'gone') return null
+  if (liveness.state === 'alive') return `broker process ${legacySupervisor.pid} is still alive`
+  return `broker process ${legacySupervisor.pid} liveness is unknown: ${liveness.reason}`
 }
 
 /**
@@ -220,13 +224,17 @@ export async function startProcessNatsManager(): Promise<NatsManager> {
         try {
           await legacyManager.stop()
         } catch (error) {
+          const stopMessage = error instanceof Error ? error.message : String(error)
+          const ownershipBlocker = legacyNatsManagerOwnershipBlocker(legacyManager)
           log.error(
             'nats',
-            `failed to retire legacy nats manager before retry: ${error instanceof Error ? error.message : String(error)}`,
+            `failed to retire legacy nats manager before retry: ${stopMessage}`
+              + (ownershipBlocker ? `; ${ownershipBlocker}` : ''),
           )
-          if (!legacyNatsManagerResourcesAreInactive(legacyManager)) {
+          if (ownershipBlocker) {
             throw new Error(
-              'legacy nats manager retirement was not confirmed; refusing duplicate broker ownership',
+              'legacy nats manager retirement was not confirmed; refusing duplicate broker ownership: '
+                + ownershipBlocker,
               { cause: error },
             )
           }

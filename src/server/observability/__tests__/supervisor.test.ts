@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +7,10 @@ import { Supervisor } from '../../infra/supervisor'
 let tmp: string
 
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tinstar-sup-test-')) })
-afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  rmSync(tmp, { recursive: true, force: true })
+})
 
 function shSupervisor(script: string, stateDir: string, name = 'fake') {
   const bin = join(tmp, `${name}.sh`)
@@ -54,6 +57,41 @@ describe('Supervisor spawn + readiness', () => {
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
+  it('treats permission-denied liveness as possibly alive and adopts the recorded pid', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+    }))
+    let stopping = false
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') {
+        stopping = true
+        return true
+      }
+      if (signal === 0) {
+        throw Object.assign(
+          new Error(stopping ? 'no such process' : 'operation not permitted'),
+          { code: stopping ? 'ESRCH' : 'EPERM' },
+        )
+      }
+      return true
+    })
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+    })
+
+    await sup.start()
+
+    expect(sup.pid).toBe(42)
+    expect(sup.state).toBe('ready')
+    expect(kill).toHaveBeenCalledWith(42, 0)
+    await sup.stop()
+  })
+
   it('adopts a live pid recorded in the state file instead of spawning', async () => {
     // spawn a long-lived sleep out-of-band
     const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })

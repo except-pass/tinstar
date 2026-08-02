@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -7,7 +7,10 @@ import { acquireLock, tryAcquireLock } from '../../infra/lock'
 let tmp: string
 
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tinstar-lock-test-')) })
-afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  rmSync(tmp, { recursive: true, force: true })
+})
 
 describe('observability lock', () => {
   it('acquireLock grants when file is unheld', async () => {
@@ -54,5 +57,17 @@ describe('observability lock', () => {
     const release = await tryAcquireLock(join(tmp, 'o.lock'))
     expect(release).not.toBeNull()
     await release!()
+  })
+
+  it('does not steal a lock when the owner probe is permission denied', async () => {
+    const dir = join(tmp, 'o.lock.mark')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 0 }))
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+
+    await expect(tryAcquireLock(join(tmp, 'o.lock'))).resolves.toBeNull()
+    expect(kill).toHaveBeenCalledWith(42, 0)
   })
 })

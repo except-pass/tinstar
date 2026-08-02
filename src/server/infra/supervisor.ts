@@ -2,6 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
+import { processMayBeAlive } from './process-liveness.js'
 
 export interface SupervisorOpts {
   name: string
@@ -71,7 +72,7 @@ export class Supervisor {
     // wait up to `grace` ms for the process to exit
     const deadline = Date.now() + grace
     while (Date.now() < deadline) {
-      try { process.kill(pid, 0) } catch { this.cleanupState(); return }
+      if (!processMayBeAlive(pid)) { this.cleanupState(); return }
       await new Promise((r) => setTimeout(r, 50))
     }
 
@@ -80,8 +81,11 @@ export class Supervisor {
     // final drain
     const drainDeadline = Date.now() + 500
     while (Date.now() < drainDeadline) {
-      try { process.kill(pid, 0) } catch { this.cleanupState(); return }
+      if (!processMayBeAlive(pid)) { this.cleanupState(); return }
       await new Promise((r) => setTimeout(r, 25))
+    }
+    if (processMayBeAlive(pid)) {
+      throw new Error(`${this.opts.name} process ${pid} did not stop`)
     }
     this.cleanupState()
   }
@@ -152,7 +156,7 @@ export class Supervisor {
 
   private isProcessAlive(): boolean {
     if (!this.pid) return false
-    try { process.kill(this.pid, 0); return true } catch { return false }
+    return processMayBeAlive(this.pid)
   }
 
   /**
@@ -242,8 +246,7 @@ export class Supervisor {
     try {
       const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
       if (!Number.isInteger(s.pid) || s.pid <= 0) return null
-      // kill(pid, 0) throws if the process doesn't exist
-      try { process.kill(s.pid, 0) } catch { return null }
+      if (!processMayBeAlive(s.pid)) return null
       // Validate the binary name if an expected name was provided
       if (this.opts.expectedBinaryName) {
         const actual = getProcessName(s.pid)

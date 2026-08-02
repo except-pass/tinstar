@@ -1,5 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { processMayBeAlive } from './process-liveness.js'
 
 export type ReleaseFn = () => Promise<void>
 
@@ -27,15 +28,16 @@ function tryCreateMarker(dir: string): boolean {
 }
 
 function isOwnerAlive(dir: string): boolean {
+  let pid: number
   try {
     const raw = readFileSync(ownerFile(dir), 'utf-8')
-    const { pid } = JSON.parse(raw) as { pid: number }
+    const owner = JSON.parse(raw) as { pid: number }
+    pid = owner.pid
     if (typeof pid !== 'number' || pid <= 0) return false
-    process.kill(pid, 0)
-    return true
   } catch {
     return false
   }
+  return processMayBeAlive(pid)
 }
 
 function stealLock(dir: string): boolean {
@@ -109,15 +111,26 @@ function readOwnerPid(dir: string): number | null {
   }
 }
 
-function killAndWait(pid: number, timeoutMs = 3_000): void {
-  try { process.kill(pid, 'SIGTERM') } catch { return }
+function killAndWait(pid: number, timeoutMs = 3_000): boolean {
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return !processMayBeAlive(pid)
+  }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    try { process.kill(pid, 0) } catch { return } // gone
+    if (!processMayBeAlive(pid)) return true
     const start = Date.now()
     while (Date.now() - start < 50) { /* brief spin — boot path, no event loop yet */ }
   }
   try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  const drainDeadline = Date.now() + 500
+  while (Date.now() < drainDeadline) {
+    if (!processMayBeAlive(pid)) return true
+    const start = Date.now()
+    while (Date.now() - start < 25) { /* brief spin — boot path, no event loop yet */ }
+  }
+  return !processMayBeAlive(pid)
 }
 
 /**
@@ -166,7 +179,9 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
     return { acquired: false, action, ownerPid: ownerPid ?? undefined }
   }
   if (action === 'takeover' && ownerPid) {
-    killAndWait(ownerPid)
+    if (!killAndWait(ownerPid)) {
+      return { acquired: false, action: 'refuse', ownerPid }
+    }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
   return stealLock(dir)

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +25,10 @@ describe('decideSingletonAction', () => {
 describe('acquireBackendSingleton', () => {
   let dir: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tinstar-singleton-')) })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
 
   const lockPath = () => join(dir, 'server.lock')
 
@@ -54,5 +57,21 @@ describe('acquireBackendSingleton', () => {
     expect(r.acquired).toBe(true)
     const owner = JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))
     expect(owner.pid).toBe(process.pid)
+  })
+
+  it('refuses a forced takeover when owner retirement is permission denied', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+
+    const result = acquireBackendSingleton(lockPath(), { force: true })
+
+    expect(result).toEqual({ acquired: false, action: 'refuse', ownerPid: 42 })
+    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).toHaveBeenCalledWith(42, 0)
+    expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({ pid: 42 })
   })
 })
