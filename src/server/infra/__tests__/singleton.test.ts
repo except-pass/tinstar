@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decideSingletonAction, acquireBackendSingleton } from '../lock'
@@ -137,5 +137,22 @@ describe('acquireBackendSingleton', () => {
 
     expect(result).toMatchObject({ acquired: true, action: 'steal' })
     expect(kill).not.toHaveBeenCalled()
+  })
+
+  it('does not attribute an unresolved marker failure to the stale owner', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 1 }))
+    chmodSync(dir, 0o555)
+
+    try {
+      expect(acquireBackendSingleton(lockPath())).toEqual({
+        acquired: false,
+        action: 'steal',
+        failure: 'marker-recreation-failed',
+      })
+    } finally {
+      chmodSync(dir, 0o755)
+    }
   })
 })
