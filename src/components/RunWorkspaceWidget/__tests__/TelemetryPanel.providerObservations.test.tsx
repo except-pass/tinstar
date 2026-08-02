@@ -296,6 +296,45 @@ describe('<TelemetryPanel> provider observations', () => {
     expect(view.getByText('10')).toBeTruthy()
   })
 
+  it('prefers cumulative provider history over a latest-turn-only live total', () => {
+    const provider = codexProviderSession()
+    testState.providerSessions = [{
+      ...provider,
+      usage: {
+        ...provider.usage,
+        availability: {
+          state: 'available',
+          value: { model: 'gpt-5.4', latestTurnTokens: { input: 7, output: 3 } },
+        },
+      },
+    }]
+    testState.legacySnapshot = legacySnapshot(4_200)
+
+    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
+    const providerSignal = within(view.getByTestId('provider-session-signal-codex'))
+
+    expect(providerSignal.getByText('1.2k')).toBeTruthy()
+    expect(providerSignal.queryByText('10')).toBeNull()
+    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
+  })
+
+  it('falls back to legacy tokens when a failed history refresh retains stale points', () => {
+    testState.legacySnapshot = legacySnapshot(4_200)
+    testState.providerHistory = {
+      tsSec: [1, 2],
+      tokens: [1_000, 1_200],
+      source: 'Tinstar provider observation history',
+      freshness: 'stale',
+      error: 'HTTP 503',
+    }
+
+    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
+
+    expect(view.getByText('TOKENS · PROMETHEUS')).toBeTruthy()
+    expect(view.getByText('4.2k')).toBeTruthy()
+    expect(view.getByText('history unavailable')).toBeTruthy()
+  })
+
   it('suppresses legacy tokens when cumulative provider history is usable', () => {
     testState.legacySnapshot = legacySnapshot(4_200)
 

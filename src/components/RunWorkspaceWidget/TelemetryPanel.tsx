@@ -14,7 +14,7 @@ import {
   type ProviderSessionObservations,
 } from '../../hooks/providerObservationsStore'
 import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
-import { providerSessionTokenTotal } from '../../domain/provider-capabilities'
+import { providerTokenTotal } from '../../domain/provider-capabilities'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -232,16 +232,17 @@ function ProviderSessionSignal({
   const availableContext = context?.availability.state === 'available'
     ? context.availability.value
     : null
-  const total = providerSessionTokenTotal(availableUsage)
+  const liveCumulativeTotal = providerTokenTotal(availableUsage?.cumulativeTokens)
+  const latestTurnTotal = providerTokenTotal(availableUsage?.latestTurnTokens)
   const usedPercent = providerContextPercent(availableContext)
   const sessionId = showTokens
     ? usage?.scope.sessionId ?? context?.scope.sessionId ?? null
     : null
   const history = useProviderTelemetrySeries(provider.providerId, sessionId)
   const tokenSeries = history?.tokens ?? []
-  const historyTotal = latestNonNull(tokenSeries)
+  const historyTotal = history?.error === null ? latestNonNull(tokenSeries) : null
   const hasNativeTokenHistory = historyTotal !== null
-  const displayedTotal = total ?? historyTotal
+  const displayedTotal = liveCumulativeTotal ?? historyTotal ?? latestTurnTotal
   const historyDelta = history?.error
     ? { text: 'history unavailable', tone: 'flat' as const }
     : computeDeltaChip(
