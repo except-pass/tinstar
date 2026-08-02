@@ -25,7 +25,8 @@ const RECIPIENT_KEYS = new Set(['providerId', 'sessionId', 'incarnation'])
 const EVIDENCE_KEYS = new Set(['source', 'reference'])
 const EVIDENCE_SOURCE_KEYS = new Set(['id', 'label'])
 const STATE_EVENT_KEYS = new Set([
-  'state', 'attempt', 'at', 'reason', 'retryAt', 'retryable', 'attemptRef', 'evidence',
+  'state', 'attempt', 'at', 'reason', 'retryAt', 'retryable', 'attemptRef',
+  'providerAcceptedAt', 'evidence',
 ])
 const MESSAGE_KEYS = new Set([
   'id', 'requestId', 'requestFingerprint', 'acceptedAt',
@@ -142,6 +143,7 @@ export interface DeliveryStateEvent {
   retryAt?: string
   retryable?: boolean
   attemptRef?: string
+  providerAcceptedAt?: string
   evidence?: DeliveryEvidence
 }
 
@@ -406,6 +408,7 @@ function isStateEvent(value: unknown): value is DeliveryStateEvent {
   if (event.retryAt !== undefined && !isIsoTimestamp(event.retryAt)) return false
   if (event.retryable !== undefined && typeof event.retryable !== 'boolean') return false
   if (event.attemptRef !== undefined && typeof event.attemptRef !== 'string') return false
+  if (event.providerAcceptedAt !== undefined && !isIsoTimestamp(event.providerAcceptedAt)) return false
   if (event.evidence !== undefined && !isEvidence(event.evidence)) return false
   if (event.state === 'failed') {
     return nonEmpty(event.reason) && typeof event.retryable === 'boolean'
@@ -863,6 +866,11 @@ function transitionProblem(
   if (next.attemptRef !== undefined && typeof next.attemptRef !== 'string') {
     return 'attemptRef must be a string'
   }
+  if (next.providerAcceptedAt !== undefined) {
+    if (next.state !== 'accepted' || !isIsoTimestamp(next.providerAcceptedAt)) {
+      return 'providerAcceptedAt must be an ISO timestamp on an accepted transition'
+    }
+  }
   if (next.evidence !== undefined && !isEvidence(next.evidence)) {
     return 'evidence is malformed'
   }
@@ -924,6 +932,7 @@ function copyTransitionNext(
   if (next.retryAt !== undefined) owned.retryAt = next.retryAt
   if (next.retryable !== undefined) owned.retryable = next.retryable
   if (next.attemptRef !== undefined) owned.attemptRef = next.attemptRef
+  if (next.providerAcceptedAt !== undefined) owned.providerAcceptedAt = next.providerAcceptedAt
   if (next.evidence !== undefined) {
     owned.evidence = {
       source: {

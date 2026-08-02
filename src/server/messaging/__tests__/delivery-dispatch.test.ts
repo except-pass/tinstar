@@ -504,7 +504,7 @@ describe('durable provider dispatch', () => {
           messageId: request.messageId,
           attempt: request.attempt,
           recipient: request.recipient,
-          acceptedAt: '2026-08-01T12:00:02.000Z',
+          acceptedAt: '2026-08-01T12:00:01.500Z',
           attemptRef: 'tinstar-message-v1:sha256:' + 'a'.repeat(64),
         }
       },
@@ -565,6 +565,7 @@ describe('durable provider dispatch', () => {
       providerId: 'codex',
       messageId: 'msg-7',
       attempt: 1,
+      acceptedAt: '2026-08-01T12:00:01.500Z',
       attemptRef: 'tinstar-message-v1:sha256:' + 'a'.repeat(64),
       recipient: {
         providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
@@ -582,6 +583,48 @@ describe('durable provider dispatch', () => {
         }),
       ]),
     })
+  })
+
+  it('confirms provider acceptance without provider-owned attempt state', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger([{
+      providerId: 'generic', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], { now: () => now })
+    const confirm = vi.fn(async (acceptance) => ({
+      state: 'confirmed' as const,
+      providerId: 'generic',
+      messageId: acceptance.messageId,
+      attempt: acceptance.attempt,
+      recipient: acceptance.recipient,
+      confirmedAt: new Date(now).toISOString(),
+      evidence: {
+        source: { id: 'generic-confirmation', label: 'Generic confirmation' },
+      },
+    }))
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('generic', {
+      async accept(request) {
+        return {
+          state: 'accepted',
+          providerId: 'generic',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: '2026-08-01T11:59:59.500Z',
+        }
+      },
+      confirm,
+    })
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, { now: () => now })
+    now += 1_000
+    await expect(recoverAcceptedMessages(ledger, registry, { now: () => now })).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'delivered',
+    }])
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedAt: '2026-08-01T11:59:59.500Z',
+    }))
+    expect(confirm.mock.calls[0]![0]).not.toHaveProperty('attemptRef')
   })
 
   it('backs off bounded confirmation before issuing a fresh at-least-once attempt', async () => {
@@ -613,6 +656,7 @@ describe('durable provider dispatch', () => {
       now: () => now,
       retryDelayMs: 1_000,
       confirmationMaxChecks: 2,
+      maxAttempts: 2,
     }
 
     await expect(dispatchAcceptedMessage('msg-7', ledger, registry, options)).resolves.toEqual([{
@@ -672,6 +716,156 @@ describe('durable provider dispatch', () => {
     expect(reopenedLedger.getDelivery('msg-7/d/1')).toMatchObject({
       state: 'accepted', attempt: 2,
     })
+
+    now += 1_000
+    await expect(recoverAcceptedMessages(reopenedLedger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'pending',
+      reason: 'rollout evidence is not visible yet',
+    }])
+    now += 1_000
+    await expect(recoverAcceptedMessages(reopenedLedger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider delivery could not be confirmed after 2 attempts: '
+        + 'rollout evidence is not visible yet',
+    }])
+    expect(reopenedLedger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', attempt: 2,
+      history: expect.arrayContaining([expect.objectContaining({
+        retryable: false,
+      })]),
+    })
+    now += 60_000
+    await expect(recoverAcceptedMessages(reopenedLedger, registry, options)).resolves.toEqual([])
+    expect(accept.mock.calls.map(([request]) => request.attempt)).toEqual([1, 2])
+  })
+
+  it('fails an unregistered provider without blocking healthy recovery work', async () => {
+    const { ledger } = await acceptedLedger([
+      { providerId: 'removed', sessionId: 'gone', incarnation: 'gone-v1' },
+      { providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3' },
+    ])
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'delivered',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          deliveredAt: '2026-08-01T12:00:01.000Z',
+          evidence: {
+            source: { id: 'claude-receipt', label: 'Claude receipt' },
+          },
+        }
+      },
+    })
+
+    const deliveries = ledger.getMessage('msg-7')!.deliveries
+    const removedId = deliveries.find(delivery => delivery.recipient.providerId === 'removed')!.id
+    const healthyId = deliveries.find(delivery => delivery.recipient.providerId === 'claude')!.id
+    await expect(recoverAcceptedMessages(ledger, registry)).resolves.toEqual(expect.arrayContaining([
+      {
+        deliveryId: removedId,
+        state: 'failed',
+        reason: 'Provider "removed" is no longer registered',
+      },
+      { deliveryId: healthyId, state: 'delivered' },
+    ]))
+    expect(ledger.getDelivery(removedId)).toMatchObject({
+      state: 'failed',
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+    expect(ledger.getDelivery(healthyId)).toMatchObject({ state: 'delivered' })
+  })
+
+  it('bounds retryable acceptance rejections by the delivery attempt budget', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    const attempts: number[] = []
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        attempts.push(request.attempt)
+        return {
+          state: 'rejected',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'temporary channel failure',
+          retryable: true,
+        }
+      },
+    })
+    const options = { now: () => now, retryDelayMs: 1_000, maxAttempts: 2 }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    now += 1_000
+    await recoverAcceptedMessages(ledger, registry, options)
+    expect(attempts).toEqual([1, 2])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', attempt: 2,
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+    now += 60_000
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([])
+    expect(attempts).toEqual([1, 2])
+  })
+
+  it('bounds retryable confirmation failures by the delivery attempt budget', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], { now: () => now })
+    const attempts: number[] = []
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('codex', {
+      async accept(request) {
+        attempts.push(request.attempt)
+        return {
+          state: 'accepted',
+          providerId: 'codex',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: new Date(now).toISOString(),
+          attemptRef: `attempt-${request.attempt}`,
+        }
+      },
+      async confirm(acceptance) {
+        return {
+          state: 'failed',
+          providerId: 'codex',
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'temporary evidence failure',
+          retryable: true,
+        }
+      },
+    })
+    const options = { now: () => now, retryDelayMs: 1_000, maxAttempts: 2 }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    now += 1_000
+    await recoverAcceptedMessages(ledger, registry, options)
+    now += 1_000
+    await recoverAcceptedMessages(ledger, registry, options)
+    now += 1_000
+    await recoverAcceptedMessages(ledger, registry, options)
+    expect(attempts).toEqual([1, 2])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', attempt: 2,
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+    now += 60_000
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([])
+    expect(attempts).toEqual([1, 2])
   })
 
   it('records explicit channel rejection instead of silently succeeding', async () => {

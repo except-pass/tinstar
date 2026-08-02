@@ -53,7 +53,9 @@ function deps(screen = '• Working (3s)\n\n› Add a follow-up\n  ? for shortcu
       captureScreen,
       submitPrompt,
     }),
-    currentIncarnation: vi.fn(async () => 'worker-two-v1'),
+    currentIncarnation: vi.fn<(sessionId: string) => Promise<string | null>>(
+      async () => 'worker-two-v1',
+    ),
     resolveTranscript: vi.fn<(sessionId: string) => Promise<string | null>>(async () => null),
   }
 }
@@ -187,11 +189,9 @@ describe('Codex terminal delivery', () => {
     expect(adapter.queueDepth('worker-two')).toBe(1)
   })
 
-  it('removes a rejected head so the next durable retry can be delivered', async () => {
+  it('treats a failed prompt submission as non-retryable because text may remain', async () => {
     const d = deps()
-    d.submitPrompt
-      .mockRejectedValueOnce(new Error('tmux pane disappeared'))
-      .mockResolvedValueOnce(true)
+    d.submitPrompt.mockRejectedValueOnce(new Error('Enter failed after paste'))
     const adapter = new CodexDeliveryAdapter(d)
 
     const rejected = await adapter.accept(request({ attempt: 1 }))
@@ -199,24 +199,11 @@ describe('Codex terminal delivery', () => {
     expect(rejected).toMatchObject({
       state: 'rejected',
       attempt: 1,
-      retryable: true,
-      reason: 'Codex prompt injection failed: tmux pane disappeared',
+      retryable: false,
+      reason: 'Codex prompt submission may have partially failed: Enter failed after paste',
     })
     expect(adapter.queueDepth('worker-two')).toBe(0)
-
-    const accepted = await adapter.accept(request({ attempt: 2 }))
-
-    expect(accepted).toMatchObject({
-      state: 'accepted',
-      attempt: 2,
-      attemptRef: expect.stringMatching(/^tinstar-message-v1:sha256:[a-f0-9]{64}$/),
-    })
-    expect(adapter.queueDepth('worker-two')).toBe(0)
-    expect(d.submitPrompt).toHaveBeenCalledTimes(2)
-    expect(parseCodexMessageEnvelope(d.submitPrompt.mock.calls[1]![0])).toMatchObject({
-      message_id: 'msg-01JABC',
-      attempt: 2,
-    })
+    expect(d.submitPrompt).toHaveBeenCalledOnce()
   })
 
   it('discards a deferred queue when the session name is reused by a new incarnation', async () => {
@@ -321,7 +308,7 @@ describe('Codex terminal delivery', () => {
       retryable: false,
       reason: 'The accepted Codex recipient process has been replaced or stopped',
     })
-    d.currentIncarnation.mockResolvedValue('worker-two-v2')
+    d.currentIncarnation.mockResolvedValue(null)
     expect(await adapter.confirm(accepted)).toMatchObject({
       state: 'confirmed',
       evidence: {
@@ -329,7 +316,7 @@ describe('Codex terminal delivery', () => {
         reference: accepted.attemptRef,
       },
     })
-    expect(d.resolveTranscript).toHaveBeenCalledTimes(corruptions.length + 2)
+    expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
   })
 
   it('re-resolves an unverified rollout when same-workdir discovery first picks another session', async () => {
@@ -337,6 +324,8 @@ describe('Codex terminal delivery', () => {
     const wrongTranscript = join(dir, 'wrong-session.jsonl')
     const correctTranscript = join(dir, 'worker-two.jsonl')
     const d = deps()
+    let now = Date.parse(NOW)
+    d.now = () => new Date(now).toISOString()
     d.resolveTranscript
       .mockResolvedValueOnce(wrongTranscript)
       .mockResolvedValueOnce(correctTranscript)
@@ -363,6 +352,7 @@ describe('Codex terminal delivery', () => {
     })}\n`)
 
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
+    now += 5_000
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'confirmed' })
     expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
   })

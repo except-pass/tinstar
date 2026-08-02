@@ -18,6 +18,9 @@ import {
 
 export const CODEX_MESSAGE_ENVELOPE_MARKER = 'TINSTAR_MESSAGE_ENVELOPE_V1'
 const CODEX_PROVIDER_ID = 'codex'
+const CODEX_TRANSCRIPT_DISCOVERY_TTL_MS = 5_000
+const MAX_CODEX_TRANSCRIPT_PATHS = 1_024
+const MAX_CODEX_CONFIRMATION_CURSORS = 4_096
 const ROLLOUT_EVIDENCE = {
   id: 'codex-rollout-user-message',
   label: 'Codex rollout user message',
@@ -64,6 +67,12 @@ interface QueuedAttempt {
   deliveryKey: string
   request: ProviderDeliveryRequest
   prompt: string
+}
+
+interface TranscriptPathCache {
+  path: string
+  verified: boolean
+  refreshAfter: number
 }
 
 export type CodexTerminalSafety =
@@ -201,7 +210,7 @@ function resultIdentity(
 export class CodexDeliveryAdapter {
   private readonly queues = new Map<string, QueuedAttempt[]>()
   private readonly chains = new Map<string, Promise<unknown>>()
-  private readonly transcriptPaths = new Map<string, string>()
+  private readonly transcriptPaths = new Map<string, TranscriptPathCache>()
   private readonly confirmationOffsets = new Map<string, {
     path: string
     identity: string
@@ -360,8 +369,8 @@ export class CodexDeliveryAdapter {
         ...identity,
         state: 'rejected',
         checkedAt: this.now(),
-        reason: `Codex prompt injection failed: ${(error as Error).message}`,
-        retryable: true,
+        reason: `Codex prompt submission may have partially failed: ${(error as Error).message}`,
+        retryable: false,
       }
     }
 
@@ -390,9 +399,98 @@ export class CodexDeliveryAdapter {
       }
     }
 
+    const checkedAt = this.now()
+    const parsedNow = Date.parse(checkedAt)
+    const nowMs = Number.isFinite(parsedNow) ? parsedNow : Date.now()
+    let evidencePendingReason: string | null = null
+    const recipientKey = recipientIncarnationKey(acceptance.recipient)
+    const cachedTranscript = this.transcriptPaths.get(recipientKey)
+    let transcriptPath = cachedTranscript?.path ?? null
+    if (!cachedTranscript || (!cachedTranscript.verified && cachedTranscript.refreshAfter <= nowMs)) {
+      try {
+        const resolved = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
+        if (resolved) {
+          transcriptPath = resolved
+          this.rememberTranscriptPath(recipientKey, {
+            path: resolved,
+            verified: false,
+            refreshAfter: nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS,
+          })
+        } else if (cachedTranscript) {
+          this.rememberTranscriptPath(recipientKey, {
+            ...cachedTranscript,
+            refreshAfter: nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS,
+          })
+        }
+      } catch (error) {
+        evidencePendingReason = `Codex rollout could not be resolved: ${(error as Error).message}`
+      }
+    }
+    if (!transcriptPath) {
+      evidencePendingReason ??= 'Codex rollout is not available yet'
+    }
+
+    const confirmationKey = attemptKey(acceptance)
+    const priorScan = this.confirmationOffsets.get(confirmationKey)
+    if (transcriptPath) {
+      const scan = await scanCodexUserMessages(
+        transcriptPath,
+        priorScan?.path === transcriptPath ? priorScan.offset : 0,
+        (message) => {
+          const envelope = parseCodexMessageEnvelope(message)
+          return envelope !== null
+            && attemptRef(message) === expectedRef
+            && envelope.message_id === acceptance.messageId
+            && envelope.attempt === acceptance.attempt
+            && envelope.recipient.provider_id === acceptance.recipient.providerId
+            && envelope.recipient.session_id === acceptance.recipient.sessionId
+            && envelope.recipient.incarnation === acceptance.recipient.incarnation
+        },
+        priorScan?.path === transcriptPath ? priorScan.identity : undefined,
+      )
+      if (!scan.available) {
+        this.transcriptPaths.delete(recipientKey)
+        this.confirmationOffsets.delete(confirmationKey)
+        evidencePendingReason = 'Codex rollout is not available yet'
+      } else {
+        if (scan.identity) {
+          this.rememberConfirmationOffset(confirmationKey, {
+            path: transcriptPath,
+            identity: scan.identity,
+            offset: scan.nextOffset,
+          })
+        }
+        if (scan.evidence) {
+          // Discovery can fall back to the newest same-workdir rollout when several
+          // sessions share a worktree. Bind the path to this incarnation only after
+          // exact envelope evidence proves it belongs to the accepted delivery.
+          this.rememberTranscriptPath(recipientKey, {
+            path: transcriptPath,
+            verified: true,
+            refreshAfter: Number.POSITIVE_INFINITY,
+          })
+          this.confirmationOffsets.delete(confirmationKey)
+          return {
+            ...identity,
+            state: 'confirmed',
+            confirmedAt: scan.evidence.timestamp ?? this.now(),
+            evidence: {
+              source: ROLLOUT_EVIDENCE,
+              reference: expectedRef,
+            },
+          }
+        }
+        evidencePendingReason = 'Codex rollout has not recorded this message as user input'
+      }
+    }
+
+    // Exact durable provider evidence wins if the recipient exits or is
+    // replaced after accepting input but before the scheduled confirmation.
     try {
       const liveIncarnation = await this.deps.currentIncarnation(acceptance.recipient.sessionId)
       if (liveIncarnation !== acceptance.recipient.incarnation) {
+        this.transcriptPaths.delete(recipientKey)
+        this.confirmationOffsets.delete(confirmationKey)
         return {
           ...identity,
           state: 'failed',
@@ -409,86 +507,34 @@ export class CodexDeliveryAdapter {
         reason: `Codex recipient liveness could not be inspected: ${(error as Error).message}`,
       }
     }
-
-    let transcriptPath: string | null
-    const recipientKey = recipientIncarnationKey(acceptance.recipient)
-    transcriptPath = this.transcriptPaths.get(recipientKey) ?? null
-    if (!transcriptPath) {
-      try {
-        transcriptPath = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
-      } catch (error) {
-        return {
-          ...identity,
-          state: 'pending',
-          checkedAt: this.now(),
-          reason: `Codex rollout could not be resolved: ${(error as Error).message}`,
-        }
-      }
-    }
-    if (!transcriptPath) {
-      return {
-        ...identity,
-        state: 'pending',
-        checkedAt: this.now(),
-        reason: 'Codex rollout is not available yet',
-      }
-    }
-
-    const confirmationKey = attemptKey(acceptance)
-    const priorScan = this.confirmationOffsets.get(confirmationKey)
-    const scan = await scanCodexUserMessages(
-      transcriptPath,
-      priorScan?.path === transcriptPath ? priorScan.offset : 0,
-      (message) => {
-        const envelope = parseCodexMessageEnvelope(message)
-        return envelope !== null
-          && attemptRef(message) === expectedRef
-          && envelope.message_id === acceptance.messageId
-          && envelope.attempt === acceptance.attempt
-          && envelope.recipient.provider_id === acceptance.recipient.providerId
-          && envelope.recipient.session_id === acceptance.recipient.sessionId
-          && envelope.recipient.incarnation === acceptance.recipient.incarnation
-      },
-      priorScan?.path === transcriptPath ? priorScan.identity : undefined,
-    )
-    if (!scan.available) {
-      this.transcriptPaths.delete(recipientKey)
-      this.confirmationOffsets.delete(confirmationKey)
-      return {
-        ...identity,
-        state: 'pending',
-        checkedAt: this.now(),
-        reason: 'Codex rollout is not available yet',
-      }
-    }
-    if (scan.identity) {
-      this.confirmationOffsets.set(confirmationKey, {
-        path: transcriptPath,
-        identity: scan.identity,
-        offset: scan.nextOffset,
-      })
-    }
-    if (!scan.evidence) {
-      return {
-        ...identity,
-        state: 'pending',
-        checkedAt: this.now(),
-        reason: 'Codex rollout has not recorded this message as user input',
-      }
-    }
-    // Discovery can fall back to the newest same-workdir rollout when several
-    // sessions share a worktree. Bind the path to this incarnation only after
-    // exact envelope evidence proves it belongs to the accepted delivery.
-    this.transcriptPaths.set(recipientKey, transcriptPath)
-    this.confirmationOffsets.delete(confirmationKey)
     return {
       ...identity,
-      state: 'confirmed',
-      confirmedAt: scan.evidence.timestamp ?? this.now(),
-      evidence: {
-        source: ROLLOUT_EVIDENCE,
-        reference: expectedRef,
-      },
+      state: 'pending',
+      checkedAt: this.now(),
+      reason: evidencePendingReason ?? 'Codex rollout is not available yet',
+    }
+  }
+
+  private rememberTranscriptPath(key: string, value: TranscriptPathCache): void {
+    this.transcriptPaths.delete(key)
+    this.transcriptPaths.set(key, value)
+    while (this.transcriptPaths.size > MAX_CODEX_TRANSCRIPT_PATHS) {
+      const oldest = this.transcriptPaths.keys().next().value
+      if (oldest === undefined) break
+      this.transcriptPaths.delete(oldest)
+    }
+  }
+
+  private rememberConfirmationOffset(
+    key: string,
+    value: { path: string; identity: string; offset: number },
+  ): void {
+    this.confirmationOffsets.delete(key)
+    this.confirmationOffsets.set(key, value)
+    while (this.confirmationOffsets.size > MAX_CODEX_CONFIRMATION_CURSORS) {
+      const oldest = this.confirmationOffsets.keys().next().value
+      if (oldest === undefined) break
+      this.confirmationOffsets.delete(oldest)
     }
   }
 

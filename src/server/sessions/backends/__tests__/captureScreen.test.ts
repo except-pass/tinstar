@@ -61,7 +61,7 @@ describe('captureScreen', () => {
     ))).toBe(false)
   })
 
-  it('injects the checked prompt and Enter in one serialized tmux operation', async () => {
+  it('settles and submits the checked prompt in one tmux command queue', async () => {
     execFileMock.mockImplementation(async (_file: string, args: string[]) => {
       if (args[0] === 'capture-pane') {
         return { stdout: '› Add a follow-up\n  ? for shortcuts', stderr: '' }
@@ -81,7 +81,11 @@ describe('captureScreen', () => {
     expect(submitted).toBe(true)
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
-      ['send-keys', '-t', '=tinstar-worker:', 'durable envelope', '', 'Enter'],
+      [
+        'send-keys', '-t', '=tinstar-worker:', 'durable envelope', '',
+        ';', 'run-shell', 'sleep 0.3',
+        ';', 'send-keys', '-t', '=tinstar-worker:', '', 'Enter',
+      ],
       expect.any(Object),
     )
   })

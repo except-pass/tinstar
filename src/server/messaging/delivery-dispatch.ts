@@ -22,11 +22,17 @@ export const DELIVERY_RETRY_DELAY_MS = 1_000
 export const DELIVERY_RETRY_POLL_MS = 250
 export const DELIVERY_CONFIRMATION_MAX_CHECKS = 6
 export const DELIVERY_CONFIRMATION_MAX_DELAY_MS = 8_000
+export const DELIVERY_MAX_ATTEMPTS = 3
 
 export interface DeliveryDispatchOptions {
   now?: () => number
   retryDelayMs?: number
   confirmationMaxChecks?: number
+  maxAttempts?: number
+}
+
+function maxAttemptsFor(options: DeliveryDispatchOptions): number {
+  return Math.max(1, options.maxAttempts ?? DELIVERY_MAX_ATTEMPTS)
 }
 
 class DeliveryDispatchScheduler {
@@ -107,6 +113,17 @@ async function dispatchOne(
   if (!current || !isAttemptDue(current, now)) {
     return { deliveryId: captured.id, state: 'skipped' }
   }
+  if (current.attempt >= maxAttemptsFor(options)) {
+    const reason = `Provider delivery attempt budget exhausted after ${current.attempt} attempts`
+    const recorded = await transition(ledger, {
+      deliveryId: current.id,
+      expected: { state: current.state, attempt: current.attempt },
+      next: { state: 'failed', attempt: current.attempt, reason, retryable: false },
+    })
+    return recorded
+      ? { deliveryId: current.id, state: 'failed', reason }
+      : { deliveryId: current.id, state: 'ambiguous', reason: `could not record: ${reason}` }
+  }
   const attempt = current.attempt + 1
   const claimed = await transition(ledger, {
     deliveryId: current.id,
@@ -115,7 +132,9 @@ async function dispatchOne(
   })
   if (!claimed) return { deliveryId: current.id, state: 'skipped' }
 
-  const adapter = registry.deliveryFor(current.recipient.providerId)
+  const adapter = registry.get(current.recipient.providerId)
+    ? registry.deliveryFor(current.recipient.providerId)
+    : null
   if (!adapter) {
     const reason = `Provider "${current.recipient.providerId}" has no delivery adapter`
     const recorded = await transition(ledger, {
@@ -158,6 +177,7 @@ async function dispatchOne(
         next: {
           state: 'accepted',
           attempt,
+          providerAcceptedAt: result.acceptedAt,
           ...(result.attemptRef ? { attemptRef: result.attemptRef } : {}),
           retryAt: retryAtFor(
             result.acceptedAt,
@@ -176,29 +196,38 @@ async function dispatchOne(
           }
     }
     if (result.state === 'deferred') {
+      const exhausted = attempt >= maxAttemptsFor(options)
+      const reason = exhausted
+        ? `Provider acceptance remained deferred after ${attempt} attempts: ${result.reason}`
+        : result.reason
       const recorded = await transition(ledger, {
         deliveryId: current.id,
         expected: { state: 'in-flight', attempt },
         next: {
-          state: 'pending',
+          state: exhausted ? 'failed' : 'pending',
           attempt,
-          reason: result.reason,
-          retryAt: retryAtFor(
-            result.checkedAt,
-            result.retryAt,
-            options.retryDelayMs,
-            now,
-          ),
+          reason,
+          ...(exhausted
+            ? { retryable: false }
+            : {
+                retryAt: retryAtFor(
+                  result.checkedAt,
+                  result.retryAt,
+                  options.retryDelayMs,
+                  now,
+                ),
+              }),
         },
       })
       return recorded
-        ? { deliveryId: current.id, state: 'pending', reason: result.reason }
+        ? { deliveryId: current.id, state: exhausted ? 'failed' : 'pending', reason }
         : {
             deliveryId: current.id,
             state: 'ambiguous',
             reason: `could not record provider deferral: ${result.reason}`,
           }
     }
+    const retryable = result.retryable && attempt < maxAttemptsFor(options)
     const recorded = await transition(ledger, {
       deliveryId: current.id,
       expected: { state: 'in-flight', attempt },
@@ -206,8 +235,8 @@ async function dispatchOne(
         state: 'failed',
         attempt,
         reason: result.reason,
-        retryable: result.retryable,
-        ...(result.retryable
+        retryable,
+        ...(retryable
           ? {
               retryAt: retryAtFor(
                 result.checkedAt,
@@ -246,7 +275,6 @@ function durableAcceptanceEvent(delivery: DeliveryRecord) {
   return [...delivery.history].reverse().find(event => (
     event.state === 'accepted'
     && event.attempt === delivery.attempt
-    && event.attemptRef
   ))
 }
 
@@ -302,8 +330,8 @@ function durableAcceptance(
     attempt: delivery.attempt,
     recipient: { ...delivery.recipient },
     state: 'accepted',
-    acceptedAt: accepted.at,
-    attemptRef: accepted.attemptRef,
+    acceptedAt: accepted.providerAcceptedAt ?? accepted.at,
+    ...(accepted.attemptRef ? { attemptRef: accepted.attemptRef } : {}),
   }
 }
 
@@ -319,7 +347,9 @@ async function confirmOne(
   }
   const envelope = ledger.getMessage(current.messageId)
   if (!envelope) return { deliveryId: current.id, state: 'skipped' }
-  const adapter = registry.deliveryFor(current.recipient.providerId)
+  const adapter = registry.get(current.recipient.providerId)
+    ? registry.deliveryFor(current.recipient.providerId)
+    : null
   const acceptance = durableAcceptance(envelope, current)
   if (!adapter?.confirm || !acceptance) {
     return { deliveryId: current.id, state: 'skipped' }
@@ -358,8 +388,8 @@ async function confirmOne(
         state: 'failed',
         attempt: current.attempt,
         reason: result.reason,
-        retryable: result.retryable,
-        ...(result.retryable
+        retryable: result.retryable && current.attempt < maxAttemptsFor(options),
+        ...(result.retryable && current.attempt < maxAttemptsFor(options)
           ? {
               retryAt: retryAtFor(
                 result.checkedAt,
@@ -394,7 +424,6 @@ function confirmationCheckCount(delivery: DeliveryRecord): number {
     if (
       event.state === 'accepted'
       && event.attempt === delivery.attempt
-      && event.attemptRef
     ) {
       acceptedIndex = index
       break
@@ -418,6 +447,8 @@ async function recordPendingConfirmation(
   const checkCount = confirmationCheckCount(current) + 1
   const maxChecks = options.confirmationMaxChecks ?? DELIVERY_CONFIRMATION_MAX_CHECKS
   const exhausted = checkCount >= maxChecks
+  const attemptBudgetExhausted = current.attempt >= maxAttemptsFor(options)
+  const terminal = exhausted && attemptBudgetExhausted
   const baseDelay = options.retryDelayMs ?? DELIVERY_RETRY_DELAY_MS
   const confirmationDelay = Math.min(
     baseDelay * (2 ** Math.max(0, checkCount - 1)),
@@ -429,6 +460,9 @@ async function recordPendingConfirmation(
     exhausted ? baseDelay : confirmationDelay,
     now,
   )
+  const failureReason = terminal
+    ? `Provider delivery could not be confirmed after ${current.attempt} attempts: ${reason}`
+    : `Provider confirmation remained pending after ${checkCount} checks: ${reason}`
   const recorded = await transition(ledger, {
     deliveryId: current.id,
     expected: { state: current.state, attempt: current.attempt },
@@ -436,9 +470,9 @@ async function recordPendingConfirmation(
       ? {
           state: 'failed',
           attempt: current.attempt,
-          reason: `Provider confirmation remained pending after ${checkCount} checks: ${reason}`,
-          retryable: true,
-          retryAt,
+          reason: failureReason,
+          retryable: !terminal,
+          ...(!terminal ? { retryAt } : {}),
         }
       : {
           state: 'pending',
@@ -460,7 +494,7 @@ async function recordPendingConfirmation(
     ? {
         deliveryId: current.id,
         state: 'failed',
-        reason: `Provider confirmation remained pending after ${checkCount} checks: ${reason}`,
+        reason: failureReason,
       }
     : { deliveryId: current.id, state: 'pending', reason }
 }
@@ -500,6 +534,29 @@ export async function recoverAcceptedMessages(
   for (const delivery of ledger.listRecoverable()) {
     const envelope = ledger.getMessage(delivery.messageId)
     if (!envelope) continue
+    if (!registry.get(delivery.recipient.providerId)) {
+      work.push(async () => {
+        const current = ledger.getDelivery(delivery.id)
+        if (!current || current.state === 'delivered') {
+          return { deliveryId: delivery.id, state: 'skipped' }
+        }
+        const reason = `Provider "${current.recipient.providerId}" is no longer registered`
+        const recorded = await transition(ledger, {
+          deliveryId: current.id,
+          expected: { state: current.state, attempt: current.attempt },
+          next: {
+            state: 'failed',
+            attempt: current.attempt,
+            reason,
+            retryable: false,
+          },
+        })
+        return recorded
+          ? { deliveryId: current.id, state: 'failed', reason }
+          : { deliveryId: current.id, state: 'ambiguous', reason: `could not record: ${reason}` }
+      })
+      continue
+    }
     if (isAttemptDue(delivery, now)) {
       work.push(() => dispatchOne(envelope, delivery, ledger, registry, options))
       continue

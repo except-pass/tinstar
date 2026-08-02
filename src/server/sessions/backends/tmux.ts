@@ -2329,7 +2329,7 @@ const sendChains = new Map<string, Promise<unknown>>()
 
 export interface SerializedSessionInput {
   captureScreen(scrollback?: number): Promise<string>
-  /** Run the last safety check, then inject text and Enter as one tmux operation. */
+  /** Run the last safety check, then submit text and Enter under one input lock. */
   submitPrompt(prompt: string, beforeEnter?: () => Promise<boolean>): Promise<boolean>
 }
 
@@ -2374,10 +2374,13 @@ async function doSendPrompt(
   const target = exactTmuxPaneTarget(tmuxName)
   if (beforeEnter) {
     if (!await beforeEnter()) return false
-    // Keep provider-controlled delivery all-or-nothing from tmux's point of
-    // view. If the boundary changed, no text is left in the composer; if it is
-    // still safe, prompt and Enter enter the pane in one ordered command.
-    await execFileAsync('tmux', ['send-keys', '-t', target, prompt, '', 'Enter'])
+    // Submit the paste, load-bearing settle, and Enter as one tmux command
+    // queue. The outer per-session lock remains held for the whole sequence.
+    await execFileAsync('tmux', [
+      'send-keys', '-t', target, prompt, '',
+      ';', 'run-shell', 'sleep 0.3',
+      ';', 'send-keys', '-t', target, '', 'Enter',
+    ])
     return true
   }
   await execFileAsync('tmux', ['send-keys', '-t', target, prompt, ''])
