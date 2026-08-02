@@ -12,6 +12,14 @@ export function isSupportedProcessId(pid: unknown): pid is number {
     && pid <= 0x7fff_ffff
 }
 
+function describeProcessId(pid: unknown): string {
+  try {
+    return String(pid)
+  } catch {
+    return '<unprintable>'
+  }
+}
+
 /**
  * Probe without signalling. ESRCH is the only proof that a process is gone;
  * permission and unexpected OS errors remain unknown so ownership gates fail
@@ -19,7 +27,7 @@ export function isSupportedProcessId(pid: unknown): pid is number {
  */
 export function probeProcessLiveness(pid: unknown): ProcessLiveness {
   if (!isSupportedProcessId(pid)) {
-    return { state: 'invalid', reason: `unsupported process id ${pid}` }
+    return { state: 'invalid', reason: `unsupported process id ${describeProcessId(pid)}` }
   }
   try {
     process.kill(pid, 0)

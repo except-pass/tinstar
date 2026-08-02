@@ -92,7 +92,7 @@ describe('Supervisor adoption', () => {
     expect(kill).toHaveBeenCalledWith(42, 0)
     const deadline = Date.now() + 1_000
     while (
-      kill.mock.calls.filter(([, signal]) => signal === 0).length < 3
+      kill.mock.calls.filter(([, signal]) => signal === 0).length < 2
       && Date.now() < deadline
     ) {
       await new Promise(resolve => setTimeout(resolve, 10))

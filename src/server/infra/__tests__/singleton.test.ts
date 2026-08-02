@@ -80,6 +80,53 @@ describe('acquireBackendSingleton', () => {
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({ pid: 42 })
   })
 
+  it('completes a forced takeover when SIGKILL proves the prior owner is gone', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    let dead = false
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGKILL') dead = true
+      if (signal === 0 && dead) {
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
+      }
+      return true
+    })
+    vi.spyOn(Date, 'now').mockImplementation((() => {
+      let now = 0
+      return () => { now += 1_000; return now }
+    })())
+
+    expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
+      acquired: true,
+      action: 'takeover',
+    })
+    expect(kill).toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({
+      pid: process.pid,
+    })
+  })
+
+  it('reports a prior owner that remains alive after SIGKILL', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    vi.spyOn(Date, 'now').mockImplementation((() => {
+      let now = 0
+      return () => { now += 1_000; return now }
+    })())
+
+    expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
+      acquired: false,
+      action: 'takeover',
+      ownerPid: 42,
+      failure: 'owner-survived-sigkill',
+    })
+    expect(kill).toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8')).pid).toBe(42)
+  })
+
   it.each([42.5, Number.MAX_SAFE_INTEGER])('steals a malformed lock pid %s as stale', (pid) => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)

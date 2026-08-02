@@ -28,6 +28,16 @@ describe('process liveness', () => {
     })
   })
 
+  it('safely describes a symbol pid as invalid without invoking the OS', () => {
+    const kill = vi.spyOn(process, 'kill')
+
+    expect(probeProcessLiveness(Symbol('pid'))).toEqual({
+      state: 'invalid',
+      reason: 'unsupported process id Symbol(pid)',
+    })
+    expect(kill).not.toHaveBeenCalled()
+  })
+
   it('recognizes the current process as alive', () => {
     expect(probeProcessLiveness(process.pid)).toEqual({ state: 'alive' })
   })

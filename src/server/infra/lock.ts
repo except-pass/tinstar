@@ -216,10 +216,13 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
   if (stealLock(dir)) return { acquired: true, action }
+  // A failed recreation can mean another backend won the marker race. Report
+  // that current owner when available, not the stale process just retired.
+  const competingOwnerPid = readOwnerPid(dir)
   return {
     acquired: false,
     action,
-    ownerPid: ownerPid ?? undefined,
+    ownerPid: competingOwnerPid ?? undefined,
     failure: 'marker-recreation-failed',
   }
 }
