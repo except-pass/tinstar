@@ -62,7 +62,7 @@ describe('observability lock', () => {
   it('surfaces an unexpected marker creation error while stealing', async () => {
     const dir = join(tmp, 'o.lock.mark')
     mkdirSync(dir)
-    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
     const error = Object.assign(
       new Error(`EACCES: permission denied, mkdir '${dir}'`),
       { code: 'EACCES' },
