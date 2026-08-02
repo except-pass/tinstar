@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decideSingletonAction, acquireBackendSingleton } from '../lock'
+import {
+  acquireBackendSingleton,
+  decideSingletonAction,
+  describeSingletonFailure,
+  type SingletonResult,
+} from '../lock'
 
 describe('decideSingletonAction', () => {
   it('acquires when no owner is present', () => {
@@ -153,6 +158,7 @@ describe('acquireBackendSingleton', () => {
       acquired: false,
       action: 'steal',
       failure: 'marker-recreation-failed',
+      detail: 'EACCES: permission denied',
     })
     expect(removeMarker).toHaveBeenCalledWith(mark)
   })
@@ -173,6 +179,85 @@ describe('acquireBackendSingleton', () => {
       acquired: false,
       action: 'steal',
       failure: 'marker-recreation-failed',
+      detail: 'EACCES: permission denied',
     })
+  })
+})
+
+describe('describeSingletonFailure', () => {
+  const configDir = '/tmp/tinstar-test'
+
+  it.each<{
+    result: SingletonResult
+    expected: ReturnType<typeof describeSingletonFailure>
+  }>([
+    {
+      result: {
+        acquired: false,
+        action: 'takeover',
+        ownerPid: 42,
+        failure: 'owner-retirement-permission-denied',
+      },
+      expected: {
+        logMessage: 'permission denied while stopping prior tinstar backend on /tmp/tinstar-test (pid 42)',
+        headline: 'Permission was denied while stopping tinstar (pid 42) after --force.',
+        guidance: 'Run as the process-owning user or stop that process with appropriate privileges.',
+      },
+    },
+    {
+      result: {
+        acquired: false,
+        action: 'takeover',
+        ownerPid: 42,
+        failure: 'owner-survived-sigkill',
+      },
+      expected: {
+        logMessage: 'prior tinstar backend survived forced shutdown on /tmp/tinstar-test (pid 42)',
+        headline: 'Tinstar (pid 42) still exists after SIGTERM and SIGKILL.',
+        guidance: 'Inspect the process state and stop it manually before retrying.',
+      },
+    },
+    {
+      result: {
+        acquired: false,
+        action: 'takeover',
+        ownerPid: 42,
+        failure: 'owner-retirement-unconfirmed',
+      },
+      expected: {
+        logMessage: 'could not confirm prior tinstar backend stopped on /tmp/tinstar-test (pid 42)',
+        headline: 'Could not confirm that tinstar (pid 42) stopped after --force.',
+        guidance: 'Inspect and stop that process manually before retrying.',
+      },
+    },
+    {
+      result: {
+        acquired: false,
+        action: 'steal',
+        failure: 'marker-recreation-failed',
+        detail: 'EACCES: permission denied',
+      },
+      expected: {
+        logMessage: 'could not claim the tinstar backend marker on /tmp/tinstar-test: EACCES: permission denied',
+        headline: 'Could not claim the tinstar backend marker on /tmp/tinstar-test.',
+        guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+      },
+    },
+    {
+      result: { acquired: false, action: 'refuse', ownerPid: 42 },
+      expected: {
+        logMessage: 'another tinstar backend is already running on /tmp/tinstar-test (pid 42)',
+        headline: 'Tinstar is already running on /tmp/tinstar-test (pid 42).',
+        guidance: 'Stop it first, use a different TINSTAR_CONFIG_HOME, or pass --force to take over.',
+      },
+    },
+  ])('maps $result.failure to complete operator guidance', ({ result, expected }) => {
+    expect(describeSingletonFailure(result, configDir)).toEqual(expected)
+  })
+
+  it('omits --force when the caller cannot honor it', () => {
+    expect(describeSingletonFailure({ acquired: false, action: 'refuse' }, configDir, {
+      allowForce: false,
+    }).guidance).toBe('Stop it first, or use a different TINSTAR_CONFIG_HOME.')
   })
 })

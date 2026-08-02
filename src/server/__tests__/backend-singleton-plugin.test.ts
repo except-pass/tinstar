@@ -54,7 +54,7 @@ describe('acquireBackendSingletonForPlugin', () => {
         refusal = error as Error
       }
       expect(refusal?.message).toMatch(
-        new RegExp(`another tinstar backend is already running on ${dir} \\(pid ${owner}\\)`),
+        new RegExp(`Tinstar is already running on ${dir} \\(pid ${owner}\\)`),
       )
       expect(refusal?.message).not.toContain('--force')
       // The live owner's snapshot was never read, rotated, or truncated, and no
@@ -98,7 +98,7 @@ describe('acquireBackendSingletonForPlugin', () => {
           action: 'steal',
           failure: 'marker-recreation-failed',
         }),
-      })).toThrow(/could not claim the tinstar backend marker.*marker may be unremovable/)
+      })).toThrow(/Could not claim the tinstar backend marker.*marker may be unremovable/)
     })
   })
 })

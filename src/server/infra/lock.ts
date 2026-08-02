@@ -54,15 +54,33 @@ const markerReplacementOps: MarkerReplacementOps = {
   createMarker: tryCreateMarker,
 }
 
-function stealLock(dir: string, ops: Partial<MarkerReplacementOps> = {}): boolean {
+interface MarkerReplacementOutcome {
+  replaced: boolean
+  removeError?: unknown
+  createError?: unknown
+}
+
+function replaceMarker(
+  dir: string,
+  ops: Partial<MarkerReplacementOps> = {},
+): MarkerReplacementOutcome {
   const removeMarker = ops.removeMarker ?? markerReplacementOps.removeMarker
   const createMarker = ops.createMarker ?? markerReplacementOps.createMarker
-  try { removeMarker(dir) } catch { /* someone else cleaned it */ }
+  let removeError: unknown
+  try { removeMarker(dir) } catch (error) { removeError = error }
   try {
-    return createMarker(dir)
-  } catch {
-    return false
+    return { replaced: createMarker(dir), removeError }
+  } catch (createError) {
+    return { replaced: false, removeError, createError }
   }
+}
+
+function stealLock(dir: string, ops: Partial<MarkerReplacementOps> = {}): boolean {
+  const outcome = replaceMarker(dir, ops)
+  // The generic lock APIs historically propagate unexpected marker-creation
+  // failures. Only the backend singleton converts them into operator guidance.
+  if (outcome.createError) throw outcome.createError
+  return outcome.replaced
 }
 
 function makeRelease(dir: string): ReleaseFn {
@@ -196,6 +214,8 @@ export interface SingletonResult {
   /** Previously recorded owner PID when it remains relevant to the outcome. */
   ownerPid?: number
   failure?: SingletonFailure
+  /** Safe operator-facing detail retained from a failed marker operation. */
+  detail?: string
 }
 
 export interface SingletonFailureDescription {
@@ -211,41 +231,53 @@ export function describeSingletonFailure(
   options: { allowForce?: boolean } = {},
 ): SingletonFailureDescription {
   const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
-  if (result.failure === 'owner-retirement-permission-denied') {
-    return {
-      logMessage: `permission denied while stopping prior tinstar backend on ${configDir}${who}`,
-      headline: `Permission was denied while stopping tinstar${who} after --force.`,
-      guidance: 'Run as the process-owning user or stop that process with appropriate privileges.',
+  switch (result.failure) {
+    case 'owner-retirement-permission-denied':
+      return {
+        logMessage: `permission denied while stopping prior tinstar backend on ${configDir}${who}`,
+        headline: `Permission was denied while stopping tinstar${who} after --force.`,
+        guidance: 'Run as the process-owning user or stop that process with appropriate privileges.',
+      }
+    case 'owner-survived-sigkill':
+      return {
+        logMessage: `prior tinstar backend survived forced shutdown on ${configDir}${who}`,
+        headline: `Tinstar${who} still exists after SIGTERM and SIGKILL.`,
+        guidance: 'Inspect the process state and stop it manually before retrying.',
+      }
+    case 'owner-retirement-unconfirmed':
+      return {
+        logMessage: `could not confirm prior tinstar backend stopped on ${configDir}${who}`,
+        headline: `Could not confirm that tinstar${who} stopped after --force.`,
+        guidance: 'Inspect and stop that process manually before retrying.',
+      }
+    case 'marker-recreation-failed':
+      return {
+        logMessage: `could not claim the tinstar backend marker on ${configDir}${result.detail ? `: ${result.detail}` : ''}`,
+        headline: `Could not claim the tinstar backend marker on ${configDir}.`,
+        guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+      }
+    case undefined:
+      return {
+        logMessage: `another tinstar backend is already running on ${configDir}${who}`,
+        headline: `Tinstar is already running on ${configDir}${who}.`,
+        guidance: options.allowForce === false
+          ? 'Stop it first, or use a different TINSTAR_CONFIG_HOME.'
+          : 'Stop it first, use a different TINSTAR_CONFIG_HOME, or pass --force to take over.',
+      }
+    default: {
+      const exhaustiveFailure: never = result.failure
+      return exhaustiveFailure
     }
   }
-  if (result.failure === 'owner-survived-sigkill') {
-    return {
-      logMessage: `prior tinstar backend survived forced shutdown on ${configDir}${who}`,
-      headline: `Tinstar${who} still exists after SIGTERM and SIGKILL.`,
-      guidance: 'Inspect the process state and stop it manually before retrying.',
-    }
+}
+
+function describeMarkerError(error: unknown): string | undefined {
+  if (error === undefined) return undefined
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code ? `${code}: ${error.message}` : error.message
   }
-  if (result.failure === 'owner-retirement-unconfirmed') {
-    return {
-      logMessage: `could not confirm prior tinstar backend stopped on ${configDir}${who}`,
-      headline: `Could not confirm that tinstar${who} stopped after --force.`,
-      guidance: 'Inspect and stop that process manually before retrying.',
-    }
-  }
-  if (result.failure === 'marker-recreation-failed') {
-    return {
-      logMessage: `could not claim the tinstar backend marker on ${configDir}`,
-      headline: `could not claim the tinstar backend marker on ${configDir}; another backend may have won the startup race or the marker may be unremovable.`,
-      guidance: 'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
-    }
-  }
-  return {
-    logMessage: `another tinstar backend is already running on ${configDir}${who}`,
-    headline: `another tinstar backend is already running on ${configDir}${who}.`,
-    guidance: options.allowForce === false
-      ? 'Stop it first, or use a different TINSTAR_CONFIG_HOME.'
-      : 'Stop it first, use a different TINSTAR_CONFIG_HOME, or pass --force to take over.',
-  }
+  return String(error)
 }
 
 /**
@@ -285,12 +317,15 @@ export function acquireBackendSingleton(
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
-  if (stealLock(dir, deps.markerReplacement)) return { acquired: true, action }
+  const replacement = replaceMarker(dir, deps.markerReplacement)
+  if (replacement.replaced) return { acquired: true, action }
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.
+  const detail = describeMarkerError(replacement.createError ?? replacement.removeError)
   return {
     acquired: false,
     action,
     failure: 'marker-recreation-failed',
+    ...(detail ? { detail } : {}),
   }
 }
