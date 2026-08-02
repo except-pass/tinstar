@@ -93,6 +93,7 @@ function makeRelease(dir: string): ReleaseFn {
 }
 
 interface LockAcquireDependencies {
+  /** Overrides stale-marker replacement only; initial acquisition stays real. */
   markerReplacement?: Partial<MarkerReplacementOps>
 }
 
@@ -235,6 +236,20 @@ export interface SingletonFailureDescription {
   detail?: string
 }
 
+export function formatSingletonFailureForConsole(
+  description: SingletonFailureDescription,
+): string {
+  const detail = description.detail ? `\n  ${description.detail}` : ''
+  return `\n✗ ${description.headline}${detail}\n  ${description.guidance}\n`
+}
+
+export function formatSingletonFailureForError(
+  description: SingletonFailureDescription,
+): string {
+  const detail = description.detail ? ` (${description.detail})` : ''
+  return `${description.headline}${detail} ${description.guidance}`
+}
+
 /** One operator-facing mapping shared by standalone and Vite-plugin startup. */
 export function describeSingletonFailure(
   result: SingletonResult,
@@ -279,9 +294,10 @@ export function describeSingletonFailure(
     default: {
       const exhaustiveFailure: never = result.failure
       return {
-        logMessage: `unrecognized tinstar backend singleton failure on ${configDir}: ${String(exhaustiveFailure)}`,
+        logMessage: `unrecognized tinstar backend singleton failure on ${configDir}: ${String(exhaustiveFailure)}${result.detail ? `: ${result.detail}` : ''}`,
         headline: `Could not acquire the tinstar backend marker on ${configDir}.`,
         guidance: 'Inspect the marker and backend logs before retrying, or use a different TINSTAR_CONFIG_HOME.',
+        ...(result.detail ? { detail: result.detail } : {}),
       }
     }
   }
@@ -309,7 +325,7 @@ function describeMarkerError(error: unknown): string | undefined {
 export function acquireBackendSingleton(
   path: string,
   opts: { force?: boolean } = {},
-  deps: { markerReplacement?: Partial<MarkerReplacementOps> } = {},
+  deps: LockAcquireDependencies = {},
 ): SingletonResult {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)

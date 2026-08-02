@@ -37,7 +37,7 @@ describe('observability lock', () => {
   it('steals a stale lock left by a dead process', async () => {
     const dir = join(tmp, 'o.lock.mark')
     mkdirSync(dir)
-    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
     const release = await acquireLock(join(tmp, 'o.lock'))
     expect(typeof release).toBe('function')
     await release()
@@ -53,7 +53,7 @@ describe('observability lock', () => {
   it('tryAcquireLock steals from a dead pid', async () => {
     const dir = join(tmp, 'o.lock.mark')
     mkdirSync(dir)
-    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
     const release = await tryAcquireLock(join(tmp, 'o.lock'))
     expect(release).not.toBeNull()
     await release!()

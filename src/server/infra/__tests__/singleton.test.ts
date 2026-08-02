@@ -6,6 +6,8 @@ import {
   acquireBackendSingleton,
   decideSingletonAction,
   describeSingletonFailure,
+  formatSingletonFailureForConsole,
+  formatSingletonFailureForError,
   type SingletonResult,
 } from '../lock'
 
@@ -269,13 +271,37 @@ describe('describeSingletonFailure', () => {
       acquired: false,
       action: 'refuse',
       failure: 'future-singleton-failure',
+      detail: 'future diagnostic detail',
     } as unknown as SingletonResult
 
     expect(describeSingletonFailure(result, configDir)).toEqual({
       logMessage: 'unrecognized tinstar backend singleton failure on /tmp/tinstar-test: '
-        + 'future-singleton-failure',
+        + 'future-singleton-failure: future diagnostic detail',
       headline: 'Could not acquire the tinstar backend marker on /tmp/tinstar-test.',
       guidance: 'Inspect the marker and backend logs before retrying, or use a different TINSTAR_CONFIG_HOME.',
+      detail: 'future diagnostic detail',
     })
+  })
+
+  it('formats detail legibly for standalone and plugin startup', () => {
+    const description = describeSingletonFailure({
+      acquired: false,
+      action: 'steal',
+      failure: 'marker-recreation-failed',
+      detail: 'EACCES: permission denied, mkdir server.lock.mark',
+    }, configDir)
+
+    expect(formatSingletonFailureForConsole(description)).toBe(
+      '\n✗ Could not claim the tinstar backend marker on /tmp/tinstar-test.\n'
+      + '  EACCES: permission denied, mkdir server.lock.mark\n'
+      + '  Another backend may have won the startup race, or the marker may be unremovable. '
+      + 'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.\n',
+    )
+    expect(formatSingletonFailureForError(description)).toBe(
+      'Could not claim the tinstar backend marker on /tmp/tinstar-test. '
+      + '(EACCES: permission denied, mkdir server.lock.mark) '
+      + 'Another backend may have won the startup race, or the marker may be unremovable. '
+      + 'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+    )
   })
 })

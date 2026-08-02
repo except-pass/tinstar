@@ -25,7 +25,11 @@ import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import { getConfigRoot } from './configRoot'
-import { acquireBackendSingleton, describeSingletonFailure } from './infra/lock'
+import {
+  acquireBackendSingleton,
+  describeSingletonFailure,
+  formatSingletonFailureForError,
+} from './infra/lock'
 import {
   loadConfig,
   ensureDirs,
@@ -1515,8 +1519,7 @@ export function acquireBackendSingletonForPlugin(
   const result = (deps.acquire ?? acquireBackendSingleton)(lockPath)
   if (!result.acquired) {
     const description = describeSingletonFailure(result, configDir, { allowForce: false })
-    const detail = description.detail ? ` ${description.detail}` : ''
-    throw new Error(`${description.headline}${detail} ${description.guidance}`)
+    throw new Error(formatSingletonFailureForError(description))
   }
   // The marker outlives only this process; drop it on exit exactly as
   // standalone.ts does, so the next start sees a clean (or stealable) lock.

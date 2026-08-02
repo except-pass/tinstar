@@ -24,7 +24,11 @@ import { handleFilePush } from './api/filePushRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
-import { acquireBackendSingleton, describeSingletonFailure } from './infra/lock'
+import {
+  acquireBackendSingleton,
+  describeSingletonFailure,
+  formatSingletonFailureForConsole,
+} from './infra/lock'
 import { decideStaticServe } from './staticServe'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -78,8 +82,7 @@ export function startServer(opts: ServerOptions) {
   if (!lockResult.acquired) {
     const description = describeSingletonFailure(lockResult, configDir)
     log.error('server', description.logMessage)
-    const detail = description.detail ? `\n  ${description.detail}` : ''
-    console.error(`\n✗ ${description.headline}${detail}\n  ${description.guidance}\n`)
+    console.error(formatSingletonFailureForConsole(description))
     process.exit(1)
   }
   // The lock marker outlives only this process; drop it on exit so the next
