@@ -2374,14 +2374,6 @@ async function doSendPrompt(
   const target = exactTmuxPaneTarget(tmuxName)
   if (beforeEnter) {
     if (!await beforeEnter()) return false
-    // Submit the paste, load-bearing settle, and Enter as one tmux command
-    // queue. The outer per-session lock remains held for the whole sequence.
-    await execFileAsync('tmux', [
-      'send-keys', '-t', target, prompt, '',
-      ';', 'run-shell', 'sleep 0.3',
-      ';', 'send-keys', '-t', target, '', 'Enter',
-    ])
-    return true
   }
   await execFileAsync('tmux', ['send-keys', '-t', target, prompt, ''])
   await new Promise(r => setTimeout(r, 300))

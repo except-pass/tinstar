@@ -230,6 +230,18 @@ export class CodexDeliveryAdapter {
     return this.serialize(request.recipient.sessionId, () => this.acceptSerial(request))
   }
 
+  abandon = (request: ProviderDeliveryRequest): Promise<void> => {
+    return this.serialize(request.recipient.sessionId, async () => {
+      const queue = this.queues.get(request.recipient.sessionId)
+      if (!queue) return
+      const index = queue.findIndex(item => (
+        item.deliveryKey === logicalDeliveryKey(request)
+      ))
+      if (index >= 0) queue.splice(index, 1)
+      if (queue.length === 0) this.queues.delete(request.recipient.sessionId)
+    })
+  }
+
   private async acceptSerial(request: ProviderDeliveryRequest): Promise<ProviderDeliveryAcceptance> {
     const identity = resultIdentity(request)
     const key = attemptKey(request)
@@ -359,10 +371,9 @@ export class CodexDeliveryAdapter {
         }
       }
     } catch (error) {
-      // A rejected attempt has reached a terminal outcome for this invocation.
-      // The durable router may retry it as a new attempt, but retaining this
-      // failed head would make that retry wait behind an item that can never
-      // be accepted and poison the recipient's FIFO queue.
+      // Submission may have partially landed, so this delivery is terminal.
+      // Drop its provider-local head so unrelated later messages to the same
+      // recipient are not blocked behind work that cannot be retried safely.
       queue.shift()
       if (queue.length === 0) this.queues.delete(request.recipient.sessionId)
       return {

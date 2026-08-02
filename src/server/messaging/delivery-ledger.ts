@@ -36,7 +36,8 @@ const DESTINATION_KEYS = new Set(['subject'])
 const EXCLUSION_KEYS = new Set(['sessionId', 'reason'])
 const DELIVERY_KEYS = new Set([
   'id', 'messageId', 'recipient', 'state', 'attempt', 'acceptedAt',
-  'updatedAt', 'history', 'historyTruncated',
+  'updatedAt', 'history', 'historyTruncated', 'deferralCount',
+  'sendAttemptCount',
 ])
 
 export type DeliveryRecipientExclusionReason =
@@ -173,11 +174,41 @@ export interface DeliveryRecord {
   history: DeliveryStateEvent[]
   /** The initial event is retained even when older intermediate events are pruned. */
   historyTruncated: boolean
+  /** Durable aggregate retained independently of the bounded event history. */
+  deferralCount?: number
+  /** Final-mile calls that may have performed a send; independent of attempt IDs. */
+  sendAttemptCount?: number
 }
 
 export interface DeliveryEnvelope {
   message: DeliveryMessage
   deliveries: DeliveryRecord[]
+}
+
+/**
+ * Classified final-mile calls, with a history fallback for schema-v1 records
+ * written before the durable aggregate existed. A current in-flight call may
+ * have performed the side effect and therefore consumes one slot.
+ */
+export function deliverySendAttemptCount(delivery: DeliveryRecord): number {
+  const classified = new Set<number>()
+  if (delivery.sendAttemptCount === undefined) {
+    for (const event of delivery.history) {
+      if (event.attempt < 1) continue
+      if (
+        event.state === 'accepted'
+        || event.state === 'delivered'
+        || event.state === 'failed'
+      ) classified.add(event.attempt)
+    }
+  }
+  const recorded = delivery.sendAttemptCount ?? classified.size
+  const currentAlreadyClassified = classified.has(delivery.attempt)
+  return delivery.state === 'in-flight'
+    && delivery.attempt > 0
+    && !currentAlreadyClassified
+    ? recorded + 1
+    : recorded
 }
 
 export interface DeliveryAcceptanceReceipt {
@@ -210,6 +241,10 @@ export interface DeliveryTransitionInput {
   deliveryId: string
   expected: { state: DeliveryState; attempt: number }
   next: Omit<DeliveryStateEvent, 'at'>
+  /** Set only when recording a provider deferral; must increment by exactly one. */
+  deferralCount?: number
+  /** Set when a provider call may have sent; must increment by exactly one. */
+  sendAttemptCount?: number
 }
 
 export type DeliveryTransitionRejection =
@@ -467,7 +502,12 @@ function isDelivery(value: unknown): value is DeliveryRecord {
     || !Array.isArray(delivery.history)
     || delivery.history.length < 1
     || !delivery.history.every(isStateEvent)
-    || typeof delivery.historyTruncated !== 'boolean') return false
+    || typeof delivery.historyTruncated !== 'boolean'
+    || (delivery.deferralCount !== undefined
+      && (!Number.isInteger(delivery.deferralCount) || delivery.deferralCount < 1))
+    || (delivery.sendAttemptCount !== undefined
+      && (!Number.isInteger(delivery.sendAttemptCount)
+        || delivery.sendAttemptCount < 1))) return false
   const first = delivery.history[0]!
   const last = delivery.history[delivery.history.length - 1]!
   if (first.state !== 'accepted'
@@ -812,6 +852,14 @@ function validateTransitionInput(input: DeliveryTransitionInput): string | null 
   if (input.next.evidence !== undefined && !hasEvidenceFields(input.next.evidence)) {
     return 'evidence is malformed'
   }
+  if (input.deferralCount !== undefined
+    && (!Number.isInteger(input.deferralCount) || input.deferralCount < 1)) {
+    return 'deferralCount must be a positive integer'
+  }
+  if (input.sendAttemptCount !== undefined
+    && (!Number.isInteger(input.sendAttemptCount) || input.sendAttemptCount < 1)) {
+    return 'sendAttemptCount must be a positive integer'
+  }
   return null
 }
 
@@ -988,6 +1036,12 @@ function copyTransitionInput(input: DeliveryTransitionInput): DeliveryTransition
       attempt: input.expected.attempt,
     },
     next: copyTransitionNext(input.next),
+    ...(input.deferralCount !== undefined
+      ? { deferralCount: input.deferralCount }
+      : {}),
+    ...(input.sendAttemptCount !== undefined
+      ? { sendAttemptCount: input.sendAttemptCount }
+      : {}),
   }
 }
 
@@ -1380,6 +1434,41 @@ export class DeliveryLedger {
     if (invalid) {
       return { updated: false, reason: 'invalid-transition', detail: invalid }
     }
+    if (owned.deferralCount !== undefined) {
+      if (owned.next.state !== 'pending' && owned.next.state !== 'failed') {
+        return {
+          updated: false,
+          reason: 'invalid-transition',
+          detail: 'deferralCount is valid only when recording or exhausting a deferral',
+        }
+      }
+      const expectedDeferralCount = (current.deferralCount ?? 0) + 1
+      if (owned.deferralCount !== expectedDeferralCount) {
+        return {
+          updated: false,
+          reason: 'invalid-transition',
+          detail: `deferralCount must increment to ${expectedDeferralCount}`,
+        }
+      }
+    }
+    if (owned.sendAttemptCount !== undefined) {
+      if (current.state !== 'in-flight'
+        || !['accepted', 'delivered', 'failed'].includes(owned.next.state)) {
+        return {
+          updated: false,
+          reason: 'invalid-transition',
+          detail: 'sendAttemptCount requires a classified provider result',
+        }
+      }
+      const expectedSendAttemptCount = deliverySendAttemptCount(current)
+      if (owned.sendAttemptCount !== expectedSendAttemptCount) {
+        return {
+          updated: false,
+          reason: 'invalid-transition',
+          detail: `sendAttemptCount must increment to ${expectedSendAttemptCount}`,
+        }
+      }
+    }
 
     const at = new Date(this.clock()).toISOString()
     const event: DeliveryStateEvent = { ...owned.next, at }
@@ -1395,6 +1484,12 @@ export class DeliveryLedger {
       updatedAt: at,
       history: boundedHistory,
       historyTruncated: current.historyTruncated || truncated,
+      ...(owned.deferralCount !== undefined
+        ? { deferralCount: owned.deferralCount }
+        : {}),
+      ...(owned.sendAttemptCount !== undefined
+        ? { sendAttemptCount: owned.sendAttemptCount }
+        : {}),
     }
     const nextMessages = new Map(this.messages)
     const nextDeliveries = new Map(this.deliveries)

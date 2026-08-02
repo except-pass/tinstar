@@ -185,6 +185,12 @@ interface ProviderDeliveryAcceptanceAdapter<TDetail extends object = object> {
   accept: (
     request: ProviderDeliveryRequest,
   ) => Promise<ProviderDeliveryAcceptance<TDetail>>
+  /**
+   * Idempotently discard provider-local work that never reached acceptance.
+   * Dispatchers call this before terminalizing an exhausted deferral so a
+   * stale FIFO head cannot block later messages for the same recipient.
+   */
+  abandon?: (request: ProviderDeliveryRequest) => Promise<void>
 }
 
 export interface ProviderAcceptanceOnlyDeliveryAdapter<
@@ -327,23 +333,7 @@ function guardDeliveryAdapter<TDetail extends object>(
 ): ProviderDeliveryAdapter<TDetail> {
   const rawAccept = unwrapGuardedHandler(delivery.accept, 'delivery:accept')
   const accept = async (request: ProviderDeliveryRequest) => {
-    const problem = providerDeliveryRequestProblem(request)
-    if (problem) {
-      throw new TypeError(
-        `Provider "${providerId}" delivery request is not router-stamped: ${problem}`,
-      )
-    }
-    if (request.recipient.providerId !== providerId) {
-      throw preflightDeliveryIdentityError(
-        `Provider "${providerId}" delivery request is addressed to provider `
-        + `"${request.recipient.providerId}"`,
-        {
-          providerId,
-          actualProviderId: request.recipient.providerId,
-          source: request,
-        },
-      )
-    }
+    assertProviderDeliveryRequest(providerId, request)
     const result = await rawAccept(request)
     assertDeliveryIdentity(
       providerId,
@@ -355,7 +345,21 @@ function guardDeliveryAdapter<TDetail extends object>(
   }
   rememberGuardedHandler(accept, rawAccept, 'delivery:accept')
 
-  if (!delivery.confirm) return { accept }
+  const rawAbandon = delivery.abandon
+    ? unwrapGuardedHandler(delivery.abandon, 'delivery:abandon')
+    : null
+  const abandon = rawAbandon
+    ? async (request: ProviderDeliveryRequest): Promise<void> => {
+        assertProviderDeliveryRequest(providerId, request)
+        await rawAbandon(request)
+      }
+    : null
+  if (abandon && rawAbandon) {
+    rememberGuardedHandler(abandon, rawAbandon, 'delivery:abandon')
+  }
+
+  const acceptance = { accept, ...(abandon ? { abandon } : {}) }
+  if (!delivery.confirm) return acceptance
 
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
@@ -391,7 +395,30 @@ function guardDeliveryAdapter<TDetail extends object>(
     return result
   }
   rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
-  return { accept, confirm }
+  return { ...acceptance, confirm }
+}
+
+function assertProviderDeliveryRequest(
+  providerId: string,
+  request: ProviderDeliveryRequest,
+): void {
+  const problem = providerDeliveryRequestProblem(request)
+  if (problem) {
+    throw new TypeError(
+      `Provider "${providerId}" delivery request is not router-stamped: ${problem}`,
+    )
+  }
+  if (request.recipient.providerId !== providerId) {
+    throw preflightDeliveryIdentityError(
+      `Provider "${providerId}" delivery request is addressed to provider `
+      + `"${request.recipient.providerId}"`,
+      {
+        providerId,
+        actualProviderId: request.recipient.providerId,
+        source: request,
+      },
+    )
+  }
 }
 
 function providerDeliveryRequestProblem(request: ProviderDeliveryRequest): string | null {

@@ -61,7 +61,7 @@ describe('captureScreen', () => {
     ))).toBe(false)
   })
 
-  it('settles and submits the checked prompt in one tmux command queue', async () => {
+  it('settles and submits checked text as literal tmux arguments', async () => {
     execFileMock.mockImplementation(async (_file: string, args: string[]) => {
       if (args[0] === 'capture-pane') {
         return { stdout: '› Add a follow-up\n  ? for shortcuts', stderr: '' }
@@ -73,19 +73,22 @@ describe('captureScreen', () => {
     const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
 
     const submitted = await withSessionInput(config, 'worker', async input => (
-      input.submitPrompt('durable envelope', async () => (
+      input.submitPrompt('durable envelope;', async () => (
         (await input.captureScreen()).includes('? for shortcuts')
       ))
     ))
 
     expect(submitted).toBe(true)
-    expect(execFileMock).toHaveBeenCalledWith(
+    expect(execFileMock).toHaveBeenNthCalledWith(
+      4,
       'tmux',
-      [
-        'send-keys', '-t', '=tinstar-worker:', 'durable envelope', '',
-        ';', 'run-shell', 'sleep 0.3',
-        ';', 'send-keys', '-t', '=tinstar-worker:', '', 'Enter',
-      ],
+      ['send-keys', '-t', '=tinstar-worker:', 'durable envelope;', ''],
+      expect.any(Object),
+    )
+    expect(execFileMock).toHaveBeenNthCalledWith(
+      5,
+      'tmux',
+      ['send-keys', '-t', '=tinstar-worker:', '', 'Enter'],
       expect.any(Object),
     )
   })

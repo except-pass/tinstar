@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { acquireBackendSingleton } from '../../infra/lock'
-import { createDefaultProviderRegistry } from '../../providers/lifecycle'
+import {
+  CODEX_PROVIDER,
+  ProviderAdapterRegistry,
+  createDefaultProviderRegistry,
+} from '../../providers/lifecycle'
 import {
   DELIVERY_DISPATCH_CONCURRENCY,
   DeliveryRetryScheduler,
@@ -31,6 +35,7 @@ async function acceptedLedger(recipients = [{
   providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3',
 }], options: {
   maxOutstandingDeliveries?: number
+  maxHistoryEntries?: number
   now?: () => number
   createMessageId?: () => string
 } = {}) {
@@ -61,7 +66,7 @@ describe('durable provider dispatch', () => {
       messageId: request.messageId,
       attempt: request.attempt,
       recipient: request.recipient,
-      acceptedAt: '2026-08-01T12:00:02.000Z',
+      acceptedAt: '2026-08-01T12:00:02Z',
       attemptRef: request.deliveryId,
     }))
     const registry = createDefaultProviderRegistry()
@@ -92,8 +97,40 @@ describe('durable provider dispatch', () => {
         expect.objectContaining({ state: 'in-flight', attempt: 1 }),
         expect.objectContaining({
           state: 'accepted', attempt: 1, attemptRef: 'msg-7/d/1',
+          providerAcceptedAt: '2026-08-01T12:00:02.000Z',
         }),
       ]),
+    })
+  })
+
+  it('keeps provider acceptance recoverable when its timestamp is malformed', async () => {
+    const now = Date.parse('2026-08-01T12:00:03.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'accepted',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: 'not-a-provider-timestamp',
+          attemptRef: request.deliveryId,
+        }
+      },
+    })
+
+    await expect(dispatchAcceptedMessage('msg-7', ledger, registry, {
+      now: () => now,
+    })).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'accepted',
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'accepted',
+      history: expect.arrayContaining([expect.objectContaining({
+        providerAcceptedAt: '2026-08-01T12:00:03.000Z',
+      })]),
     })
   })
 
@@ -325,6 +362,357 @@ describe('durable provider dispatch', () => {
       delivery_id: 'msg-7/d/1',
       attempt: 2,
     })
+  })
+
+  it('does not spend the send-attempt budget while provider acceptance is deferred', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    const attempts: number[] = []
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        attempts.push(request.attempt)
+        if (attempts.length <= 5) {
+          return {
+            state: 'deferred',
+            providerId: 'claude',
+            messageId: request.messageId,
+            attempt: request.attempt,
+            recipient: request.recipient,
+            checkedAt: new Date(now).toISOString(),
+            reason: 'operator interaction is still active',
+          }
+        }
+        return {
+          state: 'delivered',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          deliveredAt: new Date(now).toISOString(),
+          evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
+        }
+      },
+    })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      maxAttempts: 1,
+      maxDeferrals: 10,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    for (let index = 0; index < 5; index += 1) {
+      now += 1_000
+      await recoverAcceptedMessages(ledger, registry, options)
+    }
+
+    expect(attempts).toEqual([1, 2, 3, 4, 5, 6])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'delivered', attempt: 6,
+    })
+  })
+
+  it('persists the deferral cap beyond pruned history and ledger reopen', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, {
+      now: () => now,
+      maxHistoryEntries: 4,
+    })
+    const abandon = vi.fn(async () => {})
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'deferred',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'provider remains busy',
+        }
+      },
+      abandon,
+    })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      maxDeferrals: 6,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    for (let index = 0; index < 4; index += 1) {
+      now += 1_000
+      await recoverAcceptedMessages(ledger, registry, options)
+    }
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'pending',
+      deferralCount: 5,
+      historyTruncated: true,
+      history: expect.arrayContaining([expect.objectContaining({ attempt: 5 })]),
+    })
+
+    const root = roots.at(-1)!
+    const reopened = DeliveryLedger.open({
+      dir: root,
+      lockPath: join(root, 'server.lock'),
+      now: () => now,
+      maxHistoryEntries: 4,
+    })
+    expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({ deferralCount: 5 })
+    now += 1_000
+    await expect(recoverAcceptedMessages(reopened, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider acceptance remained deferred after 6 deferrals: provider remains busy',
+    }])
+    expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', deferralCount: 6,
+    })
+    expect(abandon).toHaveBeenCalledOnce()
+  })
+
+  it('persists spent send attempts across later deferrals and ledger reopen', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, {
+      now: () => now,
+      maxHistoryEntries: 4,
+    })
+    const attempts: number[] = []
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        attempts.push(request.attempt)
+        if (attempts.length === 1 || attempts.length === 7) {
+          return {
+            state: 'rejected',
+            providerId: 'claude',
+            messageId: request.messageId,
+            attempt: request.attempt,
+            recipient: request.recipient,
+            checkedAt: new Date(now).toISOString(),
+            reason: 'temporary provider rejection',
+            retryable: true,
+          }
+        }
+        return {
+          state: 'deferred',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'provider remains busy',
+        }
+      },
+    })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      maxAttempts: 2,
+      maxDeferrals: 10,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    for (let index = 0; index < 5; index += 1) {
+      now += 1_000
+      await recoverAcceptedMessages(ledger, registry, options)
+    }
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'pending',
+      sendAttemptCount: 1,
+      deferralCount: 5,
+      historyTruncated: true,
+    })
+
+    const root = roots.at(-1)!
+    const reopened = DeliveryLedger.open({
+      dir: root,
+      lockPath: join(root, 'server.lock'),
+      now: () => now,
+      maxHistoryEntries: 4,
+    })
+    expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({
+      sendAttemptCount: 1,
+      deferralCount: 5,
+    })
+    now += 1_000
+    await expect(recoverAcceptedMessages(reopened, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'temporary provider rejection',
+    }])
+    expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', sendAttemptCount: 2,
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+    now += 1_000
+    await expect(recoverAcceptedMessages(reopened, registry, options)).resolves.toEqual([])
+    expect(attempts).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('bootstraps the send aggregate from a pre-aggregate retry record', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    await ledger.transition({
+      deliveryId: 'msg-7/d/1',
+      expected: { state: 'accepted', attempt: 0 },
+      next: { state: 'in-flight', attempt: 1 },
+    })
+    await ledger.transition({
+      deliveryId: 'msg-7/d/1',
+      expected: { state: 'in-flight', attempt: 1 },
+      next: {
+        state: 'failed',
+        attempt: 1,
+        reason: 'pre-aggregate provider rejection',
+        retryable: true,
+        retryAt: new Date(now).toISOString(),
+      },
+    })
+    expect(ledger.getDelivery('msg-7/d/1')).not.toHaveProperty('sendAttemptCount')
+
+    const root = roots.at(-1)!
+    const reopened = DeliveryLedger.open({
+      dir: root,
+      lockPath: join(root, 'server.lock'),
+      now: () => now,
+    })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'delivered',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          deliveredAt: new Date(now).toISOString(),
+          evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
+        }
+      },
+    })
+
+    await expect(recoverAcceptedMessages(reopened, registry, {
+      now: () => now,
+      maxAttempts: 2,
+    })).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'delivered',
+    }])
+    expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'delivered', attempt: 2, sendAttemptCount: 2,
+    })
+  })
+
+  it('retries failed deferral cleanup without losing its durable count', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    let cleanupCalls = 0
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'deferred',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'provider remains busy',
+        }
+      },
+      async abandon() {
+        cleanupCalls += 1
+        if (cleanupCalls === 1) throw new Error('queue lock busy')
+      },
+    })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      maxDeferrals: 1,
+    }
+
+    await expect(dispatchAcceptedMessage(
+      'msg-7', ledger, registry, options,
+    )).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'pending',
+      reason: 'Provider deferral cleanup failed: queue lock busy',
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({ deferralCount: 1 })
+    now += 1_000
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider acceptance remained deferred after 2 deferrals: provider remains busy',
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed', deferralCount: 2,
+    })
+    expect(cleanupCalls).toBe(2)
+  })
+
+  it('abandons an exhausted Codex deferral before delivering the next FIFO item', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const messageIds = ['msg-7', 'msg-8']
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], {
+      now: () => now,
+      createMessageId: () => messageIds.shift()!,
+    })
+    let screen = 'Would you like to run this command?\nPress enter to confirm or esc to cancel'
+    const submitted: string[] = []
+    const adapter = new CodexDeliveryAdapter({
+      now: () => new Date(now).toISOString(),
+      currentIncarnation: async () => 'receiver-v3',
+      resolveTranscript: async () => null,
+      withSessionInput: async (_sessionId, operation) => operation({
+        captureScreen: async () => screen,
+        submitPrompt: async (prompt, beforeEnter) => {
+          if (!await beforeEnter()) return false
+          submitted.push(prompt)
+          return true
+        },
+      }),
+    })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('codex', adapter)
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      maxAttempts: 1,
+      maxDeferrals: 2,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    expect(adapter.queueDepth('receiver')).toBe(1)
+    now += 1_000
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider acceptance remained deferred after 2 deferrals: '
+        + 'Codex is waiting for a modal confirmation',
+    }])
+    expect(adapter.queueDepth('receiver')).toBe(0)
+
+    screen = '• Working\n\n› Add a follow-up\n  ? for shortcuts'
+    const second = await ledger.accept({
+      requestId: 'request-8',
+      sender: { sessionId: 'sender', incarnation: 'sender-v2' },
+      destination: { subject: 'agents.receiver' },
+      text: 'later message',
+      recipients: [{
+        providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+      }],
+    })
+    expect(second).toMatchObject({ accepted: true, message: { id: 'msg-8' } })
+    await expect(dispatchAcceptedMessage('msg-8', ledger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-8/d/1', state: 'accepted',
+    }])
+    expect(adapter.queueDepth('receiver')).toBe(0)
+    expect(submitted).toHaveLength(1)
   })
 
   it('stops a prior-module retry loop when HMR installs a separately evaluated scheduler', async () => {
@@ -779,6 +1167,112 @@ describe('durable provider dispatch', () => {
       history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
     })
     expect(ledger.getDelivery(healthyId)).toMatchObject({ state: 'delivered' })
+  })
+
+  it('preserves ambiguity when an accepted provider disappears before confirmation', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], { now: () => now })
+    const initialRegistry = new ProviderAdapterRegistry([CODEX_PROVIDER])
+    initialRegistry.registerDelivery('codex', {
+      async accept(request) {
+        return {
+          state: 'accepted',
+          providerId: 'codex',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: new Date(now).toISOString(),
+          attemptRef: 'provider-attempt-1',
+        }
+      },
+      async confirm(acceptance) {
+        return {
+          state: 'pending',
+          providerId: 'codex',
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
+          checkedAt: new Date(now).toISOString(),
+          reason: 'evidence pending',
+        }
+      },
+    })
+    const options = { now: () => now, retryDelayMs: 1_000 }
+
+    await dispatchAcceptedMessage('msg-7', ledger, initialRegistry, options)
+    now += 1_000
+    const unregisteredRegistry = new ProviderAdapterRegistry()
+    const reason = 'Provider "codex" is no longer registered; attempt 1 may already '
+      + 'have been delivered but can no longer be confirmed'
+    await expect(recoverAcceptedMessages(
+      ledger,
+      unregisteredRegistry,
+      options,
+    )).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'ambiguous', reason,
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed',
+      history: expect.arrayContaining([expect.objectContaining({
+        reason,
+        retryable: false,
+      })]),
+    })
+  })
+
+  it('fails pending work when a registered provider has no delivery adapter', async () => {
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }])
+    const registry = new ProviderAdapterRegistry([CODEX_PROVIDER])
+
+    await expect(recoverAcceptedMessages(ledger, registry)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider "codex" has no delivery adapter',
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed',
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+  })
+
+  it('terminalizes a legacy retry whose reduced send-attempt budget is already spent', async () => {
+    const now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    await ledger.transition({
+      deliveryId: 'msg-7/d/1',
+      expected: { state: 'accepted', attempt: 0 },
+      next: { state: 'in-flight', attempt: 1 },
+    })
+    await ledger.transition({
+      deliveryId: 'msg-7/d/1',
+      expected: { state: 'in-flight', attempt: 1 },
+      next: {
+        state: 'failed',
+        attempt: 1,
+        reason: 'legacy retryable failure',
+        retryable: true,
+        retryAt: new Date(now).toISOString(),
+      },
+    })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      accept: vi.fn(async () => {
+        throw new Error('must not be called')
+      }),
+    })
+
+    await expect(recoverAcceptedMessages(ledger, registry, {
+      now: () => now,
+      maxAttempts: 1,
+    })).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1',
+      state: 'failed',
+      reason: 'Provider delivery attempt budget exhausted after 1 attempt',
+    }])
   })
 
   it('bounds retryable acceptance rejections by the delivery attempt budget', async () => {
