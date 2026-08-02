@@ -47,9 +47,16 @@ describe('acquireBackendSingletonForPlugin', () => {
       const bytes = readFileSync(paths.primary, 'utf-8')
       const owner = fakeLiveOwner(lockPath)
 
-      expect(() => acquireBackendSingletonForPlugin(dir)).toThrow(
+      let refusal: Error | null = null
+      try {
+        acquireBackendSingletonForPlugin(dir)
+      } catch (error) {
+        refusal = error as Error
+      }
+      expect(refusal?.message).toMatch(
         new RegExp(`another tinstar backend is already running on ${dir} \\(pid ${owner}\\)`),
       )
+      expect(refusal?.message).not.toContain('--force')
       // The live owner's snapshot was never read, rotated, or truncated, and no
       // temp file was left behind.
       expect(readFileSync(paths.primary, 'utf-8')).toBe(bytes)

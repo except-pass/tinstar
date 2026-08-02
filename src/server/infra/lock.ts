@@ -54,9 +54,15 @@ const markerReplacementOps: MarkerReplacementOps = {
   createMarker: tryCreateMarker,
 }
 
-function stealLock(dir: string, ops: MarkerReplacementOps = markerReplacementOps): boolean {
-  try { ops.removeMarker(dir) } catch { /* someone else cleaned it */ }
-  return ops.createMarker(dir)
+function stealLock(dir: string, ops: Partial<MarkerReplacementOps> = {}): boolean {
+  const removeMarker = ops.removeMarker ?? markerReplacementOps.removeMarker
+  const createMarker = ops.createMarker ?? markerReplacementOps.createMarker
+  try { removeMarker(dir) } catch { /* someone else cleaned it */ }
+  try {
+    return createMarker(dir)
+  } catch {
+    return false
+  }
 }
 
 function makeRelease(dir: string): ReleaseFn {
@@ -192,6 +198,56 @@ export interface SingletonResult {
   failure?: SingletonFailure
 }
 
+export interface SingletonFailureDescription {
+  logMessage: string
+  headline: string
+  guidance: string
+}
+
+/** One operator-facing mapping shared by standalone and Vite-plugin startup. */
+export function describeSingletonFailure(
+  result: SingletonResult,
+  configDir: string,
+  options: { allowForce?: boolean } = {},
+): SingletonFailureDescription {
+  const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
+  if (result.failure === 'owner-retirement-permission-denied') {
+    return {
+      logMessage: `permission denied while stopping prior tinstar backend on ${configDir}${who}`,
+      headline: `Permission was denied while stopping tinstar${who} after --force.`,
+      guidance: 'Run as the process-owning user or stop that process with appropriate privileges.',
+    }
+  }
+  if (result.failure === 'owner-survived-sigkill') {
+    return {
+      logMessage: `prior tinstar backend survived forced shutdown on ${configDir}${who}`,
+      headline: `Tinstar${who} still exists after SIGTERM and SIGKILL.`,
+      guidance: 'Inspect the process state and stop it manually before retrying.',
+    }
+  }
+  if (result.failure === 'owner-retirement-unconfirmed') {
+    return {
+      logMessage: `could not confirm prior tinstar backend stopped on ${configDir}${who}`,
+      headline: `Could not confirm that tinstar${who} stopped after --force.`,
+      guidance: 'Inspect and stop that process manually before retrying.',
+    }
+  }
+  if (result.failure === 'marker-recreation-failed') {
+    return {
+      logMessage: `could not claim the tinstar backend marker on ${configDir}`,
+      headline: `could not claim the tinstar backend marker on ${configDir}; another backend may have won the startup race or the marker may be unremovable.`,
+      guidance: 'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+    }
+  }
+  return {
+    logMessage: `another tinstar backend is already running on ${configDir}${who}`,
+    headline: `another tinstar backend is already running on ${configDir}${who}.`,
+    guidance: options.allowForce === false
+      ? 'Stop it first, or use a different TINSTAR_CONFIG_HOME.'
+      : 'Stop it first, use a different TINSTAR_CONFIG_HOME, or pass --force to take over.',
+  }
+}
+
 /**
  * Synchronously acquire the backend singleton lock at `path`.
  *
@@ -203,7 +259,7 @@ export interface SingletonResult {
 export function acquireBackendSingleton(
   path: string,
   opts: { force?: boolean } = {},
-  deps: { markerReplacement?: MarkerReplacementOps } = {},
+  deps: { markerReplacement?: Partial<MarkerReplacementOps> } = {},
 ): SingletonResult {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)

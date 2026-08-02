@@ -25,7 +25,7 @@ import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import { getConfigRoot } from './configRoot'
-import { acquireBackendSingleton } from './infra/lock'
+import { acquireBackendSingleton, describeSingletonFailure } from './infra/lock'
 import {
   loadConfig,
   ensureDirs,
@@ -1514,18 +1514,8 @@ export function acquireBackendSingletonForPlugin(
   const lockPath = join(configDir, 'server.lock')
   const result = (deps.acquire ?? acquireBackendSingleton)(lockPath)
   if (!result.acquired) {
-    if (result.failure === 'marker-recreation-failed') {
-      throw new Error(
-        `could not claim the tinstar backend marker on ${configDir}; ` +
-        'another backend may have won the startup race or the marker may be unremovable. ' +
-        'Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
-      )
-    }
-    const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
-    throw new Error(
-      `another tinstar backend is already running on ${configDir}${who}. ` +
-      `Stop it first, or run this one under a different TINSTAR_CONFIG_HOME.`,
-    )
+    const description = describeSingletonFailure(result, configDir, { allowForce: false })
+    throw new Error(`${description.headline} ${description.guidance}`)
   }
   // The marker outlives only this process; drop it on exit exactly as
   // standalone.ts does, so the next start sees a clean (or stealable) lock.

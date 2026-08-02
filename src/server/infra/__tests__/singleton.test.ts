@@ -147,16 +147,32 @@ describe('acquireBackendSingleton', () => {
     const removeMarker = vi.fn(() => {
       throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
     })
-    const createMarker = vi.fn(() => false)
-
     expect(acquireBackendSingleton(lockPath(), {}, {
-      markerReplacement: { removeMarker, createMarker },
+      markerReplacement: { removeMarker },
     })).toEqual({
       acquired: false,
       action: 'steal',
       failure: 'marker-recreation-failed',
     })
     expect(removeMarker).toHaveBeenCalledWith(mark)
-    expect(createMarker).toHaveBeenCalledWith(mark)
+  })
+
+  it('maps an unexpected marker creation error to marker-recreation-failed', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 1 }))
+
+    expect(acquireBackendSingleton(lockPath(), {}, {
+      markerReplacement: {
+        removeMarker: () => {},
+        createMarker: () => {
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+        },
+      },
+    })).toEqual({
+      acquired: false,
+      action: 'steal',
+      failure: 'marker-recreation-failed',
+    })
   })
 })
