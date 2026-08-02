@@ -121,12 +121,16 @@ export type SingletonFailure =
   | 'owner-survived-sigkill'
   | 'marker-recreation-failed'
 
-function uncertainRetirementFailure(pid: number): SingletonFailure | null {
+function uncertainRetirementFailure(
+  pid: number,
+  sigkillAttempted = false,
+): SingletonFailure | null {
   const liveness = probeProcessLiveness(pid)
   if (liveness.state === 'gone') return null
-  if (liveness.state === 'unknown' && liveness.reason.includes('EPERM')) {
+  if (liveness.state === 'unknown' && liveness.code === 'EPERM') {
     return 'owner-retirement-permission-denied'
   }
+  if (liveness.state === 'alive' && sigkillAttempted) return 'owner-survived-sigkill'
   return 'owner-retirement-unconfirmed'
 }
 
@@ -149,14 +153,7 @@ function killAndWait(pid: number, timeoutMs = 3_000): SingletonFailure | null {
     const start = Date.now()
     while (Date.now() - start < 25) { /* brief spin — boot path, no event loop yet */ }
   }
-  const liveness = probeProcessLiveness(pid)
-  if (liveness.state === 'gone') return null
-  if (liveness.state === 'unknown' && liveness.reason.includes('EPERM')) {
-    return 'owner-retirement-permission-denied'
-  }
-  return liveness.state === 'alive'
-    ? 'owner-survived-sigkill'
-    : 'owner-retirement-unconfirmed'
+  return uncertainRetirementFailure(pid, true)
 }
 
 /**
@@ -219,5 +216,10 @@ export function acquireBackendSingleton(path: string, opts: { force?: boolean } 
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
   if (stealLock(dir)) return { acquired: true, action }
-  return { acquired: false, action, failure: 'marker-recreation-failed' }
+  return {
+    acquired: false,
+    action,
+    ownerPid: ownerPid ?? undefined,
+    failure: 'marker-recreation-failed',
+  }
 }

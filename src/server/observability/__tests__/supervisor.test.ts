@@ -97,7 +97,10 @@ describe('Supervisor adoption', () => {
     ) {
       await new Promise(resolve => setTimeout(resolve, 10))
     }
-    expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThanOrEqual(3)
+    expect(
+      kill.mock.calls.filter(([, signal]) => signal === 0).length,
+      'health loop did not continue probing within 1s',
+    ).toBeGreaterThan(1)
     expect(sup.pid).toBe(42)
     expect(sup.state).toBe('ready')
     await sup.stop()

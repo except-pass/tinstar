@@ -42,10 +42,8 @@ export class NatsManager {
           // Keep retrying retirement of a supervisor that may still own a
           // process. Dropping the reference here would let the next start()
           // create a competing broker after an unconfirmed stop.
-          if (
-            staleSupervisor.pid !== 0
-            && probeProcessLiveness(staleSupervisor.pid).state !== 'gone'
-          ) {
+          if (staleSupervisor.pid !== 0
+            && probeProcessLiveness(staleSupervisor.pid).state !== 'gone') {
             this.supervisor = staleSupervisor
           }
           throw error
@@ -190,7 +188,7 @@ function legacyNatsManagerOwnershipBlocker(manager: NatsManager): string | null 
   if (legacySupervisor == null) return null
   if (legacyNatsManagerHasRunningHealthLoop(manager)) return 'the legacy health loop is still running'
   if (typeof legacySupervisor.pid !== 'number') return 'the legacy supervisor process identity is unknown'
-  if (legacySupervisor.pid <= 0) return null
+  if (legacySupervisor.pid === 0) return null
   const liveness = probeProcessLiveness(legacySupervisor.pid)
   if (liveness.state === 'gone') return null
   if (liveness.state === 'alive') return `broker process ${legacySupervisor.pid} is still alive`

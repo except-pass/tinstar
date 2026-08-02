@@ -2,7 +2,7 @@ export type ProcessLiveness =
   | { state: 'alive' }
   | { state: 'gone' }
   | { state: 'invalid'; reason: string }
-  | { state: 'unknown'; reason: string }
+  | { state: 'unknown'; code?: string; reason: string }
 
 /** Node's process APIs require a positive signed 32-bit integer PID. */
 export function isSupportedProcessId(pid: unknown): pid is number {
@@ -17,7 +17,7 @@ export function isSupportedProcessId(pid: unknown): pid is number {
  * permission and unexpected OS errors remain unknown so ownership gates fail
  * closed instead of starting a competing process.
  */
-export function probeProcessLiveness(pid: number): ProcessLiveness {
+export function probeProcessLiveness(pid: unknown): ProcessLiveness {
   if (!isSupportedProcessId(pid)) {
     return { state: 'invalid', reason: `unsupported process id ${pid}` }
   }
@@ -29,6 +29,7 @@ export function probeProcessLiveness(pid: number): ProcessLiveness {
     if (code === 'ESRCH') return { state: 'gone' }
     return {
       state: 'unknown',
+      ...(code ? { code } : {}),
       reason: code ? `process probe failed with ${code}` : 'process probe failed without an OS error code',
     }
   }

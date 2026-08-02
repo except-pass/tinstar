@@ -79,7 +79,7 @@ describe('NatsManager', () => {
     expect(staleStop).toHaveBeenCalledOnce()
   })
 
-  it('retains an incomplete supervisor while its process may still be alive', async () => {
+  it('retains an incomplete live supervisor until a later stop succeeds', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
     vi.spyOn(process, 'kill').mockReturnValue(true)
     const mgr = new NatsManager()
@@ -89,7 +89,7 @@ describe('NatsManager', () => {
     }
     staleSupervisor.stop
       .mockRejectedValueOnce(new Error('stop was not confirmed'))
-      .mockImplementationOnce(async () => { staleSupervisor.pid = 0 })
+      .mockResolvedValueOnce(undefined)
     Object.assign(mgr as unknown as Record<string, unknown>, {
       supervisor: staleSupervisor,
       supervisorStarted: false,
@@ -97,17 +97,20 @@ describe('NatsManager', () => {
 
     await mgr.start()
     expect(mgr.state).toBe('degraded')
+    expect((mgr as unknown as { supervisor: unknown }).supervisor).toBe(staleSupervisor)
     await mgr.start()
 
     expect(mgr.state).toBe('ready')
     expect(staleSupervisor.stop).toHaveBeenCalledTimes(2)
   })
 
-  it('retains an incomplete supervisor with an invalid pid after an unconfirmed stop', async () => {
+  it.each([-1, Number.MAX_SAFE_INTEGER])(
+    'retains an incomplete supervisor with invalid pid %s after an unconfirmed stop',
+    async (pid) => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')
     const mgr = new NatsManager()
     const staleSupervisor = {
-      pid: Number.MAX_SAFE_INTEGER,
+      pid,
       stop: vi.fn<() => Promise<void>>(),
     }
     staleSupervisor.stop
@@ -120,11 +123,13 @@ describe('NatsManager', () => {
 
     await mgr.start()
     expect(mgr.state).toBe('degraded')
+    expect((mgr as unknown as { supervisor: unknown }).supervisor).toBe(staleSupervisor)
     await mgr.start()
 
     expect(mgr.state).toBe('ready')
     expect(staleSupervisor.stop).toHaveBeenCalledTimes(2)
-  })
+    },
+  )
 
   it('reuses one process manager across HMR generations until process shutdown', async () => {
     vi.stubEnv('TINSTAR_FAST_SIM', '1')

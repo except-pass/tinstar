@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   isSupportedProcessId,
   probeProcessLiveness,
 } from '../process-liveness'
 
 describe('process liveness', () => {
+  afterEach(() => vi.restoreAllMocks())
+
   it.each([
     [0, false],
     [-1, false],
@@ -28,5 +30,34 @@ describe('process liveness', () => {
 
   it('recognizes the current process as alive', () => {
     expect(probeProcessLiveness(process.pid)).toEqual({ state: 'alive' })
+  })
+
+  it('recognizes ESRCH as proof that a process is gone', () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
+    })
+
+    expect(probeProcessLiveness(42)).toEqual({ state: 'gone' })
+  })
+
+  it('preserves EPERM as structured unknown liveness', () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+
+    expect(probeProcessLiveness(42)).toEqual({
+      state: 'unknown',
+      code: 'EPERM',
+      reason: 'process probe failed with EPERM',
+    })
+  })
+
+  it('keeps code-less probe failures unknown', () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => { throw new TypeError('unexpected failure') })
+
+    expect(probeProcessLiveness(42)).toEqual({
+      state: 'unknown',
+      reason: 'process probe failed without an OS error code',
+    })
   })
 })
