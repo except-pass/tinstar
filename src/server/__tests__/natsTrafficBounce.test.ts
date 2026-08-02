@@ -54,6 +54,26 @@ describe('NatsTrafficBridge.start() re-syncs subscriptions', () => {
     const subjectsAfter = nats.__fakeNc.subscribe.mock.calls.map((c: any[]) => c[0])
     expect(subjectsAfter).toEqual(expect.arrayContaining(['tinstar.a.b', 'tinstar.c.d']))
   })
+
+  it('drains a connection that finishes opening after the bridge was stopped', async () => {
+    const nats = await import('nats') as any
+    let releaseConnect!: (connection: typeof nats.__fakeNc) => void
+    const connectGate = new Promise<typeof nats.__fakeNc>(resolve => {
+      releaseConnect = resolve
+    })
+    nats.connect.mockImplementationOnce(() => connectGate)
+    const bridge = new NatsTrafficBridge(fakeSse)
+
+    const starting = bridge.start()
+    await Promise.resolve()
+    await bridge.stop()
+    releaseConnect(nats.__fakeNc)
+    await starting
+
+    expect(nats.connect).toHaveBeenCalledOnce()
+    expect(nats.__fakeNc.drain).toHaveBeenCalledOnce()
+    expect(bridge.status()).toEqual({ connection: 'down' })
+  })
 })
 
 describe('bounceNatsTraffic(bridge)', () => {

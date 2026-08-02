@@ -1,8 +1,17 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { NatsManager } from '../nats-manager'
+import {
+  NatsManager,
+  resetProcessNatsManagerForTests,
+  startProcessNatsManager,
+  stopProcessNatsManager,
+} from '../nats-manager'
 
 describe('NatsManager', () => {
-  afterEach(() => { vi.unstubAllEnvs() })
+  afterEach(async () => {
+    await resetProcessNatsManagerForTests()
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
 
   it('starts as idle with default port 4222', () => {
     const mgr = new NatsManager()
@@ -35,5 +44,21 @@ describe('NatsManager', () => {
     const mgr = new NatsManager()
     await mgr.stop()
     expect(mgr.state).toBe('idle')
+  })
+
+  it('reuses one process manager across HMR generations until process shutdown', async () => {
+    vi.stubEnv('TINSTAR_FAST_SIM', '1')
+    const start = vi.spyOn(NatsManager.prototype, 'start')
+    const stop = vi.spyOn(NatsManager.prototype, 'stop')
+
+    const first = await startProcessNatsManager()
+    const replacement = await startProcessNatsManager()
+
+    expect(replacement).toBe(first)
+    expect(start).toHaveBeenCalledOnce()
+    expect(stop).not.toHaveBeenCalled()
+
+    await stopProcessNatsManager()
+    expect(stop).toHaveBeenCalledOnce()
   })
 })

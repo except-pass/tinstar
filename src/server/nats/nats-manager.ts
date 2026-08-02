@@ -108,3 +108,64 @@ export class NatsManager {
     }
   }
 }
+
+interface ProcessNatsManagerOwner {
+  manager: NatsManager
+  startPromise: Promise<void> | null
+}
+
+const PROCESS_NATS_MANAGER = Symbol.for('tinstar.nats-manager-owner.v1')
+
+function processNatsManagerOwner(): ProcessNatsManagerOwner {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  let owner = processGlobal[PROCESS_NATS_MANAGER] as ProcessNatsManagerOwner | undefined
+  if (!owner) {
+    owner = {
+      manager: new NatsManager(),
+      startPromise: null,
+    }
+    processGlobal[PROCESS_NATS_MANAGER] = owner
+  }
+  // The owner survives module reloads; normalize instances created before the
+  // start-promise field existed.
+  owner.startPromise ??= null
+  return owner
+}
+
+/**
+ * Start or reuse the one broker supervisor owned by this process.
+ *
+ * HMR backends share it deliberately: two independent Supervisors can adopt
+ * the same persisted PID, after which retiring the older backend would kill
+ * the broker beneath the newer one.
+ */
+export async function startProcessNatsManager(): Promise<NatsManager> {
+  const owner = processNatsManagerOwner()
+  if (owner.manager.state !== 'idle' && !owner.startPromise) return owner.manager
+  if (!owner.startPromise) {
+    let settled!: Promise<void>
+    settled = owner.manager.start().finally(() => {
+      if (owner.startPromise === settled) owner.startPromise = null
+    })
+    owner.startPromise = settled
+  }
+  await owner.startPromise
+  return owner.manager
+}
+
+/** Stop the shared broker only at process shutdown, never during HMR cleanup. */
+export async function stopProcessNatsManager(): Promise<void> {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  const owner = processGlobal[PROCESS_NATS_MANAGER] as ProcessNatsManagerOwner | undefined
+  if (!owner) return
+  await owner.startPromise
+  await owner.manager.stop()
+  if (processGlobal[PROCESS_NATS_MANAGER] === owner) {
+    delete processGlobal[PROCESS_NATS_MANAGER]
+  }
+}
+
+/** Test-only reset for process-global ownership left by lifecycle tests. */
+export async function resetProcessNatsManagerForTests(): Promise<void> {
+  await stopProcessNatsManager()
+}

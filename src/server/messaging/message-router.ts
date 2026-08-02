@@ -579,8 +579,6 @@ function processRouterOwners(): Map<string, ProcessRouterOwner> {
 }
 
 export interface MessageRouterOwnerLease {
-  /** Wait until the responder owned by the prior backend has fully drained. */
-  waitForPreviousDrain(): Promise<void>
   /**
    * Prepare and start one complete backend activation under this generation.
    * A superseded lease never invokes prepare.
@@ -590,11 +588,71 @@ export interface MessageRouterOwnerLease {
       service: NatsMessageRouterService
       cleanup?: () => Promise<void>
     } | null>,
-  ): Promise<boolean>
+  ): Promise<MessageRouterActivationResult>
   /** Start only if this is still the newest backend for the config root. */
-  start(service: NatsMessageRouterService): Promise<boolean>
+  start(service: NatsMessageRouterService): Promise<MessageRouterActivationResult>
   /** Stop this lease's responder without disturbing a newer backend. */
   stop(): Promise<void>
+}
+
+export type MessageRouterActivationResult =
+  | 'activated'
+  | 'superseded'
+  | 'failed'
+
+interface PreparedMessageRouter {
+  service: NatsMessageRouterService
+  cleanup?: () => Promise<void>
+}
+
+async function runOwnerLifecycleStep(
+  failureMessage: string,
+  operation: (() => Promise<void>) | null | undefined,
+): Promise<void> {
+  if (!operation) return
+  try {
+    await operation()
+  } catch (error) {
+    log.warn(
+      'message-router',
+      `${failureMessage}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
+async function stopOwnedRouterResources(
+  state: ProcessRouterOwner,
+  phase: 'previous' | 'lease' | 'shutdown',
+): Promise<void> {
+  const active = state.active
+  const cleanup = state.cleanup
+  state.active = null
+  state.cleanup = null
+  await runOwnerLifecycleStep(
+    phase === 'previous'
+      ? 'previous responder drain failed'
+      : `${phase} responder stop failed`,
+    active ? () => active.stop() : null,
+  )
+  await runOwnerLifecycleStep(
+    phase === 'previous'
+      ? 'previous responder cleanup failed'
+      : `${phase} responder cleanup failed`,
+    cleanup,
+  )
+}
+
+async function rollbackPreparedRouter(
+  prepared: PreparedMessageRouter,
+): Promise<void> {
+  await runOwnerLifecycleStep(
+    'failed to stop rolled-back responder',
+    () => prepared.service.stop(),
+  )
+  await runOwnerLifecycleStep(
+    'failed to cleanup rolled-back responder',
+    prepared.cleanup,
+  )
 }
 
 /**
@@ -618,68 +676,68 @@ export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwne
   owners.set(configRoot, state)
   const generation = ++state.generation
 
-  const previousDrain = state.transition.then(async () => {
-    const active = state.active
-    const cleanup = state.cleanup
-    state.active = null
-    state.cleanup = null
-    if (active) {
-      try {
-        await active.stop()
-      } catch (error) {
-        // Older HMR module instances allowed connection.drain() to reject from
-        // stop(). Their subscription is already removed and handlers settled,
-        // so a transport teardown error must not strand the replacement.
-        log.warn('message-router', `previous responder drain failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    if (cleanup) {
-      try {
-        await cleanup()
-      } catch (error) {
-        log.warn('message-router', `previous responder cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-  })
-  state.transition = previousDrain.catch(() => {})
-
   const activate: MessageRouterOwnerLease['activate'] = async (prepare) => {
-    let started = false
-    const activation = state.transition.then(async () => {
-      if (state.generation !== generation) return
-      const prepared = await prepare()
-      if (!prepared) return
-      if (state.generation !== generation) {
-        await prepared.cleanup?.()
-        return
+    const activation = state.transition.then(async (): Promise<MessageRouterActivationResult> => {
+      if (state.generation !== generation) return 'superseded'
+
+      // Reserving a lease is intentionally non-destructive. Only a backend
+      // whose NATS connection is ready and whose generation is still current
+      // may retire the working responder and retry scheduler it replaces.
+      await stopOwnedRouterResources(state, 'previous')
+      if (state.generation !== generation) return 'superseded'
+
+      let prepared: PreparedMessageRouter | null
+      try {
+        prepared = await prepare()
+      } catch (error) {
+        log.warn(
+          'message-router',
+          `failed to prepare responder: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return 'failed'
       }
-      let committed = false
+      if (!prepared) return 'failed'
+      if (state.generation !== generation) {
+        await runOwnerLifecycleStep(
+          'failed to cleanup superseded responder',
+          prepared.cleanup,
+        )
+        return 'superseded'
+      }
+
       try {
         await prepared.service.start()
-        if (state.generation !== generation) return
-        state.active = prepared.service
-        state.cleanup = prepared.cleanup ?? null
-        committed = true
-        started = true
-      } finally {
-        if (!committed) {
-          try {
-            await prepared.service.stop()
-          } finally {
-            await prepared.cleanup?.()
-          }
-        }
+      } catch (error) {
+        log.warn(
+          'message-router',
+          `failed to start responder: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        await rollbackPreparedRouter(prepared)
+        return 'failed'
       }
+      if (state.generation !== generation) {
+        await rollbackPreparedRouter(prepared)
+        return 'superseded'
+      }
+
+      state.active = prepared.service
+      state.cleanup = prepared.cleanup ?? null
+      return 'activated'
     })
-    state.transition = activation.catch(() => {})
-    await activation
-    return started
+    const settled = activation.catch((error): MessageRouterActivationResult => {
+      // This is a defensive boundary for an older HMR transition or a future
+      // lifecycle branch that escapes the deliberately-contained steps above.
+      log.warn(
+        'message-router',
+        `responder activation failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return 'failed'
+    })
+    state.transition = settled.then(() => {})
+    return settled
   }
 
   return {
-    async waitForPreviousDrain() {
-      await previousDrain
-    },
     activate,
     start(service) {
       return activate(async () => ({ service }))
@@ -688,12 +746,7 @@ export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwne
       if (state.generation !== generation) return
       ++state.generation
       const stopping = state.transition.then(async () => {
-        const active = state.active
-        const cleanup = state.cleanup
-        state.active = null
-        state.cleanup = null
-        if (active) await active.stop()
-        await cleanup?.()
+        await stopOwnedRouterResources(state, 'lease')
       })
       state.transition = stopping.catch(() => {})
       await stopping
@@ -712,10 +765,7 @@ export async function resetMessageRouterOwnersForTests(): Promise<void> {
   await Promise.all(states.map(async (state) => {
     ++state.generation
     await state.transition
-    await state.active?.stop()
-    await state.cleanup?.()
-    state.active = null
-    state.cleanup = null
+    await stopOwnedRouterResources(state, 'shutdown')
   }))
 }
 
@@ -727,10 +777,7 @@ export async function stopAllMessageRouters(): Promise<void> {
   await Promise.all(states.map(async (state) => {
     ++state.generation
     await state.transition
-    await state.active?.stop()
-    await state.cleanup?.()
-    state.active = null
-    state.cleanup = null
+    await stopOwnedRouterResources(state, 'shutdown')
   }))
 }
 

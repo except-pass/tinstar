@@ -66,7 +66,11 @@ import {
   describeTtydFailure,
 } from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
-import { NatsManager } from './nats/nats-manager.js'
+import {
+  startProcessNatsManager,
+  stopProcessNatsManager,
+  type NatsManager,
+} from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
@@ -746,6 +750,16 @@ export function initBackend(): RouteContext {
   })
   let slateWatcher: SlateWatcher | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
+  let natsBackendCleanup: Promise<void> | null = null
+  const stopNatsBackendResources = (): Promise<void> => {
+    if (natsBackendCleanup) return natsBackendCleanup
+    natsBackendCleanup = (async () => {
+      try { natsHealth?.stop() } catch (e) { log.debug('nats-backend', `health stop: ${(e as Error).message}`) }
+      try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('nats-backend', `delivery retry stop: ${(e as Error).message}`) }
+      try { await natsTraffic?.stop() } catch (e) { log.debug('nats-backend', `traffic stop: ${(e as Error).message}`) }
+    })()
+    return natsBackendCleanup
+  }
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
@@ -755,7 +769,7 @@ export function initBackend(): RouteContext {
       try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('shutdown', `deliveryRetry: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
-      try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
+      try { await stopProcessNatsManager() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
       try { await observability.stop() } catch (e) { log.debug('shutdown', `observability: ${(e as Error).message}`) }
       try { telemetryRoutes.stopPolling() } catch (e) { log.debug('shutdown', `telemetry: ${(e as Error).message}`) }
       try { docStore.flush() } catch (e) { log.debug('shutdown', `docStore: ${(e as Error).message}`) }
@@ -788,11 +802,13 @@ export function initBackend(): RouteContext {
   } catch (e) { log.debug('init', `bunx tmp cleanup: ${(e as Error).message}`) }
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
-  natsManager = new NatsManager()
-  void natsManager.start().then(async () => {
+  void startProcessNatsManager().then(async (manager) => {
+    natsManager = manager
     // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
     natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
-    natsTraffic.start()
+    // Await the initial attempt so a superseded backend cannot call stop()
+    // while start() is still about to install a connection or reconnect timer.
+    await natsTraffic.start()
 
     // External NATS and fast-sim can become ready in one microtask. Make the
     // dependency on session/ledger/context boot explicit instead of relying on
@@ -859,10 +875,21 @@ export function initBackend(): RouteContext {
       })
       return {
         service: messageRouter,
-        cleanup: stopDeliveryRetryScheduler,
+        // The owner generation covers every NATS-side resource created by this
+        // backend, not only the responder. A later HMR activation therefore
+        // cannot leave an observer connection, retry loop, or health timer
+        // from this generation running in the background. The broker manager
+        // itself is process-shared and stops only at process shutdown.
+        cleanup: stopNatsBackendResources,
       }
     })
-    if (messageRouterOwner && !activated) return
+    if (messageRouterOwner && activated !== 'activated') {
+      await stopNatsBackendResources()
+      if (activated === 'failed') {
+        log.warn('message-router', 'backend NATS activation failed; Saloon rehydration and health monitoring were skipped')
+      }
+      return
+    }
 
     // Re-register every persisted session's subs with the bridge. Saloon entries
     // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs.
@@ -904,6 +931,12 @@ export function initBackend(): RouteContext {
       }
       natsHealth.start()
     }
+  }).catch(async (error) => {
+    log.warn(
+      'nats-backend',
+      `startup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    await stopNatsBackendResources()
   })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
