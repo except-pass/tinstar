@@ -39,10 +39,31 @@ function expectNoSignalToProcess(
   calls: readonly (readonly unknown[])[],
   pid: number,
 ): void {
+  // Callers assert before their finally block sends SIGTERM for test cleanup.
   const signallingCalls = calls.filter(([calledPid, signal]) => (
     Math.abs(Number(calledPid)) === pid && signal !== 0
   ))
   expect(signallingCalls).toEqual([])
+}
+
+function expectOnlySigtermToProcess(
+  calls: readonly (readonly unknown[])[],
+  pid: number,
+): void {
+  const signallingCalls = calls.filter(([calledPid, signal]) => (
+    Math.abs(Number(calledPid)) === pid && signal !== 0
+  ))
+  expect(signallingCalls).toEqual([[pid, 'SIGTERM']])
+}
+
+function expectStoppedWithoutStateLoss(
+  supervisor: Supervisor,
+  stateFile: string,
+  originalState: string,
+): void {
+  expect(supervisor.pid).toBe(0)
+  expect(supervisor.state).toBe('idle')
+  expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
 }
 
 describe('Supervisor spawn + readiness', () => {
@@ -548,7 +569,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -626,7 +647,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -667,7 +688,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -710,7 +731,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -748,7 +769,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -828,7 +849,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -868,7 +889,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -951,7 +972,7 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
-      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectStoppedWithoutStateLoss(sup, stateFile, originalState)
       expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -1305,8 +1326,7 @@ describe('Supervisor adoption', () => {
     await sup.start()
 
     await expect(sup.stop()).rejects.toThrow('did not stop')
-    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
-    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expectOnlySigtermToProcess(kill.mock.calls, 42)
     expect(sup.state).toBe('degraded')
     expect(sup.pid).toBe(42)
 
@@ -1382,8 +1402,7 @@ describe('Supervisor adoption', () => {
 
     await sup.stop()
 
-    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
-    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expectOnlySigtermToProcess(kill.mock.calls, 42)
     expect(sup.state).toBe('idle')
   })
 
