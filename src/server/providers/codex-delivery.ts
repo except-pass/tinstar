@@ -88,6 +88,22 @@ interface TranscriptPathCache {
   verified: boolean
 }
 
+type TerminalSubmissionFailureState = 'cleared' | 'orphaned' | 'possibly-submitted'
+
+function terminalSubmissionFailureState(error: unknown): TerminalSubmissionFailureState | null {
+  if (
+    typeof error !== 'object'
+    || error === null
+    || !('name' in error)
+    || error.name !== 'TerminalPromptSubmissionError'
+    || !('submissionState' in error)
+  ) return null
+  const state = error.submissionState
+  return state === 'cleared' || state === 'orphaned' || state === 'possibly-submitted'
+    ? state
+    : null
+}
+
 export type CodexTerminalSafety =
   | { state: 'safe' }
   | { state: 'unsafe'; reason: string }
@@ -129,16 +145,31 @@ export function classifyCodexTerminalSafety(screen: string): CodexTerminalSafety
   // stable adjacent `? for shortcuts` footer; modal pickers replace that footer
   // with their own Enter/Esc instructions. Require both pieces as one positive
   // signature so an unfamiliar screen remains fail-closed.
-  const hasComposer = tail.some((line, index) => {
+  let composerIndex = -1
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    const line = tail[index]!
     const match = /^\s*›(?:\s(.*))?$/u.exec(line)
-    if (!match) return false
+    if (!match) continue
     const content = (match[1] ?? '').trim()
-    if (content === '') return true
-    if (!EMPTY_COMPOSER_PLACEHOLDERS.has(content)) return false
     const nextLine = tail[index + 1] ?? ''
-    return nextLine.trim() === '' || COMPOSER_SHORTCUT_HINT.test(nextLine)
-  })
-  if (hasComposer) return { state: 'safe' }
+    const hasShortcutFooter = COMPOSER_SHORTCUT_HINT.test(nextLine)
+    if (/^\[Pasted Content\s+[\d,]+\s+chars?\]$/i.test(content)) continue
+    const knownEmptyComposer = content === ''
+      || EMPTY_COMPOSER_PLACEHOLDERS.has(content)
+    if (hasShortcutFooter || (knownEmptyComposer && nextLine.trim() === '')) {
+      composerIndex = index
+      break
+    }
+  }
+  if (composerIndex >= 0) {
+    // Transcript prose above the newest composer is harmless, but modal UI
+    // below it means the old composer row is stale and must not authorize input.
+    const followingRegion = tail.slice(composerIndex + 1).join('\n')
+    for (const [pattern, reason] of UNSAFE_MODAL_PATTERNS) {
+      if (pattern.test(followingRegion)) return { state: 'unsafe', reason }
+    }
+    return { state: 'safe' }
+  }
   const activeRegion = tail.join('\n')
   for (const [pattern, reason] of UNSAFE_MODAL_PATTERNS) {
     if (pattern.test(activeRegion)) return { state: 'unsafe', reason }
@@ -552,16 +583,34 @@ export class CodexDeliveryAdapter {
         }
       }
     } catch (error) {
-      // Submission may have partially landed, so this delivery is terminal.
-      // Drop its provider-local head so unrelated later messages to the same
-      // recipient are not blocked behind work that cannot be retried safely.
+      const submissionState = terminalSubmissionFailureState(error)
+      if (submissionState === 'cleared') {
+        return {
+          ...identity,
+          state: 'deferred',
+          checkedAt: this.now(),
+          reason: `Codex prompt submission was cleared before Enter: ${(error as Error).message}`,
+        }
+      }
       queue.shift()
       if (queue.length === 0) this.queues.delete(request.recipient.sessionId)
+      if (submissionState === 'possibly-submitted') {
+        return {
+          ...identity,
+          state: 'accepted',
+          acceptedAt: this.now(),
+          attemptRef: attemptRef(prompt),
+        }
+      }
+      // An orphaned line or unknown post-byte failure cannot be retried safely.
+      // Drop its provider-local head so later messages are not blocked behind it.
       return {
         ...identity,
         state: 'rejected',
         checkedAt: this.now(),
-        reason: `Codex prompt submission may have partially failed: ${(error as Error).message}`,
+        reason: submissionState === 'orphaned'
+          ? `Codex prompt submission left an uncleared line: ${(error as Error).message}`
+          : `Codex prompt submission may have partially failed: ${(error as Error).message}`,
         retryable: false,
       }
     }
@@ -594,20 +643,23 @@ export class CodexDeliveryAdapter {
     const checkedAt = this.now()
     const parsedNow = Date.parse(checkedAt)
     const nowMs = Number.isFinite(parsedNow) ? parsedNow : Date.now()
-    let evidencePendingReason: string | null = null
+    const retryAt = new Date(nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS).toISOString()
+    let observationUnavailableReason: string | null = null
     const recipientKey = recipientIncarnationKey(acceptance.recipient)
     const cachedTranscript = this.transcriptPaths.get(recipientKey)
-    let transcriptPath = cachedTranscript?.path ?? null
-    if (
-      !cachedTranscript
-      || (!cachedTranscript.verified && cachedTranscript.refreshAfter <= nowMs)
-    ) {
+    const shouldResolve = !cachedTranscript || cachedTranscript.refreshAfter <= nowMs
+    let resolvedTranscript: string | null = null
+    if (shouldResolve) {
       try {
-        const resolved = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
-        if (resolved) {
-          transcriptPath = resolved
+        resolvedTranscript = await this.deps.resolveTranscript(acceptance.recipient.sessionId)
+        if (resolvedTranscript && resolvedTranscript === cachedTranscript?.path) {
           this.rememberTranscriptPath(recipientKey, {
-            path: resolved,
+            ...cachedTranscript,
+            refreshAfter: nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS,
+          })
+        } else if (resolvedTranscript && !cachedTranscript) {
+          this.rememberTranscriptPath(recipientKey, {
+            path: resolvedTranscript,
             refreshAfter: nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS,
             verified: false,
           })
@@ -618,36 +670,44 @@ export class CodexDeliveryAdapter {
           })
         }
       } catch (error) {
-        evidencePendingReason = `Codex rollout could not be resolved: ${(error as Error).message}`
+        observationUnavailableReason = `Codex rollout could not be resolved: ${(error as Error).message}`
       }
-    }
-    if (!transcriptPath) {
-      evidencePendingReason ??= 'Codex rollout is not available yet'
+      if (!resolvedTranscript && !observationUnavailableReason) {
+        observationUnavailableReason = 'Codex rollout is not available yet'
+      }
     }
 
     const confirmationKey = attemptKey(acceptance)
-    const priorScan = this.confirmationOffsets.get(confirmationKey)
-    if (transcriptPath) {
-      const scan = await scanCodexUserMessages(
-        transcriptPath,
-        priorScan?.path === transcriptPath ? priorScan.offset : 0,
-        (message) => {
-          const envelope = parseCodexMessageEnvelope(message)
-          return envelope !== null
-            && attemptRef(message) === expectedRef
-            && envelope.message_id === acceptance.messageId
-            && envelope.attempt === acceptance.attempt
-            && envelope.recipient.provider_id === acceptance.recipient.providerId
-            && envelope.recipient.session_id === acceptance.recipient.sessionId
-            && envelope.recipient.incarnation === acceptance.recipient.incarnation
-        },
-        priorScan?.path === transcriptPath ? priorScan.identity : undefined,
-      )
-      if (!scan.available) {
-        this.transcriptPaths.delete(recipientKey)
-        this.confirmationOffsets.delete(confirmationKey)
-        evidencePendingReason = 'Codex rollout is not available yet'
-      } else {
+    const transcriptPaths = [...new Set([
+      cachedTranscript?.path,
+      resolvedTranscript,
+    ].filter((path): path is string => Boolean(path)))]
+    let readableTranscript = false
+    for (const transcriptPath of transcriptPaths) {
+      const priorScan = this.confirmationOffsets.get(confirmationKey)
+      let scan: Awaited<ReturnType<typeof scanCodexUserMessages>>
+      try {
+        scan = await scanCodexUserMessages(
+          transcriptPath,
+          priorScan?.path === transcriptPath ? priorScan.offset : 0,
+          (message) => {
+            const envelope = parseCodexMessageEnvelope(message)
+            return envelope !== null
+              && attemptRef(message) === expectedRef
+              && envelope.message_id === acceptance.messageId
+              && envelope.attempt === acceptance.attempt
+              && envelope.recipient.provider_id === acceptance.recipient.providerId
+              && envelope.recipient.session_id === acceptance.recipient.sessionId
+              && envelope.recipient.incarnation === acceptance.recipient.incarnation
+          },
+          priorScan?.path === transcriptPath ? priorScan.identity : undefined,
+        )
+      } catch (error) {
+        observationUnavailableReason = `Codex rollout could not be read: ${(error as Error).message}`
+        continue
+      }
+      if (scan.available) {
+        readableTranscript = true
         if (scan.identity) {
           this.rememberConfirmationOffset(confirmationKey, {
             path: transcriptPath,
@@ -661,7 +721,7 @@ export class CodexDeliveryAdapter {
           // exact envelope evidence proves it belongs to the accepted delivery.
           this.rememberTranscriptPath(recipientKey, {
             path: transcriptPath,
-            refreshAfter: Number.POSITIVE_INFINITY,
+            refreshAfter: nowMs + CODEX_TRANSCRIPT_DISCOVERY_TTL_MS,
             verified: true,
           })
           this.confirmationOffsets.delete(confirmationKey)
@@ -675,8 +735,22 @@ export class CodexDeliveryAdapter {
             },
           }
         }
-        evidencePendingReason = 'Codex rollout has not recorded this message as user input'
+      } else if (cachedTranscript?.path === transcriptPath) {
+        this.transcriptPaths.delete(recipientKey)
       }
+    }
+    if (transcriptPaths.length === 0 || !readableTranscript) {
+      observationUnavailableReason ??= 'Codex rollout is not available yet'
+    }
+    if (
+      cachedTranscript
+      && resolvedTranscript
+      && cachedTranscript.path !== resolvedTranscript
+    ) {
+      // The resolver now points at a different rollout. Exact evidence on
+      // either file wins above; without it we cannot safely charge the retry
+      // budget against one rollout or inject into the other.
+      observationUnavailableReason = 'Codex rollout identity changed before delivery was confirmed'
     }
 
     // Exact durable provider evidence wins if the recipient exits or is
@@ -697,16 +771,26 @@ export class CodexDeliveryAdapter {
     } catch (error) {
       return {
         ...identity,
-        state: 'pending',
+        state: 'unobservable',
         checkedAt: this.now(),
         reason: `Codex recipient liveness could not be inspected: ${(error as Error).message}`,
+        retryAt,
+      }
+    }
+    if (observationUnavailableReason) {
+      return {
+        ...identity,
+        state: 'unobservable',
+        checkedAt: this.now(),
+        reason: observationUnavailableReason,
+        retryAt,
       }
     }
     return {
       ...identity,
       state: 'pending',
       checkedAt: this.now(),
-      reason: evidencePendingReason ?? 'Codex rollout is not available yet',
+      reason: 'Codex rollout has not recorded this message as user input',
     }
   }
 

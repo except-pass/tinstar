@@ -58,9 +58,10 @@ export function codexMcpLaunchFlags(configPath: string): string[] {
     throw new Error(`Codex requires a valid nats MCP server in "${configPath}"`)
   }
 
-  // Values are injected into the tmux session environment. Only their names
-  // belong on the command line; this keeps the per-session router credential
-  // out of pane history and process arguments while Codex forwards it to MCP.
+  // Values are injected into the managed tmux pane and forwarded to the MCP
+  // process. Only their names belong on the command line, which keeps the
+  // per-session router credential out of pane history and process arguments;
+  // same-user processes can still inspect the managed process environment.
   const envNames = Object.keys(server.env ?? {}).sort()
   const serverKey = `mcp_servers.${CODEX_TINSTAR_MCP_SERVER_ID}`
   // Replace the complete reserved server table in one override. Dotted

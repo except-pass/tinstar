@@ -371,6 +371,77 @@ describe('durable provider dispatch recovery', () => {
     expect(reopened.getDelivery('msg-7/d/1')).toMatchObject({ state: 'delivered' })
   })
 
+  it('does not spend confirmation or reinjection budgets while evidence is unobservable', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    let observable = false
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], { now: () => now })
+    const accept = vi.fn(async request => ({
+      state: 'accepted' as const,
+      providerId: 'codex',
+      messageId: request.messageId,
+      attempt: request.attempt,
+      recipient: request.recipient,
+      acceptedAt: new Date(now).toISOString(),
+      attemptRef: 'durable-attempt-1',
+    }))
+    const confirm = vi.fn(async acceptance => observable
+      ? {
+          state: 'confirmed' as const,
+          providerId: 'codex',
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
+          confirmedAt: new Date(now).toISOString(),
+          evidence: {
+            source: { id: 'codex-rollout-user-message', label: 'Codex rollout user message' },
+          },
+        }
+      : {
+          state: 'unobservable' as const,
+          providerId: 'codex',
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
+          checkedAt: new Date(now).toISOString(),
+          retryAt: new Date(now + 1_000).toISOString(),
+          reason: 'rollout discovery is temporarily unavailable',
+        })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('codex', { accept, confirm })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      confirmationMaxChecks: 1,
+      maxAttempts: 2,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    for (let index = 0; index < 3; index += 1) {
+      now += 1_000
+      await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([{
+        deliveryId: 'msg-7/d/1',
+        state: 'pending',
+        reason: 'rollout discovery is temporarily unavailable',
+      }])
+    }
+    expect(accept).toHaveBeenCalledOnce()
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'pending',
+      attempt: 1,
+      providerAcceptance: { confirmationCount: 0 },
+    })
+
+    observable = true
+    now += 1_000
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'delivered',
+    }])
+    expect(accept).toHaveBeenCalledOnce()
+  })
+
   it('confirms provider acceptance without provider-owned attempt state', async () => {
     let now = Date.parse('2026-08-01T12:00:00.000Z')
     const { ledger } = await acceptedLedger([{

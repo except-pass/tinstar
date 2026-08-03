@@ -3,11 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 
-import { buildAgentCommand, providerTelemetryEnvironmentCommands } from '../tmux'
+import {
+  buildAgentCommand,
+  providerLaunchEnvironmentCommands,
+  providerTelemetryEnvironmentCommands,
+} from '../tmux'
 import type { AgentDef } from '../tmux'
 import type { CliTemplate } from '../../config'
 import {
   CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
   GENERIC_PROVIDER,
   ProviderCapabilityError,
   type TerminalProviderAdapter,
@@ -116,6 +121,35 @@ describe('provider telemetry environment reconciliation', () => {
       GENERIC_PROVIDER,
       { ...tmpl('agent', 'agent resume'), telemetry: true },
     )).toThrow(ProviderCapabilityError)
+  })
+})
+
+describe('provider launch environment reconciliation', () => {
+  it('forwards a custom CODEX_HOME without teaching tmux about Codex', () => {
+    const previous = process.env.CODEX_HOME
+    process.env.CODEX_HOME = '/srv/codex-home'
+    try {
+      expect(providerLaunchEnvironmentCommands('=tinstar-worker', CODEX_PROVIDER))
+        .toEqual([[
+          'set-environment', '-t', '=tinstar-worker', 'CODEX_HOME', '/srv/codex-home',
+        ]])
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previous
+    }
+  })
+
+  it('removes stale CODEX_HOME when the host no longer configures it', () => {
+    const previous = process.env.CODEX_HOME
+    delete process.env.CODEX_HOME
+    try {
+      expect(providerLaunchEnvironmentCommands('=tinstar-worker', CODEX_PROVIDER))
+        .toEqual([[
+          'set-environment', '-t', '=tinstar-worker', '-r', 'CODEX_HOME',
+        ]])
+    } finally {
+      if (previous !== undefined) process.env.CODEX_HOME = previous
+    }
   })
 })
 

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const execFileMock = vi.hoisted(() => vi.fn())
@@ -10,6 +11,7 @@ import {
   captureScreen,
   exactTmuxPaneTarget,
   exactTmuxSessionTarget,
+  TerminalPromptSubmissionError,
   withSessionInput,
 } from '../tmux'
 import type { TinstarConfig } from '../../config'
@@ -61,7 +63,7 @@ describe('captureScreen', () => {
     ))).toBe(false)
   })
 
-  it('settles and submits checked text as literal tmux arguments', async () => {
+  it('settles and submits checked text through a private tmux buffer', async () => {
     execFileMock.mockImplementation(async (_file: string, args: string[]) => {
       if (args[0] === 'capture-pane') {
         return { stdout: '› Add a follow-up\n  ? for shortcuts', stderr: '' }
@@ -81,9 +83,16 @@ describe('captureScreen', () => {
     expect(submitted).toBe(true)
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
-      ['send-keys', '-l', '-t', '%1', 'durable envelope;'],
+      ['load-buffer', '-b', expect.stringMatching(/^tinstar-/), expect.any(String)],
       expect.any(Object),
     )
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      ['paste-buffer', '-d', '-b', expect.stringMatching(/^tinstar-/), '-t', '%1'],
+      expect.any(Object),
+    )
+    expect(execFileMock.mock.calls.some(([, args]) => args.includes('durable envelope;')))
+      .toBe(false)
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
       ['send-keys', '-t', '%1', '', 'Enter'],
@@ -111,7 +120,7 @@ describe('captureScreen', () => {
 
     expect(submitted).toBe(false)
     expect(execFileMock.mock.calls.some(([, args]) => (
-      args[0] === 'send-keys' && args[1] === '-l'
+      args[0] === 'load-buffer' || args[0] === 'paste-buffer'
     ))).toBe(false)
   })
 
@@ -132,7 +141,7 @@ describe('captureScreen', () => {
       input.submitPrompt('must remain retryable', async () => true)
     ))).resolves.toBe(false)
     expect(execFileMock.mock.calls.some(([, args]) => (
-      args[0] === 'send-keys' && args[1] === '-l'
+      args[0] === 'load-buffer' || args[0] === 'paste-buffer'
     ))).toBe(false)
   })
 
@@ -158,19 +167,19 @@ describe('captureScreen', () => {
       .map(([, args]) => args as string[])
       .filter(args => args[0] === 'send-keys')
     expect(sentKeys).toEqual([
-      ['send-keys', '-l', '-t', '%1', 'first unsent prompt'],
       ['send-keys', '-t', '%1', 'C-u'],
-      ['send-keys', '-l', '-t', '%1', 'second clean prompt'],
       ['send-keys', '-t', '%1', '', 'Enter'],
     ])
+    expect(execFileMock.mock.calls.filter(([, args]) => args[0] === 'paste-buffer'))
+      .toHaveLength(2)
   })
 
-  it('clears a potentially partial line when literal injection fails', async () => {
+  it('clears a potentially partial line when buffer paste fails', async () => {
     execFileMock.mockImplementation(async (_file: string, args: string[]) => {
       if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
       if (args.at(-1) === '#{pane_in_mode}') return { stdout: '0\n', stderr: '' }
-      if (args[0] === 'send-keys' && args[1] === '-l') {
-        throw new Error('literal injection timed out')
+      if (args[0] === 'paste-buffer') {
+        throw new Error('buffer paste timed out')
       }
       return { stdout: '', stderr: '' }
     })
@@ -178,14 +187,62 @@ describe('captureScreen', () => {
 
     await expect(withSessionInput(config, 'worker', input => (
       input.submitPrompt('possibly partial prompt', async () => true)
-    ))).rejects.toThrow('literal injection timed out')
+    ))).rejects.toMatchObject({
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'cleared',
+      message: 'buffer paste timed out',
+    })
 
     expect(execFileMock.mock.calls
       .map(([, args]) => args as string[])
       .filter(args => args[0] === 'send-keys')).toEqual([
-      ['send-keys', '-l', '-t', '%1', 'possibly partial prompt'],
       ['send-keys', '-t', '%1', 'C-u'],
     ])
+  })
+
+  it('stages messages larger than the operating-system argv limit', async () => {
+    const prompt = 'x'.repeat(256 * 1024)
+    let stagedPrompt = ''
+    execFileMock.mockImplementation(async (_file: string, args: string[]) => {
+      if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
+      if (args.at(-1) === '#{pane_in_mode}') return { stdout: '0\n', stderr: '' }
+      if (args[0] === 'load-buffer') stagedPrompt = readFileSync(args[3]!, 'utf8')
+      return { stdout: '', stderr: '' }
+    })
+    const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
+
+    await expect(withSessionInput(config, 'worker', input => (
+      input.submitPrompt(prompt, async () => true)
+    ))).resolves.toBe(true)
+
+    expect(stagedPrompt).toBe(prompt)
+    expect(execFileMock.mock.calls.some(([, args]) => args.includes(prompt))).toBe(false)
+    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'paste-buffer')).toBe(true)
+  })
+
+  it('marks a failed Enter command as possibly submitted', async () => {
+    execFileMock.mockImplementation(async (_file: string, args: string[]) => {
+      if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
+      if (args.at(-1) === '#{pane_in_mode}') return { stdout: '0\n', stderr: '' }
+      if (args[0] === 'send-keys' && args.includes('Enter')) {
+        throw new Error('Enter timed out')
+      }
+      return { stdout: '', stderr: '' }
+    })
+    const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
+
+    await expect(withSessionInput(config, 'worker', input => (
+      input.submitPrompt('possibly submitted', async () => true)
+    ))).rejects.toMatchObject({
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'possibly-submitted',
+      message: 'Enter timed out',
+    })
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      ['send-keys', '-t', '%1', 'C-u'],
+      expect.any(Object),
+    )
   })
 
   it('does not mask a late probe error when clearing the unsubmitted line fails', async () => {
@@ -199,11 +256,13 @@ describe('captureScreen', () => {
     })
     const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
 
-    await expect(withSessionInput(config, 'worker', input => (
+    const rejection = withSessionInput(config, 'worker', input => (
       input.submitPrompt('first unsent prompt', async () => true, async () => {
         throw new Error('original late probe failure')
       })
-    ))).rejects.toThrow('original late probe failure')
+    ))
+    await expect(rejection).rejects.toBeInstanceOf(TerminalPromptSubmissionError)
+    await expect(rejection).rejects.toMatchObject({ submissionState: 'orphaned' })
   })
 
   it('pins capture, cwd, and both prompt stages when the active pane changes', async () => {
@@ -230,7 +289,7 @@ describe('captureScreen', () => {
           stderr: '',
         }
       }
-      if (args[0] === 'send-keys' && args[1] === '-l') activePane = '%2'
+      if (args[0] === 'paste-buffer') activePane = '%2'
       return { stdout: '', stderr: '' }
     })
     const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
@@ -294,7 +353,7 @@ describe('captureScreen', () => {
     })
 
     expect(submitted).toBe(false)
-    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'send-keys' && args[1] === '-l'))
+    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'paste-buffer'))
       .toBe(false)
   })
 
@@ -311,7 +370,7 @@ describe('captureScreen', () => {
       if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
       if (args.at(-1) === '#{pane_in_mode}') return { stdout: '0\n', stderr: '' }
       if (args.at(-1) === '#{pane_pid}') return { stdout: '4242\n', stderr: '' }
-      if (args[0] === 'send-keys' && args[1] === '-l') foregroundPid = '6262'
+      if (args[0] === 'paste-buffer') foregroundPid = '6262'
       return { stdout: '', stderr: '' }
     })
     const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
@@ -331,7 +390,7 @@ describe('captureScreen', () => {
 
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
-      ['send-keys', '-l', '-t', '%1', 'durable envelope'],
+      ['paste-buffer', '-d', '-b', expect.stringMatching(/^tinstar-/), '-t', '%1'],
       expect.any(Object),
     )
     expect(execFileMock.mock.calls.some(([, args]) => args.includes('Enter'))).toBe(false)

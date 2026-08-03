@@ -591,6 +591,16 @@ async function confirmOne(
         options,
       )
     }
+    if (result.state === 'unobservable') {
+      return recordUnobservableConfirmation(
+        current,
+        ledger,
+        result.reason,
+        result.checkedAt,
+        result.retryAt,
+        options,
+      )
+    }
     const retryable = result.retryable
       && deliverySendAttemptCount(current) < maxAttemptsFor(options)
     const recorded = await transition(ledger, {
@@ -619,7 +629,7 @@ async function confirmOne(
       : { deliveryId: current.id, state: 'ambiguous', reason: 'could not record failed confirmation' }
   } catch (error) {
     const now = options.now?.() ?? Date.now()
-    return recordPendingConfirmation(
+    return recordUnobservableConfirmation(
       current,
       ledger,
       error instanceof Error ? error.message : String(error),
@@ -628,6 +638,40 @@ async function confirmOne(
       options,
     )
   }
+}
+
+async function recordUnobservableConfirmation(
+  current: DeliveryRecord,
+  ledger: DispatchLedger,
+  reason: string,
+  checkedAt: string,
+  explicitRetryAt: string | undefined,
+  options: DeliveryDispatchOptions,
+): Promise<DeliveryDispatchOutcome> {
+  const now = options.now?.() ?? Date.now()
+  const retryAt = retryAtFor(
+    checkedAt,
+    explicitRetryAt,
+    options.retryDelayMs,
+    now,
+  )
+  const recorded = await transition(ledger, {
+    deliveryId: current.id,
+    expected: { state: current.state, attempt: current.attempt },
+    next: {
+      state: 'pending',
+      attempt: current.attempt,
+      reason,
+      retryAt,
+    },
+  })
+  return recorded
+    ? { deliveryId: current.id, state: 'pending', reason }
+    : {
+        deliveryId: current.id,
+        state: 'ambiguous',
+        reason: 'could not record unavailable provider confirmation',
+      }
 }
 
 function confirmationCheckCount(delivery: DeliveryRecord): number {

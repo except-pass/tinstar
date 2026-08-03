@@ -7,7 +7,19 @@ import { log } from '../logger'
 import { readTail } from './transcript-parser'
 import type { RecapEntry } from '../../types'
 
-const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
+/** Resolve at call time so tests and managed launches honor a changed CODEX_HOME. */
+export function codexHomeDir(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = environment.CODEX_HOME?.trim()
+  return configured || join(homedir(), '.codex')
+}
+
+export function codexSessionsDir(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(codexHomeDir(environment), 'sessions')
+}
 
 // --- Utilities ---
 
@@ -47,7 +59,8 @@ function extractAgentMessages(jsonlText: string): string[] {
 
 /** List candidate JSONL files from the creation date through today. */
 function listCandidateFiles(createdAt: string): string[] {
-  if (!existsSync(CODEX_SESSIONS_DIR)) return []
+  const sessionsDir = codexSessionsDir()
+  if (!existsSync(sessionsDir)) return []
   const startDate = new Date(createdAt)
   const today = new Date()
   const files: string[] = []
@@ -56,7 +69,7 @@ function listCandidateFiles(createdAt: string): string[] {
     const yyyy = d.getFullYear().toString()
     const mm = String(d.getMonth() + 1).padStart(2, '0')
     const dd = String(d.getDate()).padStart(2, '0')
-    const dayDir = join(CODEX_SESSIONS_DIR, yyyy, mm, dd)
+    const dayDir = join(sessionsDir, yyyy, mm, dd)
     if (!existsSync(dayDir)) continue
     try {
       for (const f of readdirSync(dayDir)) {

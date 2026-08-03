@@ -174,6 +174,18 @@ export type ProviderDeliveryConfirmation<TDetail extends object = object> =
       detail?: TDetail
     }>
   | ProviderDeliveryResult<{
+      /**
+       * Confirmation evidence cannot currently be observed. Unlike `pending`,
+       * this does not consume the dispatcher's bounded confirmation budget or
+       * authorize another final-mile attempt.
+       */
+      state: 'unobservable'
+      checkedAt: string
+      reason: string
+      retryAt?: string
+      detail?: TDetail
+    }>
+  | ProviderDeliveryResult<{
       state: 'failed'
       checkedAt: string
       reason: string

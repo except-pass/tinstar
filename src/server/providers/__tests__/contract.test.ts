@@ -498,6 +498,16 @@ describe('provider capability contract', () => {
         retryAt: '2026-07-30T12:00:03.000Z',
       },
       {
+        state: 'unobservable',
+        providerId: 'forge',
+        messageId: 'msg-retry',
+        attempt: 2,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
+        checkedAt: CHECKED_AT,
+        reason: 'Provider evidence is temporarily unavailable',
+        retryAt: '2026-07-30T12:00:03.000Z',
+      },
+      {
         state: 'failed',
         providerId: 'forge',
         messageId: 'msg-retry',
@@ -510,7 +520,9 @@ describe('provider capability contract', () => {
     ] satisfies ProviderDeliveryConfirmation[]
 
     expect(acceptances.map((result) => result.state)).toEqual(['deferred', 'rejected'])
-    expect(confirmations.map((result) => result.state)).toEqual(['pending', 'failed'])
+    expect(confirmations.map((result) => result.state)).toEqual([
+      'pending', 'unobservable', 'failed',
+    ])
   })
 
   it('keeps router acceptance separate from final-mile acceptance and confirmation', async () => {

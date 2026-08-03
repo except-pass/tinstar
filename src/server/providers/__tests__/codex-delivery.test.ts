@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,11 @@ import {
   renderCodexMessageEnvelope,
 } from '../codex-delivery'
 import type { ProviderDeliveryRequest } from '../contract'
-import { scanCodexUserMessages } from '../../sessions/codex-transcript'
+import {
+  codexSessionsDir,
+  discoverTranscript,
+  scanCodexUserMessages,
+} from '../../sessions/codex-transcript'
 
 const NOW = '2026-08-01T12:00:00.000Z'
 
@@ -71,6 +75,32 @@ function deps(screen = '• Working (3s)\n\n› Add a follow-up\n  ? for shortcu
 }
 
 describe('Codex terminal delivery', () => {
+  it('discovers rollouts under a custom CODEX_HOME', async () => {
+    const customHome = mkdtempSync(join(tmpdir(), 'codex-custom-home-'))
+    const dayDir = join(customHome, 'sessions', '2026', '08', '01')
+    const transcript = join(dayDir, 'rollout.jsonl')
+    mkdirSync(dayDir, { recursive: true })
+    writeFileSync(transcript, `${JSON.stringify({
+      timestamp: NOW,
+      type: 'session_meta',
+      payload: { cwd: '/work/custom', timestamp: NOW },
+    })}\n`)
+    const previous = process.env.CODEX_HOME
+    process.env.CODEX_HOME = customHome
+    try {
+      expect(codexSessionsDir()).toBe(join(customHome, 'sessions'))
+      await expect(discoverTranscript(
+        'worker-two',
+        '/work/custom',
+        NOW,
+        'tinstar-worker-two',
+      )).resolves.toBe(transcript)
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previous
+    }
+  })
+
   it('renders shell-active substitutions inert without changing parsed values', () => {
     const dangerousText = 'inspect $HOME, $(touch /tmp/nope), `touch /tmp/nope-either`, and !-2'
     const rendered = renderCodexMessageEnvelope(request({ text: dangerousText }))
@@ -134,6 +164,24 @@ describe('Codex terminal delivery', () => {
     expect(classifyCodexTerminalSafety(
       '──────\n\n› Use /skills to list available skills\n\n  gpt-5.6-sol xhigh · ~/repo/tinstar',
     )).toEqual({ state: 'safe' })
+  })
+
+  it('recognizes a new empty-composer placeholder from the stable shortcut footer', () => {
+    expect(classifyCodexTerminalSafety(
+      '──────\n\n› Try the new Codex workflow\n  ? for shortcuts',
+    )).toEqual({ state: 'safe' })
+  })
+
+  it('rejects a stale composer when a newer modal is rendered below it', () => {
+    expect(classifyCodexTerminalSafety([
+      '› Add a follow-up',
+      '  ? for shortcuts',
+      'Would you like to run this command?',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n'))).toEqual({
+      state: 'unsafe',
+      reason: 'Codex is waiting for a modal confirmation',
+    })
   })
 
   it.each([
@@ -467,7 +515,7 @@ describe('Codex terminal delivery', () => {
     expect(adapter.queueDepth('worker-two')).toBe(0)
   })
 
-  it('treats a failed prompt submission as non-retryable because text may remain', async () => {
+  it('treats an unknown failed prompt submission as non-retryable because text may remain', async () => {
     const d = deps()
     d.submitPrompt.mockRejectedValueOnce(new Error('Enter failed after paste'))
     const adapter = new CodexDeliveryAdapter(d)
@@ -482,6 +530,56 @@ describe('Codex terminal delivery', () => {
     })
     expect(adapter.queueDepth('worker-two')).toBe(0)
     expect(d.submitPrompt).toHaveBeenCalledOnce()
+  })
+
+  it('retains the queue when tmux proves a failed submission was cleared', async () => {
+    const d = deps()
+    d.submitPrompt.mockRejectedValueOnce(Object.assign(new Error('paste failed'), {
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'cleared',
+    }))
+    const adapter = new CodexDeliveryAdapter(d)
+
+    await expect(adapter.accept(request({ attempt: 1 }))).resolves.toMatchObject({
+      state: 'deferred',
+      reason: 'Codex prompt submission was cleared before Enter: paste failed',
+    })
+    expect(adapter.queueDepth('worker-two')).toBe(1)
+    await expect(adapter.accept(request({ attempt: 1 }))).resolves.toMatchObject({
+      state: 'accepted',
+    })
+  })
+
+  it('accepts an attempt for confirmation first when the Enter result is uncertain', async () => {
+    const d = deps()
+    d.submitPrompt.mockRejectedValueOnce(Object.assign(new Error('Enter timed out'), {
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'possibly-submitted',
+    }))
+    const adapter = new CodexDeliveryAdapter(d)
+
+    await expect(adapter.accept(request({ attempt: 1 }))).resolves.toMatchObject({
+      state: 'accepted',
+      attempt: 1,
+      attemptRef: expect.stringMatching(/^tinstar-message-v1:sha256:/),
+    })
+    expect(adapter.queueDepth('worker-two')).toBe(0)
+  })
+
+  it('rejects an orphaned submission line without unsafe retry', async () => {
+    const d = deps()
+    d.submitPrompt.mockRejectedValueOnce(Object.assign(new Error('cleanup failed'), {
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'orphaned',
+    }))
+    const adapter = new CodexDeliveryAdapter(d)
+
+    await expect(adapter.accept(request({ attempt: 1 }))).resolves.toMatchObject({
+      state: 'rejected',
+      retryable: false,
+      reason: 'Codex prompt submission left an uncleared line: cleanup failed',
+    })
+    expect(adapter.queueDepth('worker-two')).toBe(0)
   })
 
   it('discards a deferred queue when the session name is reused by a new incarnation', async () => {
@@ -664,7 +762,7 @@ describe('Codex terminal delivery', () => {
     expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
   })
 
-  it('pins exact evidence until the rollout disappears, then re-resolves', async () => {
+  it('periodically re-resolves a verified rollout after an in-process reset', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-verified-rotation-'))
     const firstTranscript = join(dir, 'first.jsonl')
     const secondTranscript = join(dir, 'second.jsonl')
@@ -697,14 +795,6 @@ describe('Codex terminal delivery', () => {
     })}\n`)
     now += 5_000
 
-    // Exact evidence pins the first rollout beyond the discovery TTL.
-    await expect(adapter.confirm(second)).resolves.toMatchObject({ state: 'pending' })
-    expect(d.resolveTranscript).toHaveBeenCalledTimes(1)
-
-    renameSync(firstTranscript, join(dir, 'first.previous.jsonl'))
-    // The unavailable pinned file clears the durable mapping. Discovery is
-    // retried on the next confirmation without weakening this attempt's scan.
-    await expect(adapter.confirm(second)).resolves.toMatchObject({ state: 'pending' })
     await expect(adapter.confirm(second)).resolves.toMatchObject({ state: 'confirmed' })
     expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
   })

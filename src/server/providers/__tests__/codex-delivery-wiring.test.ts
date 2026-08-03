@@ -318,6 +318,6 @@ describe('Codex production delivery wiring', () => {
     expect(submitPrompt).toHaveBeenCalledTimes(2)
 
     resolveDiscovery?.(null)
-    await expect(confirmation).resolves.toMatchObject({ state: 'pending' })
+    await expect(confirmation).resolves.toMatchObject({ state: 'unobservable' })
   })
 })

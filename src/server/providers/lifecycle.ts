@@ -15,6 +15,7 @@ import {
   parseCodexRecapEntries,
   readCodexStatus,
   resetCodexOffset,
+  codexHomeDir,
 } from '../sessions/codex-transcript'
 import {
   defineProviderDeliveryAdapter,
@@ -111,6 +112,11 @@ export interface TerminalProviderAdapter {
     /** Preserve Claude's historical implicit telemetry; other providers opt in. */
     defaultTelemetry: boolean
     transcript: ProviderTranscriptAdapter | null
+    /** Provider-owned environment reconciled on every managed agent launch. */
+    managedEnvironment?: {
+      names: readonly string[]
+      values: () => Record<string, string>
+    }
   }
   /** Provider-owned final mile; configured by the host when it needs runtime dependencies. */
   delivery?: ProviderDeliveryAdapter | null
@@ -372,6 +378,14 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
     },
     defaultTelemetry: false,
     transcript: codexTranscript,
+    managedEnvironment: {
+      names: ['CODEX_HOME'],
+      values: (): Record<string, string> => {
+        const configured = process.env.CODEX_HOME?.trim()
+        if (!configured) return {}
+        return { CODEX_HOME: codexHomeDir() }
+      },
+    },
   },
 }
 

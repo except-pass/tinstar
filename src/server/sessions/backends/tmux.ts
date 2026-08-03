@@ -1,6 +1,15 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
+import {
+  chmodSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  mkdtempSync,
+  rmSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
 import type { Session, SessionNats } from '../session'
@@ -848,6 +857,7 @@ export async function createTmuxSession(
     provider,
     opts.template,
   )
+  await syncProviderLaunchEnvironment(tmuxTarget, provider)
 
   // Scoped env, half 2 of 2: repair for an already-running tmux server. The
   // server is long-lived and SHARED (no -L/-S socket — see the SCOPE note
@@ -998,6 +1008,7 @@ export async function startTmuxSession(
     provider,
     opts.template,
   )
+  await syncProviderLaunchEnvironment(exactTmuxSessionTarget(tmuxName), provider)
 
   // Re-scrub on restart: a session created before guest-env scoping existed
   // still carries Tinstar's env, and restarting its agent is the one moment we
@@ -1078,6 +1089,27 @@ async function syncProviderTelemetryEnvironment(
     template,
   )
   for (const args of commands) await execFileAsync('tmux', args)
+}
+
+async function syncProviderLaunchEnvironment(
+  tmuxTarget: string,
+  provider: TerminalProviderAdapter,
+): Promise<void> {
+  for (const args of providerLaunchEnvironmentCommands(tmuxTarget, provider)) {
+    await execFileAsync('tmux', args)
+  }
+}
+
+export function providerLaunchEnvironmentCommands(
+  tmuxTarget: string,
+  provider: TerminalProviderAdapter,
+): string[][] {
+  const managed = provider.terminal.managedEnvironment
+  if (!managed) return []
+  const values = managed.values()
+  return managed.names.map(name => values[name]
+    ? ['set-environment', '-t', tmuxTarget, name, values[name]!]
+    : ['set-environment', '-t', tmuxTarget, '-r', name])
 }
 
 /** Pure telemetry reconciliation plan shared by create and existing-session start. */
@@ -2395,13 +2427,31 @@ export interface SerializedSessionInput {
   getAgentIdentity(): Promise<string | null>
   /**
    * Submit under one input lock. `false` means no prompt bytes were injected;
-   * a rejection after literal injection is intentionally ambiguous.
+   * structured rejections distinguish cleared, orphaned, and possibly-submitted
+   * terminal outcomes.
    */
   submitPrompt(
     prompt: string,
     beforeInput?: () => Promise<boolean>,
     beforeEnter?: () => Promise<void>,
   ): Promise<boolean>
+}
+
+export type TerminalPromptSubmissionState =
+  | 'cleared'
+  | 'orphaned'
+  | 'possibly-submitted'
+
+/** Structured outcome for failures after a terminal input transaction begins. */
+export class TerminalPromptSubmissionError extends Error {
+  readonly name = 'TerminalPromptSubmissionError'
+
+  constructor(
+    readonly submissionState: TerminalPromptSubmissionState,
+    readonly originalError: unknown,
+  ) {
+    super(originalError instanceof Error ? originalError.message : String(originalError))
+  }
 }
 
 /**
@@ -2445,11 +2495,12 @@ async function doSendPrompt(
   beforeInput?: () => Promise<boolean>,
   beforeEnter?: () => Promise<void>,
 ): Promise<boolean> {
-  const clearUnsubmittedLine = async (): Promise<void> => {
+  const clearUnsubmittedLine = async (): Promise<boolean> => {
     try {
       await execFileAsync('tmux', ['send-keys', '-t', paneId, 'C-u'])
+      return true
     } catch {
-      // The original error carries the ambiguity; cleanup failure cannot mask it.
+      return false
     }
   }
   // The pane enters copy-mode when the user scrolls in the ttyd terminal.
@@ -2472,16 +2523,39 @@ async function doSendPrompt(
     // false is safely retryable because no prompt bytes have been injected yet.
     return false
   }
-  // `-l` makes the complete prompt literal. Without it, tmux interprets values
-  // such as `Escape` as key names and a trailing semicolon as command syntax.
+  // Stage literal input through a mode-0600 file and a private tmux buffer.
+  // Passing the complete message as one argv value exceeds Linux's per-argument
+  // limit well below the router's supported message size.
+  let stagingDir: string
   try {
-    await execFileAsync('tmux', ['send-keys', '-l', '-t', paneId, prompt])
+    stagingDir = mkdtempSync(join(tmpdir(), 'tinstar-tmux-input-'))
   } catch (error) {
-    // A timeout or transport error does not prove that tmux injected zero
-    // bytes. Clear any partial line before releasing the input lock so a later
-    // delivery cannot append to and submit an orphaned envelope.
-    await clearUnsubmittedLine()
-    throw error
+    throw new TerminalPromptSubmissionError('cleared', error)
+  }
+  const stagingPath = join(stagingDir, 'prompt')
+  const bufferName = `tinstar-${randomUUID()}`
+  let bufferLoaded = false
+  try {
+    writeFileSync(stagingPath, prompt, { encoding: 'utf8', mode: 0o600 })
+    await execFileAsync('tmux', ['load-buffer', '-b', bufferName, stagingPath])
+    bufferLoaded = true
+    await execFileAsync('tmux', ['paste-buffer', '-d', '-b', bufferName, '-t', paneId])
+    bufferLoaded = false
+  } catch (error) {
+    const cleared = await clearUnsubmittedLine()
+    throw new TerminalPromptSubmissionError(
+      cleared ? 'cleared' : 'orphaned',
+      error,
+    )
+  } finally {
+    if (bufferLoaded) {
+      try {
+        await execFileAsync('tmux', ['delete-buffer', '-b', bufferName])
+      } catch { /* best-effort cleanup preserves the input outcome */ }
+    }
+    try {
+      rmSync(stagingDir, { recursive: true, force: true })
+    } catch { /* best-effort cleanup preserves the input outcome */ }
   }
   await new Promise(r => setTimeout(r, 300))
   // This guard runs after prompt bytes exist in the pane. Any rejection is
@@ -2493,11 +2567,21 @@ async function doSendPrompt(
       // Prompt bytes exist but Enter has not been sent. Clear the pending line
       // best-effort so a later input transaction starts clean, while preserving
       // the original boundary failure as the authoritative delivery outcome.
-      await clearUnsubmittedLine()
-      throw error
+      const cleared = await clearUnsubmittedLine()
+      throw new TerminalPromptSubmissionError(
+        cleared ? 'cleared' : 'orphaned',
+        error,
+      )
     }
   }
-  await execFileAsync('tmux', ['send-keys', '-t', paneId, '', 'Enter'])
+  try {
+    await execFileAsync('tmux', ['send-keys', '-t', paneId, '', 'Enter'])
+  } catch (error) {
+    // A failed tmux request can still have reached the server. Confirmation is
+    // the only safe next step; immediate reinjection could duplicate delivery.
+    await clearUnsubmittedLine()
+    throw new TerminalPromptSubmissionError('possibly-submitted', error)
+  }
   return true
 }
 
