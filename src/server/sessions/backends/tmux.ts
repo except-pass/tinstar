@@ -27,6 +27,7 @@ import {
   TINSTAR_MESSAGE_ROUTER_AUTH_ENV,
   TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV,
   TINSTAR_NATS_URL_ENV,
+  TINSTAR_SESSION_NAME_ENV,
 } from '../../messaging/message-router-address'
 import {
   deriveMessageRouterSessionKey,
@@ -441,6 +442,7 @@ function interpolateTemplate(
 export function generateNatsMcpConfig(opts: {
   sessionsDir: string
   sessionName: string
+  agentIncarnation: string
   nats: SessionNats
   channelServerPackage: string  // npm package or github:user/repo
   bunPath: string
@@ -476,6 +478,8 @@ export function generateNatsMcpConfig(opts: {
         command: opts.bunPath,
         args,
         env: {
+          [TINSTAR_SESSION_NAME_ENV]: opts.sessionName,
+          [TINSTAR_AGENT_INCARNATION_ENV]: opts.agentIncarnation,
           [TINSTAR_NATS_URL_ENV]: opts.natsUrl,
           [TINSTAR_MESSAGE_ROUTER_SUBJECT_ENV]: opts.routerSubject,
           [TINSTAR_MESSAGE_ROUTER_AUTH_ENV]: opts.routerAuth,
@@ -870,6 +874,7 @@ export async function createTmuxSession(
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
+      agentIncarnation,
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
@@ -1011,6 +1016,7 @@ export async function startTmuxSession(
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
+      agentIncarnation,
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
@@ -1192,12 +1198,41 @@ export async function captureScreen(
   scrollback?: number,
   timeoutMs?: number,
 ): Promise<string> {
-  const args = ['capture-pane', '-t', exactTmuxPaneTarget(tmuxName), '-p']
+  return captureTmuxPaneScreen(exactTmuxPaneTarget(tmuxName), scrollback, timeoutMs)
+}
+
+/** Capture one already-resolved tmux pane without consulting active-pane state. */
+export async function captureTmuxPaneScreen(
+  paneTarget: string,
+  scrollback?: number,
+  timeoutMs?: number,
+): Promise<string> {
+  const args = ['capture-pane', '-t', paneTarget, '-p']
   if (scrollback && scrollback > 0) args.push('-S', `-${scrollback}`)
   const { stdout } = timeoutMs === undefined
     ? await execFileAsync('tmux', args)
     : await execFileAsync('tmux', args, { timeout: timeoutMs })
   return stdout
+}
+
+/**
+ * Read the current directory of an exact managed pane target. Callers own the
+ * target selection; input transactions pass their pinned pane id here.
+ */
+export async function getTmuxPaneWorkingDirectory(paneTarget: string): Promise<string | null> {
+  const { stdout } = await execFileAsync('tmux', [
+    'display-message', '-p', '-t', paneTarget, '#{pane_current_path}',
+  ])
+  const workingDirectory = stdout.trim()
+  return workingDirectory || null
+}
+
+/** Resolve the active managed terminal pane's current directory. */
+export function getTmuxSessionWorkingDirectory(
+  config: TinstarConfig,
+  sessionName: string,
+): Promise<string | null> {
+  return getTmuxPaneWorkingDirectory(exactTmuxPaneTarget(tmuxSessionName(config, sessionName)))
 }
 
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
@@ -1217,13 +1252,27 @@ export async function getTmuxAgentIdentity(
   sessionName: string,
 ): Promise<string | null> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  return getTmuxPaneAgentIdentity(
+    config,
+    sessionName,
+    exactTmuxPaneTarget(tmuxName),
+  )
+}
+
+/** Inspect the managed foreground process in one already-resolved tmux pane. */
+export async function getTmuxPaneAgentIdentity(
+  config: TinstarConfig,
+  sessionName: string,
+  paneTarget: string,
+): Promise<string | null> {
+  const tmuxName = tmuxSessionName(config, sessionName)
   let shellPid: string
   try {
     const { stdout } = await execFileAsync('tmux', [
       'display-message',
       '-p',
       '-t',
-      exactTmuxPaneTarget(tmuxName),
+      paneTarget,
       '#{pane_pid}',
     ])
     shellPid = stdout.trim()
@@ -2278,16 +2327,18 @@ export function managedTtydPort(sessionName: string): number | null {
  *      active window" each time, which can shift between commands. We
  *      resolve a stable pane_id once and use it everywhere.
  */
-async function exitAnyMode(tmuxName: string): Promise<void> {
-  let paneId: string
-  try {
-    const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', exactTmuxPaneTarget(tmuxName), '#{pane_id}'])
-    paneId = stdout.trim()
-    if (!paneId) return
-  } catch {
-    return
+async function resolveTmuxPaneId(tmuxName: string): Promise<string> {
+  const { stdout } = await execFileAsync('tmux', [
+    'display-message', '-p', '-t', exactTmuxPaneTarget(tmuxName), '#{pane_id}',
+  ])
+  const paneId = stdout.trim()
+  if (!/^%\d+$/.test(paneId)) {
+    throw new Error(`tmux returned an invalid pane id for ${tmuxName}`)
   }
+  return paneId
+}
 
+async function exitAnyMode(paneId: string): Promise<void> {
   for (let i = 0; i < 5; i++) {
     let inMode = '0'
     try {
@@ -2315,9 +2366,20 @@ async function exitAnyMode(tmuxName: string): Promise<void> {
   }
 }
 
+async function tmuxPaneIsInMode(paneId: string): Promise<boolean> {
+  const { stdout } = await execFileAsync('tmux', [
+    'display-message', '-p', '-t', paneId, '#{pane_in_mode}',
+  ])
+  const value = stdout.trim()
+  if (value === '0') return false
+  if (value === '1') return true
+  throw new Error(`tmux returned an invalid pane mode for ${paneId}`)
+}
+
 async function doSendKeys(tmuxName: string, keys: string[]): Promise<void> {
-  await exitAnyMode(tmuxName)
-  await execFileAsync('tmux', ['send-keys', '-t', exactTmuxPaneTarget(tmuxName), ...keys])
+  const paneId = await resolveTmuxPaneId(tmuxName)
+  await exitAnyMode(paneId)
+  await execFileAsync('tmux', ['send-keys', '-t', paneId, ...keys])
 }
 
 // Per-session send queue (keyed by tmux session name). A prompt is delivered in
@@ -2329,8 +2391,17 @@ const sendChains = new Map<string, Promise<unknown>>()
 
 export interface SerializedSessionInput {
   captureScreen(scrollback?: number): Promise<string>
-  /** Run the last safety check, then submit text and Enter under one input lock. */
-  submitPrompt(prompt: string, beforeEnter?: () => Promise<boolean>): Promise<boolean>
+  getWorkingDirectory(): Promise<string | null>
+  getAgentIdentity(): Promise<string | null>
+  /**
+   * Submit under one input lock. `false` means no prompt bytes were injected;
+   * a rejection after literal injection is intentionally ambiguous.
+   */
+  submitPrompt(
+    prompt: string,
+    beforeInput?: () => Promise<boolean>,
+    beforeEnter?: () => Promise<void>,
+  ): Promise<boolean>
 }
 
 /**
@@ -2344,10 +2415,17 @@ export function withSessionInput<T>(
   operation: (input: SerializedSessionInput) => Promise<T>,
 ): Promise<T> {
   const tmuxName = tmuxSessionName(config, sessionName)
-  return serializeByKey(sendChains, tmuxName, () => operation({
-    captureScreen: scrollback => captureScreen(tmuxName, scrollback),
-    submitPrompt: (prompt, beforeEnter) => doSendPrompt(tmuxName, prompt, beforeEnter),
-  }))
+  return serializeByKey(sendChains, tmuxName, async () => {
+    const paneId = await resolveTmuxPaneId(tmuxName)
+    return operation({
+      captureScreen: scrollback => captureTmuxPaneScreen(paneId, scrollback),
+      getWorkingDirectory: () => getTmuxPaneWorkingDirectory(paneId),
+      getAgentIdentity: () => getTmuxPaneAgentIdentity(config, sessionName, paneId),
+      submitPrompt: (prompt, beforeInput, beforeEnter) => (
+        doSendPrompt(paneId, prompt, beforeInput, beforeEnter)
+      ),
+    })
+  })
 }
 
 export function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
@@ -2362,22 +2440,64 @@ export function sendPrompt(config: TinstarConfig, sessionName: string, prompt: s
 }
 
 async function doSendPrompt(
-  tmuxName: string,
+  paneId: string,
   prompt: string,
-  beforeEnter?: () => Promise<boolean>,
+  beforeInput?: () => Promise<boolean>,
+  beforeEnter?: () => Promise<void>,
 ): Promise<boolean> {
+  const clearUnsubmittedLine = async (): Promise<void> => {
+    try {
+      await execFileAsync('tmux', ['send-keys', '-t', paneId, 'C-u'])
+    } catch {
+      // The original error carries the ambiguity; cleanup failure cannot mask it.
+    }
+  }
   // The pane enters copy-mode when the user scrolls in the ttyd terminal.
   // While in copy-mode (or a nested sub-prompt like search/jump), send-keys
   // text goes to the mode handler instead of the underlying process — which
   // is how a prompt starting with 'F' silently triggers "jump backward".
-  await exitAnyMode(tmuxName)
-  const target = exactTmuxPaneTarget(tmuxName)
-  if (beforeEnter) {
-    if (!await beforeEnter()) return false
+  await exitAnyMode(paneId)
+  if (beforeInput) {
+    if (!await beforeInput()) return false
   }
-  await execFileAsync('tmux', ['send-keys', '-t', target, prompt, ''])
+  // tmux cannot atomically condition an argv-safe literal send without parsing
+  // the untrusted prompt as tmux command syntax. Check pane mode once more at
+  // the last safe boundary instead. A mode entered after this process-level
+  // check remains an unavoidable tmux-server scheduling race; `-l` still keeps
+  // the prompt opaque to tmux's command parser.
+  try {
+    if (await tmuxPaneIsInMode(paneId)) return false
+  } catch {
+    // This probe runs before literal input. Preserve the submitPrompt contract:
+    // false is safely retryable because no prompt bytes have been injected yet.
+    return false
+  }
+  // `-l` makes the complete prompt literal. Without it, tmux interprets values
+  // such as `Escape` as key names and a trailing semicolon as command syntax.
+  try {
+    await execFileAsync('tmux', ['send-keys', '-l', '-t', paneId, prompt])
+  } catch (error) {
+    // A timeout or transport error does not prove that tmux injected zero
+    // bytes. Clear any partial line before releasing the input lock so a later
+    // delivery cannot append to and submit an orphaned envelope.
+    await clearUnsubmittedLine()
+    throw error
+  }
   await new Promise(r => setTimeout(r, 300))
-  await execFileAsync('tmux', ['send-keys', '-t', target, '', 'Enter'])
+  // This guard runs after prompt bytes exist in the pane. Any rejection is
+  // therefore ambiguous/non-retryable to callers, and Enter must stay withheld.
+  if (beforeEnter) {
+    try {
+      await beforeEnter()
+    } catch (error) {
+      // Prompt bytes exist but Enter has not been sent. Clear the pending line
+      // best-effort so a later input transaction starts clean, while preserving
+      // the original boundary failure as the authoritative delivery outcome.
+      await clearUnsubmittedLine()
+      throw error
+    }
+  }
+  await execFileAsync('tmux', ['send-keys', '-t', paneId, '', 'Enter'])
   return true
 }
 

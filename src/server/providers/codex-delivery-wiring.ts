@@ -35,10 +35,38 @@ export function registerCodexDelivery(
     async resolveTranscript(sessionId) {
       const session = runtime.getSession(config.dirs.sessions, sessionId)
       if (!session || !transcript) return null
-      return transcript.discover({
+      const request = {
         session,
         tmuxName: runtime.tmuxName(config, sessionId),
         captureScreen: runtime.captureScreen,
+      }
+      if (session.workspace?.path) return transcript.discover(request)
+
+      // Standalone sessions have no durable launch cwd. Capture the discovery
+      // inputs on one pinned pane, then release the terminal-input lock before
+      // scanning Codex's rollout tree. That scan is mostly synchronous and must
+      // not block a user prompt behind transcript discovery.
+      const pinned = await runtime.withSessionInput(config, sessionId, async input => {
+        const workingDirectory = await input.getWorkingDirectory()
+        if (!workingDirectory) return null
+        try {
+          return {
+            workingDirectory,
+            screen: await input.captureScreen(200),
+            captureError: null,
+          }
+        } catch (error) {
+          return { workingDirectory, screen: null, captureError: error }
+        }
+      })
+      if (!pinned) return transcript.discover(request)
+      return transcript.discover({
+        ...request,
+        workingDirectory: pinned.workingDirectory,
+        captureScreen: async () => {
+          if (pinned.captureError) throw pinned.captureError
+          return pinned.screen ?? ''
+        },
       })
     },
   }))

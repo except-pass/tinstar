@@ -30,6 +30,12 @@ export interface ProviderTranscriptStatus {
 export interface ProviderTranscriptDiscovery {
   session: Session
   tmuxName: string
+  /**
+   * The managed terminal's actual launch directory. This stays separate from
+   * the optional workspace record: standalone sessions have no workspace but
+   * Codex still records its terminal cwd in the rollout metadata.
+   */
+  workingDirectory?: string | null
   captureScreen?: (tmuxName: string, scrollback?: number) => Promise<string>
 }
 
@@ -262,8 +268,8 @@ const claudeTranscript: ProviderTranscriptAdapter = {
 }
 
 const codexTranscript: ProviderTranscriptAdapter = {
-  async discover({ session, tmuxName, captureScreen }) {
-    const workdir = session.workspace?.path
+  async discover({ session, tmuxName, workingDirectory, captureScreen }) {
+    const workdir = session.workspace?.path ?? workingDirectory
     if (!workdir) return null
     return discoverCodexTranscript(
       session.name,

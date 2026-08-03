@@ -354,12 +354,12 @@ function guardDeliveryAdapter<TDetail extends object>(
         await rawAbandon(request)
       }
     : null
-  if (abandon && rawAbandon) {
-    rememberGuardedHandler(abandon, rawAbandon, 'delivery:abandon')
+  if (abandon) {
+    rememberGuardedHandler(abandon, rawAbandon!, 'delivery:abandon')
   }
 
-  const acceptance = { accept, ...(abandon ? { abandon } : {}) }
-  if (!delivery.confirm) return acceptance
+  const acceptanceAdapter = { accept, ...(abandon ? { abandon } : {}) }
+  if (!delivery.confirm) return acceptanceAdapter
 
   const rawConfirm = unwrapGuardedHandler(delivery.confirm, 'delivery:confirm')
   const confirm = async (acceptance: AcceptedProviderDeliveryIdentity) => {
@@ -395,7 +395,7 @@ function guardDeliveryAdapter<TDetail extends object>(
     return result
   }
   rememberGuardedHandler(confirm, rawConfirm, 'delivery:confirm')
-  return { ...acceptance, confirm }
+  return { ...acceptanceAdapter, confirm }
 }
 
 function assertProviderDeliveryRequest(

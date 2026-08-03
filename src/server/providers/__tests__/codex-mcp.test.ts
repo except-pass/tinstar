@@ -15,6 +15,8 @@ describe('Codex standard MCP launch configuration', () => {
           command: "/opt/bun's/bin/bun",
           args: ['x', 'nats-channel-mcp', '--name', 'worker'],
           env: {
+            TINSTAR_SESSION_NAME: 'worker',
+            TINSTAR_AGENT_INCARNATION: 'worker-v1',
             TINSTAR_NATS_URL: 'nats://127.0.0.1:4222',
             TINSTAR_MESSAGE_ROUTER_AUTH: "secret'value",
           },
@@ -24,7 +26,7 @@ describe('Codex standard MCP launch configuration', () => {
 
     const flags = codexMcpLaunchFlags(configPath)
     expect(flags).toEqual([
-      `-c 'mcp_servers.${CODEX_TINSTAR_MCP_SERVER_ID}={command="/opt/bun'\\''s/bin/bun",args=["x","nats-channel-mcp","--name","worker"],env_vars=["TINSTAR_MESSAGE_ROUTER_AUTH","TINSTAR_NATS_URL"],env={},enabled_tools=["reply"],disabled_tools=[],enabled=true,required=true}'`,
+      `-c 'mcp_servers.${CODEX_TINSTAR_MCP_SERVER_ID}={command="/opt/bun'\\''s/bin/bun",args=["x","nats-channel-mcp","--name","worker"],env_vars=["TINSTAR_AGENT_INCARNATION","TINSTAR_MESSAGE_ROUTER_AUTH","TINSTAR_NATS_URL","TINSTAR_SESSION_NAME"],env={},enabled_tools=["reply"],disabled_tools=[],enabled=true,required=true}'`,
       `-c 'mcp_servers.${CODEX_TINSTAR_MCP_SERVER_ID}.tools.reply.approval_mode="approve"'`,
     ])
     expect(flags.join(' ')).not.toContain('secret')

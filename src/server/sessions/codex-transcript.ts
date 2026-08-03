@@ -3,7 +3,6 @@ import { open as openFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { StringDecoder } from 'node:string_decoder'
 import { log } from '../logger'
 import { readTail } from './transcript-parser'
 import type { RecapEntry } from '../../types'
@@ -271,73 +270,6 @@ export async function scanCodexUserMessages(
     return { available: true, evidence: null, identity, nextOffset: committedOffset }
   } finally {
     await file.close()
-  }
-}
-
-/**
- * Scan rollout events for one exact user_message accepted by Codex. Delivery
- * confirmation deliberately reads provider evidence instead of terminal text,
- * which can show keystrokes before the TUI has accepted them.
- */
-export function findCodexUserMessage(
-  transcriptPath: string,
-  matches: (message: string) => boolean,
-): CodexUserMessageEvidence | null {
-  if (!existsSync(transcriptPath)) return null
-  const size = statSync(transcriptPath).size
-  const fd = openSync(transcriptPath, 'r')
-  try {
-    const chunk = Buffer.alloc(256 * 1024)
-    const decoder = new StringDecoder('utf8')
-    let position = 0
-    let carry = ''
-    while (position < size) {
-      const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position)
-      if (count <= 0) break
-      position += count
-      // StringDecoder retains an incomplete multibyte sequence for the next
-      // chunk. Buffer#toString would replace a split UTF-8 character and could
-      // make exact rollout evidence impossible to match.
-      const lines = (carry + decoder.write(chunk.subarray(0, count))).split('\n')
-      carry = lines.pop() ?? ''
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const event = JSON.parse(line)
-          const message = event.type === 'event_msg'
-            && event.payload?.type === 'user_message'
-            && typeof event.payload.message === 'string'
-            ? event.payload.message
-            : null
-          if (message !== null && matches(message)) {
-            return {
-              message,
-              timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
-            }
-          }
-        } catch { /* malformed or partial rollout line */ }
-      }
-    }
-    carry += decoder.end()
-    if (carry.trim()) {
-      try {
-        const event = JSON.parse(carry)
-        const message = event.type === 'event_msg'
-          && event.payload?.type === 'user_message'
-          && typeof event.payload.message === 'string'
-          ? event.payload.message
-          : null
-        if (message !== null && matches(message)) {
-          return {
-            message,
-            timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
-          }
-        }
-      } catch { /* incomplete trailing line */ }
-    }
-    return null
-  } finally {
-    closeSync(fd)
   }
 }
 
