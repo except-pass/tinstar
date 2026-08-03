@@ -64,38 +64,13 @@ describe('Supervisor spawn + readiness', () => {
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
-  it('upgrades an old compatible state file with the adopted process identity', async () => {
-    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
-    child.unref()
-    const pid = child.pid!
-    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
-      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
-    }))
-    const sup = new Supervisor({
-      name: 'fake',
-      binaryPath: '/bin/sleep',
-      args: ['30'],
-      stateDir: tmp,
-      port: 9999,
-      probe: async () => true,
-      expectedBinaryName: 'sleep',
-    })
-
-    await sup.start()
-
-    expect(sup.pid).toBe(pid)
-    expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
-      .toMatchObject({ pid, processIdentity: expect.any(String) })
-    await sup.stop()
-  })
-
-  it('upgrades a pre-boot-id Linux identity after verifying the binary name', async () => {
+  it('adopts a compatible state file with a boot-scoped process identity', async () => {
     const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
     child.unref()
     const pid = child.pid!
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid,
-      processIdentity: 'linux:424242',
+      processIdentity: 'linux:boot-a:424242',
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 9999,
@@ -118,6 +93,38 @@ describe('Supervisor adoption', () => {
     expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
       .toMatchObject({ pid, processIdentity: 'linux:boot-a:424242' })
     await sup.stop()
+  })
+
+  it('refuses to adopt a pre-boot-id Linux identity after a possible reboot', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid,
+      processIdentity: 'linux:424242',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      processIdentity: () => 'linux:boot-a:424242',
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('has no boot-scoped lifetime identity')
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
   })
 
   it('does not adopt a new process that reused the recorded pid', async () => {
@@ -425,6 +432,8 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       shutdownGraceMs: 100,
+      // Let the health loop observe the identity change and finish shutdown
+      // while stop() is inside its grace-period drain.
       healthIntervalMs: 10,
       processIdentity: () => identity,
     } as ConstructorParameters<typeof Supervisor>[0] & {
@@ -448,7 +457,12 @@ describe('Supervisor adoption', () => {
 
     // pre-seed state file
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
-      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+      pid,
+      processIdentity: 'process-identity',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
     }))
 
     const sup = new Supervisor({
@@ -459,6 +473,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       expectedBinaryName: 'sleep',
+      processIdentity: () => 'process-identity',
     })
     await sup.start()
     expect(sup.pid).toBe(pid)
@@ -611,7 +626,12 @@ describe('Supervisor health loop', () => {
     const pid = child.pid!
 
     writeFileSync(join(tmp, 'health.state.json'), JSON.stringify({
-      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+      pid,
+      processIdentity: 'process-identity',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
     }))
 
     const stateChanges: string[] = []
@@ -625,6 +645,7 @@ describe('Supervisor health loop', () => {
         try { process.kill(pid, 0); return true } catch { return false }
       },
       expectedBinaryName: 'sleep',
+      processIdentity: () => 'process-identity',
       healthIntervalMs: 100,
       healthFailureThreshold: 1,
       maxRestartsPerMinute: 0,

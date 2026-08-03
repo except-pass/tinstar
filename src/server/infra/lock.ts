@@ -49,6 +49,8 @@ function publishMarker(
   const stagingDir = mkdtempSync(`${dir}.pending-`)
   let published = false
   try {
+    // The exact serialized bytes, made unique by markerId, are also the
+    // generation token used for conditional recovery-claim cleanup.
     const owner = JSON.stringify({
       pid: process.pid,
       startedAt: Date.now(),
@@ -166,7 +168,7 @@ function recoveryClaimIsFresh(dir: string): boolean {
   const startedAt = readOwnerRecord(dir)?.startedAt
   if (startedAt === undefined) return false
   const age = Date.now() - startedAt
-  return age >= 0 && age < RECOVERY_CLAIM_STALE_MS
+  return age > -RECOVERY_CLAIM_STALE_MS && age < RECOVERY_CLAIM_STALE_MS
 }
 
 function recoveryClaimIsOwned(claim: RecoveryClaim): boolean {
@@ -297,6 +299,9 @@ function replaceMarker(
     // The owner may have changed while this contender waited for the recovery
     // claim. Never act on the stale observation made by the caller.
     const claimStillOwned = recoveryClaimIsOwned(recoveryClaim)
+    if (!claimStillOwned) {
+      createError = new Error('recovery claim was displaced before the stale-owner check')
+    }
     const primaryStillStale = claimStillOwned && !isOwnerAlive(dir, deps)
     if (primaryStillStale) {
       try { removeMarker(dir) } catch (error) { removeError = error }
@@ -313,6 +318,8 @@ function replaceMarker(
         } catch (error) {
           createError = error
         }
+      } else {
+        createError = new Error('recovery claim was displaced before marker publication')
       }
       if (replaced && !recoveryClaimIsOwned(recoveryClaim)) {
         // A delayed contender displaced our claim while we published. Do not
@@ -325,6 +332,7 @@ function replaceMarker(
           }
         }
         replaced = false
+        createError ??= new Error('recovery claim was displaced during marker publication')
       }
     }
   } finally {
@@ -380,13 +388,13 @@ function makeRelease(
   let primaryReleased = false
   let claimReleased = lingeringClaim === undefined
   return async () => {
-    if (!primaryReleased) {
-      removeReleasedMarker(dir, deps.releaseMarker)
-      primaryReleased = true
-    }
     if (!claimReleased && lingeringClaim) {
       releaseOwnedRecoveryClaim(lingeringClaim, deps)
       claimReleased = true
+    }
+    if (!primaryReleased) {
+      removeReleasedMarker(dir, deps.releaseMarker)
+      primaryReleased = true
     }
   }
 }

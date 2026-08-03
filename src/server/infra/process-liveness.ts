@@ -73,10 +73,14 @@ export function compareProcessIdentity(
   current: string,
 ): ProcessIdentityComparison {
   if (recorded === current) return 'same'
-  const legacyLinux = /^linux:([^:]+)$/u.exec(recorded)
-  const bootScopedLinux = /^linux:[^:]+:([^:]+)$/u.exec(current)
-  if (legacyLinux && bootScopedLinux) {
-    return legacyLinux[1] === bootScopedLinux[1] ? 'legacy-unscoped' : 'different'
+  const recordedLegacy = /^linux:([^:]+)$/u.exec(recorded)
+  const currentLegacy = /^linux:([^:]+)$/u.exec(current)
+  const recordedBootScoped = /^linux:[^:]+:([^:]+)$/u.exec(recorded)
+  const currentBootScoped = /^linux:[^:]+:([^:]+)$/u.exec(current)
+  const legacyTicks = recordedLegacy?.[1] ?? currentLegacy?.[1]
+  const bootScopedTicks = recordedBootScoped?.[1] ?? currentBootScoped?.[1]
+  if (legacyTicks && bootScopedTicks) {
+    return legacyTicks === bootScopedTicks ? 'legacy-unscoped' : 'different'
   }
   return 'different'
 }

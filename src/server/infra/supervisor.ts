@@ -1,5 +1,14 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlinkSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  mkdirSync,
+  readlinkSync,
+  renameSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
 import {
@@ -367,7 +376,14 @@ export class Supervisor {
       port: this.opts.port,
       startedAt: Date.now(),
     }
-    writeFileSync(this.stateFile(), JSON.stringify(s, null, 2))
+    const target = this.stateFile()
+    const pending = `${target}.pending-${randomUUID()}`
+    try {
+      writeFileSync(pending, JSON.stringify(s, null, 2))
+      renameSync(pending, target)
+    } finally {
+      try { unlinkSync(pending) } catch { /* published or already absent */ }
+    }
   }
 
   private cleanupState(): void {
@@ -405,12 +421,12 @@ export class Supervisor {
       if (identityComparison === 'different') {
         return { state: 'spawn' }
       }
-      // A legacy state file has no boot-scoped lifetime token. Only adopt it
-      // when the configured binary-name check can independently identify the process.
-      if (identityComparison === 'legacy-unscoped' && !this.opts.expectedBinaryName) {
+      // A legacy Linux token has no boot identity. PID, start ticks, and binary
+      // name can all repeat after reboot, so they cannot prove process lifetime.
+      if (identityComparison === 'legacy-unscoped') {
         return {
           state: 'unverified',
-          reason: `${this.opts.name} recorded process ${s.pid} has no lifetime identity; refusing to spawn a replacement`,
+          reason: `${this.opts.name} recorded process ${s.pid} has no boot-scoped lifetime identity; refusing to adopt or replace it`,
         }
       }
       // Validate the binary name if an expected name was provided

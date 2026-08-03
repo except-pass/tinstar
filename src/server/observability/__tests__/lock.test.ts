@@ -196,7 +196,7 @@ describe('observability lock', () => {
     await release!()
   })
 
-  it('releases the primary before retrying a lingering recovery claim', async () => {
+  it('retains the primary while retrying a lingering recovery claim', async () => {
     const path = join(tmp, 'o.lock')
     const dir = `${path}.mark`
     mkdirSync(dir)
@@ -210,13 +210,12 @@ describe('observability lock', () => {
 
     expect(release).not.toBeNull()
     await expect(release!()).rejects.toBe(claimError)
-    expect(existsSync(dir)).toBe(false)
+    expect(existsSync(dir)).toBe(true)
 
     const successorRelease = await tryAcquireLock(path)
-    expect(successorRelease).not.toBeNull()
+    expect(successorRelease).toBeNull()
     await expect(release!()).resolves.toBeUndefined()
-    expect(existsSync(dir)).toBe(true)
-    await successorRelease!()
+    expect(existsSync(dir)).toBe(false)
   })
 
   it('does not claim success after losing its recovery generation during publish', async () => {
@@ -226,7 +225,7 @@ describe('observability lock', () => {
     mkdirSync(dir)
     writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
 
-    const release = await tryAcquireLock(path, {
+    const result = tryAcquireLock(path, {
       markerReplacement: {
         createMarker: marker => {
           mkdirSync(marker)
@@ -247,8 +246,24 @@ describe('observability lock', () => {
       },
     })
 
-    expect(release).toBeNull()
+    await expect(result).rejects.toThrow('recovery claim was displaced during marker publication')
     expect(existsSync(dir)).toBe(false)
+    expect(existsSync(recovery)).toBe(true)
+  })
+
+  it('tolerates modest forward clock skew on a recovery claim', async () => {
+    const path = join(tmp, 'o.lock')
+    const dir = `${path}.mark`
+    const recovery = `${dir}.recovery`
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
+    mkdirSync(recovery)
+    writeFileSync(join(recovery, 'owner.json'), JSON.stringify({
+      pid: 2147480000,
+      startedAt: Date.now() + 1_000,
+    }))
+
+    await expect(tryAcquireLock(path)).resolves.toBeNull()
     expect(existsSync(recovery)).toBe(true)
   })
 
