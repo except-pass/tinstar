@@ -196,6 +196,46 @@ describe('observability lock', () => {
     await release!()
   })
 
+  it('preserves an earlier recovery cleanup cause through later contention', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    try {
+      const path = join(tmp, 'o.lock')
+      const dir = `${path}.mark`
+      mkdirSync(dir)
+      writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 0 }))
+      const cleanupError = Object.assign(new Error('recovery cleanup denied'), { code: 'EACCES' })
+      const releaseRecoveryClaim = vi.fn()
+        .mockImplementationOnce(() => { throw cleanupError })
+        .mockImplementation((claim: string) => { rmSync(claim, { recursive: true }) })
+      let primaryProbeCount = 0
+
+      const outcome = acquireLock(path, {
+        probeProcessLiveness: pid => (
+          pid === 42 && ++primaryProbeCount % 2 === 0
+            ? { state: 'alive' as const }
+            : { state: 'gone' as const }
+        ),
+        releaseRecoveryClaim,
+      }).then(
+        release => ({ state: 'acquired' as const, release }),
+        error => ({ state: 'failed' as const, error }),
+      )
+      await vi.advanceTimersByTimeAsync(5_100)
+      const result = await outcome
+
+      expect(result.state).toBe('failed')
+      if (result.state === 'failed') {
+        expect(result.error).toMatchObject({
+          message: expect.stringContaining(path),
+          cause: cleanupError,
+        })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('retains the primary while retrying a lingering recovery claim', async () => {
     const path = join(tmp, 'o.lock')
     const dir = `${path}.mark`

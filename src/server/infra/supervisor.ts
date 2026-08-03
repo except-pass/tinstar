@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   writeFileSync,
   existsSync,
+  linkSync,
   readFileSync,
   unlinkSync,
   mkdirSync,
@@ -39,6 +40,8 @@ export interface SupervisorOpts {
   onStateChange?: (name: string, state: ServiceState) => void
   /** Process-identity reader; injectable for deterministic lifecycle tests. */
   processIdentity?: typeof readProcessIdentity
+  /** Listener-owner reader; injectable for deterministic legacy migration tests. */
+  listeningProcessIds?: (port: number) => Set<number> | null
 }
 
 type TrackedProcessState = 'same' | 'gone' | 'replaced' | 'unknown'
@@ -52,7 +55,7 @@ interface AdoptedProcess {
 type AdoptionResult =
   | { state: 'adopted'; process: AdoptedProcess }
   | { state: 'spawn' }
-  | { state: 'unverified'; reason: string }
+  | { state: 'unverified'; reason: string; quarantineGeneration?: string }
 
 export class Supervisor {
   state: ServiceState = 'idle'
@@ -68,6 +71,7 @@ export class Supervisor {
   private stopFailurePending = false
   private trackedProcessIdentity: string | null = null
   private ownsStateFile = false
+  private quarantineStateGeneration: string | null = null
   constructor(private readonly opts: SupervisorOpts) {}
 
   async start(): Promise<void> {
@@ -100,6 +104,7 @@ export class Supervisor {
     // Try to adopt an existing process recorded in the state file.
     const adoption = this.tryAdopt()
     if (adoption.state === 'unverified') {
+      this.quarantineStateGeneration = adoption.quarantineGeneration ?? null
       this.setState('degraded')
       throw new Error(adoption.reason)
     }
@@ -111,7 +116,11 @@ export class Supervisor {
         const lifetimeMatches = liveness.state === 'alive'
           && currentIdentity !== null
           && compareProcessIdentity(adoption.process.processIdentity, currentIdentity) === 'same'
-        if (!serviceMatches || !lifetimeMatches) {
+        const stillOwnsPort = this.processOwnsListeningPort(
+          adoption.process.pid,
+          this.opts.port,
+        )
+        if (!serviceMatches || !lifetimeMatches || !stillOwnsPort) {
           this.setState('degraded')
           throw new Error(
             `${this.opts.name} legacy process ${adoption.process.pid} could not be validated; refusing to adopt or replace it`,
@@ -142,15 +151,8 @@ export class Supervisor {
     const grace = this.opts.shutdownGraceMs ?? 5_000
     const pid = this.pid
     if (!pid) {
-      if (this.ownsStateFile) this.finishStop()
-      else {
-        this.stopHealthLoop()
-        if (this.restartTimer) clearTimeout(this.restartTimer)
-        this.restartTimer = null
-        this.stopping = false
-        this.stopFailurePending = false
-        this.setState('idle')
-      }
+      if (this.quarantineStateGeneration !== null) this.quarantineUnverifiedState()
+      this.finishStop()
       return
     }
     this.stopping = true
@@ -412,6 +414,7 @@ export class Supervisor {
       writeFileSync(pending, JSON.stringify(s, null, 2))
       renameSync(pending, target)
       this.ownsStateFile = true
+      this.quarantineStateGeneration = null
     } finally {
       try { unlinkSync(pending) } catch { /* published or already absent */ }
     }
@@ -423,19 +426,24 @@ export class Supervisor {
       try { unlinkSync(f) } catch { /* ignore */ }
     }
     this.ownsStateFile = false
+    this.quarantineStateGeneration = null
     this.pid = 0
     this.child = null
     this.trackedProcessIdentity = null
   }
 
   private tryAdopt(): AdoptionResult {
-    if (!existsSync(this.stateFile())) return { state: 'spawn' }
+    const stateFile = this.stateFile()
+    if (!existsSync(stateFile)) return { state: 'spawn' }
+    let rawState: string | null = null
     try {
-      const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
+      rawState = readFileSync(stateFile, 'utf-8')
+      const s = JSON.parse(rawState) as SupervisorState
       if (!isSupportedProcessId(s.pid)) {
         return {
           state: 'unverified',
-          reason: `${this.opts.name} state has an unsupported process id; refusing to spawn a replacement`,
+          reason: `${this.opts.name} state ${stateFile} has an unsupported process id; restart to quarantine it before replacement`,
+          quarantineGeneration: rawState,
         }
       }
       const liveness = probeProcessLiveness(s.pid)
@@ -444,34 +452,35 @@ export class Supervisor {
       if (!currentIdentity) {
         return {
           state: 'unverified',
-          reason: `${this.opts.name} recorded process ${s.pid} is live but its identity is unavailable; refusing to spawn a replacement`,
+          reason: `${this.opts.name} state ${stateFile} names live process ${s.pid}, but its identity is unavailable; refusing to spawn a replacement`,
         }
       }
       if (!s.processIdentity) {
-        if (
-          typeof s.binaryPath !== 'string'
-          || s.port !== this.opts.port
-          || !this.opts.expectedBinaryName
-        ) {
+        if (typeof s.binaryPath !== 'string' || !this.opts.expectedBinaryName) {
           return {
             state: 'unverified',
-            reason: `${this.opts.name} legacy state lacks enough service identity; refusing to adopt or replace it`,
+            reason: `${this.opts.name} legacy state ${stateFile} lacks enough service identity; refusing to adopt or replace it`,
           }
         }
+        if (s.port !== this.opts.port) return { state: 'spawn' }
         const actual = getProcessName(s.pid)
         if (!actual) {
           return {
             state: 'unverified',
-            reason: `${this.opts.name} recorded process ${s.pid} binary is unavailable; refusing to spawn a replacement`,
+            reason: `${this.opts.name} state ${stateFile} names process ${s.pid}, but its binary is unavailable; refusing to spawn a replacement`,
           }
         }
-        if (
-          !actual.includes(this.opts.expectedBinaryName)
-          || !sameExecutable(actual, s.binaryPath)
-        ) {
+        if (!actual.includes(this.opts.expectedBinaryName)) return { state: 'spawn' }
+        if (!sameExecutable(actual, s.binaryPath)) {
           return {
             state: 'unverified',
-            reason: `${this.opts.name} legacy process ${s.pid} executable does not match its recorded service; refusing to adopt or replace it`,
+            reason: `${this.opts.name} legacy process ${s.pid} executable does not match state ${stateFile}; refusing to adopt or replace it`,
+          }
+        }
+        if (!this.processOwnsListeningPort(s.pid, s.port)) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} legacy process ${s.pid} does not own the recorded service port in ${stateFile}; refusing to adopt or replace it`,
           }
         }
         return {
@@ -492,7 +501,7 @@ export class Supervisor {
       if (identityComparison === 'legacy-unscoped') {
         return {
           state: 'unverified',
-          reason: `${this.opts.name} recorded process ${s.pid} has no boot-scoped lifetime identity; refusing to adopt or replace it`,
+          reason: `${this.opts.name} state ${stateFile} records process ${s.pid} without a boot-scoped lifetime identity; refusing to adopt or replace it`,
         }
       }
       // Validate the binary name if an expected name was provided
@@ -501,7 +510,7 @@ export class Supervisor {
         if (!actual) {
           return {
             state: 'unverified',
-            reason: `${this.opts.name} recorded process ${s.pid} binary is unavailable; refusing to spawn a replacement`,
+            reason: `${this.opts.name} state ${stateFile} names process ${s.pid}, but its binary is unavailable; refusing to spawn a replacement`,
           }
         }
         if (!actual.includes(this.opts.expectedBinaryName)) return { state: 'spawn' }
@@ -517,9 +526,51 @@ export class Supervisor {
     } catch {
       return {
         state: 'unverified',
-        reason: `${this.opts.name} state is unreadable; refusing to spawn a replacement`,
+        reason: `${this.opts.name} state ${stateFile} is unreadable; restart to quarantine it before replacement`,
+        ...(rawState !== null ? { quarantineGeneration: rawState } : {}),
       }
     }
+  }
+
+  private processOwnsListeningPort(pid: number, port: number): boolean {
+    const listenerPids = (this.opts.listeningProcessIds ?? getListeningProcessIds)(port)
+    return listenerPids?.has(pid) ?? false
+  }
+
+  private quarantineUnverifiedState(): void {
+    const expectedGeneration = this.quarantineStateGeneration
+    if (expectedGeneration === null) return
+    const stateFile = this.stateFile()
+    const token = `${Date.now()}-${randomUUID()}`
+    const staging = `${stateFile}.quarantine-${token}`
+    try {
+      renameSync(stateFile, staging)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.quarantineStateGeneration = null
+        return
+      }
+      throw error
+    }
+
+    let displacedGeneration: string | null = null
+    try { displacedGeneration = readFileSync(staging, 'utf-8') } catch { /* restore below */ }
+    if (displacedGeneration === expectedGeneration) {
+      renameSync(staging, `${stateFile}.invalid-${token}`)
+      this.quarantineStateGeneration = null
+      return
+    }
+
+    // The canonical path changed after validation. Restore that newer file
+    // without overwriting any still-newer generation published concurrently.
+    try {
+      linkSync(staging, stateFile)
+      unlinkSync(staging)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      renameSync(staging, `${stateFile}.displaced-${token}`)
+    }
+    this.quarantineStateGeneration = null
   }
 }
 
@@ -534,9 +585,33 @@ function getProcessName(pid: number): string | null {
 }
 
 function sameExecutable(actual: string, recorded: string): boolean {
+  const normalizedActual = actual.endsWith(' (deleted)')
+    ? actual.slice(0, -' (deleted)'.length)
+    : actual
   try {
-    return realpathSync(actual) === realpathSync(recorded)
+    return realpathSync(normalizedActual) === realpathSync(recorded)
   } catch {
-    return false
+    return normalizedActual === recorded
+  }
+}
+
+function getListeningProcessIds(port: number): Set<number> | null {
+  try {
+    const output = process.platform === 'linux'
+      ? execFileSync('ss', ['-H', '-ltnp', `sport = :${port}`], { encoding: 'utf-8' })
+      : process.platform === 'darwin'
+        ? execFileSync(
+            'lsof',
+            ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
+            { encoding: 'utf-8' },
+          )
+        : null
+    if (output === null) return null
+    const pids = new Set<number>()
+    const pattern = process.platform === 'linux' ? /pid=(\d+)/gu : /^p(\d+)$/gmu
+    for (const match of output.matchAll(pattern)) pids.add(Number(match[1]))
+    return pids
+  } catch {
+    return null
   }
 }

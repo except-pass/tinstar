@@ -426,10 +426,20 @@ export async function acquireLock(
     if (!isOwnerAlive(dir, deps)) {
       const stolen = stealLock(dir, deps)
       if (stolen.acquired) return makeRelease(dir, deps, stolen.lingeringClaim)
-      lastRecoveryError = stolen.claimReleaseError
+      if (stolen.claimReleaseError !== undefined) {
+        lastRecoveryError = stolen.claimReleaseError
+      }
     }
     if (Date.now() >= deadline) {
-      if (lastRecoveryError !== undefined) throw lastRecoveryError
+      if (lastRecoveryError !== undefined) {
+        const detail = describeMarkerError(lastRecoveryError)
+        throw Object.assign(
+          new Error(
+            `timed out acquiring lock at ${path} after recovery-claim cleanup failed${detail ? `: ${detail}` : ''}`,
+          ),
+          { cause: lastRecoveryError },
+        )
+      }
       throw new Error(`timed out acquiring lock at ${path}`)
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))

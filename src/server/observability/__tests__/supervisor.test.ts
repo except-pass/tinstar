@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -83,6 +84,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set([pid]),
     })
 
     await sup.start()
@@ -115,6 +117,7 @@ describe('Supervisor adoption', () => {
       probeTimeoutMs: 50,
       probeIntervalMs: 10,
       expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set([pid]),
     })
 
     try {
@@ -181,12 +184,78 @@ describe('Supervisor adoption', () => {
       probe: async () => true,
       expectedBinaryName: 'sleep',
       processIdentity: () => ++identityRead === 1 ? 'process-a' : 'process-b',
+      listeningProcessIds: () => new Set([pid]),
     })
 
     try {
       await expect(sup.start()).rejects.toThrow('could not be validated')
       await sup.stop()
       expect(existsSync(stateFile)).toBe(true)
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('refuses released-format state when another pid owns its service port', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set([pid + 1]),
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('does not own the recorded service port')
+      await sup.stop()
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('rechecks released-format service ownership after readiness validation', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let ownershipRead = 0
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set([ownershipRead++ === 0 ? pid : pid + 1]),
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('could not be validated')
+      await sup.stop()
       expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
     } finally {
       try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
@@ -217,11 +286,73 @@ describe('Supervisor adoption', () => {
     })
 
     try {
-      await expect(sup.start()).rejects.toThrow('has no boot-scoped lifetime identity')
+      await expect(sup.start()).rejects.toThrow('without a boot-scoped lifetime identity')
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
     } finally {
       try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('spawns when a released-format pid now belongs to a different binary', async () => {
+    const oldChild = spawn('tail', ['-f', '/dev/null'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: oldPid,
+      binaryPath: '/usr/bin/tail',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+    })
+
+    try {
+      await sup.start()
+      expect(sup.pid).not.toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      await sup.stop()
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('spawns when a released-format record belongs to a previous service port', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: oldPid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+    })
+
+    try {
+      await sup.start()
+      expect(sup.pid).not.toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      await sup.stop()
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
 
@@ -281,7 +412,7 @@ describe('Supervisor adoption', () => {
     })
 
     await expect(sup.start()).rejects.toThrow(
-      'recorded process 42 is live but its identity is unavailable',
+      'names live process 42, but its identity is unavailable',
     )
     expect(sup.state).toBe('degraded')
     expect(existsSync(launched)).toBe(false)
@@ -591,20 +722,24 @@ describe('Supervisor adoption', () => {
     await sup.stop()
   })
 
-  it('refuses to spawn from a state file with a non-positive pid', async () => {
+  it('quarantines a state file with a non-positive pid on stop', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: -1, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: 0,
     }))
     const sup = shSupervisor('sleep 5', tmp)
 
-    await expect(sup.start()).rejects.toThrow('state has an unsupported process id')
+    await expect(sup.start()).rejects.toThrow('unsupported process id')
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
     await sup.stop()
-    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(false)
+    expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
+    await sup.start()
+    expect(sup.state).toBe('ready')
+    await sup.stop()
   })
 
-  it('refuses to spawn from a state file whose pid exceeds the supported range', async () => {
+  it('quarantines a state file whose pid exceeds the supported range on stop', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: Number.MAX_SAFE_INTEGER,
       binaryPath: '/bin/sleep',
@@ -614,24 +749,48 @@ describe('Supervisor adoption', () => {
     }))
     const sup = shSupervisor('sleep 5', tmp)
 
-    await expect(sup.start()).rejects.toThrow('state has an unsupported process id')
+    await expect(sup.start()).rejects.toThrow('unsupported process id')
 
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
     await sup.stop()
-    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(false)
+    expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
   })
 
-  it('refuses to spawn from an unreadable state file', async () => {
+  it('quarantines an unreadable state file on stop', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), '{"pid":')
     const sup = shSupervisor('sleep 5', tmp)
 
-    await expect(sup.start()).rejects.toThrow('state is unreadable')
+    await expect(sup.start()).rejects.toThrow('is unreadable')
 
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
     await sup.stop()
-    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(false)
+    expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
+  })
+
+  it('does not quarantine a repaired state generation after validation fails', async () => {
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, '{"pid":')
+    const sup = shSupervisor('sleep 5', tmp)
+
+    await expect(sup.start()).rejects.toThrow('is unreadable')
+    const repaired = JSON.stringify({
+      pid: 1234,
+      processIdentity: 'repaired-generation',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    })
+    writeFileSync(stateFile, repaired)
+
+    await sup.stop()
+
+    expect(readFileSync(stateFile, 'utf-8')).toBe(repaired)
+    expect(readdirSync(tmp).some(name => name.includes('.invalid-'))).toBe(false)
   })
 })
 
