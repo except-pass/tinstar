@@ -520,6 +520,7 @@ describe('Supervisor adoption', () => {
       startedAt: Date.now(),
     })
     writeFileSync(stateFile, originalState)
+    const kill = vi.spyOn(process, 'kill')
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -536,6 +537,8 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -788,6 +791,7 @@ describe('Supervisor adoption', () => {
       startedAt: Date.now(),
     })
     writeFileSync(stateFile, originalState)
+    const kill = vi.spyOn(process, 'kill')
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -806,6 +810,8 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
@@ -897,14 +903,16 @@ describe('Supervisor adoption', () => {
     const oldIdentity = processIdentity(oldPid)
     expect(oldIdentity).not.toBeNull()
     const stateFile = join(tmp, 'fake.state.json')
-    writeFileSync(stateFile, JSON.stringify({
+    const originalState = JSON.stringify({
       pid: oldPid,
       processIdentity: oldIdentity,
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 1234,
       startedAt: Date.now(),
-    }))
+    })
+    writeFileSync(stateFile, originalState)
+    const kill = vi.spyOn(process, 'kill')
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -922,10 +930,9 @@ describe('Supervisor adoption', () => {
       await expect(sup.start()).rejects.toThrow('could not be validated')
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
-      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).toMatchObject({
-        pid: oldPid,
-        port: 1234,
-      })
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
@@ -938,14 +945,15 @@ describe('Supervisor adoption', () => {
     const oldIdentity = processIdentity(oldPid)
     expect(oldIdentity).not.toBeNull()
     const stateFile = join(tmp, 'fake.state.json')
-    writeFileSync(stateFile, JSON.stringify({
+    const originalState = JSON.stringify({
       pid: oldPid,
       processIdentity: oldIdentity,
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 1234,
       startedAt: Date.now(),
-    }))
+    })
+    writeFileSync(stateFile, originalState)
     const realKill = process.kill.bind(process)
     let allowRetirement = false
     vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
@@ -969,7 +977,7 @@ describe('Supervisor adoption', () => {
     try {
       await expect(sup.start()).rejects.toThrow('retry will revalidate it')
       expect(sup.pid).toBe(oldPid)
-      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       expect(stateChanges).not.toContain('idle')
 
       // The surrounding stack's failed-start cleanup must retain ownership
@@ -995,14 +1003,15 @@ describe('Supervisor adoption', () => {
     oldChild.unref()
     const oldPid = oldChild.pid!
     const stateFile = join(tmp, 'fake.state.json')
-    writeFileSync(stateFile, JSON.stringify({
+    const originalState = JSON.stringify({
       pid: oldPid,
       processIdentity: 'process-a',
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 1234,
       startedAt: Date.now(),
-    }))
+    })
+    writeFileSync(stateFile, originalState)
     const realKill = process.kill.bind(process)
     let identity: string | null = 'process-a'
     vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
@@ -1032,7 +1041,7 @@ describe('Supervisor adoption', () => {
       await expect(sup.start()).rejects.toThrow('identity is unavailable')
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
-      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
     } finally {
       try { realKill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
