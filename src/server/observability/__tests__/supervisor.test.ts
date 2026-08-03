@@ -512,13 +512,14 @@ describe('Supervisor adoption', () => {
     oldChild.unref()
     const oldPid = oldChild.pid!
     const stateFile = join(tmp, 'fake.state.json')
-    writeFileSync(stateFile, JSON.stringify({
+    const originalState = JSON.stringify({
       pid: oldPid,
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 1234,
       startedAt: Date.now(),
-    }))
+    })
+    writeFileSync(stateFile, originalState)
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -534,7 +535,7 @@ describe('Supervisor adoption', () => {
       await expect(sup.start()).rejects.toThrow('listener ownership could not be inspected')
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
-      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -663,14 +664,15 @@ describe('Supervisor adoption', () => {
     const oldIdentity = processIdentity(oldPid)
     expect(oldIdentity).not.toBeNull()
     const stateFile = join(tmp, 'fake.state.json')
-    writeFileSync(stateFile, JSON.stringify({
+    const originalState = JSON.stringify({
       pid: oldPid,
       processIdentity: oldIdentity,
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 1234,
       startedAt: Date.now(),
-    }))
+    })
+    writeFileSync(stateFile, originalState)
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -688,7 +690,7 @@ describe('Supervisor adoption', () => {
       )
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
-      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
@@ -723,6 +725,85 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('adopts a released-format process already serving the configured port', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: port => port === 9999 ? new Set([oldPid]) : new Set(),
+    })
+
+    try {
+      await sup.start()
+      expect(sup.pid).toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).toMatchObject({
+        pid: oldPid,
+        processIdentity: oldIdentity,
+        port: 9999,
+      })
+      await sup.stop()
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('fails closed when released-format configured-port ownership is unavailable', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    const originalState = JSON.stringify({
+      pid: oldPid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    })
+    writeFileSync(stateFile, originalState)
+    const kill = vi.spyOn(process, 'kill')
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: port => port === 1234 ? new Set() : null,
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow(
+        'configured-port ownership could not be inspected',
+      )
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
       expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
       expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
     } finally {
