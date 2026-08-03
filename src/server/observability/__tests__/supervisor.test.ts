@@ -35,6 +35,16 @@ function shSupervisor(script: string, stateDir: string, name = 'fake') {
   })
 }
 
+function expectNoSignalToProcess(
+  calls: readonly (readonly unknown[])[],
+  pid: number,
+): void {
+  const signalled = calls.some(([calledPid, signal]) => (
+    Math.abs(Number(calledPid)) === pid && signal !== 0
+  ))
+  expect(signalled).toBe(false)
+}
+
 describe('Supervisor spawn + readiness', () => {
   it('spawns the child and reports ready when probe succeeds', async () => {
     const sup = shSupervisor(`sleep 5`, tmp)
@@ -537,10 +547,11 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
       await sup.stop()
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -615,9 +626,9 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -655,9 +666,9 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -678,6 +689,7 @@ describe('Supervisor adoption', () => {
       startedAt: Date.now(),
     })
     writeFileSync(stateFile, originalState)
+    const kill = vi.spyOn(process, 'kill')
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -696,7 +708,9 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -731,9 +745,9 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -810,9 +824,11 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      await sup.stop()
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -849,9 +865,9 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
@@ -931,9 +947,11 @@ describe('Supervisor adoption', () => {
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
       expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
-      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+      await sup.stop()
+      expect(readFileSync(stateFile, 'utf-8')).toBe(originalState)
+      expectNoSignalToProcess(kill.mock.calls, oldPid)
     } finally {
+      kill.mockRestore()
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
