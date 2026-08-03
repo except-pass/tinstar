@@ -13,6 +13,7 @@ import { getConfigRoot } from '../configRoot.js'
 const PROM_PORT = 9090
 const ALLOY_OTLP_PORT = 4318
 const ALLOY_ADMIN_PORT = 12345
+const LATE_RELEASE_RETRY_MS = [250, 500, 1_000] as const
 
 export * from './types.js'
 export { TelemetryQuery } from './query.js'
@@ -31,6 +32,10 @@ export class ObservabilityStack {
   private prom: Supervisor | null = null
   private alloy: Supervisor | null = null
   private lockRelease: ReleaseFn | null = null
+  private stopRecoveryPending = false
+  private lifecycleTail: Promise<void> = Promise.resolve()
+  private lateReleaseRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private lateReleaseRetryAttempt = 0
   private readonly root: string
   private readonly binRoot: string
   private readonly obsRoot: string
@@ -41,7 +46,11 @@ export class ObservabilityStack {
     this.obsRoot = join(this.root, 'observability')
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    return this.enqueueLifecycle(() => this.startUnlocked())
+  }
+
+  private async startUnlocked(): Promise<void> {
     if (process.env.TINSTAR_TELEMETRY === '0') {
       this.state = 'disabled'
       log.info('observability', 'telemetry disabled via TINSTAR_TELEMETRY=0')
@@ -180,34 +189,135 @@ export class ObservabilityStack {
         this.query = new TelemetryQuery(`http://127.0.0.1:${PROM_PORT}`)
         log.info('observability', 'both supervisors healthy, stack is ready')
       }
+    } else if (s === 'idle') {
+      this.completeRecoveredStopIfIdle()
     }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    return this.enqueueLifecycle(() => this.stopUnlocked())
+  }
+
+  private async stopUnlocked(): Promise<void> {
+    this.stopRecoveryPending = false
     log.info('observability', 'stopping telemetry stack')
+    const failures: Error[] = []
+    try { await this.alloy?.stop() } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error))
+      failures.push(failure)
+      log.warn('observability', 'alloy stop failed', { error: failure.message })
+    }
+    try { await this.prom?.stop() } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error))
+      failures.push(failure)
+      log.warn('observability', 'prometheus stop failed', { error: failure.message })
+    }
+    if (failures.length > 0) {
+      this.stopRecoveryPending = true
+      this.state = 'degraded'
+      this.query = null
+      this.lastError = failures.map(failure => failure.message).join('; ')
+      if (this.supervisorsAreIdle()) {
+        await this.completeStopUnlocked()
+        return
+      }
+      log.warn('observability', 'telemetry stop remains unconfirmed; retaining ownership', {
+        error: this.lastError,
+      })
+      throw new AggregateError(failures, this.lastError)
+    }
+    await this.completeStopUnlocked()
+  }
+
+  restart(): Promise<void> {
+    return this.enqueueLifecycle(async () => {
+      log.info('observability', 'restarting telemetry stack')
+      await this.stopUnlocked()
+      this.progress = []
+      await this.startUnlocked()
+    })
+  }
+
+  private supervisorsAreIdle(): boolean {
+    return (!this.prom || this.prom.state === 'idle')
+      && (!this.alloy || this.alloy.state === 'idle')
+  }
+
+  private completeRecoveredStopIfIdle(): void {
+    if (!this.stopRecoveryPending || !this.supervisorsAreIdle()) return
+    void this.enqueueLifecycle(async () => {
+      if (!this.stopRecoveryPending || !this.supervisorsAreIdle()) return
+      try {
+        await this.completeStopUnlocked()
+      } catch (error) {
+        log.warn('observability', 'failed to release ownership after late telemetry stop', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+        this.scheduleLateReleaseRetry()
+      }
+    }, false)
+  }
+
+  private async completeStopUnlocked(): Promise<void> {
+    const release = this.lockRelease
     try {
-      try { await this.alloy?.stop() } catch (err) {
-        log.warn('observability', 'alloy stop failed', { error: (err as Error).message })
-      }
-      try { await this.prom?.stop() } catch (err) {
-        log.warn('observability', 'prometheus stop failed', { error: (err as Error).message })
-      }
-    } finally {
-      if (this.lockRelease) {
-        try { await this.lockRelease() } catch { /* best effort */ }
-        this.lockRelease = null
-      }
+      if (release) await release()
+      if (this.lockRelease === release) this.lockRelease = null
+      this.cancelLateReleaseRetry()
+      this.stopRecoveryPending = false
       this.state = 'idle'
+      this.lastError = null
       log.info('observability', 'telemetry stack stopped')
+    } catch (error) {
+      this.stopRecoveryPending = true
+      this.state = 'degraded'
+      this.query = null
+      this.lastError = error instanceof Error ? error.message : String(error)
+      throw error
     }
   }
 
-  async restart(): Promise<void> {
-    log.info('observability', 'restarting telemetry stack')
-    try { await this.stop() } catch (err) {
-      log.warn('observability', 'stop during restart failed', { error: (err as Error).message })
+  private enqueueLifecycle<T>(
+    operation: () => Promise<T>,
+    resetLateRelease = true,
+  ): Promise<T> {
+    if (resetLateRelease) this.cancelLateReleaseRetry()
+    const run = () => operation()
+    const result = this.lifecycleTail.then(run, run)
+    this.lifecycleTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  private scheduleLateReleaseRetry(): void {
+    if (this.lateReleaseRetryTimer || !this.stopRecoveryPending) return
+    const delay = LATE_RELEASE_RETRY_MS[this.lateReleaseRetryAttempt]
+    if (delay === undefined) {
+      log.warn('observability', 'late telemetry ownership release retries exhausted', {
+        error: this.lastError,
+      })
+      return
     }
-    this.progress = []
-    await this.start()
+    this.lateReleaseRetryAttempt++
+    this.lateReleaseRetryTimer = setTimeout(() => {
+      this.lateReleaseRetryTimer = null
+      void this.enqueueLifecycle(async () => {
+        if (!this.stopRecoveryPending || !this.supervisorsAreIdle()) return
+        try {
+          await this.completeStopUnlocked()
+        } catch (error) {
+          log.warn('observability', 'late telemetry ownership release retry failed', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+          this.scheduleLateReleaseRetry()
+        }
+      }, false)
+    }, delay)
+    this.lateReleaseRetryTimer.unref()
+  }
+
+  private cancelLateReleaseRetry(): void {
+    if (this.lateReleaseRetryTimer) clearTimeout(this.lateReleaseRetryTimer)
+    this.lateReleaseRetryTimer = null
+    this.lateReleaseRetryAttempt = 0
   }
 }

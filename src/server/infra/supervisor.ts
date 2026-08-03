@@ -2,7 +2,11 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
-import { isSupportedProcessId, processMayBeAlive } from './process-liveness.js'
+import {
+  isSupportedProcessId,
+  probeProcessLiveness,
+  processIdentity as readProcessIdentity,
+} from './process-liveness.js'
 
 export interface SupervisorOpts {
   name: string
@@ -22,6 +26,15 @@ export interface SupervisorOpts {
   healthIntervalMs?: number            // default: 30000
   healthFailureThreshold?: number      // default: 2
   onStateChange?: (name: string, state: ServiceState) => void
+  /** Process-identity reader; injectable for deterministic lifecycle tests. */
+  processIdentity?: typeof readProcessIdentity
+}
+
+type TrackedProcessState = 'same' | 'gone' | 'replaced' | 'unknown'
+
+interface AdoptedProcess {
+  pid: number
+  processIdentity: string
 }
 
 export class Supervisor {
@@ -33,17 +46,46 @@ export class Supervisor {
   private exitHandler: ((code: number | null) => void) | null = null
   private healthTimer: ReturnType<typeof setInterval> | null = null
   private consecutiveFailures = 0
+  private stopping = false
+  private stopFailurePending = false
+  private trackedProcessIdentity: string | null = null
   constructor(private readonly opts: SupervisorOpts) {}
 
   async start(): Promise<void> {
+    let resumeTrackedProcess = false
+    if (this.stopping) {
+      throw new Error(`${this.opts.name} shutdown is still pending`)
+    }
+    if (this.stopFailurePending && this.pid) {
+      const status = this.trackedProcessState(this.pid)
+      if (status === 'unknown') {
+        throw new Error(`${this.opts.name} shutdown identity is still unresolved`)
+      }
+      if (status === 'gone' || status === 'replaced') this.finishStop()
+      else {
+        this.stopFailurePending = false
+        resumeTrackedProcess = true
+      }
+    }
     this.state = 'starting'
     this.consecutiveFailures = 0
     mkdirSync(this.opts.stateDir, { recursive: true })
 
+    if (resumeTrackedProcess) {
+      const ok = await this.waitForReady()
+      this.setState(ok ? 'ready' : 'degraded')
+      this.startHealthLoop()
+      return
+    }
+
     // Try to adopt an existing process recorded in the state file.
     const adopted = this.tryAdopt()
     if (adopted) {
-      this.pid = adopted
+      this.pid = adopted.pid
+      this.trackedProcessIdentity = adopted.processIdentity
+      // Upgrade a compatible legacy state file so the next restart can prove
+      // that the PID still names the same process lifetime.
+      this.persist()
       const ok = await this.waitForReady()
       this.setState(ok ? 'ready' : 'degraded')
       this.startHealthLoop()
@@ -59,35 +101,50 @@ export class Supervisor {
 
   async stop(): Promise<void> {
     const grace = this.opts.shutdownGraceMs ?? 5_000
-    this.state = 'idle'
-    this.stopHealthLoop()
-    // remove crash handler so we don't loop-restart during shutdown
-    if (this.child && this.exitHandler) { this.child.off('exit', this.exitHandler); this.exitHandler = null }
-
     const pid = this.pid
-    if (!pid) { this.cleanupState(); return }
+    if (!pid) { this.finishStop(); return }
+    this.stopping = true
 
-    try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    const beforeTerm = this.trackedProcessState(pid)
+    if (beforeTerm === 'gone' || beforeTerm === 'replaced') {
+      this.finishStop()
+      return
+    }
+    if (beforeTerm === 'unknown') {
+      this.failStop(`${this.opts.name} process ${pid} identity could not be verified`)
+    }
+
+    try { process.kill(pid, 'SIGTERM') } catch { /* checked below */ }
 
     // wait up to `grace` ms for the process to exit
     const deadline = Date.now() + grace
     while (Date.now() < deadline) {
-      if (!processMayBeAlive(pid)) { this.cleanupState(); return }
+      const status = this.trackedProcessState(pid)
+      if (status === 'gone' || status === 'replaced') { this.finishStop(); return }
       await new Promise((r) => setTimeout(r, 50))
     }
 
     // escalate
-    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    const beforeKill = this.trackedProcessState(pid)
+    if (beforeKill === 'gone' || beforeKill === 'replaced') {
+      this.finishStop()
+      return
+    }
+    if (beforeKill === 'same') {
+      try { process.kill(pid, 'SIGKILL') } catch { /* checked below */ }
+    }
     // final drain
     const drainDeadline = Date.now() + 500
     while (Date.now() < drainDeadline) {
-      if (!processMayBeAlive(pid)) { this.cleanupState(); return }
+      const status = this.trackedProcessState(pid)
+      if (status === 'gone' || status === 'replaced') { this.finishStop(); return }
       await new Promise((r) => setTimeout(r, 25))
     }
-    if (processMayBeAlive(pid)) {
-      throw new Error(`${this.opts.name} process ${pid} did not stop`)
+    const finalStatus = this.trackedProcessState(pid)
+    if (finalStatus === 'same' || finalStatus === 'unknown') {
+      this.failStop(`${this.opts.name} process ${pid} did not stop`)
     }
-    this.cleanupState()
+    this.finishStop()
   }
 
   private spawnOnce(): void {
@@ -105,9 +162,11 @@ export class Supervisor {
     this.child.unref()
     this.pid = this.child.pid ?? 0
     if (!this.pid) throw new Error(`failed to spawn ${this.opts.name}`)
+    this.trackedProcessIdentity = this.readProcessIdentity(this.pid)
     this.persist()
     this.exitHandler = () => {
-      // Ignore if we're stopping or have given up.
+      if (this.stopping || this.stopFailurePending) { this.finishStop(); return }
+      // Ignore if we've completed shutdown or have given up.
       if (this.state === 'idle' || this.state === 'degraded') return
       this.onChildCrash()
     }
@@ -156,7 +215,26 @@ export class Supervisor {
 
   private isProcessAlive(): boolean {
     if (!this.pid) return false
-    return processMayBeAlive(this.pid)
+    const status = this.trackedProcessState(this.pid)
+    return status === 'same' || status === 'unknown'
+  }
+
+  /**
+   * Identify the tracked process before interpreting PID liveness. A different
+   * non-null token proves the original lifetime ended even when the numeric PID
+   * now responds to signal 0; missing identity evidence remains fail-closed.
+   */
+  private trackedProcessState(pid: number): TrackedProcessState {
+    const currentIdentity = this.readProcessIdentity(pid)
+    const liveness = probeProcessLiveness(pid)
+    if (liveness.state === 'gone' || liveness.state === 'invalid') return 'gone'
+    if (!this.trackedProcessIdentity || !currentIdentity) return 'unknown'
+    if (currentIdentity !== this.trackedProcessIdentity) return 'replaced'
+    return 'same'
+  }
+
+  private readProcessIdentity(pid: number): string | null {
+    return (this.opts.processIdentity ?? readProcessIdentity)(pid)
   }
 
   /**
@@ -183,6 +261,16 @@ export class Supervisor {
     const threshold = this.opts.healthFailureThreshold ?? 2
     this.healthTimer = setInterval(async () => {
       if (this.state === 'idle') return
+
+      if (this.stopping) {
+        if (!this.isProcessAlive()) this.finishStop()
+        return
+      }
+
+      if (this.stopFailurePending) {
+        if (!this.isProcessAlive()) this.finishStop()
+        return
+      }
 
       if (!this.isProcessAlive()) {
         // Attempt recovery from any live state (idle already returned above).
@@ -219,11 +307,31 @@ export class Supervisor {
     if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null }
   }
 
+  private finishStop(): void {
+    this.stopHealthLoop()
+    if (this.child && this.exitHandler) this.child.off('exit', this.exitHandler)
+    this.exitHandler = null
+    this.cleanupState()
+    this.stopping = false
+    this.stopFailurePending = false
+    this.setState('idle')
+  }
+
+  private failStop(message: string): never {
+    this.stopping = false
+    this.stopFailurePending = true
+    this.setState('degraded')
+    throw new Error(message)
+  }
+
   private stateFile(): string { return join(this.opts.stateDir, `${this.opts.name}.state.json`) }
 
   private persist(): void {
     const s: SupervisorState = {
       pid: this.pid,
+      ...(this.trackedProcessIdentity
+        ? { processIdentity: this.trackedProcessIdentity }
+        : {}),
       binaryPath: this.opts.binaryPath,
       binaryHash: '',
       port: this.opts.port,
@@ -239,20 +347,28 @@ export class Supervisor {
     }
     this.pid = 0
     this.child = null
+    this.trackedProcessIdentity = null
   }
 
-  private tryAdopt(): number | null {
+  private tryAdopt(): AdoptedProcess | null {
     if (!existsSync(this.stateFile())) return null
     try {
       const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
       if (!isSupportedProcessId(s.pid)) return null
-      if (!processMayBeAlive(s.pid)) return null
+      const currentIdentity = this.readProcessIdentity(s.pid)
+      const liveness = probeProcessLiveness(s.pid)
+      if (liveness.state === 'gone' || liveness.state === 'invalid') return null
+      if (!currentIdentity) return null
+      if (s.processIdentity && currentIdentity !== s.processIdentity) return null
+      // A legacy state file has no lifetime token. Only adopt it when the
+      // configured binary-name check can independently identify the process.
+      if (!s.processIdentity && !this.opts.expectedBinaryName) return null
       // Validate the binary name if an expected name was provided
       if (this.opts.expectedBinaryName) {
         const actual = getProcessName(s.pid)
-        if (actual && !actual.includes(this.opts.expectedBinaryName)) return null
+        if (!actual || !actual.includes(this.opts.expectedBinaryName)) return null
       }
-      return s.pid
+      return { pid: s.pid, processIdentity: currentIdentity }
     } catch {
       return null
     }

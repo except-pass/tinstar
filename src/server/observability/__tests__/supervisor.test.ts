@@ -57,9 +57,70 @@ describe('Supervisor spawn + readiness', () => {
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
+  it('upgrades an old compatible state file with the adopted process identity', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+    })
+
+    await sup.start()
+
+    expect(sup.pid).toBe(pid)
+    expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
+      .toMatchObject({ pid, processIdentity: expect.any(String) })
+    await sup.stop()
+  })
+
+  it('does not adopt a new process that reused the recorded pid', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const bin = join(tmp, 'fake.sh')
+    writeFileSync(bin, '#!/bin/sh\nsleep 5\n')
+    chmodSync(bin, 0o755)
+    const opts = {
+      name: 'fake',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      processIdentity: (pid: number) => pid === 42 ? 'process-b' : `spawned-${pid}`,
+    } as ConstructorParameters<typeof Supervisor>[0] & {
+      processIdentity: (pid: number) => string | null
+    }
+    const sup = new Supervisor(opts)
+
+    await sup.start()
+
+    expect(sup.pid).not.toBe(42)
+    await sup.stop()
+  })
+
   it('keeps an adopted process healthy when liveness probes are permission denied', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
-      pid: 42, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+      pid: 42,
+      processIdentity: 'process-42',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
     }))
     let stopping = false
     const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
@@ -83,6 +144,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       healthIntervalMs: 10,
+      processIdentity: () => 'process-42',
     })
 
     await sup.start()
@@ -106,12 +168,26 @@ describe('Supervisor adoption', () => {
     await sup.stop()
   })
 
-  it('rejects an unconfirmed stop without clearing the tracked pid or state file', async () => {
+  it('retains an unconfirmed stop until a later liveness check proves exit', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
-      pid: 42, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+      pid: 42,
+      processIdentity: 'process-42',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
     }))
-    vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    let processAlive = true
+    let allowStop = false
+    vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM' && allowStop) {
+        processAlive = false
+        return true
+      }
+      throw Object.assign(
+        new Error(processAlive ? 'operation not permitted' : 'no such process'),
+        { code: processAlive ? 'EPERM' : 'ESRCH' },
+      )
     })
     const sup = new Supervisor({
       name: 'fake',
@@ -121,14 +197,177 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       shutdownGraceMs: 0,
-      healthIntervalMs: 60_000,
+      healthIntervalMs: 10,
+      processIdentity: () => processAlive ? 'process-42' : null,
     })
     await sup.start()
 
     await expect(sup.stop()).rejects.toThrow('fake process 42 did not stop')
-
+    expect(sup.state).toBe('degraded')
     expect(sup.pid).toBe(42)
     expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8'))).toMatchObject({ pid: 42 })
+
+    await expect(sup.start()).resolves.toBeUndefined()
+    expect(sup.state).toBe('ready')
+    expect(sup.pid).toBe(42)
+
+    allowStop = true
+    await expect(sup.stop()).resolves.toBeUndefined()
+    expect(sup.pid).toBe(0)
+  })
+
+  it('does not signal when process identity is unavailable before SIGTERM', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identity: string | null = 'process-a'
+    let alive = true
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        if (alive) return true
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' })
+      }
+      if (signal === 'SIGTERM') alive = false
+      return true
+    })
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      processIdentity: () => identity,
+    })
+    await sup.start()
+
+    identity = null
+    await expect(sup.stop()).rejects.toThrow('identity could not be verified')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(sup.state).toBe('degraded')
+    expect(sup.pid).toBe(42)
+
+    identity = 'process-a'
+    await expect(sup.stop()).resolves.toBeUndefined()
+    expect(sup.state).toBe('idle')
+  })
+
+  it('does not signal when process identity becomes unavailable before SIGKILL', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identity: string | null = 'process-a'
+    let alive = true
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') identity = null
+      if (signal === 0) {
+        if (alive) return true
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' })
+      }
+      return true
+    })
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      shutdownGraceMs: 0,
+      processIdentity: () => identity,
+    })
+    await sup.start()
+
+    await expect(sup.stop()).rejects.toThrow('did not stop')
+    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(sup.state).toBe('degraded')
+    expect(sup.pid).toBe(42)
+
+    alive = false
+    await expect(sup.stop()).resolves.toBeUndefined()
+    expect(sup.state).toBe('idle')
+  })
+
+  it('never signals a replacement process when the pid identity changes before stop', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identity = 'process-a'
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    const opts = {
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      shutdownGraceMs: 0,
+      processIdentity: () => identity,
+    } as ConstructorParameters<typeof Supervisor>[0] & {
+      processIdentity: (pid: number) => string | null
+    }
+    const sup = new Supervisor(opts)
+    await sup.start()
+
+    identity = 'process-b'
+    await sup.stop()
+
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(sup.state).toBe('idle')
+  })
+
+  it('does not escalate to SIGKILL after the pid is reused during shutdown', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identity = 'process-a'
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') identity = 'process-b'
+      return true
+    })
+    const opts = {
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      shutdownGraceMs: 100,
+      processIdentity: () => identity,
+    } as ConstructorParameters<typeof Supervisor>[0] & {
+      processIdentity: (pid: number) => string | null
+    }
+    const sup = new Supervisor(opts)
+    await sup.start()
+
+    await sup.stop()
+
+    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(sup.state).toBe('idle')
   })
 
   it('adopts a live pid recorded in the state file instead of spawning', async () => {
@@ -227,6 +466,41 @@ describe('Supervisor crash restart', () => {
 })
 
 describe('Supervisor health loop', () => {
+  it('treats a reused pid as the tracked process exiting', async () => {
+    writeFileSync(join(tmp, 'reused.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identity = 'process-a'
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    const opts = {
+      name: 'reused',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      healthIntervalMs: 10,
+      maxRestartsPerMinute: 0,
+      processIdentity: () => identity,
+    } as ConstructorParameters<typeof Supervisor>[0] & {
+      processIdentity: (pid: number) => string | null
+    }
+    const sup = new Supervisor(opts)
+    await sup.start()
+
+    identity = 'process-b'
+
+    await vi.waitFor(() => expect(sup.state).toBe('degraded'))
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    await sup.stop()
+  })
+
   it('detects a dead adopted process and fires onStateChange', async () => {
     const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
     child.unref()

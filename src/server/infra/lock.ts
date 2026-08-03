@@ -1,15 +1,28 @@
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import {
   isSupportedProcessId,
+  processIdentity,
   probeProcessLiveness,
-  processMayBeAlive,
 } from './process-liveness.js'
 
 export type ReleaseFn = () => Promise<void>
 
 const ACQUIRE_TIMEOUT_MS = 5_000
 const POLL_INTERVAL_MS = 50
+// Leave enough of acquireLock's five-second budget to reclaim a claimant that
+// crashed immediately after publishing its recovery marker.
+const RECOVERY_CLAIM_STALE_MS = ACQUIRE_TIMEOUT_MS - 1_000
+const activeRecoveryClaims = new Set<string>()
 
 function markerDir(path: string): string {
   return `${path}.mark`
@@ -19,29 +32,64 @@ function ownerFile(dir: string): string {
   return join(dir, 'owner.json')
 }
 
-function tryCreateMarker(dir: string): boolean {
+function tryCreateMarker(
+  dir: string,
+  deps: Pick<LockAcquireDependencies, 'processIdentity'> = {},
+): boolean {
+  // Avoid an OS process-identity lookup on the normal contended path. This is
+  // only an optimization: the atomic rename below remains the ownership gate.
+  if (existsSync(dir)) return false
+  const identity = (deps.processIdentity ?? processIdentity)(process.pid)
+  const stagingDir = mkdtempSync(`${dir}.pending-`)
+  let published = false
   try {
-    mkdirSync(dir)
-    try { writeFileSync(ownerFile(dir), JSON.stringify({ pid: process.pid, startedAt: Date.now() })) } catch { /* best effort */ }
+    writeFileSync(ownerFile(stagingDir), JSON.stringify({
+      pid: process.pid,
+      startedAt: Date.now(),
+      ...(identity ? { processIdentity: identity } : {}),
+    }))
+    renameSync(stagingDir, dir)
+    published = true
     return true
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException
-    if (err.code === 'EEXIST') return false
+    if (err.code === 'EEXIST' || err.code === 'ENOTEMPTY') return false
     throw err
+  } finally {
+    if (!published) {
+      try { rmSync(stagingDir, { recursive: true, force: true }) } catch { /* abandoned staging dirs are not locks */ }
+    }
   }
 }
 
-function isOwnerAlive(dir: string): boolean {
-  let pid: number
+interface LockAcquireDependencies {
+  /** Fault-injection seam for stale-marker replacement. */
+  markerReplacement?: Partial<MarkerReplacementOps>
+  /** Fault-injection seam for releasing an acquired marker. */
+  releaseMarker?: (dir: string) => void
+  /** Fault-injection seam for releasing the stale-owner recovery claim. */
+  releaseRecoveryClaim?: (dir: string) => void
+  /** Process probes used by acquisition and stale-owner recovery. */
+  probeProcessLiveness?: typeof probeProcessLiveness
+  processIdentity?: typeof processIdentity
+}
+
+function isOwnerAlive(dir: string, deps: LockAcquireDependencies = {}): boolean {
+  let owner: { pid: number; processIdentity?: string }
   try {
     const raw = readFileSync(ownerFile(dir), 'utf-8')
-    const owner = JSON.parse(raw) as { pid: number }
-    pid = owner.pid
-    if (!isSupportedProcessId(pid)) return false
+    owner = JSON.parse(raw) as { pid: number; processIdentity?: string }
+    if (!isSupportedProcessId(owner.pid)) return false
   } catch {
     return false
   }
-  return processMayBeAlive(pid)
+  const liveness = (deps.probeProcessLiveness ?? probeProcessLiveness)(owner.pid)
+  if (liveness.state === 'gone' || liveness.state === 'invalid') return false
+  if (owner.processIdentity) {
+    const currentIdentity = (deps.processIdentity ?? processIdentity)(owner.pid)
+    if (currentIdentity && currentIdentity !== owner.processIdentity) return false
+  }
+  return liveness.state === 'alive' || liveness.state === 'unknown'
 }
 
 interface MarkerReplacementOps {
@@ -58,43 +106,189 @@ interface MarkerReplacementOutcome {
   replaced: boolean
   removeError?: unknown
   createError?: unknown
+  lingeringClaim?: string
+}
+
+interface RecoveryClaim {
+  dir: string
+  owner: string
+}
+
+function readOwnerRecord(dir: string): {
+  raw: string
+  pid?: number
+  processIdentity?: string
+  startedAt?: number
+} | null {
+  try {
+    const raw = readFileSync(ownerFile(dir), 'utf-8')
+    const parsed = JSON.parse(raw) as {
+      pid?: unknown
+      processIdentity?: unknown
+      startedAt?: unknown
+    }
+    return {
+      raw,
+      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+      ...(typeof parsed.processIdentity === 'string'
+        ? { processIdentity: parsed.processIdentity }
+        : {}),
+      ...(typeof parsed.startedAt === 'number' ? { startedAt: parsed.startedAt } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+
+function recoveryClaimIsFresh(dir: string): boolean {
+  const startedAt = readOwnerRecord(dir)?.startedAt
+  return startedAt !== undefined && Date.now() - startedAt < RECOVERY_CLAIM_STALE_MS
+}
+
+function tryAcquireRecoveryClaim(
+  dir: string,
+  deps: LockAcquireDependencies,
+): RecoveryClaim | null {
+  const existing = readOwnerRecord(dir)
+  // A failed cleanup leaves our completed claim in place. Once the synchronous
+  // replacement attempt has unwound, the same process may adopt that exact
+  // claim and retry cleanup on its next acquisition attempt. Active re-entrant
+  // contenders remain excluded by the process-local set.
+  if (
+    existing?.pid === process.pid
+    && !activeRecoveryClaims.has(dir)
+  ) {
+    activeRecoveryClaims.add(dir)
+    return { dir, owner: existing.raw }
+  }
+  if (tryCreateMarker(dir, deps)) {
+    const owner = readOwnerRecord(dir)?.raw
+    if (!owner) return null
+    activeRecoveryClaims.add(dir)
+    return { dir, owner }
+  }
+  if (isOwnerAlive(dir, deps) || recoveryClaimIsFresh(dir)) return null
+
+  // Move an abandoned claim aside before replacing it. Re-check the moved
+  // record so a delayed contender that picked up a newly-created live claim
+  // restores it instead of acting on an earlier stale observation.
+  const abandonedDir = `${dir}.abandoned-${randomUUID()}`
+  try {
+    renameSync(dir, abandonedDir)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'EEXIST' || code === 'ENOTEMPTY') return null
+    throw error
+  }
+  if (isOwnerAlive(abandonedDir, deps) || recoveryClaimIsFresh(abandonedDir)) {
+    try { renameSync(abandonedDir, dir) } catch { /* another contender now owns the claim */ }
+    return null
+  }
+
+  try {
+    if (!tryCreateMarker(dir, deps)) return null
+    const owner = readOwnerRecord(dir)?.raw
+    if (!owner) return null
+    activeRecoveryClaims.add(dir)
+    return { dir, owner }
+  } finally {
+    try { rmSync(abandonedDir, { recursive: true, force: true }) } catch { /* not an active claim */ }
+  }
 }
 
 function replaceMarker(
   dir: string,
+  deps: LockAcquireDependencies = {},
   ops: Partial<MarkerReplacementOps> = {},
 ): MarkerReplacementOutcome {
+  // The recovery marker is the serialization point for stale-owner removal.
+  // A contender must hold it, then re-check the owner while holding it, before
+  // it may remove anything. This closes the gap where two contenders both saw
+  // the old owner as stale and the slower one deleted the faster one's newly
+  // published marker.
+  const recoveryDir = `${dir}.recovery`
+  let recoveryClaim: RecoveryClaim | null = null
+  try {
+    recoveryClaim = tryAcquireRecoveryClaim(recoveryDir, deps)
+  } catch (createError) {
+    return { replaced: false, createError }
+  }
+  if (!recoveryClaim) return { replaced: false }
+
   const removeMarker = ops.removeMarker ?? markerReplacementOps.removeMarker
   const createMarker = ops.createMarker ?? markerReplacementOps.createMarker
   let removeError: unknown
-  try { removeMarker(dir) } catch (error) { removeError = error }
+  let createError: unknown
+  let replaced = false
+  let claimReleaseError: unknown
   try {
-    return { replaced: createMarker(dir), removeError }
-  } catch (createError) {
-    return { replaced: false, removeError, createError }
+    // The owner may have changed while this contender waited for the recovery
+    // claim. Never act on the stale observation made by the caller.
+    const claimStillOwned = readOwnerRecord(recoveryClaim.dir)?.raw === recoveryClaim.owner
+    const primaryStillStale = claimStillOwned && !isOwnerAlive(dir, deps)
+    if (primaryStillStale) {
+      try { removeMarker(dir) } catch (error) { removeError = error }
+      try { replaced = createMarker(dir) } catch (error) { createError = error }
+    }
+  } finally {
+    try {
+      removeReleasedMarker(recoveryDir, deps.releaseRecoveryClaim)
+    } catch (error) {
+      claimReleaseError = error
+    } finally {
+      activeRecoveryClaims.delete(recoveryDir)
+    }
+  }
+
+  return {
+    replaced,
+    ...(removeError !== undefined ? { removeError } : {}),
+    ...(createError !== undefined ? { createError } : {}),
+    ...(replaced && claimReleaseError !== undefined ? { lingeringClaim: recoveryDir } : {}),
+    ...(!replaced && createError === undefined && claimReleaseError !== undefined
+      ? { createError: claimReleaseError }
+      : {}),
   }
 }
 
-function stealLock(dir: string, ops: Partial<MarkerReplacementOps> = {}): boolean {
-  const outcome = replaceMarker(dir, ops)
+function stealLock(
+  dir: string,
+  deps: LockAcquireDependencies = {},
+): { acquired: boolean; lingeringClaim?: string } {
+  const outcome = replaceMarker(dir, deps, deps.markerReplacement)
   // The generic lock APIs historically propagate unexpected marker-creation
   // failures. Only the backend singleton converts them into operator guidance.
   if (outcome.createError) throw outcome.createError
-  return outcome.replaced
-}
-
-function makeRelease(dir: string): ReleaseFn {
-  let released = false
-  return async () => {
-    if (released) return
-    released = true
-    try { rmSync(dir, { recursive: true, force: true }) } catch { /* another process cleaned it up */ }
+  return {
+    acquired: outcome.replaced,
+    ...(outcome.lingeringClaim ? { lingeringClaim: outcome.lingeringClaim } : {}),
   }
 }
 
-interface LockAcquireDependencies {
-  /** Overrides stale-marker replacement only; initial acquisition stays real. */
-  markerReplacement?: Partial<MarkerReplacementOps>
+function removeReleasedMarker(
+  dir: string,
+  removeMarker: (dir: string) => void = markerReplacementOps.removeMarker,
+): void {
+  try {
+    removeMarker(dir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return
+    throw error
+  }
+}
+
+function makeRelease(
+  dir: string,
+  deps: LockAcquireDependencies = {},
+  lingeringClaim?: string,
+): ReleaseFn {
+  let released = false
+  return async () => {
+    if (released) return
+    if (lingeringClaim) removeReleasedMarker(lingeringClaim)
+    removeReleasedMarker(dir, deps.releaseMarker)
+    released = true
+  }
 }
 
 export async function acquireLock(
@@ -104,12 +298,11 @@ export async function acquireLock(
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS
-  let stealAttempted = false
   while (true) {
-    if (tryCreateMarker(dir)) return makeRelease(dir)
-    if (!stealAttempted && !isOwnerAlive(dir)) {
-      stealAttempted = true
-      if (stealLock(dir, deps.markerReplacement)) return makeRelease(dir)
+    if (tryCreateMarker(dir, deps)) return makeRelease(dir, deps)
+    if (!isOwnerAlive(dir, deps)) {
+      const stolen = stealLock(dir, deps)
+      if (stolen.acquired) return makeRelease(dir, deps, stolen.lingeringClaim)
     }
     if (Date.now() >= deadline) throw new Error(`timed out acquiring lock at ${path}`)
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
@@ -122,8 +315,11 @@ export async function tryAcquireLock(
 ): Promise<ReleaseFn | null> {
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
-  if (tryCreateMarker(dir)) return makeRelease(dir)
-  if (!isOwnerAlive(dir) && stealLock(dir, deps.markerReplacement)) return makeRelease(dir)
+  if (tryCreateMarker(dir, deps)) return makeRelease(dir, deps)
+  if (!isOwnerAlive(dir, deps)) {
+    const stolen = stealLock(dir, deps)
+    if (stolen.acquired) return makeRelease(dir, deps, stolen.lingeringClaim)
+  }
   return null
 }
 
@@ -151,12 +347,17 @@ export function decideSingletonAction(opts: {
   return opts.force ? 'takeover' : 'refuse'
 }
 
-function readOwnerPid(dir: string): number | null {
-  try {
-    const { pid } = JSON.parse(readFileSync(ownerFile(dir), 'utf-8')) as { pid: number }
-    return isSupportedProcessId(pid) ? pid : null
-  } catch {
-    return null
+interface SingletonOwner {
+  pid: number
+  processIdentity?: string
+}
+
+function readSingletonOwner(dir: string): SingletonOwner | null {
+  const record = readOwnerRecord(dir)
+  if (!record || !isSupportedProcessId(record.pid)) return null
+  return {
+    pid: record.pid,
+    ...(record.processIdentity ? { processIdentity: record.processIdentity } : {}),
   }
 }
 
@@ -166,39 +367,91 @@ export type SingletonFailure =
   | 'owner-survived-sigkill'
   | 'marker-recreation-failed'
 
-function uncertainRetirementFailure(
+type OwnerLifetimeObservation =
+  | { state: 'same' }
+  | { state: 'gone' | 'replaced' }
+  | { state: 'unknown'; failure: SingletonFailure }
+
+function observeOwnerLifetime(
   pid: number,
-  sigkillAttempted = false,
-): SingletonFailure | null {
-  const liveness = probeProcessLiveness(pid)
-  if (liveness.state === 'gone') return null
-  if (liveness.state === 'unknown' && liveness.code === 'EPERM') {
-    return 'owner-retirement-permission-denied'
+  expectedIdentity: string | undefined,
+  deps: LockAcquireDependencies,
+): OwnerLifetimeObservation {
+  if (!expectedIdentity) {
+    return { state: 'unknown', failure: 'owner-retirement-unconfirmed' }
   }
-  if (liveness.state === 'alive' && sigkillAttempted) return 'owner-survived-sigkill'
-  return 'owner-retirement-unconfirmed'
+  const liveness = (deps.probeProcessLiveness ?? probeProcessLiveness)(pid)
+  if (liveness.state === 'gone' || liveness.state === 'invalid') return { state: 'gone' }
+  const currentIdentity = (deps.processIdentity ?? processIdentity)(pid)
+  if (!currentIdentity) {
+    return { state: 'unknown', failure: 'owner-retirement-unconfirmed' }
+  }
+  if (currentIdentity !== expectedIdentity) return { state: 'replaced' }
+  if (liveness.state === 'unknown') {
+    return {
+      state: 'unknown',
+      failure: liveness.code === 'EPERM'
+        ? 'owner-retirement-permission-denied'
+        : 'owner-retirement-unconfirmed',
+    }
+  }
+  return { state: 'same' }
 }
 
-function killAndWait(pid: number, timeoutMs = 3_000): SingletonFailure | null {
+function completedOrFailure(
+  observation: OwnerLifetimeObservation,
+): SingletonFailure | null | undefined {
+  if (observation.state === 'gone' || observation.state === 'replaced') return null
+  if (observation.state === 'unknown') return observation.failure
+  return undefined
+}
+
+function killAndWait(
+  pid: number,
+  expectedIdentity: string | undefined,
+  deps: LockAcquireDependencies,
+  timeoutMs = 3_000,
+): SingletonFailure | null {
+  const beforeTerm = completedOrFailure(observeOwnerLifetime(pid, expectedIdentity, deps))
+  if (beforeTerm !== undefined) return beforeTerm
   try {
     process.kill(pid, 'SIGTERM')
-  } catch {
-    return uncertainRetirementFailure(pid)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      return 'owner-retirement-permission-denied'
+    }
+    const afterSignalError = completedOrFailure(
+      observeOwnerLifetime(pid, expectedIdentity, deps),
+    )
+    if (afterSignalError !== undefined) return afterSignalError
   }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (!processMayBeAlive(pid)) return null
+    const duringGrace = completedOrFailure(observeOwnerLifetime(pid, expectedIdentity, deps))
+    if (duringGrace !== undefined) return duringGrace
     const start = Date.now()
     while (Date.now() - start < 50) { /* brief spin — boot path, no event loop yet */ }
   }
-  try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  const beforeKill = completedOrFailure(observeOwnerLifetime(pid, expectedIdentity, deps))
+  if (beforeKill !== undefined) return beforeKill
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      return 'owner-retirement-permission-denied'
+    }
+  }
   const drainDeadline = Date.now() + 500
   while (Date.now() < drainDeadline) {
-    if (!processMayBeAlive(pid)) return null
+    const duringDrain = completedOrFailure(observeOwnerLifetime(pid, expectedIdentity, deps))
+    if (duringDrain !== undefined) return duringDrain
     const start = Date.now()
     while (Date.now() - start < 25) { /* brief spin — boot path, no event loop yet */ }
   }
-  return uncertainRetirementFailure(pid, true)
+  const finalObservation = observeOwnerLifetime(pid, expectedIdentity, deps)
+  const finalResult = completedOrFailure(finalObservation)
+  if (finalResult !== undefined) return finalResult
+  return 'owner-survived-sigkill'
 }
 
 /**
@@ -215,7 +468,7 @@ function killAndWait(pid: number, timeoutMs = 3_000): SingletonFailure | null {
 export function backendSingletonOwner(path: string): number | null {
   const dir = markerDir(path)
   if (!isOwnerAlive(dir)) return null
-  return readOwnerPid(dir)
+  return readSingletonOwner(dir)?.pid ?? null
 }
 
 export interface SingletonResult {
@@ -330,17 +583,18 @@ export function acquireBackendSingleton(
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
 
-  if (tryCreateMarker(dir)) return { acquired: true, action: 'acquire' }
+  if (tryCreateMarker(dir, deps)) return { acquired: true, action: 'acquire' }
 
-  const ownerPid = readOwnerPid(dir)
-  const ownerAlive = isOwnerAlive(dir)
+  const owner = readSingletonOwner(dir)
+  const ownerPid = owner?.pid ?? null
+  const ownerAlive = isOwnerAlive(dir, deps)
   const action = decideSingletonAction({ ownerPresent: true, ownerAlive, force: opts.force ?? false })
 
   if (action === 'refuse') {
     return { acquired: false, action, ownerPid: ownerPid ?? undefined }
   }
   if (action === 'takeover' && ownerPid) {
-    const failure = killAndWait(ownerPid)
+    const failure = killAndWait(ownerPid, owner?.processIdentity, deps)
     if (failure) {
       return {
         acquired: false,
@@ -351,8 +605,19 @@ export function acquireBackendSingleton(
     }
   }
   // 'steal' (dead owner) or post-takeover: clear and re-create the marker.
-  const replacement = replaceMarker(dir, deps.markerReplacement)
-  if (replacement.replaced) return { acquired: true, action }
+  const replacement = replaceMarker(dir, deps, deps.markerReplacement)
+  if (replacement.replaced) {
+    if (replacement.lingeringClaim) {
+      try {
+        removeReleasedMarker(replacement.lingeringClaim, deps.releaseRecoveryClaim)
+      } catch {
+        // The singleton marker is already ours. Keep that ownership even if a
+        // second recovery-claim cleanup attempt also fails; a future stale-lock
+        // recovery can safely reclaim the claim by its recorded owner identity.
+      }
+    }
+    return { acquired: true, action }
+  }
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.
   const detail = describeMarkerError(replacement.createError ?? replacement.removeError)

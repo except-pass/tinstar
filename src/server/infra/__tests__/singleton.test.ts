@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -69,12 +69,23 @@ describe('acquireBackendSingleton', () => {
   it('refuses a forced takeover when owner retirement is permission denied', () => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)
-    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'owner-42',
+    }))
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
     })
 
-    const result = acquireBackendSingleton(lockPath(), { force: true })
+    const result = acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({
+        state: 'unknown',
+        code: 'EPERM',
+        reason: 'operation not permitted',
+      }),
+      processIdentity: () => 'owner-42',
+    })
 
     expect(result).toEqual({
       acquired: false,
@@ -82,21 +93,22 @@ describe('acquireBackendSingleton', () => {
       ownerPid: 42,
       failure: 'owner-retirement-permission-denied',
     })
-    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
-    expect(kill).toHaveBeenCalledWith(42, 0)
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({ pid: 42 })
   })
 
   it('completes a forced takeover when SIGKILL proves the prior owner is gone', () => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)
-    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'owner-42',
+    }))
     let dead = false
     const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
       if (signal === 'SIGKILL') dead = true
-      if (signal === 0 && dead) {
-        throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
-      }
       return true
     })
     vi.spyOn(Date, 'now').mockImplementation((() => {
@@ -104,7 +116,10 @@ describe('acquireBackendSingleton', () => {
       return () => { now += 10; return now }
     })())
 
-    expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => dead ? { state: 'gone' } : { state: 'alive' },
+      processIdentity: () => dead ? null : 'owner-42',
+    })).toEqual({
       acquired: true,
       action: 'takeover',
     })
@@ -117,20 +132,72 @@ describe('acquireBackendSingleton', () => {
   it('reports a prior owner that remains alive after SIGKILL', () => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)
-    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'owner-42',
+    }))
     const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
     vi.spyOn(Date, 'now').mockImplementation((() => {
       let now = 0
       return () => { now += 10; return now }
     })())
 
-    expect(acquireBackendSingleton(lockPath(), { force: true })).toEqual({
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({ state: 'alive' }),
+      processIdentity: () => 'owner-42',
+    })).toEqual({
       acquired: false,
       action: 'takeover',
       ownerPid: 42,
       failure: 'owner-survived-sigkill',
     })
     expect(kill).toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8')).pid).toBe(42)
+  })
+
+  it('does not SIGKILL a replacement that reuses the pid after SIGTERM', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'owner-a',
+    }))
+    let identity = 'owner-a'
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') identity = 'owner-b'
+      return true
+    })
+
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({ state: 'alive' }),
+      processIdentity: () => identity,
+    })).toEqual({ acquired: true, action: 'takeover' })
+
+    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+    expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8')).pid)
+      .toBe(process.pid)
+  })
+
+  it('refuses automated force when a legacy marker has no process identity', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({ state: 'alive' }),
+      processIdentity: () => 'current-pid-42-identity',
+    })).toEqual({
+      acquired: false,
+      action: 'takeover',
+      ownerPid: 42,
+      failure: 'owner-retirement-unconfirmed',
+    })
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8')).pid).toBe(42)
   })
 
@@ -185,6 +252,26 @@ describe('acquireBackendSingleton', () => {
       failure: 'marker-recreation-failed',
       detail: `EACCES: permission denied, mkdir '${mark}'`,
     })
+  })
+
+  it('retries recovery-claim cleanup after successfully taking singleton ownership', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 1 }))
+    const releaseRecoveryClaim = vi.fn()
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('transient cleanup failure'), { code: 'EACCES' })
+      })
+      .mockImplementationOnce((claim: string) => { rmSync(claim, { recursive: true }) })
+
+    expect(acquireBackendSingleton(lockPath(), {}, { releaseRecoveryClaim })).toEqual({
+      acquired: true,
+      action: 'steal',
+    })
+
+    expect(releaseRecoveryClaim).toHaveBeenCalledTimes(2)
+    expect(existsSync(mark)).toBe(true)
+    expect(existsSync(`${mark}.recovery`)).toBe(false)
   })
 })
 
