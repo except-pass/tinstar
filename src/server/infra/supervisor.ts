@@ -88,15 +88,18 @@ export class Supervisor {
       throw new Error(`${this.opts.name} shutdown is still pending`)
     }
     if (this.stopFailurePending && this.pid) {
-      const status = this.trackedProcessState(this.pid)
-      if (status === 'unknown') {
-        throw new Error(`${this.opts.name} shutdown identity is still unresolved`)
-      }
-      if (this.retirementFailurePending) this.resetFailedRetirement()
-      else if (status === 'gone' || status === 'replaced') this.finishStop()
-      else {
-        this.stopFailurePending = false
-        resumeTrackedProcess = true
+      if (this.retirementFailurePending) {
+        this.resetFailedRetirement()
+      } else {
+        const status = this.trackedProcessState(this.pid)
+        if (status === 'unknown') {
+          throw new Error(`${this.opts.name} shutdown identity is still unresolved`)
+        }
+        if (status === 'gone' || status === 'replaced') this.finishStop()
+        else {
+          this.stopFailurePending = false
+          resumeTrackedProcess = true
+        }
       }
     }
     this.state = 'starting'
@@ -598,7 +601,25 @@ export class Supervisor {
             },
           }
         }
-        if (recordedPortOwnership === false) return { state: 'spawn' }
+        if (recordedPortOwnership === false) {
+          const configuredPortOwnership = this.processOwnsListeningPort(s.pid, this.opts.port)
+          if (configuredPortOwnership === true) {
+            return {
+              state: 'adopted',
+              process: {
+                pid: s.pid,
+                processIdentity: currentIdentity,
+                needsServiceValidation: false,
+              },
+            }
+          }
+          return {
+            state: 'unverified',
+            reason: configuredPortOwnership === false
+              ? `${this.opts.name} process ${s.pid} owns neither recorded port ${s.port} nor configured port ${this.opts.port}; refusing to spawn while it is live`
+              : `${this.opts.name} process ${s.pid} left recorded port ${s.port}, but configured-port ownership could not be inspected; refusing to spawn while it is live`,
+          }
+        }
         return {
           state: 'unverified',
           reason: `${this.opts.name} process ${s.pid} uses recorded port ${s.port}, but listener ownership could not be inspected; refusing to adopt or replace it`,

@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getListeningProcessIds, Supervisor } from '../../infra/supervisor'
-import { processIdentity } from '../../infra/process-liveness'
+import { probeProcessLiveness, processIdentity } from '../../infra/process-liveness'
 
 let tmp: string
 
@@ -500,6 +500,7 @@ describe('Supervisor adoption', () => {
       await sup.start()
       expect(sup.pid).not.toBe(oldPid)
       expect(sup.state).toBe('ready')
+      expect(probeProcessLiveness(oldPid).state).toBe('gone')
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -569,6 +570,7 @@ describe('Supervisor adoption', () => {
       await sup.start()
       expect(sup.pid).not.toBe(oldPid)
       expect(sup.state).toBe('ready')
+      expect(probeProcessLiveness(oldPid).state).toBe('gone')
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -609,6 +611,83 @@ describe('Supervisor adoption', () => {
       expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
       expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
       expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('refuses to duplicate a live current-format process with no proven listener', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: oldPid,
+      processIdentity: oldIdentity,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const kill = vi.spyOn(process, 'kill')
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set(),
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('refusing to spawn while it is live')
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('adopts a current-format process already serving the configured port', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      processIdentity: oldIdentity,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: port => port === 9999 ? new Set([oldPid]) : new Set(),
+    })
+
+    try {
+      await sup.start()
+      expect(sup.pid).toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).toMatchObject({
+        pid: oldPid,
+        port: 9999,
+      })
+      await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
@@ -668,6 +747,54 @@ describe('Supervisor adoption', () => {
       expect(sup.state).toBe('ready')
       expect(stateChanges).not.toContain('idle')
       await sup.stop()
+    } finally {
+      try { realKill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('re-reads durable state when a failed retirement loses identity evidence', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const realKill = process.kill.bind(process)
+    let identity: string | null = 'process-a'
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === oldPid && signal === 'SIGTERM') {
+        identity = null
+        return true
+      }
+      return realKill(pid, signal)
+    })
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      shutdownGraceMs: 0,
+      processIdentity: () => identity,
+      listeningProcessIds: port => port === 1234 ? new Set([oldPid]) : new Set(),
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('retry will revalidate it')
+      expect(sup.pid).toBe(oldPid)
+
+      await expect(sup.start()).rejects.toThrow('identity is unavailable')
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
     } finally {
       try { realKill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
