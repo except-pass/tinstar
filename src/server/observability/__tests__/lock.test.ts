@@ -230,6 +230,7 @@ describe('observability lock', () => {
           message: expect.stringContaining(path),
           cause: cleanupError,
         })
+        expect(Object.prototype.propertyIsEnumerable.call(result.error, 'cause')).toBe(false)
       }
     } finally {
       vi.useRealTimers()

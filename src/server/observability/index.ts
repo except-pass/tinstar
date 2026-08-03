@@ -116,6 +116,9 @@ export class ObservabilityStack {
       const onSupervisorChange = (name: string, s: import('./types.js').ObservabilityState) => {
         this.onSupervisorStateChange(name, s)
       }
+      const onSupervisorWarning = (name: string, message: string) => {
+        log.warn('observability', `${name}: ${message}`)
+      }
 
       this.prom = new Supervisor({
         name: 'prometheus',
@@ -134,6 +137,7 @@ export class ObservabilityStack {
         },
         expectedBinaryName: 'prometheus',
         onStateChange: onSupervisorChange,
+        onWarning: onSupervisorWarning,
       })
       this.alloy = new Supervisor({
         name: 'alloy',
@@ -154,6 +158,7 @@ export class ObservabilityStack {
         },
         expectedBinaryName: 'alloy',
         onStateChange: onSupervisorChange,
+        onWarning: onSupervisorWarning,
       })
 
       await this.prom.start()
@@ -169,6 +174,13 @@ export class ObservabilityStack {
         log.error('observability', 'telemetry stack degraded after supervisor start', { promState: this.prom.state, alloyState: this.alloy.state })
       }
     } catch (err) {
+      try {
+        await this.stopUnlocked()
+      } catch (cleanupError) {
+        log.warn('observability', 'telemetry cleanup after failed start was incomplete', {
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        })
+      }
       // Swallow-and-record: callers check state/lastError, no unhandled rejections
       this.state = 'degraded'
       this.lastError = (err as Error).message

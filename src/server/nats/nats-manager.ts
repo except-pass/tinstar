@@ -31,6 +31,7 @@ export class NatsManager {
   }
 
   async start(): Promise<void> {
+    let createdSupervisor: Supervisor | null = null
     try {
       if (this.supervisor && !this.supervisorStarted) {
         const staleSupervisor = this.supervisor
@@ -84,7 +85,7 @@ export class NatsManager {
       log.info('nats', 'nats-server installed', { binaryPath: install.binaryPath })
 
       this.state = 'starting'
-      this.supervisor = new Supervisor({
+      createdSupervisor = new Supervisor({
         name: 'nats-server',
         binaryPath: install.binaryPath,
         args: ['-a', '127.0.0.1', '-p', String(this.port), '-js', '-sd', jetstreamDir],
@@ -93,7 +94,9 @@ export class NatsManager {
         probe: () => this.probe(),
         expectedBinaryName: 'nats-server',
         onStateChange: (_name, s) => { this.state = s },
+        onWarning: (name, message) => { log.warn('nats', `${name}: ${message}`) },
       })
+      this.supervisor = createdSupervisor
 
       await this.supervisor.start()
       this.supervisorStarted = true
@@ -104,6 +107,17 @@ export class NatsManager {
         log.warn('nats', `nats-server degraded after start: ${this.state}`)
       }
     } catch (err) {
+      const failedSupervisor = this.supervisor
+      if (failedSupervisor && failedSupervisor === createdSupervisor && !this.supervisorStarted) {
+        try {
+          await failedSupervisor.stop()
+          if (this.supervisor === failedSupervisor) this.supervisor = null
+        } catch (cleanupError) {
+          log.warn('nats', 'cleanup after failed start was incomplete', {
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          })
+        }
+      }
       this.state = 'degraded'
       log.error('nats', `failed to start nats-server: ${(err as Error).message}`)
     }

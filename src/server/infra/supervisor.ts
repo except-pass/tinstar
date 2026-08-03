@@ -1,17 +1,21 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
+  constants,
+  copyFileSync,
   writeFileSync,
   existsSync,
   linkSync,
+  readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   mkdirSync,
   readlinkSync,
   realpathSync,
   renameSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
 import {
   compareProcessIdentity,
@@ -38,6 +42,7 @@ export interface SupervisorOpts {
   healthIntervalMs?: number            // default: 30000
   healthFailureThreshold?: number      // default: 2
   onStateChange?: (name: string, state: ServiceState) => void
+  onWarning?: (name: string, message: string) => void
   /** Process-identity reader; injectable for deterministic lifecycle tests. */
   processIdentity?: typeof readProcessIdentity
   /** Listener-owner reader; injectable for deterministic legacy migration tests. */
@@ -54,6 +59,7 @@ interface AdoptedProcess {
 
 type AdoptionResult =
   | { state: 'adopted'; process: AdoptedProcess }
+  | { state: 'retire'; process: AdoptedProcess }
   | { state: 'spawn' }
   | { state: 'unverified'; reason: string; quarantineGeneration?: string }
 
@@ -108,6 +114,12 @@ export class Supervisor {
       this.setState('degraded')
       throw new Error(adoption.reason)
     }
+    if (adoption.state === 'retire') {
+      this.pid = adoption.process.pid
+      this.trackedProcessIdentity = adoption.process.processIdentity
+      await this.stop()
+      this.state = 'starting'
+    }
     if (adoption.state === 'adopted') {
       if (adoption.process.needsServiceValidation) {
         const serviceMatches = await this.waitForReady()
@@ -120,6 +132,12 @@ export class Supervisor {
           adoption.process.pid,
           this.opts.port,
         )
+        if (stillOwnsPort === null) {
+          this.opts.onWarning?.(
+            this.opts.name,
+            `listener ownership for process ${adoption.process.pid} could not be inspected; proceeding with executable, lifetime, and readiness evidence`,
+          )
+        }
         if (!serviceMatches || !lifetimeMatches || stillOwnsPort === false) {
           this.setState('degraded')
           throw new Error(
@@ -159,7 +177,7 @@ export class Supervisor {
       } finally {
         // Quarantine is recovery hygiene, not process ownership. A filesystem
         // failure must not leave shutdown timers or supervisor state wedged.
-        this.finishStop()
+        this.finishStop(quarantineError !== undefined)
       }
       if (quarantineError !== undefined) throw quarantineError
       return
@@ -213,12 +231,7 @@ export class Supervisor {
   }
 
   private spawnOnce(): void {
-    // Clear any orphan still holding our port before binding a fresh child.
-    // Without this, a process that survived a crash/stop (e.g. stop() killed a
-    // stale tracked pid while the real listener lived on) makes every spawn hit
-    // EADDRINUSE and die immediately — leaving a dead tracked pid + a live
-    // orphan, the exact loop that wedges restarts.
-    this.reapPortOrphan()
+    this.assertPortAvailable()
     this.child = spawn(this.opts.binaryPath, this.opts.args, {
       detached: true,
       stdio: 'ignore',
@@ -315,14 +328,18 @@ export class Supervisor {
     return (this.opts.processIdentity ?? readProcessIdentity)(pid)
   }
 
-  /** Best-effort: clear any foreign listener before a fresh child binds. */
-  private reapPortOrphan(): void {
-    const listenerPids = getListeningProcessIds(this.opts.port)
-    if (listenerPids === null) return
-    for (const pid of listenerPids) {
-      if (pid !== this.pid) {
-        try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
-      }
+  /** Never signal an unverified listener merely because it owns our port. */
+  private assertPortAvailable(): void {
+    const listenerPids = this.readListeningProcessIds(this.opts.port)
+    if (listenerPids === null) {
+      throw new Error(
+        `${this.opts.name} port ${this.opts.port} ownership could not be inspected; refusing to spawn without proving the port is free`,
+      )
+    }
+    if (listenerPids && listenerPids.size > 0) {
+      throw new Error(
+        `${this.opts.name} port ${this.opts.port} is already owned by process ${[...listenerPids].join(', ')}; refusing to replace an unverified listener`,
+      )
     }
   }
 
@@ -378,13 +395,13 @@ export class Supervisor {
     if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null }
   }
 
-  private finishStop(): void {
+  private finishStop(preserveQuarantine = false): void {
     this.stopHealthLoop()
     if (this.restartTimer) clearTimeout(this.restartTimer)
     this.restartTimer = null
     if (this.child && this.exitHandler) this.child.off('exit', this.exitHandler)
     this.exitHandler = null
-    this.cleanupState()
+    this.cleanupState(preserveQuarantine)
     this.stopping = false
     this.stopFailurePending = false
     this.setState('idle')
@@ -422,13 +439,13 @@ export class Supervisor {
     }
   }
 
-  private cleanupState(): void {
+  private cleanupState(preserveQuarantine = false): void {
     const f = this.stateFile()
     if (this.ownsStateFile && existsSync(f)) {
       try { unlinkSync(f) } catch { /* ignore */ }
     }
     this.ownsStateFile = false
-    this.quarantineStateGeneration = null
+    if (!preserveQuarantine) this.quarantineStateGeneration = null
     this.pid = 0
     this.child = null
     this.trackedProcessIdentity = null
@@ -436,6 +453,13 @@ export class Supervisor {
 
   private tryAdopt(): AdoptionResult {
     const stateFile = this.stateFile()
+    const interruptedRecovery = this.restoreInterruptedQuarantine(stateFile)
+    if (interruptedRecovery) {
+      return {
+        state: 'unverified',
+        reason: `${this.opts.name} ${interruptedRecovery}; refusing to spawn a replacement`,
+      }
+    }
     if (!existsSync(stateFile)) return { state: 'spawn' }
     let rawState: string | null = null
     try {
@@ -479,9 +503,21 @@ export class Supervisor {
           }
         }
         if (s.port !== this.opts.port) {
+          const recordedPortOwnership = this.processOwnsListeningPort(s.pid, s.port)
+          if (recordedPortOwnership === true) {
+            return {
+              state: 'retire',
+              process: {
+                pid: s.pid,
+                processIdentity: currentIdentity,
+                needsServiceValidation: false,
+              },
+            }
+          }
+          if (recordedPortOwnership === false) return { state: 'spawn' }
           return {
             state: 'unverified',
-            reason: `${this.opts.name} legacy process ${s.pid} is still live on recorded port ${s.port}, but this version expects ${this.opts.port}; stop it before replacement`,
+            reason: `${this.opts.name} legacy process ${s.pid} uses recorded port ${s.port}, but listener ownership could not be inspected; refusing to adopt or replace it`,
           }
         }
         if (this.processOwnsListeningPort(s.pid, s.port) === false) {
@@ -522,6 +558,19 @@ export class Supervisor {
         }
         if (!actual.includes(this.opts.expectedBinaryName)) return { state: 'spawn' }
       }
+      if (s.port !== this.opts.port) {
+        // Current-format state carries a boot-scoped lifetime identity. Once
+        // that exact process and its expected binary are confirmed, it is safe
+        // to retire before rebinding on the new configured port.
+        return {
+          state: 'retire',
+          process: {
+            pid: s.pid,
+            processIdentity: currentIdentity,
+            needsServiceValidation: false,
+          },
+        }
+      }
       return {
         state: 'adopted',
         process: {
@@ -540,8 +589,12 @@ export class Supervisor {
   }
 
   private processOwnsListeningPort(pid: number, port: number): boolean | null {
-    const listenerPids = (this.opts.listeningProcessIds ?? getListeningProcessIds)(port)
+    const listenerPids = this.readListeningProcessIds(port)
     return listenerPids?.has(pid) ?? null
+  }
+
+  private readListeningProcessIds(port: number): Set<number> | null {
+    return (this.opts.listeningProcessIds ?? getListeningProcessIds)(port)
   }
 
   private quarantineUnverifiedState(): void {
@@ -549,35 +602,114 @@ export class Supervisor {
     if (expectedGeneration === null) return
     const stateFile = this.stateFile()
     const token = `${Date.now()}-${randomUUID()}`
-    const staging = `${stateFile}.quarantine-${token}`
+    let staging = `${stateFile}.quarantine-${token}`
     try {
       renameSync(stateFile, staging)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.quarantineStateGeneration = null
+        const matching = this.quarantineStagingFiles(stateFile).filter((candidate) => {
+          try { return readFileSync(candidate, 'utf-8') === expectedGeneration } catch { return false }
+        })
+        if (matching.length === 0) {
+          this.quarantineStateGeneration = null
+          return
+        }
+        if (matching.length > 1) {
+          throw new Error(`${this.opts.name} has multiple interrupted quarantine generations`)
+        }
+        staging = matching[0]
+      } else {
+        throw error
+      }
+    }
+
+    try {
+      const displacedGeneration = readFileSync(staging, 'utf-8')
+      if (displacedGeneration === expectedGeneration) {
+        renameSync(staging, `${stateFile}.invalid-${token}`)
+      } else {
+        // The canonical path changed after validation. Restore that newer file
+        // without overwriting a still-newer generation published concurrently.
+        this.restoreDisplacedState(staging, stateFile, token)
+      }
+      this.quarantineStateGeneration = null
+    } catch (error) {
+      if (existsSync(staging)) {
+        try {
+          this.restoreDisplacedState(staging, stateFile, token)
+        } catch (restoreError) {
+          throw new AggregateError(
+            [error, restoreError],
+            `${this.opts.name} state quarantine and restoration both failed`,
+          )
+        }
+      }
+      throw error
+    }
+  }
+
+  private restoreDisplacedState(staging: string, stateFile: string, token: string): void {
+    try {
+      linkSync(staging, stateFile)
+      unlinkSync(staging)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        renameSync(staging, `${stateFile}.displaced-${token}`)
+        return
+      }
+    }
+
+    // Some mounted filesystems do not support hard links. COPYFILE_EXCL keeps
+    // the fallback non-clobbering even if another writer publishes meanwhile.
+    try {
+      copyFileSync(staging, stateFile, constants.COPYFILE_EXCL)
+      unlinkSync(staging)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        renameSync(staging, `${stateFile}.displaced-${token}`)
         return
       }
       throw error
     }
+  }
 
-    let displacedGeneration: string | null = null
-    try { displacedGeneration = readFileSync(staging, 'utf-8') } catch { /* restore below */ }
-    if (displacedGeneration === expectedGeneration) {
-      renameSync(staging, `${stateFile}.invalid-${token}`)
-      this.quarantineStateGeneration = null
-      return
-    }
-
-    // The canonical path changed after validation. Restore that newer file
-    // without overwriting any still-newer generation published concurrently.
+  private restoreInterruptedQuarantine(stateFile: string): string | null {
+    const interrupted = this.quarantineStagingFiles(stateFile)
+    if (interrupted.length === 0) return null
     try {
-      linkSync(staging, stateFile)
-      unlinkSync(staging)
+      const ranked = [...interrupted].sort((left, right) => {
+        const timeDelta = statSync(left).mtimeMs - statSync(right).mtimeMs
+        return timeDelta || left.localeCompare(right)
+      })
+      if (existsSync(stateFile)) {
+        for (const candidate of ranked) {
+          renameSync(candidate, `${stateFile}.displaced-recovered-${randomUUID()}`)
+        }
+        return null
+      }
+      const candidate = ranked.pop()!
+      for (const older of ranked) {
+        renameSync(older, `${stateFile}.displaced-recovered-${randomUUID()}`)
+      }
+      this.restoreDisplacedState(candidate, stateFile, `recovered-${randomUUID()}`)
+      return null
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      renameSync(staging, `${stateFile}.displaced-${token}`)
+      const detail = error instanceof Error ? error.message : String(error)
+      return `could not restore interrupted state quarantine in ${dirname(stateFile)}: ${detail}`
     }
-    this.quarantineStateGeneration = null
+  }
+
+  private quarantineStagingFiles(stateFile: string): string[] {
+    const prefix = `${basename(stateFile)}.quarantine-`
+    try {
+      return readdirSync(dirname(stateFile))
+        .filter(name => name.startsWith(prefix))
+        .sort()
+        .map(name => join(dirname(stateFile), name))
+    } catch {
+      return []
+    }
   }
 }
 
@@ -624,6 +756,7 @@ function inspectionOutput(value: string | Buffer | undefined): string {
 }
 
 function isCleanListenerMiss(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false
   const failure = error as ListenerInspectionFailure
   return (
     (failure.status === 1 || failure.code === 1 || failure.code === '1')
@@ -640,17 +773,36 @@ export function getListeningProcessIds(
   platform: NodeJS.Platform = process.platform,
 ): Set<number> | null {
   if (platform !== 'linux' && platform !== 'darwin') return null
+  let listenerObservedWithoutPid = false
+  if (platform === 'linux') {
+    try {
+      const output = run(
+        'ss',
+        ['-H', '-ltnp', `sport = :${port}`],
+        { encoding: 'utf-8', timeout: 2_000 },
+      )
+      const pids = new Set<number>()
+      for (const match of output.matchAll(/pid=(\d+)/gu)) pids.add(Number(match[1]))
+      if (pids.size > 0 || output.trim() === '') return pids
+      // Restricted process visibility can show a listener without its owner.
+      // Fall back to lsof before returning an inconclusive result.
+      listenerObservedWithoutPid = true
+    } catch { /* use the documented lsof dependency as a fallback */ }
+  }
   try {
     const output = run(
       'lsof',
-      ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
+      ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
       { encoding: 'utf-8', timeout: 2_000 },
     )
     const pids = new Set<number>()
     for (const match of output.matchAll(/^p(\d+)$/gmu)) pids.add(Number(match[1]))
-    return pids
+    if (pids.size > 0) return pids
+    return output.trim() === '' && !listenerObservedWithoutPid ? pids : null
   } catch (error) {
-    if (isCleanListenerMiss(error)) return new Set()
+    if (isCleanListenerMiss(error)) {
+      return listenerObservedWithoutPid ? null : new Set()
+    }
     return null
   }
 }

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getListeningProcessIds, Supervisor } from '../../infra/supervisor'
+import { processIdentity } from '../../infra/process-liveness'
 
 let tmp: string
 
@@ -60,21 +61,82 @@ describe('Supervisor spawn + readiness', () => {
     expect(sup.state).toBe('degraded')
     await sup.stop()
   })
+
+  it('refuses to signal or replace an unverified listener on the service port', async () => {
+    const launched = join(tmp, 'launched')
+    const bin = join(tmp, 'must-not-launch.sh')
+    writeFileSync(bin, `#!/bin/sh\ntouch ${launched}\nsleep 5\n`)
+    chmodSync(bin, 0o755)
+    const kill = vi.spyOn(process, 'kill')
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      listeningProcessIds: () => new Set([42]),
+    })
+
+    await expect(sup.start()).rejects.toThrow('refusing to replace an unverified listener')
+
+    expect(existsSync(launched)).toBe(false)
+    expect(kill).not.toHaveBeenCalled()
+  })
+
+  it('fails closed before spawning when listener ownership is unavailable', async () => {
+    const launched = join(tmp, 'launched')
+    const bin = join(tmp, 'must-not-launch.sh')
+    writeFileSync(bin, `#!/bin/sh\ntouch ${launched}\nsleep 5\n`)
+    chmodSync(bin, 0o755)
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      listeningProcessIds: () => null,
+    })
+
+    await expect(sup.start()).rejects.toThrow('without proving the port is free')
+
+    expect(existsSync(launched)).toBe(false)
+    expect(sup.pid).toBe(0)
+  })
 })
 
 describe('listener ownership inspection', () => {
-  it('uses bounded lsof inspection and parses listener pids', () => {
-    const run = vi.fn(() => 'p123\nf8\np456\nf9\n')
+  it('uses bounded ss inspection on Linux and parses listener pids', () => {
+    const run = vi.fn(() => (
+      'LISTEN 0 511 127.0.0.1:9999 0.0.0.0:* users:(("prometheus",pid=123,fd=8))\n'
+      + 'LISTEN 0 511 [::1]:9999 [::]:* users:(("prometheus",pid=456,fd=9))\n'
+    ))
 
     expect(getListeningProcessIds(9999, run, 'linux')).toEqual(new Set([123, 456]))
     expect(run).toHaveBeenCalledWith(
-      'lsof',
-      ['-w', '-nP', '-iTCP:9999', '-sTCP:LISTEN', '-Fp'],
+      'ss',
+      ['-H', '-ltnp', 'sport = :9999'],
       { encoding: 'utf-8', timeout: 2_000 },
     )
   })
 
-  it('distinguishes a clean empty match from unavailable inspection', () => {
+  it('falls back to bounded lsof inspection on Linux and uses it on macOS', () => {
+    const linuxRun = vi.fn()
+      .mockImplementationOnce(() => { throw Object.assign(new Error('ss missing'), { code: 'ENOENT' }) })
+      .mockReturnValueOnce('p123\nf8\n')
+    const darwinRun = vi.fn(() => 'p456\nf9\n')
+
+    expect(getListeningProcessIds(9999, linuxRun, 'linux')).toEqual(new Set([123]))
+    expect(linuxRun).toHaveBeenLastCalledWith(
+      'lsof',
+      ['-nP', '-iTCP:9999', '-sTCP:LISTEN', '-Fp'],
+      { encoding: 'utf-8', timeout: 2_000 },
+    )
+    expect(getListeningProcessIds(9999, darwinRun, 'darwin')).toEqual(new Set([456]))
+  })
+
+  it('keeps a visible Linux listener inconclusive when neither tool reveals its pid', () => {
     const cleanMiss = Object.assign(new Error('no matches'), {
       status: 1,
       stdout: '',
@@ -82,11 +144,35 @@ describe('listener ownership inspection', () => {
       killed: false,
       signal: null,
     })
+    const run = vi.fn()
+      .mockReturnValueOnce('LISTEN 0 511 127.0.0.1:9999 0.0.0.0:*\n')
+      .mockImplementationOnce(() => { throw cleanMiss })
+
+    expect(getListeningProcessIds(9999, run, 'linux')).toBeNull()
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('distinguishes a clean empty match from unavailable or malformed failures', () => {
+    const cleanMiss = Object.assign(new Error('no matches'), {
+      status: 1,
+      stdout: Buffer.from(''),
+      stderr: Buffer.from(''),
+      killed: false,
+      signal: null,
+    })
     const failed = Object.assign(new Error('lsof missing'), { code: 'ENOENT' })
 
-    expect(getListeningProcessIds(9999, () => { throw cleanMiss }, 'linux'))
+    expect(getListeningProcessIds(9999, () => { throw cleanMiss }, 'darwin'))
       .toEqual(new Set())
-    expect(getListeningProcessIds(9999, () => { throw failed }, 'linux')).toBeNull()
+    expect(getListeningProcessIds(9999, () => { throw failed }, 'darwin')).toBeNull()
+    expect(getListeningProcessIds(9999, () => { throw null }, 'darwin')).toBeNull()
+  })
+
+  it('returns unknown without inspecting unsupported platforms', () => {
+    const run = vi.fn(() => '')
+
+    expect(getListeningProcessIds(9999, run, 'win32')).toBeNull()
+    expect(run).not.toHaveBeenCalled()
   })
 })
 
@@ -134,6 +220,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       startedAt: Date.now(),
     }))
+    const onWarning = vi.fn()
     const sup = new Supervisor({
       name: 'fake',
       binaryPath: '/bin/sleep',
@@ -143,12 +230,17 @@ describe('Supervisor adoption', () => {
       probe: async () => true,
       expectedBinaryName: 'sleep',
       listeningProcessIds: () => null,
+      onWarning,
     })
 
     await sup.start()
 
     expect(sup.pid).toBe(pid)
     expect(sup.state).toBe('ready')
+    expect(onWarning).toHaveBeenCalledWith(
+      'fake',
+      expect.stringContaining('listener ownership for process'),
+    )
     await sup.stop()
   })
 
@@ -382,7 +474,7 @@ describe('Supervisor adoption', () => {
     }
   })
 
-  it('refuses to duplicate a live released-format service on a previous port', async () => {
+  it('retires a proven released-format service before moving it to a new port', async () => {
     const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
     oldChild.unref()
     const oldPid = oldChild.pid!
@@ -401,13 +493,82 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       expectedBinaryName: 'sleep',
+      listeningProcessIds: port => port === 1234 ? new Set([oldPid]) : new Set(),
     })
 
     try {
-      await expect(sup.start()).rejects.toThrow('is still live on recorded port 1234')
+      await sup.start()
+      expect(sup.pid).not.toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      await sup.stop()
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('fails closed when prior-port ownership cannot be inspected', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => null,
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('listener ownership could not be inspected')
       expect(sup.pid).toBe(0)
       expect(sup.state).toBe('degraded')
-      expect(() => process.kill(oldPid, 0)).not.toThrow()
+      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      await sup.stop()
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('retires current-format state before moving its service to a new port', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: oldPid,
+      processIdentity: oldIdentity,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => new Set(),
+    })
+
+    try {
+      await sup.start()
+      expect(sup.pid).not.toBe(oldPid)
+      expect(sup.state).toBe('ready')
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -834,15 +995,19 @@ describe('Supervisor adoption', () => {
     const sup = shSupervisor('sleep 5', tmp)
     await expect(sup.start()).rejects.toThrow('is unreadable')
     const quarantineError = Object.assign(new Error('quarantine denied'), { code: 'EACCES' })
-    vi.spyOn(
+    const quarantine = vi.spyOn(
       sup as unknown as { quarantineUnverifiedState: () => void },
       'quarantineUnverifiedState',
-    ).mockImplementation(() => { throw quarantineError })
+    ).mockImplementationOnce(() => { throw quarantineError })
 
     await expect(sup.stop()).rejects.toBe(quarantineError)
 
     expect(sup.state).toBe('idle')
     expect(sup.pid).toBe(0)
+
+    await expect(sup.stop()).resolves.toBeUndefined()
+    expect(quarantine).toHaveBeenCalledTimes(2)
+    expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
   })
 
   it('does not quarantine a repaired state generation after validation fails', async () => {
@@ -865,6 +1030,48 @@ describe('Supervisor adoption', () => {
 
     expect(readFileSync(stateFile, 'utf-8')).toBe(repaired)
     expect(readdirSync(tmp).some(name => name.includes('.invalid-'))).toBe(false)
+  })
+
+  it('restores an interrupted quarantine before evaluating startup state', async () => {
+    const stateFile = join(tmp, 'fake.state.json')
+    const interrupted = `${stateFile}.quarantine-interrupted`
+    writeFileSync(interrupted, '{"pid":')
+    const launched = join(tmp, 'launched')
+    const sup = shSupervisor(`touch ${launched}\nsleep 5`, tmp)
+
+    await expect(sup.start()).rejects.toThrow('is unreadable')
+
+    expect(existsSync(launched)).toBe(false)
+    expect(existsSync(stateFile)).toBe(true)
+    expect(existsSync(interrupted)).toBe(false)
+    await sup.stop()
+    expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
+  })
+
+  it('recovers deterministically from multiple interrupted quarantine generations', async () => {
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(`${stateFile}.quarantine-100`, '{"pid":')
+    writeFileSync(`${stateFile}.quarantine-200`, '{"pid":')
+    const bin = join(tmp, 'fake.sh')
+    writeFileSync(bin, '#!/bin/sh\nsleep 5\n')
+    chmodSync(bin, 0o755)
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      listeningProcessIds: () => new Set(),
+    })
+
+    await expect(sup.start()).rejects.toThrow('is unreadable')
+    expect(readdirSync(tmp).filter(name => name.includes('.quarantine-'))).toHaveLength(0)
+    expect(readdirSync(tmp).filter(name => name.includes('.displaced-recovered-'))).toHaveLength(1)
+    await sup.stop()
+    await sup.start()
+    expect(sup.state).toBe('ready')
+    await sup.stop()
   })
 })
 
