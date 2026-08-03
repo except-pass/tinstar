@@ -130,7 +130,7 @@ describe('listener ownership inspection', () => {
     expect(getListeningProcessIds(9999, linuxRun, 'linux')).toEqual(new Set([123]))
     expect(linuxRun).toHaveBeenLastCalledWith(
       'lsof',
-      ['-nP', '-iTCP:9999', '-sTCP:LISTEN', '-Fp'],
+      ['-w', '-nP', '-iTCP:9999', '-sTCP:LISTEN', '-Fp'],
       { encoding: 'utf-8', timeout: 2_000 },
     )
     expect(getListeningProcessIds(9999, darwinRun, 'darwin')).toEqual(new Set([456]))
@@ -562,7 +562,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       expectedBinaryName: 'sleep',
-      listeningProcessIds: () => new Set(),
+      listeningProcessIds: port => port === 1234 ? new Set([oldPid]) : new Set(),
     })
 
     try {
@@ -572,6 +572,104 @@ describe('Supervisor adoption', () => {
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('does not retire current-format state without prior-port ownership proof', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      processIdentity: oldIdentity,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const kill = vi.spyOn(process, 'kill')
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => null,
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('listener ownership could not be inspected')
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGTERM')
+      expect(kill).not.toHaveBeenCalledWith(oldPid, 'SIGKILL')
+    } finally {
+      try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('revalidates a recorded process after retirement fails without emitting idle', async () => {
+    const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    oldChild.unref()
+    const oldPid = oldChild.pid!
+    const oldIdentity = processIdentity(oldPid)
+    expect(oldIdentity).not.toBeNull()
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid: oldPid,
+      processIdentity: oldIdentity,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 1234,
+      startedAt: Date.now(),
+    }))
+    const realKill = process.kill.bind(process)
+    let allowRetirement = false
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === oldPid && signal !== 0 && !allowRetirement) return true
+      return realKill(pid, signal)
+    })
+    const stateChanges: string[] = []
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['5'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      shutdownGraceMs: 0,
+      listeningProcessIds: port => port === 1234 ? new Set([oldPid]) : new Set(),
+      onStateChange: (_name, state) => stateChanges.push(state),
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('retry will revalidate it')
+      expect(sup.pid).toBe(oldPid)
+      expect(readFileSync(stateFile, 'utf-8')).toContain(`"pid":${oldPid}`)
+      expect(stateChanges).not.toContain('idle')
+
+      // The surrounding stack's failed-start cleanup must retain ownership
+      // while the recorded process still refuses to stop.
+      await expect(sup.stop()).rejects.toThrow('did not stop')
+      expect(sup.pid).toBe(oldPid)
+      expect(sup.state).toBe('degraded')
+      expect(stateChanges).not.toContain('idle')
+
+      allowRetirement = true
+      await sup.start()
+      expect(sup.pid).not.toBe(oldPid)
+      expect(sup.state).toBe('ready')
+      expect(stateChanges).not.toContain('idle')
+      await sup.stop()
+    } finally {
+      try { realKill(oldPid, 'SIGTERM') } catch { /* gone */ }
     }
   })
 

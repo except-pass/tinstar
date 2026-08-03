@@ -74,7 +74,9 @@ export class Supervisor {
   private restartTimer: ReturnType<typeof setTimeout> | null = null
   private consecutiveFailures = 0
   private stopping = false
+  private retiring = false
   private stopFailurePending = false
+  private retirementFailurePending = false
   private trackedProcessIdentity: string | null = null
   private ownsStateFile = false
   private quarantineStateGeneration: string | null = null
@@ -90,7 +92,8 @@ export class Supervisor {
       if (status === 'unknown') {
         throw new Error(`${this.opts.name} shutdown identity is still unresolved`)
       }
-      if (status === 'gone' || status === 'replaced') this.finishStop()
+      if (this.retirementFailurePending) this.resetFailedRetirement()
+      else if (status === 'gone' || status === 'replaced') this.finishStop()
       else {
         this.stopFailurePending = false
         resumeTrackedProcess = true
@@ -117,8 +120,18 @@ export class Supervisor {
     if (adoption.state === 'retire') {
       this.pid = adoption.process.pid
       this.trackedProcessIdentity = adoption.process.processIdentity
-      await this.stop()
-      this.state = 'starting'
+      this.retiring = true
+      try {
+        await this.stop()
+      } catch (error) {
+        this.retirementFailurePending = true
+        throw new Error(
+          `${this.opts.name} recorded process ${adoption.process.pid} could not be retired; retry will revalidate it`,
+          { cause: error },
+        )
+      } finally {
+        this.retiring = false
+      }
     }
     if (adoption.state === 'adopted') {
       if (adoption.process.needsServiceValidation) {
@@ -404,7 +417,8 @@ export class Supervisor {
     this.cleanupState(preserveQuarantine)
     this.stopping = false
     this.stopFailurePending = false
-    this.setState('idle')
+    this.retirementFailurePending = false
+    this.setState(this.retiring ? 'starting' : 'idle')
   }
 
   private failStop(message: string): never {
@@ -412,6 +426,20 @@ export class Supervisor {
     this.stopFailurePending = true
     this.setState('degraded')
     throw new Error(message)
+  }
+
+  /** Forget a borrowed adoption candidate without deleting its durable record. */
+  private resetFailedRetirement(): void {
+    this.stopHealthLoop()
+    if (this.restartTimer) clearTimeout(this.restartTimer)
+    this.restartTimer = null
+    this.pid = 0
+    this.child = null
+    this.trackedProcessIdentity = null
+    this.stopping = false
+    this.stopFailurePending = false
+    this.retirementFailurePending = false
+    this.ownsStateFile = false
   }
 
   private stateFile(): string { return join(this.opts.stateDir, `${this.opts.name}.state.json`) }
@@ -559,16 +587,21 @@ export class Supervisor {
         if (!actual.includes(this.opts.expectedBinaryName)) return { state: 'spawn' }
       }
       if (s.port !== this.opts.port) {
-        // Current-format state carries a boot-scoped lifetime identity. Once
-        // that exact process and its expected binary are confirmed, it is safe
-        // to retire before rebinding on the new configured port.
+        const recordedPortOwnership = this.processOwnsListeningPort(s.pid, s.port)
+        if (recordedPortOwnership === true) {
+          return {
+            state: 'retire',
+            process: {
+              pid: s.pid,
+              processIdentity: currentIdentity,
+              needsServiceValidation: false,
+            },
+          }
+        }
+        if (recordedPortOwnership === false) return { state: 'spawn' }
         return {
-          state: 'retire',
-          process: {
-            pid: s.pid,
-            processIdentity: currentIdentity,
-            needsServiceValidation: false,
-          },
+          state: 'unverified',
+          reason: `${this.opts.name} process ${s.pid} uses recorded port ${s.port}, but listener ownership could not be inspected; refusing to adopt or replace it`,
         }
       }
       return {
@@ -792,7 +825,7 @@ export function getListeningProcessIds(
   try {
     const output = run(
       'lsof',
-      ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
+      ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
       { encoding: 'utf-8', timeout: 2_000 },
     )
     const pids = new Set<number>()
