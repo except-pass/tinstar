@@ -925,6 +925,7 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                   ['cacheHit',   'Cache hit'],
                   ['duty',       'Duty cycle'],
                   ['turnLength', 'Turn length'],
+                  ['timeline',   'Where the time went'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-3 cursor-pointer group">
                     <input
