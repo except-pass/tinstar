@@ -119,7 +119,8 @@ const UNSAFE_MODAL_PATTERNS: readonly [RegExp, string][] = [
 
 const COMPOSER_SHORTCUT_HINT = /^\s*\?\s+for shortcuts(?:\s|$)/i
 
-// Codex renders one of these prompts only while its composer is empty. Requiring
+// Captured against codex-cli 0.146.0. Codex renders one of these prompts only
+// while its composer is empty. Requiring
 // the empty-composer placeholder keeps Tinstar from appending an envelope to a
 // human draft or a large-paste placeholder. Keep the legacy active-turn prompt
 // for clients that still render the adjacent `? for shortcuts` footer.
@@ -156,7 +157,7 @@ export function classifyCodexTerminalSafety(screen: string): CodexTerminalSafety
     if (/^\[Pasted Content\s+[\d,]+\s+chars?\]$/i.test(content)) continue
     const knownEmptyComposer = content === ''
       || EMPTY_COMPOSER_PLACEHOLDERS.has(content)
-    if (hasShortcutFooter || (knownEmptyComposer && nextLine.trim() === '')) {
+    if (knownEmptyComposer && (hasShortcutFooter || nextLine.trim() === '')) {
       composerIndex = index
       break
     }
@@ -672,9 +673,6 @@ export class CodexDeliveryAdapter {
       } catch (error) {
         observationUnavailableReason = `Codex rollout could not be resolved: ${(error as Error).message}`
       }
-      if (!resolvedTranscript && !observationUnavailableReason) {
-        observationUnavailableReason = 'Codex rollout is not available yet'
-      }
     }
 
     const confirmationKey = attemptKey(acceptance)
@@ -739,7 +737,11 @@ export class CodexDeliveryAdapter {
         this.transcriptPaths.delete(recipientKey)
       }
     }
-    if (transcriptPaths.length === 0 || !readableTranscript) {
+    if (readableTranscript) {
+      // A readable cached rollout is still a real negative observation even
+      // when rediscovery briefly returns null or throws.
+      observationUnavailableReason = null
+    } else {
       observationUnavailableReason ??= 'Codex rollout is not available yet'
     }
     if (

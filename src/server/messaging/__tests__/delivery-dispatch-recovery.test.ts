@@ -414,6 +414,7 @@ describe('durable provider dispatch recovery', () => {
       now: () => now,
       retryDelayMs: 1_000,
       confirmationMaxChecks: 1,
+      confirmationUnobservableTimeoutMs: 10_000,
       maxAttempts: 2,
     }
 
@@ -440,6 +441,60 @@ describe('durable provider dispatch recovery', () => {
       deliveryId: 'msg-7/d/1', state: 'delivered',
     }])
     expect(accept).toHaveBeenCalledOnce()
+  })
+
+  it('bounds permanently unobservable acceptance before retrying at least once', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger([{
+      providerId: 'codex', sessionId: 'receiver', incarnation: 'receiver-v3',
+    }], { now: () => now })
+    const accept = vi.fn(async request => ({
+      state: 'accepted' as const,
+      providerId: 'codex',
+      messageId: request.messageId,
+      attempt: request.attempt,
+      recipient: request.recipient,
+      acceptedAt: new Date(now).toISOString(),
+      attemptRef: `durable-attempt-${request.attempt}`,
+    }))
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('codex', {
+      accept,
+      async confirm(acceptance) {
+        return {
+          state: 'unobservable',
+          providerId: 'codex',
+          messageId: acceptance.messageId,
+          attempt: acceptance.attempt,
+          recipient: acceptance.recipient,
+          checkedAt: new Date(now).toISOString(),
+          retryAt: new Date(now + 1_000).toISOString(),
+          reason: 'rollout is permanently unavailable',
+        }
+      },
+    })
+    const options = {
+      now: () => now,
+      retryDelayMs: 1_000,
+      confirmationUnobservableTimeoutMs: 2_000,
+      maxAttempts: 2,
+    }
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry, options)
+    for (const expected of ['pending', 'failed', 'accepted', 'pending', 'failed']) {
+      now += 1_000
+      await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([
+        expect.objectContaining({ deliveryId: 'msg-7/d/1', state: expected }),
+      ])
+    }
+    expect(accept.mock.calls.map(([request]) => request.attempt)).toEqual([1, 2])
+    const finalDelivery = ledger.getDelivery('msg-7/d/1')!
+    expect(finalDelivery).toMatchObject({
+      state: 'failed',
+      attempt: 2,
+      history: expect.arrayContaining([expect.objectContaining({ retryable: false })]),
+    })
+    expect(finalDelivery).not.toHaveProperty('providerAcceptance')
   })
 
   it('confirms provider acceptance without provider-owned attempt state', async () => {

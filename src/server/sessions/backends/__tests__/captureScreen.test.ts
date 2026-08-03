@@ -11,6 +11,7 @@ import {
   captureScreen,
   exactTmuxPaneTarget,
   exactTmuxSessionTarget,
+  sendPrompt,
   TerminalPromptSubmissionError,
   withSessionInput,
 } from '../tmux'
@@ -88,7 +89,10 @@ describe('captureScreen', () => {
     )
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
-      ['paste-buffer', '-d', '-b', expect.stringMatching(/^tinstar-/), '-t', '%1'],
+      [
+        'paste-buffer', '-d', '-r', '-p',
+        '-b', expect.stringMatching(/^tinstar-/), '-t', '%1',
+      ],
       expect.any(Object),
     )
     expect(execFileMock.mock.calls.some(([, args]) => args.includes('durable envelope;')))
@@ -143,6 +147,25 @@ describe('captureScreen', () => {
     expect(execFileMock.mock.calls.some(([, args]) => (
       args[0] === 'load-buffer' || args[0] === 'paste-buffer'
     ))).toBe(false)
+  })
+
+  it('surfaces a non-ready pane to general sendPrompt callers', async () => {
+    let modeProbes = 0
+    execFileMock.mockImplementation(async (_file: string, args: string[]) => {
+      if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
+      if (args.at(-1) === '#{pane_in_mode}') {
+        modeProbes += 1
+        return { stdout: modeProbes === 1 ? '0\n' : '1\n', stderr: '' }
+      }
+      return { stdout: '', stderr: '' }
+    })
+    const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
+
+    await expect(sendPrompt(config, 'worker', 'must not disappear')).rejects.toThrow(
+      'Terminal prompt was not submitted because the pane is not ready for input',
+    )
+    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'paste-buffer'))
+      .toBe(false)
   })
 
   it('clears an unsubmitted line after a late failure before accepting a later prompt', async () => {
@@ -200,8 +223,28 @@ describe('captureScreen', () => {
     ])
   })
 
-  it('stages messages larger than the operating-system argv limit', async () => {
-    const prompt = 'x'.repeat(256 * 1024)
+  it('does not clear human input when staging fails before paste is attempted', async () => {
+    execFileMock.mockImplementation(async (_file: string, args: string[]) => {
+      if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
+      if (args.at(-1) === '#{pane_in_mode}') return { stdout: '0\n', stderr: '' }
+      if (args[0] === 'load-buffer') throw new Error('buffer load failed')
+      return { stdout: '', stderr: '' }
+    })
+    const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
+
+    await expect(withSessionInput(config, 'worker', input => (
+      input.submitPrompt('never pasted', async () => true)
+    ))).rejects.toMatchObject({
+      name: 'TerminalPromptSubmissionError',
+      submissionState: 'cleared',
+      message: 'buffer load failed',
+    })
+    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'send-keys'))
+      .toBe(false)
+  })
+
+  it('stages multiline messages larger than the argv limit without rewriting LF', async () => {
+    const prompt = `${'x'.repeat(128 * 1024)}\n${'y'.repeat(128 * 1024)}`
     let stagedPrompt = ''
     execFileMock.mockImplementation(async (_file: string, args: string[]) => {
       if (args.at(-1) === '#{pane_id}') return { stdout: '%1\n', stderr: '' }
@@ -217,7 +260,14 @@ describe('captureScreen', () => {
 
     expect(stagedPrompt).toBe(prompt)
     expect(execFileMock.mock.calls.some(([, args]) => args.includes(prompt))).toBe(false)
-    expect(execFileMock.mock.calls.some(([, args]) => args[0] === 'paste-buffer')).toBe(true)
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      [
+        'paste-buffer', '-d', '-r', '-p',
+        '-b', expect.stringMatching(/^tinstar-/), '-t', '%1',
+      ],
+      expect.any(Object),
+    )
   })
 
   it('marks a failed Enter command as possibly submitted', async () => {
@@ -390,7 +440,10 @@ describe('captureScreen', () => {
 
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
-      ['paste-buffer', '-d', '-b', expect.stringMatching(/^tinstar-/), '-t', '%1'],
+      [
+        'paste-buffer', '-d', '-r', '-p',
+        '-b', expect.stringMatching(/^tinstar-/), '-t', '%1',
+      ],
       expect.any(Object),
     )
     expect(execFileMock.mock.calls.some(([, args]) => args.includes('Enter'))).toBe(false)

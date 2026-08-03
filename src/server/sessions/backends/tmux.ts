@@ -2485,7 +2485,10 @@ export function sendKeys(config: TinstarConfig, sessionName: string, keys: strin
 
 export function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   return withSessionInput(config, sessionName, async input => {
-    await input.submitPrompt(prompt)
+    const submitted = await input.submitPrompt(prompt)
+    if (!submitted) {
+      throw new Error('Terminal prompt was not submitted because the pane is not ready for input')
+    }
   })
 }
 
@@ -2535,13 +2538,27 @@ async function doSendPrompt(
   const stagingPath = join(stagingDir, 'prompt')
   const bufferName = `tinstar-${randomUUID()}`
   let bufferLoaded = false
+  let pasteAttempted = false
   try {
     writeFileSync(stagingPath, prompt, { encoding: 'utf8', mode: 0o600 })
     await execFileAsync('tmux', ['load-buffer', '-b', bufferName, stagingPath])
     bufferLoaded = true
-    await execFileAsync('tmux', ['paste-buffer', '-d', '-b', bufferName, '-t', paneId])
+    pasteAttempted = true
+    await execFileAsync('tmux', [
+      'paste-buffer',
+      '-d',
+      '-r',
+      '-p',
+      '-b',
+      bufferName,
+      '-t',
+      paneId,
+    ])
     bufferLoaded = false
   } catch (error) {
+    if (!pasteAttempted) {
+      throw new TerminalPromptSubmissionError('cleared', error)
+    }
     const cleared = await clearUnsubmittedLine()
     throw new TerminalPromptSubmissionError(
       cleared ? 'cleared' : 'orphaned',

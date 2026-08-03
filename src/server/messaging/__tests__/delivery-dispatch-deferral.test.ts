@@ -14,6 +14,61 @@ import {
 import { acceptedLedger, roots } from './delivery-dispatch-fixture'
 
 describe('durable provider dispatch deferrals', () => {
+  it('reports terminal outcomes produced by the periodic retry sweep', async () => {
+    vi.useFakeTimers()
+    try {
+      const now = Date.parse('2026-08-01T12:00:00.000Z')
+      const { ledger } = await acceptedLedger(undefined, { now: () => now })
+      let calls = 0
+      const registry = createDefaultProviderRegistry()
+      registry.registerDelivery('claude', {
+        async accept(request) {
+          calls += 1
+          if (calls === 1) {
+            return {
+              state: 'deferred',
+              providerId: 'claude',
+              messageId: request.messageId,
+              attempt: request.attempt,
+              recipient: request.recipient,
+              checkedAt: new Date(now).toISOString(),
+              retryAt: new Date(now).toISOString(),
+              reason: 'retry on the timer',
+            }
+          }
+          return {
+            state: 'rejected',
+            providerId: 'claude',
+            messageId: request.messageId,
+            attempt: request.attempt,
+            recipient: request.recipient,
+            checkedAt: new Date(now).toISOString(),
+            reason: 'recipient stopped',
+            retryable: false,
+          }
+        },
+      })
+      const onOutcomes = vi.fn()
+      const scheduler = new DeliveryRetryScheduler(ledger, registry, {
+        now: () => now,
+        pollMs: 10,
+        onOutcomes,
+      })
+
+      await scheduler.start()
+      await vi.advanceTimersByTimeAsync(10)
+      await scheduler.stop()
+
+      expect(onOutcomes).toHaveBeenCalledWith([{
+        deliveryId: 'msg-7/d/1',
+        state: 'failed',
+        reason: 'recipient stopped',
+      }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not retry a deferred attempt until its explicit retryAt', async () => {
     let now = Date.parse('2026-08-01T12:00:00.000Z')
     const { ledger } = await acceptedLedger(undefined, { now: () => now })

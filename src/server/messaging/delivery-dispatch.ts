@@ -25,8 +25,10 @@ type RecoveryLedger = DispatchLedger & Pick<DeliveryLedger, 'listRecoverable'>
 export const DELIVERY_DISPATCH_CONCURRENCY = 16
 export const DELIVERY_RETRY_DELAY_MS = 1_000
 export const DELIVERY_RETRY_POLL_MS = 250
-/** Preserve the pre-existing bounded confirmation window with exponential spacing. */
-export const DELIVERY_CONFIRMATION_MAX_CHECKS = 6
+/** About five minutes with exponential spacing capped at eight seconds. */
+export const DELIVERY_CONFIRMATION_MAX_CHECKS = 40
+/** Bound an accepted attempt whose provider evidence cannot be inspected at all. */
+export const DELIVERY_CONFIRMATION_UNOBSERVABLE_TIMEOUT_MS = 5 * 60 * 1_000
 export const DELIVERY_RETRY_MAX_DELAY_MS = 8_000
 export const DELIVERY_MAX_ATTEMPTS = 3
 /** Roughly thirty minutes with exponential retry capped at eight seconds. */
@@ -37,6 +39,7 @@ export interface DeliveryDispatchOptions {
   now?: () => number
   retryDelayMs?: number
   confirmationMaxChecks?: number
+  confirmationUnobservableTimeoutMs?: number
   maxAttempts?: number
   maxDeferrals?: number
   maxAbandonFailures?: number
@@ -44,6 +47,14 @@ export interface DeliveryDispatchOptions {
 
 function maxAttemptsFor(options: DeliveryDispatchOptions): number {
   return Math.max(1, options.maxAttempts ?? DELIVERY_MAX_ATTEMPTS)
+}
+
+function unobservableTimeoutFor(options: DeliveryDispatchOptions): number {
+  return Math.max(
+    1,
+    options.confirmationUnobservableTimeoutMs
+      ?? DELIVERY_CONFIRMATION_UNOBSERVABLE_TIMEOUT_MS,
+  )
 }
 
 function maxDeferralsFor(options: DeliveryDispatchOptions): number {
@@ -629,7 +640,7 @@ async function confirmOne(
       : { deliveryId: current.id, state: 'ambiguous', reason: 'could not record failed confirmation' }
   } catch (error) {
     const now = options.now?.() ?? Date.now()
-    return recordUnobservableConfirmation(
+    return recordPendingConfirmation(
       current,
       ledger,
       error instanceof Error ? error.message : String(error),
@@ -649,12 +660,47 @@ async function recordUnobservableConfirmation(
   options: DeliveryDispatchOptions,
 ): Promise<DeliveryDispatchOutcome> {
   const now = options.now?.() ?? Date.now()
+  const acceptance = activeProviderAcceptance(current)
+  const acceptedAt = acceptance ? Date.parse(acceptance.acceptedAt) : Number.NaN
+  const deadline = (Number.isFinite(acceptedAt) ? acceptedAt : now)
+    + unobservableTimeoutFor(options)
+  if (now >= deadline) {
+    const completedAttempts = deliverySendAttemptCount(current)
+    const retryable = completedAttempts < maxAttemptsFor(options)
+    const failureReason = `Provider delivery acceptance remained unobservable: ${reason}`
+    const recorded = await transition(ledger, {
+      deliveryId: current.id,
+      expected: { state: current.state, attempt: current.attempt },
+      clearProviderAcceptance: true,
+      next: {
+        state: 'failed',
+        attempt: current.attempt,
+        reason: failureReason,
+        retryable,
+        ...(retryable
+          ? {
+              retryAt: new Date(
+                now + (options.retryDelayMs ?? DELIVERY_RETRY_DELAY_MS),
+              ).toISOString(),
+            }
+          : {}),
+      },
+    })
+    return recorded
+      ? { deliveryId: current.id, state: 'failed', reason: failureReason }
+      : {
+          deliveryId: current.id,
+          state: 'ambiguous',
+          reason: 'could not record exhausted unavailable provider confirmation',
+        }
+  }
   const retryAt = retryAtFor(
     checkedAt,
     explicitRetryAt,
     options.retryDelayMs,
     now,
   )
+  const boundedRetryAt = new Date(Math.min(Date.parse(retryAt), deadline)).toISOString()
   const recorded = await transition(ledger, {
     deliveryId: current.id,
     expected: { state: current.state, attempt: current.attempt },
@@ -662,7 +708,7 @@ async function recordUnobservableConfirmation(
       state: 'pending',
       attempt: current.attempt,
       reason,
-      retryAt,
+      retryAt: boundedRetryAt,
     },
   })
   return recorded
@@ -925,12 +971,17 @@ export class DeliveryRetryScheduler {
   constructor(
     private readonly ledger: RecoveryLedger,
     private readonly registry: ProviderAdapterRegistry,
-    private readonly options: DeliveryDispatchOptions & { pollMs?: number } = {},
+    private readonly options: DeliveryDispatchOptions & {
+      pollMs?: number
+      onOutcomes?: (outcomes: DeliveryDispatchOutcome[]) => void
+    } = {},
   ) {}
 
   start(): Promise<DeliveryDispatchOutcome[]> {
     if (!this.timer) {
-      this.timer = setInterval(() => { void this.runNow() }, this.options.pollMs ?? DELIVERY_RETRY_POLL_MS)
+      this.timer = setInterval(() => {
+        void this.runNow().then(outcomes => this.options.onOutcomes?.(outcomes))
+      }, this.options.pollMs ?? DELIVERY_RETRY_POLL_MS)
       this.timer.unref?.()
     }
     return this.runNow()

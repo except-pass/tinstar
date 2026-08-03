@@ -844,7 +844,28 @@ export function initBackend(): RouteContext {
       // explicitly retry-safe failures/deferrals are attempted; ambiguous
       // in-flight work is never duplicated blindly. The persisted recipient
       // incarnation remains the target when a session name has been reused.
-      deliveryRetryScheduler = new DeliveryRetryScheduler(deliveryLedger, providerRegistry)
+      const loggedPendingDeliveries = new Set<string>()
+      deliveryRetryScheduler = new DeliveryRetryScheduler(deliveryLedger, providerRegistry, {
+        onOutcomes: (outcomes) => {
+          for (const outcome of outcomes) {
+            if (outcome.state === 'pending') {
+              if (!loggedPendingDeliveries.has(outcome.deliveryId)) {
+                loggedPendingDeliveries.add(outcome.deliveryId)
+                log.info('message-router', `scheduled delivery ${outcome.deliveryId} is pending`, {
+                  reason: outcome.reason,
+                })
+              }
+              continue
+            }
+            loggedPendingDeliveries.delete(outcome.deliveryId)
+            if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+              log.warn('message-router', `scheduled delivery ${outcome.deliveryId} ${outcome.state}`, {
+                reason: outcome.reason,
+              })
+            }
+          }
+        },
+      })
       const recovered = await replaceDeliveryRetryScheduler(deliveryRetryScheduler)
       for (const outcome of recovered) {
         if (outcome.state === 'failed' || outcome.state === 'ambiguous') {

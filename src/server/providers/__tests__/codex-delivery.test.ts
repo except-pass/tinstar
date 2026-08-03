@@ -166,10 +166,13 @@ describe('Codex terminal delivery', () => {
     )).toEqual({ state: 'safe' })
   })
 
-  it('recognizes a new empty-composer placeholder from the stable shortcut footer', () => {
+  it('fails closed on an unknown placeholder even with the shortcut footer', () => {
     expect(classifyCodexTerminalSafety(
       '──────\n\n› Try the new Codex workflow\n  ? for shortcuts',
-    )).toEqual({ state: 'safe' })
+    )).toEqual({
+      state: 'unsafe',
+      reason: 'Codex composer is not visible',
+    })
   })
 
   it('rejects a stale composer when a newer modal is rendered below it', () => {
@@ -186,6 +189,7 @@ describe('Codex terminal delivery', () => {
 
   it.each([
     '› [Pasted Content 2,418 chars]\n  ? for shortcuts',
+    '› finish my draft before sending\n  ? for shortcuts',
     '› finish my draft before sending\n\n  gpt-5.6-sol xhigh · ~/repo/tinstar',
   ])('rejects a non-empty Codex composer draft', (screen) => {
     expect(classifyCodexTerminalSafety(screen)).toEqual({
@@ -759,6 +763,30 @@ describe('Codex terminal delivery', () => {
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
     now += 5_000
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'confirmed' })
+    expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps readable cached rollout evidence observable across a discovery miss', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-discovery-miss-'))
+    const transcript = join(dir, 'rollout.jsonl')
+    const d = deps()
+    let now = Date.parse(NOW)
+    d.now = () => new Date(now).toISOString()
+    d.resolveTranscript
+      .mockResolvedValueOnce(transcript)
+      .mockResolvedValueOnce(null)
+    const adapter = new CodexDeliveryAdapter(d)
+    const accepted = await adapter.accept(request())
+    if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
+    writeFileSync(transcript, `${JSON.stringify({
+      timestamp: NOW,
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'a different message' },
+    })}\n`)
+
+    await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
+    now += 5_000
+    await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
     expect(d.resolveTranscript).toHaveBeenCalledTimes(2)
   })
 
