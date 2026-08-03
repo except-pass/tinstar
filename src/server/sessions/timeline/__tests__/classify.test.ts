@@ -53,6 +53,19 @@ describe('classifyCodexCall', () => {
     expect(out.map(i => i.kind)).toEqual(['approval'])
   })
 
+  it('still catches a stall when the reported runtime includes the stall (R6)', () => {
+    // The production shape, verbatim: a script-wrapped rm -rf that sat on an
+    // approval prompt for 7.6h and then reported the whole 7.6h as its own
+    // "Wall time". The regex matches, so the subtraction path finds nothing —
+    // this must not short-circuit past the heuristic.
+    const out = classifyCodexCall(
+      0, 27_361, 'exec',
+      'const r = await tools.exec_command({ cmd: "rm -rf -- /tmp/ce-code-review/jobs/y" });',
+      'Script running with cell ID 21\nWall time 27361.5 seconds\nOutput:\n',
+    )
+    expect(out.map(i => i.kind)).toEqual(['approval'])
+  })
+
   it('does not apply the heuristic to a long non-trivial command', () => {
     const out = classifyCodexCall(
       0, 27_361, 'exec',

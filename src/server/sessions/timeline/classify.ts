@@ -59,12 +59,17 @@ export function classifyCodexCall(
       if (ran > 0.05) out.push({ start: start + gap, end, kind: 'tool', ...base })
       return out
     }
-    return [{ start, end, kind: 'tool', ...base }]
+    // Deliberately fall through rather than returning tool here. A matched
+    // `Wall time` does not mean the runtime is *usable*: Codex's script-wrapped
+    // `exec` reports elapsed-including-stall, so it always matches and always
+    // fails the gap test above. Returning early at this point silently
+    // reclassified 12.6h of real approval stalls as tool time on the session
+    // this feature was built to explain.
   }
 
-  // Script-wrapped exec reports elapsed-including-stall, so subtraction finds
-  // nothing to subtract. Fall back to: a trivial command cannot honestly take
-  // minutes (R6). This is a heuristic and is documented as one.
+  // The runtime was absent or unusable, so subtraction found nothing to
+  // subtract. Fall back to: a trivial command cannot honestly take minutes
+  // (R6). This is a heuristic and is documented as one.
   if (
     span > HEURISTIC_MIN_SEC &&
     (name === 'exec' || name === 'exec_command') &&
