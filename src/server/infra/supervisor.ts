@@ -157,7 +157,7 @@ export class Supervisor {
         if (!serviceMatches || !lifetimeMatches || stillOwnsPort === false) {
           this.setState('degraded')
           throw new Error(
-            `${this.opts.name} legacy process ${adoption.process.pid} could not be validated; refusing to adopt or replace it`,
+            `${this.opts.name} process ${adoption.process.pid} could not be validated; refusing to adopt or replace it`,
           )
         }
       }
@@ -545,7 +545,25 @@ export class Supervisor {
               },
             }
           }
-          if (recordedPortOwnership === false) return { state: 'spawn' }
+          if (recordedPortOwnership === false) {
+            const configuredPortOwnership = this.processOwnsListeningPort(s.pid, this.opts.port)
+            if (configuredPortOwnership === true) {
+              return {
+                state: 'adopted',
+                process: {
+                  pid: s.pid,
+                  processIdentity: currentIdentity,
+                  needsServiceValidation: true,
+                },
+              }
+            }
+            return {
+              state: 'unverified',
+              reason: configuredPortOwnership === false
+                ? `${this.opts.name} legacy process ${s.pid} owns neither recorded port ${s.port} nor configured port ${this.opts.port}; refusing to spawn while it is live`
+                : `${this.opts.name} legacy process ${s.pid} left recorded port ${s.port}, but configured-port ownership could not be inspected; refusing to spawn while it is live`,
+            }
+          }
           return {
             state: 'unverified',
             reason: `${this.opts.name} legacy process ${s.pid} uses recorded port ${s.port}, but listener ownership could not be inspected; refusing to adopt or replace it`,
@@ -609,7 +627,7 @@ export class Supervisor {
               process: {
                 pid: s.pid,
                 processIdentity: currentIdentity,
-                needsServiceValidation: false,
+                needsServiceValidation: true,
               },
             }
           }
