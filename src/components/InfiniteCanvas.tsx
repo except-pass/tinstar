@@ -66,6 +66,7 @@ import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { RunNodeCapabilities } from './RunNodeCapabilities'
 import { FocusCycleHint } from './FocusCycleHint'
 import { focusCycleDirection, resolveFocusLayout, type FocusCycleDirection } from '../focusMode/focusCanvas'
+import { isBuiltInRunWorkspace } from '../focusMode/focusTarget'
 
 interface Props {
   tree: TreeNode[]
@@ -2019,7 +2020,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const canonicalLayout = layouts.get(node.id)
     if (!canonicalLayout) return null
     const isFocusTarget = focusReady && node.id === focusedNodeId
-    const layout = isFocusTarget && focusLayout ? focusLayout : canonicalLayout
+    // Keep every mounted Run Workspace at Focus geometry while Focus is active.
+    // Cycling can then change visibility without resizing either terminal iframe.
+    const usesFocusPresentation = focusReady && node.type === 'run' && isBuiltInRunWorkspace(run)
+    const layout = usesFocusPresentation && focusLayout ? focusLayout : canonicalLayout
 
     const data: unknown =
       node.type === 'run'
@@ -2122,7 +2126,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onReopenPin={reopenPinCb}
           hidden={focusMode && !isFocusTarget}
           interactionLocked={focusMode}
-          presentation={isFocusTarget ? 'focus' : 'canvas'}
+          presentation={usesFocusPresentation ? 'focus' : 'canvas'}
         />
       </Fragment>
     )

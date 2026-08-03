@@ -32,6 +32,16 @@ async function focusedRunTestId(page: Page) {
   return page.locator('[data-testid^="canvas-widget-run-"]:visible').first().getAttribute('data-testid')
 }
 
+async function terminalResizeCount(page: Page, runId: string) {
+  const terminal = page
+    .frameLocator(`[data-testid="widget-root-${runId}"] iframe[title="Session terminal"]`)
+    .frameLocator('#term')
+  await expect(terminal.locator('body')).toBeAttached()
+  return terminal.locator('body').evaluate(() => (
+    window as Window & { __resizeCount?: number }
+  ).__resizeCount ?? 0)
+}
+
 test.describe('Focus mode', () => {
   test.beforeAll(async () => {
     await mkdir(SCREENSHOTS_DIR, { recursive: true })
@@ -158,6 +168,58 @@ test.describe('Focus mode', () => {
     await page.keyboard.press('Control+[')
     await expect(page.getByTestId(readyTargetTestId!)).toBeVisible()
     await expect(composer).toHaveValue('keep this draft')
+  })
+
+  test('switches focused runs without resizing either terminal viewport', async ({ page }) => {
+    await page.route('**/s/**', route => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><style>
+        html, body { width: 100%; height: 100%; margin: 0; }
+      </style></head><body><script>
+        window.__resizeCount = 0
+        window.addEventListener('resize', () => { window.__resizeCount++ })
+        window.term = { attachCustomKeyEventHandler() {}, focus() {} }
+      </script></body></html>`,
+    }))
+
+    await page.evaluate(async () => {
+      const state = await fetch('/api/state').then(response => response.json()) as {
+        runs: Array<{ id: string; sessionId?: string | null }>
+      }
+      const ids = state.runs.filter(run => run.sessionId).map(run => run.id)
+      await Promise.all(ids.map(id => fetch('/api/simulator/patch-run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, port: 19999 }),
+      })))
+    })
+
+    await page.reload()
+    await enterFocus(page)
+    await page.waitForTimeout(300)
+
+    // Collapsed hierarchy branches are intentionally absent from the canvas.
+    // Measure only the terminal workspaces that are actually mounted and can
+    // therefore participate in Focus cycling.
+    const runIds = await page.locator('[data-testid^="widget-root-"]').evaluateAll(roots => roots
+      .filter(root => root.querySelector('iframe[title="Session terminal"]'))
+      .map(root => root.getAttribute('data-testid')!.replace('widget-root-', '')))
+    expect(runIds.length).toBeGreaterThan(1)
+
+    const firstTestId = await focusedRunTestId(page)
+    expect(firstTestId).not.toBeNull()
+    const firstRunId = firstTestId!.replace('canvas-widget-run-', '')
+    const before = new Map<string, number>()
+    for (const runId of runIds) before.set(runId, await terminalResizeCount(page, runId))
+
+    await page.keyboard.press('Control+Shift+]')
+    await expect.poll(() => focusedRunTestId(page)).not.toBe(firstTestId)
+    await page.waitForTimeout(300)
+
+    const nextTestId = await focusedRunTestId(page)
+    const nextRunId = nextTestId!.replace('canvas-widget-run-', '')
+    expect(await terminalResizeCount(page, firstRunId)).toBe(before.get(firstRunId))
+    expect(await terminalResizeCount(page, nextRunId)).toBe(before.get(nextRunId))
   })
 
   test('cycles from the terminal iframe bridge and shows a rate-limited boundary reminder', async ({ page }) => {
