@@ -617,7 +617,7 @@ export class Supervisor {
         if (matching.length > 1) {
           throw new Error(`${this.opts.name} has multiple interrupted quarantine generations`)
         }
-        staging = matching[0]
+        staging = matching[0]!
       } else {
         throw error
       }
