@@ -64,13 +64,12 @@ describe('Supervisor spawn + readiness', () => {
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
-  it('adopts a compatible state file with a boot-scoped process identity', async () => {
+  it('migrates a released-format state file after validating its executable and service', async () => {
     const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
     child.unref()
     const pid = child.pid!
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid,
-      processIdentity: 'linux:boot-a:424242',
       binaryPath: '/bin/sleep',
       binaryHash: '',
       port: 9999,
@@ -84,15 +83,114 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       expectedBinaryName: 'sleep',
-      processIdentity: () => 'linux:boot-a:424242',
     })
 
     await sup.start()
 
     expect(sup.pid).toBe(pid)
     expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
-      .toMatchObject({ pid, processIdentity: 'linux:boot-a:424242' })
+      .toMatchObject({ pid, processIdentity: expect.any(String) })
     await sup.stop()
+  })
+
+  it('preserves released-format state when service validation fails', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => false,
+      probeTimeoutMs: 50,
+      probeIntervalMs: 10,
+      expectedBinaryName: 'sleep',
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('could not be validated')
+      await sup.stop()
+      expect(existsSync(stateFile)).toBe(true)
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('refuses released-format state whose executable does not match', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid,
+      binaryPath: '/bin/false',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('executable does not match')
+      await sup.stop()
+      expect(existsSync(stateFile)).toBe(true)
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
+  })
+
+  it('refuses released-format state when the pid lifetime changes during validation', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    const stateFile = join(tmp, 'fake.state.json')
+    writeFileSync(stateFile, JSON.stringify({
+      pid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    let identityRead = 0
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      processIdentity: () => ++identityRead === 1 ? 'process-a' : 'process-b',
+    })
+
+    try {
+      await expect(sup.start()).rejects.toThrow('could not be validated')
+      await sup.stop()
+      expect(existsSync(stateFile)).toBe(true)
+      expect(JSON.parse(readFileSync(stateFile, 'utf-8'))).not.toHaveProperty('processIdentity')
+    } finally {
+      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+    }
   })
 
   it('refuses to adopt a pre-boot-id Linux identity after a possible reboot', async () => {
@@ -502,6 +600,8 @@ describe('Supervisor adoption', () => {
     await expect(sup.start()).rejects.toThrow('state has an unsupported process id')
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
+    await sup.stop()
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
   })
 
   it('refuses to spawn from a state file whose pid exceeds the supported range', async () => {
@@ -518,6 +618,8 @@ describe('Supervisor adoption', () => {
 
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
+    await sup.stop()
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
   })
 
   it('refuses to spawn from an unreadable state file', async () => {
@@ -528,6 +630,8 @@ describe('Supervisor adoption', () => {
 
     expect(sup.pid).toBe(0)
     expect(sup.state).toBe('degraded')
+    await sup.stop()
+    expect(existsSync(join(tmp, 'fake.state.json'))).toBe(true)
   })
 })
 

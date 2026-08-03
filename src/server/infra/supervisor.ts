@@ -7,6 +7,7 @@ import {
   unlinkSync,
   mkdirSync,
   readlinkSync,
+  realpathSync,
   renameSync,
 } from 'node:fs'
 import { join } from 'node:path'
@@ -45,6 +46,7 @@ type TrackedProcessState = 'same' | 'gone' | 'replaced' | 'unknown'
 interface AdoptedProcess {
   pid: number
   processIdentity: string
+  needsServiceValidation: boolean
 }
 
 type AdoptionResult =
@@ -65,6 +67,7 @@ export class Supervisor {
   private stopping = false
   private stopFailurePending = false
   private trackedProcessIdentity: string | null = null
+  private ownsStateFile = false
   constructor(private readonly opts: SupervisorOpts) {}
 
   async start(): Promise<void> {
@@ -101,12 +104,28 @@ export class Supervisor {
       throw new Error(adoption.reason)
     }
     if (adoption.state === 'adopted') {
+      if (adoption.process.needsServiceValidation) {
+        const serviceMatches = await this.waitForReady()
+        const liveness = probeProcessLiveness(adoption.process.pid)
+        const currentIdentity = this.readProcessIdentity(adoption.process.pid)
+        const lifetimeMatches = liveness.state === 'alive'
+          && currentIdentity !== null
+          && compareProcessIdentity(adoption.process.processIdentity, currentIdentity) === 'same'
+        if (!serviceMatches || !lifetimeMatches) {
+          this.setState('degraded')
+          throw new Error(
+            `${this.opts.name} legacy process ${adoption.process.pid} could not be validated; refusing to adopt or replace it`,
+          )
+        }
+      }
       this.pid = adoption.process.pid
       this.trackedProcessIdentity = adoption.process.processIdentity
-      // Upgrade a compatible legacy state file so the next restart can prove
-      // that the PID still names the same process lifetime.
+      // Atomically refresh current records and upgrade a fully validated
+      // released-format record with a boot-scoped process identity.
       this.persist()
-      const ok = await this.waitForReady()
+      const ok = adoption.process.needsServiceValidation
+        ? true
+        : await this.waitForReady()
       this.setState(ok ? 'ready' : 'degraded')
       this.startHealthLoop()
       return
@@ -122,7 +141,18 @@ export class Supervisor {
   async stop(): Promise<void> {
     const grace = this.opts.shutdownGraceMs ?? 5_000
     const pid = this.pid
-    if (!pid) { this.finishStop(); return }
+    if (!pid) {
+      if (this.ownsStateFile) this.finishStop()
+      else {
+        this.stopHealthLoop()
+        if (this.restartTimer) clearTimeout(this.restartTimer)
+        this.restartTimer = null
+        this.stopping = false
+        this.stopFailurePending = false
+        this.setState('idle')
+      }
+      return
+    }
     this.stopping = true
 
     const beforeTerm = this.trackedProcessState(pid)
@@ -381,6 +411,7 @@ export class Supervisor {
     try {
       writeFileSync(pending, JSON.stringify(s, null, 2))
       renameSync(pending, target)
+      this.ownsStateFile = true
     } finally {
       try { unlinkSync(pending) } catch { /* published or already absent */ }
     }
@@ -388,9 +419,10 @@ export class Supervisor {
 
   private cleanupState(): void {
     const f = this.stateFile()
-    if (existsSync(f)) {
+    if (this.ownsStateFile && existsSync(f)) {
       try { unlinkSync(f) } catch { /* ignore */ }
     }
+    this.ownsStateFile = false
     this.pid = 0
     this.child = null
     this.trackedProcessIdentity = null
@@ -415,9 +447,43 @@ export class Supervisor {
           reason: `${this.opts.name} recorded process ${s.pid} is live but its identity is unavailable; refusing to spawn a replacement`,
         }
       }
-      const identityComparison = s.processIdentity
-        ? compareProcessIdentity(s.processIdentity, currentIdentity)
-        : 'legacy-unscoped'
+      if (!s.processIdentity) {
+        if (
+          typeof s.binaryPath !== 'string'
+          || s.port !== this.opts.port
+          || !this.opts.expectedBinaryName
+        ) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} legacy state lacks enough service identity; refusing to adopt or replace it`,
+          }
+        }
+        const actual = getProcessName(s.pid)
+        if (!actual) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} recorded process ${s.pid} binary is unavailable; refusing to spawn a replacement`,
+          }
+        }
+        if (
+          !actual.includes(this.opts.expectedBinaryName)
+          || !sameExecutable(actual, s.binaryPath)
+        ) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} legacy process ${s.pid} executable does not match its recorded service; refusing to adopt or replace it`,
+          }
+        }
+        return {
+          state: 'adopted',
+          process: {
+            pid: s.pid,
+            processIdentity: currentIdentity,
+            needsServiceValidation: true,
+          },
+        }
+      }
+      const identityComparison = compareProcessIdentity(s.processIdentity, currentIdentity)
       if (identityComparison === 'different') {
         return { state: 'spawn' }
       }
@@ -442,7 +508,11 @@ export class Supervisor {
       }
       return {
         state: 'adopted',
-        process: { pid: s.pid, processIdentity: currentIdentity },
+        process: {
+          pid: s.pid,
+          processIdentity: currentIdentity,
+          needsServiceValidation: false,
+        },
       }
     } catch {
       return {
@@ -461,4 +531,12 @@ function getProcessName(pid: number): string | null {
     try { return execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf-8' }).trim() } catch { return null }
   }
   return null
+}
+
+function sameExecutable(actual: string, recorded: string): boolean {
+  try {
+    return realpathSync(actual) === realpathSync(recorded)
+  } catch {
+    return false
+  }
 }

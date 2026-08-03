@@ -21,8 +21,10 @@ export type ReleaseFn = () => Promise<void>
 const ACQUIRE_TIMEOUT_MS = 5_000
 const POLL_INTERVAL_MS = 50
 // Leave enough of acquireLock's five-second budget to reclaim a claimant that
-// crashed immediately after publishing its recovery marker.
+// crashed immediately after publishing its recovery marker, including modest
+// forward clock skew between observations.
 const RECOVERY_CLAIM_STALE_MS = ACQUIRE_TIMEOUT_MS - 1_000
+const RECOVERY_CLAIM_CLOCK_SKEW_MS = 500
 const activeRecoveryClaims = new Set<string>()
 
 function markerDir(path: string): string {
@@ -130,6 +132,7 @@ interface MarkerReplacementOutcome {
   removeError?: unknown
   createError?: unknown
   claimReleaseError?: unknown
+  contentionDetail?: string
   lingeringClaim?: RecoveryClaim
 }
 
@@ -168,7 +171,7 @@ function recoveryClaimIsFresh(dir: string): boolean {
   const startedAt = readOwnerRecord(dir)?.startedAt
   if (startedAt === undefined) return false
   const age = Date.now() - startedAt
-  return age > -RECOVERY_CLAIM_STALE_MS && age < RECOVERY_CLAIM_STALE_MS
+  return age > -RECOVERY_CLAIM_CLOCK_SKEW_MS && age < RECOVERY_CLAIM_STALE_MS
 }
 
 function recoveryClaimIsOwned(claim: RecoveryClaim): boolean {
@@ -295,12 +298,13 @@ function replaceMarker(
   let replaced = false
   let createdOwner: string | undefined
   let claimReleaseError: unknown
+  let contentionDetail: string | undefined
   try {
     // The owner may have changed while this contender waited for the recovery
     // claim. Never act on the stale observation made by the caller.
     const claimStillOwned = recoveryClaimIsOwned(recoveryClaim)
     if (!claimStillOwned) {
-      createError = new Error('recovery claim was displaced before the stale-owner check')
+      contentionDetail = 'recovery claim was displaced before the stale-owner check'
     }
     const primaryStillStale = claimStillOwned && !isOwnerAlive(dir, deps)
     if (primaryStillStale) {
@@ -319,7 +323,7 @@ function replaceMarker(
           createError = error
         }
       } else {
-        createError = new Error('recovery claim was displaced before marker publication')
+        contentionDetail = 'recovery claim was displaced before marker publication'
       }
       if (replaced && !recoveryClaimIsOwned(recoveryClaim)) {
         // A delayed contender displaced our claim while we published. Do not
@@ -332,7 +336,7 @@ function replaceMarker(
           }
         }
         replaced = false
-        createError ??= new Error('recovery claim was displaced during marker publication')
+        contentionDetail = 'recovery claim was displaced during marker publication'
       }
     }
   } finally {
@@ -350,6 +354,7 @@ function replaceMarker(
     ...(removeError !== undefined ? { removeError } : {}),
     ...(createError !== undefined ? { createError } : {}),
     ...(claimReleaseError !== undefined ? { claimReleaseError } : {}),
+    ...(contentionDetail !== undefined ? { contentionDetail } : {}),
     ...(replaced && claimReleaseError !== undefined ? { lingeringClaim: recoveryClaim } : {}),
   }
 }
@@ -357,13 +362,22 @@ function replaceMarker(
 function stealLock(
   dir: string,
   deps: LockAcquireDependencies = {},
-): { acquired: boolean; lingeringClaim?: RecoveryClaim } {
+): {
+  acquired: boolean
+  claimReleaseError?: unknown
+  contentionDetail?: string
+  lingeringClaim?: RecoveryClaim
+} {
   const outcome = replaceMarker(dir, deps, deps.markerReplacement)
   // The generic lock APIs historically propagate unexpected marker-creation
   // failures. Only the backend singleton converts them into operator guidance.
   if (outcome.createError) throw outcome.createError
   return {
     acquired: outcome.replaced,
+    ...(outcome.claimReleaseError !== undefined
+      ? { claimReleaseError: outcome.claimReleaseError }
+      : {}),
+    ...(outcome.contentionDetail ? { contentionDetail: outcome.contentionDetail } : {}),
     ...(outcome.lingeringClaim ? { lingeringClaim: outcome.lingeringClaim } : {}),
   }
 }
@@ -406,13 +420,18 @@ export async function acquireLock(
   mkdirSync(dirname(path), { recursive: true })
   const dir = markerDir(path)
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS
+  let lastRecoveryError: unknown
   while (true) {
     if (tryCreateMarker(dir, deps)) return makeRelease(dir, deps)
     if (!isOwnerAlive(dir, deps)) {
       const stolen = stealLock(dir, deps)
       if (stolen.acquired) return makeRelease(dir, deps, stolen.lingeringClaim)
+      lastRecoveryError = stolen.claimReleaseError
     }
-    if (Date.now() >= deadline) throw new Error(`timed out acquiring lock at ${path}`)
+    if (Date.now() >= deadline) {
+      if (lastRecoveryError !== undefined) throw lastRecoveryError
+      throw new Error(`timed out acquiring lock at ${path}`)
+    }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
 }
@@ -427,6 +446,7 @@ export async function tryAcquireLock(
   if (!isOwnerAlive(dir, deps)) {
     const stolen = stealLock(dir, deps)
     if (stolen.acquired) return makeRelease(dir, deps, stolen.lingeringClaim)
+    if (stolen.claimReleaseError !== undefined) throw stolen.claimReleaseError
   }
   return null
 }
@@ -750,6 +770,7 @@ export function acquireBackendSingleton(
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.
   const detail = describeMarkerError(replacement.createError ?? replacement.removeError)
+    ?? replacement.contentionDetail
   return {
     acquired: false,
     action,

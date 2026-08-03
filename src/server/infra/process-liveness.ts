@@ -67,7 +67,12 @@ export function linuxProcessIdentity(stat: string, bootId: string): string | nul
 
 export type ProcessIdentityComparison = 'same' | 'different' | 'legacy-unscoped'
 
-/** Compare identities without treating pre-boot-id Linux tokens as proof of replacement. */
+/**
+ * Compare identities without treating pre-boot-id Linux tokens as proof of
+ * replacement. The mixed-version comparison is symmetric for durable records
+ * inspected during upgrades or rollbacks, even though this reader emits only
+ * boot-scoped Linux identities.
+ */
 export function compareProcessIdentity(
   recorded: string,
   current: string,

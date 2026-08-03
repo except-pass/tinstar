@@ -184,7 +184,7 @@ describe('observability lock', () => {
       releaseRecoveryClaim,
     }
 
-    await expect(tryAcquireLock(path, deps)).resolves.toBeNull()
+    await expect(tryAcquireLock(path, deps)).rejects.toBe(cleanupError)
     expect(existsSync(`${dir}.recovery`)).toBe(true)
 
     primaryAlive = false
@@ -225,7 +225,7 @@ describe('observability lock', () => {
     mkdirSync(dir)
     writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
 
-    const result = tryAcquireLock(path, {
+    const release = await tryAcquireLock(path, {
       markerReplacement: {
         createMarker: marker => {
           mkdirSync(marker)
@@ -246,7 +246,7 @@ describe('observability lock', () => {
       },
     })
 
-    await expect(result).rejects.toThrow('recovery claim was displaced during marker publication')
+    expect(release).toBeNull()
     expect(existsSync(dir)).toBe(false)
     expect(existsSync(recovery)).toBe(true)
   })
@@ -260,7 +260,7 @@ describe('observability lock', () => {
     mkdirSync(recovery)
     writeFileSync(join(recovery, 'owner.json'), JSON.stringify({
       pid: 2147480000,
-      startedAt: Date.now() + 1_000,
+      startedAt: Date.now() + 250,
     }))
 
     await expect(tryAcquireLock(path)).resolves.toBeNull()
