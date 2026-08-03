@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Supervisor } from '../../infra/supervisor'
@@ -82,6 +89,37 @@ describe('Supervisor adoption', () => {
     await sup.stop()
   })
 
+  it('upgrades a pre-boot-id Linux identity after verifying the binary name', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid,
+      processIdentity: 'linux:424242',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      processIdentity: () => 'linux:boot-a:424242',
+    })
+
+    await sup.start()
+
+    expect(sup.pid).toBe(pid)
+    expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
+      .toMatchObject({ pid, processIdentity: 'linux:boot-a:424242' })
+    await sup.stop()
+  })
+
   it('does not adopt a new process that reused the recorded pid', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: 42,
@@ -111,6 +149,37 @@ describe('Supervisor adoption', () => {
 
     expect(sup.pid).not.toBe(42)
     await sup.stop()
+  })
+
+  it('refuses to spawn when a recorded live process cannot be identified', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 42,
+      processIdentity: 'process-a',
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const launched = join(tmp, 'launched')
+    const bin = join(tmp, 'must-not-launch.sh')
+    writeFileSync(bin, `#!/bin/sh\ntouch ${launched}\nsleep 5\n`)
+    chmodSync(bin, 0o755)
+    vi.spyOn(process, 'kill').mockReturnValue(true)
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      processIdentity: () => null,
+    })
+
+    await expect(sup.start()).rejects.toThrow(
+      'recorded process 42 is live but its identity is unavailable',
+    )
+    expect(sup.state).toBe('degraded')
+    expect(existsSync(launched)).toBe(false)
   })
 
   it('keeps an adopted process healthy when liveness probes are permission denied', async () => {
@@ -356,6 +425,7 @@ describe('Supervisor adoption', () => {
       port: 9999,
       probe: async () => true,
       shutdownGraceMs: 100,
+      healthIntervalMs: 10,
       processIdentity: () => identity,
     } as ConstructorParameters<typeof Supervisor>[0] & {
       processIdentity: (pid: number) => string | null
@@ -408,18 +478,18 @@ describe('Supervisor adoption', () => {
     await sup.stop()
   })
 
-  it('ignores a malformed pidfile with a non-positive pid', async () => {
+  it('refuses to spawn from a state file with a non-positive pid', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: -1, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: 0,
     }))
     const sup = shSupervisor('sleep 5', tmp)
-    await sup.start()
-    expect(sup.pid).toBeGreaterThan(0)
-    expect(sup.state).toBe('ready')
-    await sup.stop()
+
+    await expect(sup.start()).rejects.toThrow('state has an unsupported process id')
+    expect(sup.pid).toBe(0)
+    expect(sup.state).toBe('degraded')
   })
 
-  it('ignores a malformed pidfile whose pid exceeds the supported range', async () => {
+  it('refuses to spawn from a state file whose pid exceeds the supported range', async () => {
     writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
       pid: Number.MAX_SAFE_INTEGER,
       binaryPath: '/bin/sleep',
@@ -429,12 +499,20 @@ describe('Supervisor adoption', () => {
     }))
     const sup = shSupervisor('sleep 5', tmp)
 
-    await sup.start()
+    await expect(sup.start()).rejects.toThrow('state has an unsupported process id')
 
-    expect(sup.pid).toBeGreaterThan(0)
-    expect(sup.pid).not.toBe(Number.MAX_SAFE_INTEGER)
-    expect(sup.state).toBe('ready')
-    await sup.stop()
+    expect(sup.pid).toBe(0)
+    expect(sup.state).toBe('degraded')
+  })
+
+  it('refuses to spawn from an unreadable state file', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), '{"pid":')
+    const sup = shSupervisor('sleep 5', tmp)
+
+    await expect(sup.start()).rejects.toThrow('state is unreadable')
+
+    expect(sup.pid).toBe(0)
+    expect(sup.state).toBe('degraded')
   })
 })
 
@@ -462,6 +540,32 @@ describe('Supervisor crash restart', () => {
     expect(pids.size).toBeGreaterThan(1)
     expect(sup.state).toBe('degraded')
     await sup.stop()
+  })
+
+  it('cancels a pending crash restart when stopped during backoff', async () => {
+    const bin = join(tmp, 'crash-once.sh')
+    writeFileSync(bin, '#!/bin/sh\nexit 1\n')
+    chmodSync(bin, 0o755)
+    const sup = new Supervisor({
+      name: 'cancel-restart',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => false,
+      probeTimeoutMs: 100,
+      probeIntervalMs: 10,
+      restartBackoffMs: 250,
+      maxRestartsPerMinute: 3,
+    })
+
+    await sup.start()
+    await sup.stop()
+    await new Promise(resolve => setTimeout(resolve, 350))
+
+    expect(sup.state).toBe('idle')
+    expect(sup.pid).toBe(0)
+    expect(existsSync(join(tmp, 'cancel-restart.state.json'))).toBe(false)
   })
 })
 

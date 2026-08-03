@@ -74,9 +74,7 @@ describe('acquireBackendSingleton', () => {
       startedAt: 1,
       processIdentity: 'owner-42',
     }))
-    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
-    })
+    const kill = vi.spyOn(process, 'kill')
 
     const result = acquireBackendSingleton(lockPath(), { force: true }, {
       probeProcessLiveness: () => ({
@@ -96,6 +94,34 @@ describe('acquireBackendSingleton', () => {
     expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
     expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8'))).toMatchObject({ pid: 42 })
+  })
+
+  it('reports permission denied when SIGTERM itself is rejected', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'owner-42',
+    }))
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+      }
+      return true
+    })
+
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({ state: 'alive' }),
+      processIdentity: () => 'owner-42',
+    })).toEqual({
+      acquired: false,
+      action: 'takeover',
+      ownerPid: 42,
+      failure: 'owner-retirement-permission-denied',
+    })
+    expect(kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
   })
 
   it('completes a forced takeover when SIGKILL proves the prior owner is gone', () => {
@@ -201,6 +227,29 @@ describe('acquireBackendSingleton', () => {
     expect(JSON.parse(readFileSync(join(mark, 'owner.json'), 'utf-8')).pid).toBe(42)
   })
 
+  it('refuses automated force for a pre-boot-id Linux identity', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({
+      pid: 42,
+      startedAt: 1,
+      processIdentity: 'linux:424242',
+    }))
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+
+    expect(acquireBackendSingleton(lockPath(), { force: true }, {
+      probeProcessLiveness: () => ({ state: 'alive' }),
+      processIdentity: () => 'linux:boot-a:424242',
+    })).toEqual({
+      acquired: false,
+      action: 'takeover',
+      ownerPid: 42,
+      failure: 'owner-retirement-unconfirmed',
+    })
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(kill).not.toHaveBeenCalledWith(42, 'SIGKILL')
+  })
+
   it.each([42.5, Number.MAX_SAFE_INTEGER])('steals a malformed lock pid %s as stale', (pid) => {
     const mark = `${lockPath()}.mark`
     mkdirSync(mark)
@@ -273,6 +322,30 @@ describe('acquireBackendSingleton', () => {
     expect(existsSync(mark)).toBe(true)
     expect(existsSync(`${mark}.recovery`)).toBe(false)
   })
+
+  it('names the recovery claim when its cleanup fails before replacement', () => {
+    const mark = `${lockPath()}.mark`
+    mkdirSync(mark)
+    writeFileSync(join(mark, 'owner.json'), JSON.stringify({ pid: 42, startedAt: 1 }))
+    let primaryAlive = false
+    const cleanupError = Object.assign(new Error('recovery cleanup denied'), { code: 'EACCES' })
+
+    expect(acquireBackendSingleton(lockPath(), {}, {
+      probeProcessLiveness: pid => (
+        pid === 42 && primaryAlive ? { state: 'alive' } : { state: 'gone' }
+      ),
+      processIdentity: () => {
+        primaryAlive = true
+        return 'current-process'
+      },
+      releaseRecoveryClaim: () => { throw cleanupError },
+    })).toEqual({
+      acquired: false,
+      action: 'steal',
+      failure: 'recovery-claim-release-failed',
+      detail: `${mark}.recovery: EACCES: recovery cleanup denied`,
+    })
+  })
 })
 
 describe('describeSingletonFailure', () => {
@@ -333,6 +406,21 @@ describe('describeSingletonFailure', () => {
         headline: 'Could not claim the tinstar backend marker on /tmp/tinstar-test.',
         guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
         detail: 'EACCES: permission denied',
+      },
+    },
+    {
+      result: {
+        acquired: false,
+        action: 'steal',
+        failure: 'recovery-claim-release-failed',
+        detail: '/tmp/tinstar-test/server.lock.mark.recovery: EACCES: cleanup denied',
+      },
+      expected: {
+        logMessage: 'could not release the tinstar backend recovery claim on /tmp/tinstar-test: '
+          + '/tmp/tinstar-test/server.lock.mark.recovery: EACCES: cleanup denied',
+        headline: 'Could not release the tinstar backend recovery claim on /tmp/tinstar-test.',
+        guidance: 'Inspect the adjacent .recovery marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+        detail: '/tmp/tinstar-test/server.lock.mark.recovery: EACCES: cleanup denied',
       },
     },
     {

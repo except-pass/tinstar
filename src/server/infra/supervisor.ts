@@ -3,6 +3,7 @@ import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlin
 import { join } from 'node:path'
 import type { ServiceState, SupervisorState } from './types.js'
 import {
+  compareProcessIdentity,
   isSupportedProcessId,
   probeProcessLiveness,
   processIdentity as readProcessIdentity,
@@ -37,6 +38,11 @@ interface AdoptedProcess {
   processIdentity: string
 }
 
+type AdoptionResult =
+  | { state: 'adopted'; process: AdoptedProcess }
+  | { state: 'spawn' }
+  | { state: 'unverified'; reason: string }
+
 export class Supervisor {
   state: ServiceState = 'idle'
   pid = 0
@@ -45,6 +51,7 @@ export class Supervisor {
   private restartWindowStart = 0
   private exitHandler: ((code: number | null) => void) | null = null
   private healthTimer: ReturnType<typeof setInterval> | null = null
+  private restartTimer: ReturnType<typeof setTimeout> | null = null
   private consecutiveFailures = 0
   private stopping = false
   private stopFailurePending = false
@@ -79,10 +86,14 @@ export class Supervisor {
     }
 
     // Try to adopt an existing process recorded in the state file.
-    const adopted = this.tryAdopt()
-    if (adopted) {
-      this.pid = adopted.pid
-      this.trackedProcessIdentity = adopted.processIdentity
+    const adoption = this.tryAdopt()
+    if (adoption.state === 'unverified') {
+      this.setState('degraded')
+      throw new Error(adoption.reason)
+    }
+    if (adoption.state === 'adopted') {
+      this.pid = adoption.process.pid
+      this.trackedProcessIdentity = adoption.process.processIdentity
       // Upgrade a compatible legacy state file so the next restart can prove
       // that the PID still names the same process lifetime.
       this.persist()
@@ -119,12 +130,14 @@ export class Supervisor {
     // wait up to `grace` ms for the process to exit
     const deadline = Date.now() + grace
     while (Date.now() < deadline) {
+      if (!this.stopping) return
       const status = this.trackedProcessState(pid)
       if (status === 'gone' || status === 'replaced') { this.finishStop(); return }
       await new Promise((r) => setTimeout(r, 50))
     }
 
     // escalate
+    if (!this.stopping) return
     const beforeKill = this.trackedProcessState(pid)
     if (beforeKill === 'gone' || beforeKill === 'replaced') {
       this.finishStop()
@@ -136,10 +149,12 @@ export class Supervisor {
     // final drain
     const drainDeadline = Date.now() + 500
     while (Date.now() < drainDeadline) {
+      if (!this.stopping) return
       const status = this.trackedProcessState(pid)
       if (status === 'gone' || status === 'replaced') { this.finishStop(); return }
       await new Promise((r) => setTimeout(r, 25))
     }
+    if (!this.stopping) return
     const finalStatus = this.trackedProcessState(pid)
     if (finalStatus === 'same' || finalStatus === 'unknown') {
       this.failStop(`${this.opts.name} process ${pid} did not stop`)
@@ -174,6 +189,7 @@ export class Supervisor {
   }
 
   private onChildCrash(): void {
+    if (this.restartTimer) return
     const now = Date.now()
     const max = this.opts.maxRestartsPerMinute ?? 5
     const backoff = this.opts.restartBackoffMs ?? 2_000
@@ -186,9 +202,20 @@ export class Supervisor {
       this.setState('degraded')
       return
     }
-    setTimeout(() => {
+    const failedPid = this.pid
+    const failedIdentity = this.trackedProcessIdentity
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
+      if (
+        this.stopping
+        || this.stopFailurePending
+        || this.state === 'idle'
+        || this.pid !== failedPid
+        || this.trackedProcessIdentity !== failedIdentity
+      ) return
       try { this.spawnOnce() } catch { this.setState('degraded') }
-    }, backoff).unref()
+    }, backoff)
+    this.restartTimer.unref()
   }
 
   private async waitForReady(): Promise<boolean> {
@@ -225,12 +252,13 @@ export class Supervisor {
    * now responds to signal 0; missing identity evidence remains fail-closed.
    */
   private trackedProcessState(pid: number): TrackedProcessState {
-    const currentIdentity = this.readProcessIdentity(pid)
     const liveness = probeProcessLiveness(pid)
     if (liveness.state === 'gone' || liveness.state === 'invalid') return 'gone'
+    const currentIdentity = this.readProcessIdentity(pid)
     if (!this.trackedProcessIdentity || !currentIdentity) return 'unknown'
-    if (currentIdentity !== this.trackedProcessIdentity) return 'replaced'
-    return 'same'
+    const comparison = compareProcessIdentity(this.trackedProcessIdentity, currentIdentity)
+    if (comparison === 'different') return 'replaced'
+    return comparison === 'same' ? 'same' : 'unknown'
   }
 
   private readProcessIdentity(pid: number): string | null {
@@ -309,6 +337,8 @@ export class Supervisor {
 
   private finishStop(): void {
     this.stopHealthLoop()
+    if (this.restartTimer) clearTimeout(this.restartTimer)
+    this.restartTimer = null
     if (this.child && this.exitHandler) this.child.off('exit', this.exitHandler)
     this.exitHandler = null
     this.cleanupState()
@@ -350,27 +380,59 @@ export class Supervisor {
     this.trackedProcessIdentity = null
   }
 
-  private tryAdopt(): AdoptedProcess | null {
-    if (!existsSync(this.stateFile())) return null
+  private tryAdopt(): AdoptionResult {
+    if (!existsSync(this.stateFile())) return { state: 'spawn' }
     try {
       const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
-      if (!isSupportedProcessId(s.pid)) return null
-      const currentIdentity = this.readProcessIdentity(s.pid)
+      if (!isSupportedProcessId(s.pid)) {
+        return {
+          state: 'unverified',
+          reason: `${this.opts.name} state has an unsupported process id; refusing to spawn a replacement`,
+        }
+      }
       const liveness = probeProcessLiveness(s.pid)
-      if (liveness.state === 'gone' || liveness.state === 'invalid') return null
-      if (!currentIdentity) return null
-      if (s.processIdentity && currentIdentity !== s.processIdentity) return null
-      // A legacy state file has no lifetime token. Only adopt it when the
-      // configured binary-name check can independently identify the process.
-      if (!s.processIdentity && !this.opts.expectedBinaryName) return null
+      if (liveness.state === 'gone' || liveness.state === 'invalid') return { state: 'spawn' }
+      const currentIdentity = this.readProcessIdentity(s.pid)
+      if (!currentIdentity) {
+        return {
+          state: 'unverified',
+          reason: `${this.opts.name} recorded process ${s.pid} is live but its identity is unavailable; refusing to spawn a replacement`,
+        }
+      }
+      const identityComparison = s.processIdentity
+        ? compareProcessIdentity(s.processIdentity, currentIdentity)
+        : 'legacy-unscoped'
+      if (identityComparison === 'different') {
+        return { state: 'spawn' }
+      }
+      // A legacy state file has no boot-scoped lifetime token. Only adopt it
+      // when the configured binary-name check can independently identify the process.
+      if (identityComparison === 'legacy-unscoped' && !this.opts.expectedBinaryName) {
+        return {
+          state: 'unverified',
+          reason: `${this.opts.name} recorded process ${s.pid} has no lifetime identity; refusing to spawn a replacement`,
+        }
+      }
       // Validate the binary name if an expected name was provided
       if (this.opts.expectedBinaryName) {
         const actual = getProcessName(s.pid)
-        if (!actual || !actual.includes(this.opts.expectedBinaryName)) return null
+        if (!actual) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} recorded process ${s.pid} binary is unavailable; refusing to spawn a replacement`,
+          }
+        }
+        if (!actual.includes(this.opts.expectedBinaryName)) return { state: 'spawn' }
       }
-      return { pid: s.pid, processIdentity: currentIdentity }
+      return {
+        state: 'adopted',
+        process: { pid: s.pid, processIdentity: currentIdentity },
+      }
     } catch {
-      return null
+      return {
+        state: 'unverified',
+        reason: `${this.opts.name} state is unreadable; refusing to spawn a replacement`,
+      }
     }
   }
 }

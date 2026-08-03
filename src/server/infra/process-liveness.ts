@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
+let cachedLinuxBootId: string | null = null
+
 export type ProcessLiveness =
   | { state: 'alive' }
   | { state: 'gone' }
@@ -51,6 +53,34 @@ export function processMayBeAlive(pid: number): boolean {
   return state === 'alive' || state === 'unknown'
 }
 
+/** Parse Linux procfs identity data; starttime is field 22 in `/proc/<pid>/stat`. */
+export function linuxProcessIdentity(stat: string, bootId: string): string | null {
+  const commandEnd = stat.lastIndexOf(')')
+  if (commandEnd < 0) return null
+  // The remainder begins at field 3 (`state`), so field 22 (`starttime`)
+  // appears at zero-based index 19. `lastIndexOf` handles `)` inside comm.
+  const fields = stat.slice(commandEnd + 1).trim().split(/\s+/)
+  const startTicks = fields[19]
+  const boot = bootId.trim()
+  return startTicks && boot ? `linux:${boot}:${startTicks}` : null
+}
+
+export type ProcessIdentityComparison = 'same' | 'different' | 'legacy-unscoped'
+
+/** Compare identities without treating pre-boot-id Linux tokens as proof of replacement. */
+export function compareProcessIdentity(
+  recorded: string,
+  current: string,
+): ProcessIdentityComparison {
+  if (recorded === current) return 'same'
+  const legacyLinux = /^linux:([^:]+)$/u.exec(recorded)
+  const bootScopedLinux = /^linux:[^:]+:([^:]+)$/u.exec(current)
+  if (legacyLinux && bootScopedLinux) {
+    return legacyLinux[1] === bootScopedLinux[1] ? 'legacy-unscoped' : 'different'
+  }
+  return 'different'
+}
+
 /**
  * Best-effort identity for one OS process lifetime. A PID can be reused, so a
  * durable lock records this token and compares it before treating EPERM as a
@@ -62,9 +92,10 @@ export function processIdentity(pid: number): string | null {
   if (process.platform === 'linux') {
     try {
       const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8')
-      const fields = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
-      const startTicks = fields[19]
-      return startTicks ? `linux:${startTicks}` : null
+      const bootId = cachedLinuxBootId
+        ?? readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim()
+      cachedLinuxBootId = bootId
+      return linuxProcessIdentity(stat, bootId)
     } catch {
       return null
     }

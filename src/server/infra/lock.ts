@@ -10,6 +10,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import {
+  compareProcessIdentity,
   isSupportedProcessId,
   processIdentity,
   probeProcessLiveness,
@@ -32,34 +33,49 @@ function ownerFile(dir: string): string {
   return join(dir, 'owner.json')
 }
 
-function tryCreateMarker(
+interface MarkerPublication {
+  created: boolean
+  owner?: string
+}
+
+function publishMarker(
   dir: string,
-  deps: Pick<LockAcquireDependencies, 'processIdentity'> = {},
-): boolean {
+  deps: Pick<LockAcquireDependencies, 'processIdentity' | 'beforeMarkerPublish'> = {},
+): MarkerPublication {
   // Avoid an OS process-identity lookup on the normal contended path. This is
   // only an optimization: the atomic rename below remains the ownership gate.
-  if (existsSync(dir)) return false
+  if (existsSync(dir)) return { created: false }
   const identity = (deps.processIdentity ?? processIdentity)(process.pid)
   const stagingDir = mkdtempSync(`${dir}.pending-`)
   let published = false
   try {
-    writeFileSync(ownerFile(stagingDir), JSON.stringify({
+    const owner = JSON.stringify({
       pid: process.pid,
       startedAt: Date.now(),
+      markerId: randomUUID(),
       ...(identity ? { processIdentity: identity } : {}),
-    }))
+    })
+    writeFileSync(ownerFile(stagingDir), owner)
+    deps.beforeMarkerPublish?.(dir)
     renameSync(stagingDir, dir)
     published = true
-    return true
+    return { created: true, owner }
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException
-    if (err.code === 'EEXIST' || err.code === 'ENOTEMPTY') return false
+    if (err.code === 'EEXIST' || err.code === 'ENOTEMPTY') return { created: false }
     throw err
   } finally {
     if (!published) {
       try { rmSync(stagingDir, { recursive: true, force: true }) } catch { /* abandoned staging dirs are not locks */ }
     }
   }
+}
+
+function tryCreateMarker(
+  dir: string,
+  deps: Pick<LockAcquireDependencies, 'processIdentity' | 'beforeMarkerPublish'> = {},
+): boolean {
+  return publishMarker(dir, deps).created
 }
 
 interface LockAcquireDependencies {
@@ -72,6 +88,8 @@ interface LockAcquireDependencies {
   /** Process probes used by acquisition and stale-owner recovery. */
   probeProcessLiveness?: typeof probeProcessLiveness
   processIdentity?: typeof processIdentity
+  /** Fault-injection seam immediately before a staged marker is published. */
+  beforeMarkerPublish?: (dir: string) => void
 }
 
 function isOwnerAlive(dir: string, deps: LockAcquireDependencies = {}): boolean {
@@ -87,7 +105,10 @@ function isOwnerAlive(dir: string, deps: LockAcquireDependencies = {}): boolean 
   if (liveness.state === 'gone' || liveness.state === 'invalid') return false
   if (owner.processIdentity) {
     const currentIdentity = (deps.processIdentity ?? processIdentity)(owner.pid)
-    if (currentIdentity && currentIdentity !== owner.processIdentity) return false
+    if (
+      currentIdentity
+      && compareProcessIdentity(owner.processIdentity, currentIdentity) === 'different'
+    ) return false
   }
   return liveness.state === 'alive' || liveness.state === 'unknown'
 }
@@ -106,7 +127,8 @@ interface MarkerReplacementOutcome {
   replaced: boolean
   removeError?: unknown
   createError?: unknown
-  lingeringClaim?: string
+  claimReleaseError?: unknown
+  lingeringClaim?: RecoveryClaim
 }
 
 interface RecoveryClaim {
@@ -142,7 +164,48 @@ function readOwnerRecord(dir: string): {
 
 function recoveryClaimIsFresh(dir: string): boolean {
   const startedAt = readOwnerRecord(dir)?.startedAt
-  return startedAt !== undefined && Date.now() - startedAt < RECOVERY_CLAIM_STALE_MS
+  if (startedAt === undefined) return false
+  const age = Date.now() - startedAt
+  return age >= 0 && age < RECOVERY_CLAIM_STALE_MS
+}
+
+function recoveryClaimIsOwned(claim: RecoveryClaim): boolean {
+  return readOwnerRecord(claim.dir)?.raw === claim.owner
+}
+
+function releaseOwnedRecoveryClaim(
+  claim: RecoveryClaim,
+  deps: LockAcquireDependencies,
+): void {
+  // Conditional deletion is implemented as move, verify, then remove. A plain
+  // read-then-rm has a TOCTOU window where a delayed contender can displace our
+  // generation and install a successor between the two operations.
+  const canonicalDir = claim.dir
+  const releaseDir = `${canonicalDir}.release-${randomUUID()}`
+  try {
+    renameSync(canonicalDir, releaseDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+
+  if (readOwnerRecord(releaseDir)?.raw !== claim.owner) {
+    try { renameSync(releaseDir, canonicalDir) } catch { /* preserve the displaced generation */ }
+    return
+  }
+
+  claim.dir = releaseDir
+  try {
+    removeReleasedMarker(releaseDir, deps.releaseRecoveryClaim)
+  } catch (error) {
+    // Restore the canonical name when it is still free so the same process can
+    // adopt this exact generation and retry a transient cleanup failure.
+    try {
+      renameSync(releaseDir, canonicalDir)
+      claim.dir = canonicalDir
+    } catch { /* a successor already owns the canonical path */ }
+    throw error
+  }
 }
 
 function tryAcquireRecoveryClaim(
@@ -173,12 +236,20 @@ function tryAcquireRecoveryClaim(
   // record so a delayed contender that picked up a newly-created live claim
   // restores it instead of acting on an earlier stale observation.
   const abandonedDir = `${dir}.abandoned-${randomUUID()}`
+  const observedOwner = existing?.raw ?? null
   try {
     renameSync(dir, abandonedDir)
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'EEXIST' || code === 'ENOTEMPTY') return null
     throw error
+  }
+  const displacedOwner = readOwnerRecord(abandonedDir)?.raw ?? null
+  if (displacedOwner !== observedOwner) {
+    // The path changed after our stale observation. Restore that newer
+    // generation when possible, and never treat it as abandoned.
+    try { renameSync(abandonedDir, dir) } catch { /* another contender now owns the claim */ }
+    return null
   }
   if (isOwnerAlive(abandonedDir, deps) || recoveryClaimIsFresh(abandonedDir)) {
     try { renameSync(abandonedDir, dir) } catch { /* another contender now owns the claim */ }
@@ -216,23 +287,49 @@ function replaceMarker(
   if (!recoveryClaim) return { replaced: false }
 
   const removeMarker = ops.removeMarker ?? markerReplacementOps.removeMarker
-  const createMarker = ops.createMarker ?? markerReplacementOps.createMarker
+  const createMarker = ops.createMarker
   let removeError: unknown
   let createError: unknown
   let replaced = false
+  let createdOwner: string | undefined
   let claimReleaseError: unknown
   try {
     // The owner may have changed while this contender waited for the recovery
     // claim. Never act on the stale observation made by the caller.
-    const claimStillOwned = readOwnerRecord(recoveryClaim.dir)?.raw === recoveryClaim.owner
+    const claimStillOwned = recoveryClaimIsOwned(recoveryClaim)
     const primaryStillStale = claimStillOwned && !isOwnerAlive(dir, deps)
     if (primaryStillStale) {
       try { removeMarker(dir) } catch (error) { removeError = error }
-      try { replaced = createMarker(dir) } catch (error) { createError = error }
+      if (recoveryClaimIsOwned(recoveryClaim)) {
+        try {
+          if (createMarker) {
+            replaced = createMarker(dir)
+            if (replaced) createdOwner = readOwnerRecord(dir)?.raw
+          } else {
+            const publication = publishMarker(dir, deps)
+            replaced = publication.created
+            createdOwner = publication.owner
+          }
+        } catch (error) {
+          createError = error
+        }
+      }
+      if (replaced && !recoveryClaimIsOwned(recoveryClaim)) {
+        // A delayed contender displaced our claim while we published. Do not
+        // report ownership without the serialization generation that proved it.
+        if (createdOwner) {
+          try {
+            if (readOwnerRecord(dir)?.raw === createdOwner) removeMarker(dir)
+          } catch (error) {
+            removeError ??= error
+          }
+        }
+        replaced = false
+      }
     }
   } finally {
     try {
-      removeReleasedMarker(recoveryDir, deps.releaseRecoveryClaim)
+      releaseOwnedRecoveryClaim(recoveryClaim, deps)
     } catch (error) {
       claimReleaseError = error
     } finally {
@@ -244,17 +341,15 @@ function replaceMarker(
     replaced,
     ...(removeError !== undefined ? { removeError } : {}),
     ...(createError !== undefined ? { createError } : {}),
-    ...(replaced && claimReleaseError !== undefined ? { lingeringClaim: recoveryDir } : {}),
-    ...(!replaced && createError === undefined && claimReleaseError !== undefined
-      ? { createError: claimReleaseError }
-      : {}),
+    ...(claimReleaseError !== undefined ? { claimReleaseError } : {}),
+    ...(replaced && claimReleaseError !== undefined ? { lingeringClaim: recoveryClaim } : {}),
   }
 }
 
 function stealLock(
   dir: string,
   deps: LockAcquireDependencies = {},
-): { acquired: boolean; lingeringClaim?: string } {
+): { acquired: boolean; lingeringClaim?: RecoveryClaim } {
   const outcome = replaceMarker(dir, deps, deps.markerReplacement)
   // The generic lock APIs historically propagate unexpected marker-creation
   // failures. Only the backend singleton converts them into operator guidance.
@@ -280,14 +375,19 @@ function removeReleasedMarker(
 function makeRelease(
   dir: string,
   deps: LockAcquireDependencies = {},
-  lingeringClaim?: string,
+  lingeringClaim?: RecoveryClaim,
 ): ReleaseFn {
-  let released = false
+  let primaryReleased = false
+  let claimReleased = lingeringClaim === undefined
   return async () => {
-    if (released) return
-    if (lingeringClaim) removeReleasedMarker(lingeringClaim)
-    removeReleasedMarker(dir, deps.releaseMarker)
-    released = true
+    if (!primaryReleased) {
+      removeReleasedMarker(dir, deps.releaseMarker)
+      primaryReleased = true
+    }
+    if (!claimReleased && lingeringClaim) {
+      releaseOwnedRecoveryClaim(lingeringClaim, deps)
+      claimReleased = true
+    }
   }
 }
 
@@ -366,6 +466,7 @@ export type SingletonFailure =
   | 'owner-retirement-unconfirmed'
   | 'owner-survived-sigkill'
   | 'marker-recreation-failed'
+  | 'recovery-claim-release-failed'
 
 type OwnerLifetimeObservation =
   | { state: 'same' }
@@ -386,7 +487,11 @@ function observeOwnerLifetime(
   if (!currentIdentity) {
     return { state: 'unknown', failure: 'owner-retirement-unconfirmed' }
   }
-  if (currentIdentity !== expectedIdentity) return { state: 'replaced' }
+  const identityComparison = compareProcessIdentity(expectedIdentity, currentIdentity)
+  if (identityComparison === 'different') return { state: 'replaced' }
+  if (identityComparison === 'legacy-unscoped') {
+    return { state: 'unknown', failure: 'owner-retirement-unconfirmed' }
+  }
   if (liveness.state === 'unknown') {
     return {
       state: 'unknown',
@@ -536,6 +641,13 @@ export function describeSingletonFailure(
         guidance: 'Another backend may have won the startup race, or the marker may be unremovable. Inspect the marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
         ...(result.detail ? { detail: result.detail } : {}),
       }
+    case 'recovery-claim-release-failed':
+      return {
+        logMessage: `could not release the tinstar backend recovery claim on ${configDir}${result.detail ? `: ${result.detail}` : ''}`,
+        headline: `Could not release the tinstar backend recovery claim on ${configDir}.`,
+        guidance: 'Inspect the adjacent .recovery marker before retrying, or use a different TINSTAR_CONFIG_HOME.',
+        ...(result.detail ? { detail: result.detail } : {}),
+      }
     case undefined:
       return {
         logMessage: `another tinstar backend is already running on ${configDir}${who}`,
@@ -609,7 +721,7 @@ export function acquireBackendSingleton(
   if (replacement.replaced) {
     if (replacement.lingeringClaim) {
       try {
-        removeReleasedMarker(replacement.lingeringClaim, deps.releaseRecoveryClaim)
+        releaseOwnedRecoveryClaim(replacement.lingeringClaim, deps)
       } catch {
         // The singleton marker is already ours. Keep that ownership even if a
         // second recovery-claim cleanup attempt also fails; a future stale-lock
@@ -617,6 +729,15 @@ export function acquireBackendSingleton(
       }
     }
     return { acquired: true, action }
+  }
+  if (replacement.claimReleaseError) {
+    const detail = describeMarkerError(replacement.claimReleaseError)
+    return {
+      acquired: false,
+      action,
+      failure: 'recovery-claim-release-failed',
+      ...(detail ? { detail: `${dir}.recovery: ${detail}` } : {}),
+    }
   }
   // Failure can mean either a competing creator won the race or the old marker
   // could not be removed. Neither case proves which process owns the marker.

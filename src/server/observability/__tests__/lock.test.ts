@@ -33,9 +33,9 @@ describe('observability lock', () => {
     let contender: ReturnType<typeof tryAcquireLock> | null = null
 
     const first = await tryAcquireLock(path, {
-      processIdentity: () => {
+      processIdentity: () => identity,
+      beforeMarkerPublish: () => {
         contender ??= tryAcquireLock(path)
-        return identity
       },
     })
     const second = await contender
@@ -184,7 +184,7 @@ describe('observability lock', () => {
       releaseRecoveryClaim,
     }
 
-    await expect(tryAcquireLock(path, deps)).rejects.toBe(cleanupError)
+    await expect(tryAcquireLock(path, deps)).resolves.toBeNull()
     expect(existsSync(`${dir}.recovery`)).toBe(true)
 
     primaryAlive = false
@@ -193,6 +193,80 @@ describe('observability lock', () => {
     expect(release).not.toBeNull()
     expect(releaseRecoveryClaim).toHaveBeenCalledTimes(2)
     expect(existsSync(`${dir}.recovery`)).toBe(false)
+    await release!()
+  })
+
+  it('releases the primary before retrying a lingering recovery claim', async () => {
+    const path = join(tmp, 'o.lock')
+    const dir = `${path}.mark`
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
+    const claimError = Object.assign(new Error('claim cleanup denied'), { code: 'EACCES' })
+    const releaseRecoveryClaim = vi.fn()
+      .mockImplementationOnce(() => { throw claimError })
+      .mockImplementationOnce(() => { throw claimError })
+      .mockImplementationOnce((claim: string) => { rmSync(claim, { recursive: true }) })
+    const release = await tryAcquireLock(path, { releaseRecoveryClaim })
+
+    expect(release).not.toBeNull()
+    await expect(release!()).rejects.toBe(claimError)
+    expect(existsSync(dir)).toBe(false)
+
+    const successorRelease = await tryAcquireLock(path)
+    expect(successorRelease).not.toBeNull()
+    await expect(release!()).resolves.toBeUndefined()
+    expect(existsSync(dir)).toBe(true)
+    await successorRelease!()
+  })
+
+  it('does not claim success after losing its recovery generation during publish', async () => {
+    const path = join(tmp, 'o.lock')
+    const dir = `${path}.mark`
+    const recovery = `${dir}.recovery`
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
+
+    const release = await tryAcquireLock(path, {
+      markerReplacement: {
+        createMarker: marker => {
+          mkdirSync(marker)
+          writeFileSync(join(marker, 'owner.json'), JSON.stringify({
+            pid: process.pid,
+            startedAt: Date.now(),
+            markerId: 'published-primary',
+          }))
+          rmSync(recovery, { recursive: true })
+          mkdirSync(recovery)
+          writeFileSync(join(recovery, 'owner.json'), JSON.stringify({
+            pid: process.pid,
+            startedAt: Date.now(),
+            markerId: 'successor-claim',
+          }))
+          return true
+        },
+      },
+    })
+
+    expect(release).toBeNull()
+    expect(existsSync(dir)).toBe(false)
+    expect(existsSync(recovery)).toBe(true)
+  })
+
+  it('does not treat a future-dated dead recovery claim as fresh forever', async () => {
+    const path = join(tmp, 'o.lock')
+    const dir = `${path}.mark`
+    const recovery = `${dir}.recovery`
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 2147480000, startedAt: 0 }))
+    mkdirSync(recovery)
+    writeFileSync(join(recovery, 'owner.json'), JSON.stringify({
+      pid: 2147480000,
+      startedAt: Date.now() + 60_000,
+    }))
+
+    const release = await tryAcquireLock(path)
+
+    expect(release).not.toBeNull()
     await release!()
   })
 
