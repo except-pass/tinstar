@@ -120,7 +120,7 @@ export class Supervisor {
           adoption.process.pid,
           this.opts.port,
         )
-        if (!serviceMatches || !lifetimeMatches || !stillOwnsPort) {
+        if (!serviceMatches || !lifetimeMatches || stillOwnsPort === false) {
           this.setState('degraded')
           throw new Error(
             `${this.opts.name} legacy process ${adoption.process.pid} could not be validated; refusing to adopt or replace it`,
@@ -151,8 +151,17 @@ export class Supervisor {
     const grace = this.opts.shutdownGraceMs ?? 5_000
     const pid = this.pid
     if (!pid) {
-      if (this.quarantineStateGeneration !== null) this.quarantineUnverifiedState()
-      this.finishStop()
+      let quarantineError: unknown
+      try {
+        if (this.quarantineStateGeneration !== null) this.quarantineUnverifiedState()
+      } catch (error) {
+        quarantineError = error
+      } finally {
+        // Quarantine is recovery hygiene, not process ownership. A filesystem
+        // failure must not leave shutdown timers or supervisor state wedged.
+        this.finishStop()
+      }
+      if (quarantineError !== undefined) throw quarantineError
       return
     }
     this.stopping = true
@@ -306,22 +315,15 @@ export class Supervisor {
     return (this.opts.processIdentity ?? readProcessIdentity)(pid)
   }
 
-  /**
-   * Best-effort: SIGKILL any process (other than our own tracked child) listening
-   * on our port, so a fresh spawn can bind cleanly. Linux-only via `ss`; on other
-   * platforms or if `ss` is absent this is a no-op (execFileSync throws → caught).
-   */
+  /** Best-effort: clear any foreign listener before a fresh child binds. */
   private reapPortOrphan(): void {
-    if (process.platform !== 'linux') return
-    try {
-      const out = execFileSync('ss', ['-H', '-ltnp', `sport = :${this.opts.port}`], { encoding: 'utf-8' })
-      for (const m of out.matchAll(/pid=(\d+)/g)) {
-        const pid = Number(m[1])
-        if (pid && pid !== this.pid) {
-          try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
-        }
+    const listenerPids = getListeningProcessIds(this.opts.port)
+    if (listenerPids === null) return
+    for (const pid of listenerPids) {
+      if (pid !== this.pid) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       }
-    } catch { /* ss missing or nothing on the port — nothing to reap */ }
+    }
   }
 
   private startHealthLoop(): void {
@@ -462,7 +464,6 @@ export class Supervisor {
             reason: `${this.opts.name} legacy state ${stateFile} lacks enough service identity; refusing to adopt or replace it`,
           }
         }
-        if (s.port !== this.opts.port) return { state: 'spawn' }
         const actual = getProcessName(s.pid)
         if (!actual) {
           return {
@@ -477,7 +478,13 @@ export class Supervisor {
             reason: `${this.opts.name} legacy process ${s.pid} executable does not match state ${stateFile}; refusing to adopt or replace it`,
           }
         }
-        if (!this.processOwnsListeningPort(s.pid, s.port)) {
+        if (s.port !== this.opts.port) {
+          return {
+            state: 'unverified',
+            reason: `${this.opts.name} legacy process ${s.pid} is still live on recorded port ${s.port}, but this version expects ${this.opts.port}; stop it before replacement`,
+          }
+        }
+        if (this.processOwnsListeningPort(s.pid, s.port) === false) {
           return {
             state: 'unverified',
             reason: `${this.opts.name} legacy process ${s.pid} does not own the recorded service port in ${stateFile}; refusing to adopt or replace it`,
@@ -532,9 +539,9 @@ export class Supervisor {
     }
   }
 
-  private processOwnsListeningPort(pid: number, port: number): boolean {
+  private processOwnsListeningPort(pid: number, port: number): boolean | null {
     const listenerPids = (this.opts.listeningProcessIds ?? getListeningProcessIds)(port)
-    return listenerPids?.has(pid) ?? false
+    return listenerPids?.has(pid) ?? null
   }
 
   private quarantineUnverifiedState(): void {
@@ -595,23 +602,55 @@ function sameExecutable(actual: string, recorded: string): boolean {
   }
 }
 
-function getListeningProcessIds(port: number): Set<number> | null {
+interface ListenerInspectionFailure {
+  code?: string | number
+  status?: number | null
+  stdout?: string | Buffer
+  stderr?: string | Buffer
+  killed?: boolean
+  signal?: NodeJS.Signals | null
+}
+
+type ListenerInspectionExec = (
+  file: string,
+  args: string[],
+  opts: { encoding: 'utf-8'; timeout: number },
+) => string
+
+function inspectionOutput(value: string | Buffer | undefined): string {
+  return typeof value === 'string'
+    ? value.trim()
+    : value?.toString('utf-8').trim() ?? ''
+}
+
+function isCleanListenerMiss(error: unknown): boolean {
+  const failure = error as ListenerInspectionFailure
+  return (
+    (failure.status === 1 || failure.code === 1 || failure.code === '1')
+    && inspectionOutput(failure.stdout) === ''
+    && inspectionOutput(failure.stderr) === ''
+    && failure.killed !== true
+    && failure.signal == null
+  )
+}
+
+export function getListeningProcessIds(
+  port: number,
+  run: ListenerInspectionExec = execFileSync as ListenerInspectionExec,
+  platform: NodeJS.Platform = process.platform,
+): Set<number> | null {
+  if (platform !== 'linux' && platform !== 'darwin') return null
   try {
-    const output = process.platform === 'linux'
-      ? execFileSync('ss', ['-H', '-ltnp', `sport = :${port}`], { encoding: 'utf-8' })
-      : process.platform === 'darwin'
-        ? execFileSync(
-            'lsof',
-            ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
-            { encoding: 'utf-8' },
-          )
-        : null
-    if (output === null) return null
+    const output = run(
+      'lsof',
+      ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
+      { encoding: 'utf-8', timeout: 2_000 },
+    )
     const pids = new Set<number>()
-    const pattern = process.platform === 'linux' ? /pid=(\d+)/gu : /^p(\d+)$/gmu
-    for (const match of output.matchAll(pattern)) pids.add(Number(match[1]))
+    for (const match of output.matchAll(/^p(\d+)$/gmu)) pids.add(Number(match[1]))
     return pids
-  } catch {
+  } catch (error) {
+    if (isCleanListenerMiss(error)) return new Set()
     return null
   }
 }

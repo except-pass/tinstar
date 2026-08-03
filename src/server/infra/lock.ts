@@ -435,7 +435,7 @@ export async function acquireLock(
         const detail = describeMarkerError(lastRecoveryError)
         throw Object.assign(
           new Error(
-            `timed out acquiring lock at ${path} after recovery-claim cleanup failed${detail ? `: ${detail}` : ''}`,
+            `timed out acquiring lock at ${path}; an earlier recovery-claim cleanup also failed${detail ? `: ${detail}` : ''}`,
           ),
           { cause: lastRecoveryError },
         )

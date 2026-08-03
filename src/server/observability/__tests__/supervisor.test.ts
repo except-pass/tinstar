@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Supervisor } from '../../infra/supervisor'
+import { getListeningProcessIds, Supervisor } from '../../infra/supervisor'
 
 let tmp: string
 
@@ -62,6 +62,34 @@ describe('Supervisor spawn + readiness', () => {
   })
 })
 
+describe('listener ownership inspection', () => {
+  it('uses bounded lsof inspection and parses listener pids', () => {
+    const run = vi.fn(() => 'p123\nf8\np456\nf9\n')
+
+    expect(getListeningProcessIds(9999, run, 'linux')).toEqual(new Set([123, 456]))
+    expect(run).toHaveBeenCalledWith(
+      'lsof',
+      ['-w', '-nP', '-iTCP:9999', '-sTCP:LISTEN', '-Fp'],
+      { encoding: 'utf-8', timeout: 2_000 },
+    )
+  })
+
+  it('distinguishes a clean empty match from unavailable inspection', () => {
+    const cleanMiss = Object.assign(new Error('no matches'), {
+      status: 1,
+      stdout: '',
+      stderr: '',
+      killed: false,
+      signal: null,
+    })
+    const failed = Object.assign(new Error('lsof missing'), { code: 'ENOENT' })
+
+    expect(getListeningProcessIds(9999, () => { throw cleanMiss }, 'linux'))
+      .toEqual(new Set())
+    expect(getListeningProcessIds(9999, () => { throw failed }, 'linux')).toBeNull()
+  })
+})
+
 import { spawn } from 'node:child_process'
 
 describe('Supervisor adoption', () => {
@@ -92,6 +120,35 @@ describe('Supervisor adoption', () => {
     expect(sup.pid).toBe(pid)
     expect(JSON.parse(readFileSync(join(tmp, 'fake.state.json'), 'utf-8')))
       .toMatchObject({ pid, processIdentity: expect.any(String) })
+    await sup.stop()
+  })
+
+  it('migrates released-format state when listener inspection is unavailable', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid,
+      binaryPath: '/bin/sleep',
+      binaryHash: '',
+      port: 9999,
+      startedAt: Date.now(),
+    }))
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+      listeningProcessIds: () => null,
+    })
+
+    await sup.start()
+
+    expect(sup.pid).toBe(pid)
+    expect(sup.state).toBe('ready')
     await sup.stop()
   })
 
@@ -325,7 +382,7 @@ describe('Supervisor adoption', () => {
     }
   })
 
-  it('spawns when a released-format record belongs to a previous service port', async () => {
+  it('refuses to duplicate a live released-format service on a previous port', async () => {
     const oldChild = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
     oldChild.unref()
     const oldPid = oldChild.pid!
@@ -347,9 +404,10 @@ describe('Supervisor adoption', () => {
     })
 
     try {
-      await sup.start()
-      expect(sup.pid).not.toBe(oldPid)
-      expect(sup.state).toBe('ready')
+      await expect(sup.start()).rejects.toThrow('is still live on recorded port 1234')
+      expect(sup.pid).toBe(0)
+      expect(sup.state).toBe('degraded')
+      expect(() => process.kill(oldPid, 0)).not.toThrow()
       await sup.stop()
     } finally {
       try { process.kill(oldPid, 'SIGTERM') } catch { /* gone */ }
@@ -769,6 +827,22 @@ describe('Supervisor adoption', () => {
     await sup.stop()
     expect(existsSync(join(tmp, 'fake.state.json'))).toBe(false)
     expect(readdirSync(tmp).some(name => name.startsWith('fake.state.json.invalid-'))).toBe(true)
+  })
+
+  it('finishes shutdown even when invalid-state quarantine fails', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), '{"pid":')
+    const sup = shSupervisor('sleep 5', tmp)
+    await expect(sup.start()).rejects.toThrow('is unreadable')
+    const quarantineError = Object.assign(new Error('quarantine denied'), { code: 'EACCES' })
+    vi.spyOn(
+      sup as unknown as { quarantineUnverifiedState: () => void },
+      'quarantineUnverifiedState',
+    ).mockImplementation(() => { throw quarantineError })
+
+    await expect(sup.stop()).rejects.toBe(quarantineError)
+
+    expect(sup.state).toBe('idle')
+    expect(sup.pid).toBe(0)
   })
 
   it('does not quarantine a repaired state generation after validation fails', async () => {
