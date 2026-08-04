@@ -1,4 +1,5 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
@@ -34,6 +35,7 @@ const rawExecFileAsync = promisify(execFile)
 // that run no tmux commands stay responsive throughout, which is exactly the reported
 // symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
 const TMUX_EXEC_TIMEOUT_MS = 10_000
+const AGENT_INCARNATION_ENV = 'TINSTAR_AGENT_INCARNATION'
 const strictProbeWarnings = new Set<string>()
 function execFileAsync(
   file: string,
@@ -768,6 +770,13 @@ export async function createTmuxSession(
 
   // Inject session identity + secrets into tmux environment
   await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, 'TINSTAR_SESSION_NAME', opts.session.name])
+  await execFileAsync('tmux', [
+    'set-environment',
+    '-t',
+    tmuxTarget,
+    AGENT_INCARNATION_ENV,
+    randomUUID(),
+  ])
   for (const [key, value] of Object.entries(opts.secrets)) {
     if (value) {
       await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
@@ -853,6 +862,12 @@ export async function createTmuxSession(
   return { port: opts.port, ttydPid }
 }
 
+interface StartTmuxSessionDeps {
+  reattachTmuxSession: typeof reattachTmuxSession
+}
+
+const startTmuxSessionDeps: StartTmuxSessionDeps = { reattachTmuxSession }
+
 export async function startTmuxSession(
   config: TinstarConfig,
   opts: {
@@ -864,6 +879,7 @@ export async function startTmuxSession(
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
+  deps: StartTmuxSessionDeps = startTmuxSessionDeps,
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const provider = opts.provider ?? defaultProviderRegistry.resolveSession(
     opts.session,
@@ -875,6 +891,27 @@ export async function startTmuxSession(
   if (!exists) {
     return createTmuxSession(config, { ...opts, provider, resume: true })
   }
+
+  // Retrying /start against a live child is idempotent: do not rotate the
+  // durable delivery incarnation or inject a second CLI into the same terminal.
+  // Re-establish the exact-target terminal surface because the prior ttyd may
+  // have exited independently while the agent survived.
+  if (await getTmuxAgentIdentity(config, opts.session.name) !== null) {
+    return deps.reattachTmuxSession(config, {
+      session: opts.session,
+      port: opts.port,
+    })
+  }
+
+  // A restart in the same pane keeps the shell PID, so give every managed
+  // agent launch its own tmux-persisted identity before sending the command.
+  await execFileAsync('tmux', [
+    'set-environment',
+    '-t',
+    exactTmuxSessionTarget(tmuxName),
+    AGENT_INCARNATION_ENV,
+    randomUUID(),
+  ])
 
   // Existing tmux sessions retain session-scoped variables across agent
   // restarts. Reconcile both sides of the policy: inject newly enabled
@@ -940,7 +977,11 @@ export async function startTmuxSession(
   }
 
   // Restart ttyd
-  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  const ttydPid = await startTtyd({
+    tmuxName,
+    port: opts.port,
+    sessionName: opts.session.name,
+  })
   return { port: opts.port, ttydPid }
 }
 
@@ -1025,9 +1066,22 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   }
 }
 
+interface ReattachTmuxSessionDeps {
+  incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
+  verifySurface: typeof verifyTtydSessionSurface
+  startTtyd: typeof startTtyd
+}
+
+const reattachTmuxSessionDeps: ReattachTmuxSessionDeps = {
+  incumbentsOnPort: ttydIncumbentsOnPortStrict,
+  verifySurface: verifyTtydSessionSurface,
+  startTtyd,
+}
+
 export async function reattachTmuxSession(
   config: TinstarConfig,
   opts: { session: Session; port: number },
+  deps: ReattachTmuxSessionDeps = reattachTmuxSessionDeps,
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
   // The boot rehydration path has already reclaimed persisted ports, while a
@@ -1037,12 +1091,22 @@ export async function reattachTmuxSession(
 
   // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
   // any unrelated HTTP listener) must never make this session look healthy.
-  const incumbent = (await ttydIncumbentsOnPortStrict(opts.port)).find(
+  const incumbent = (await deps.incumbentsOnPort(opts.port)).find(
     candidate => candidate.tmuxTarget === tmuxName,
   )
-  if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
+  if (incumbent && await deps.verifySurface({
+    port: opts.port,
+    pid: incumbent.pid,
+    tmuxName,
+  }) === 'verified') {
+    return { port: opts.port, ttydPid: incumbent.pid }
+  }
 
-  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  const ttydPid = await deps.startTtyd({
+    tmuxName,
+    port: opts.port,
+    sessionName: opts.session.name,
+  })
   return { port: opts.port, ttydPid }
 }
 
@@ -1066,6 +1130,112 @@ export async function getTmuxSessionState(config: TinstarConfig, sessionName: st
   const tmuxName = tmuxSessionName(config, sessionName)
   const exists = await tmuxHasSessionStrict(tmuxName)
   return exists ? 'exists' : 'missing'
+}
+
+/**
+ * Stable identity for the managed agent process inside a tmux pane. A launch
+ * token stored by tmux survives a Tinstar restart and rotates on every managed
+ * relaunch. The child PID and birth time fence manual or unexpected process
+ * replacement even when that token does not rotate.
+ */
+export async function getTmuxAgentIdentity(
+  config: TinstarConfig,
+  sessionName: string,
+): Promise<string | null> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  let shellPid: string
+  let launchToken = ''
+  try {
+    const { stdout } = await execFileAsync('tmux', [
+      'display-message',
+      '-p',
+      '-t',
+      exactTmuxPaneTarget(tmuxName),
+      '#{pane_pid}',
+    ])
+    shellPid = stdout.trim()
+    if (!/^\d+$/.test(shellPid)) {
+      throw new Error(`tmux returned an invalid shell pid for ${tmuxName}`)
+    }
+  } catch (error) {
+    const failure = error as { stderr?: string | Buffer }
+    if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) return null
+    throw error
+  }
+
+  let agentPid: string
+  try {
+    // The pane shell can have unrelated background children. Its foreground
+    // process group is the command currently owning the terminal, so use that
+    // leader as the managed agent identity rather than accepting the first
+    // direct child returned by pgrep.
+    const { stdout } = await execFileAsync(
+      'ps',
+      ['-o', 'tpgid=', '-p', shellPid],
+      { timeout: 2_000 },
+    )
+    agentPid = stdout.trim()
+    if (!/^\d+$/.test(agentPid) || agentPid === shellPid) return null
+  } catch (error) {
+    if (isCleanInspectionMiss(error)) return null
+    throw error
+  }
+
+  try {
+    const { stdout } = await execFileAsync('tmux', [
+      'show-environment',
+      '-t',
+      exactTmuxSessionTarget(tmuxName),
+      AGENT_INCARNATION_ENV,
+    ])
+    const prefix = `${AGENT_INCARNATION_ENV}=`
+    const environmentLine = stdout.trim()
+    if (!environmentLine.startsWith(prefix)) {
+      throw new Error(
+        `tmux returned an invalid ${AGENT_INCARNATION_ENV} value for ${tmuxName}`,
+      )
+    }
+    launchToken = environmentLine.slice(prefix.length)
+    if (!launchToken || launchToken.includes('\n') || launchToken.includes('\r')) {
+      throw new Error(
+        `tmux returned an invalid ${AGENT_INCARNATION_ENV} value for ${tmuxName}`,
+      )
+    }
+  } catch (error) {
+    const failure = error as {
+      code?: string | number
+      killed?: boolean
+      signal?: NodeJS.Signals | string | null
+      stderr?: string | Buffer
+    }
+    const stderr = (
+      typeof failure.stderr === 'string'
+        ? failure.stderr
+        : failure.stderr?.toString('utf8') ?? ''
+    ).trim()
+    const variableMissing = (
+      (failure.code === 1 || failure.code === '1')
+      && failure.killed !== true
+      && failure.signal == null
+      && stderr === `unknown variable: ${AGENT_INCARNATION_ENV}`
+    )
+    // Sessions launched before managed tokens existed still use process birth.
+    // Operational inspection failures are inconclusive and must fail closed.
+    if (!variableMissing) throw error
+  }
+
+  const { stdout: processBirth } = await execFileAsync(
+    'ps',
+    ['-o', 'lstart=', '-p', agentPid],
+    { timeout: 2_000 },
+  )
+  if (!processBirth.trim()) return null
+  const nativeIdentity = JSON.stringify([
+    launchToken,
+    agentPid,
+    processBirth.trim(),
+  ])
+  return createHash('sha256').update(nativeIdentity).digest('hex')
 }
 
 // --- ttyd management ---
