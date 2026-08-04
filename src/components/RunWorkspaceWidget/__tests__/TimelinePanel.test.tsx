@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TimelinePanel, stripHeightPx } from '../TimelinePanel'
 
 vi.mock('../../../hooks/useSessionTimeline', () => ({ useSessionTimeline: vi.fn() }))
@@ -60,6 +60,42 @@ describe('TimelinePanel', () => {
     render(<TimelinePanel sessionId="s" />)
     expect(screen.getByText(/timeline unavailable/i)).toBeInTheDocument()
     expect(screen.queryByText(/no transcript/i)).not.toBeInTheDocument()
+  })
+
+  it('offers a per-workspace mode toggle', () => {
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
+    render(<TimelinePanel sessionId="s" />)
+    const toggle = screen.getByTestId('timeline-mode-toggle')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('keeps each workspace mode independent', () => {
+    // Flipping one run's strips must not touch another's — the toggle is a way
+    // of looking at ONE run, not a global preference.
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
+    const a = render(<TimelinePanel sessionId="a" />)
+    const b = render(<TimelinePanel sessionId="b" />)
+    const toggleA = within(a.container).getByTestId('timeline-mode-toggle')
+    const toggleB = within(b.container).getByTestId('timeline-mode-toggle')
+    fireEvent.click(toggleA)
+    expect(toggleA).toHaveAttribute('aria-pressed', 'true')
+    expect(toggleB).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows percentages for the column you point at, not only ALL', () => {
+    // Shares was hardcoded to cols[0], so WIN and NOW carried no numbers at all.
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
+    render(<TimelinePanel sessionId="s" />)
+    expect(screen.getAllByText('ALL').length).toBeGreaterThan(0)
+    const strips = screen.getAllByTestId('timeline-strip')
+    fireEvent.mouseEnter(strips[2]!.parentElement!)
+    // the shares row now describes the turn column
+    expect(screen.getAllByText('NOW').length).toBeGreaterThan(1)
   })
 
   it('labels an open turn as current', () => {
