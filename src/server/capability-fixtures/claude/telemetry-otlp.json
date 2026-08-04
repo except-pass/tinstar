@@ -1,5 +1,5 @@
 {
-  "_note": "Recorded PromQL that TelemetryQuery issues, plus a canned Prometheus response set and the snapshot it produces. Claude Code exports these series over OTLP; Alloy relabels and remote-writes them into Prometheus. Codex exports nothing equivalent today — this file is the parity target.",
+  "_note": "Recorded PromQL that TelemetryQuery issues, plus a canned Prometheus response set and the snapshot it produces. Claude Code exports these series over OTLP; Alloy relabels and remote-writes them into Prometheus. Codex uses different OTel event names, normalized by codex-otel.ts into the shared dashboard contract.",
   "clock": {
     "systemTimeIso": "2026-07-30T18:00:00.000Z",
     "tzOffsetMinutes": 0

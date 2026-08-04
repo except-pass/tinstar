@@ -106,6 +106,131 @@ describe('TelemetryQuery.todayHud', () => {
   })
 })
 
+describe('TelemetryQuery unified provider contract', () => {
+  it('merges Codex canonical counters into the one fleet token and duty totals', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const query = decodeURIComponent(new URL(url).searchParams.get('query') ?? '')
+      let value: number | null = null
+      if (query.includes('tinstar_provider_session_token_usage_total')) {
+        value = query.includes('increase(') ? 300 : query.includes('[1m]') ? 60 : 600
+      } else if (query.includes('tinstar_provider_session_active_time_seconds_total')) {
+        value = 0.5
+      } else if (query.includes('claude_code_token_usage_tokens_total')) {
+        value = query.includes('rate(') ? 40 : 1_000
+      } else if (query.includes('claude_code_active_time_seconds_total')) {
+        value = 0.2
+      } else if (query.includes('claude_code_cost_usage_USD_total')) {
+        value = 2
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: {
+            resultType: 'vector',
+            result: value === null ? [] : [makeResult({}, value)],
+          },
+        }),
+      }
+    }))
+
+    const snapshot = await new TelemetryQuery('http://prom').unifiedTodayHud({
+      userEmail: 'x@example.com',
+      tzOffsetMinutes: 0,
+    })
+
+    expect(snapshot.cost.total).toBeNull()
+    expect(snapshot.tokens.total).toBe(1_300)
+    expect(snapshot.dutyCycle.value).toBeCloseTo(0.7)
+  })
+
+  it('uses canonical Codex token and duty series without exposing provider names to callers', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const query = decodeURIComponent(new URL(url).searchParams.get('query') ?? '')
+      const values = query.includes('active_time')
+        ? [[100, '0.2'], [105, '0.4']]
+        : [[100, '1000'], [105, '1200']]
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: { resultType: 'matrix', result: [{ metric: {}, values }] },
+        }),
+      }
+    }))
+
+    const series = await new TelemetryQuery('http://prom').unifiedSessionSeries({
+      identity: { providerId: 'codex', sessionIds: ['run-1', 'thread-1'] },
+      userEmail: '',
+      endSec: 110,
+      windowSec: 10,
+      stepSec: 5,
+    })
+
+    expect(series.series).toEqual({
+      cost: [],
+      tokens: [[100, 1_000], [105, 1_200]],
+      cache: [],
+      duty: [[100, 0.2], [105, 0.4]],
+    })
+  })
+
+  it('merges Claude and Codex fleet history pointwise for the shared charts', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const query = new URL(url).searchParams.get('query') ?? ''
+      const values = query.includes('claude_code_cost_usage_USD_total')
+        ? [[100, '1'], [105, '1.5']]
+        : query.includes('claude_code_token_usage_tokens_total') && query.includes('type=~')
+          ? [[100, '100'], [105, '150']]
+          : query.includes('tinstar_provider_session_token_usage_total')
+            ? [[100, '20'], [105, '30']]
+            : query.includes('claude_code_active_time_seconds_total')
+              ? [[100, '0.2'], [105, '0.3']]
+              : query.includes('tinstar_provider_session_active_time_seconds_total')
+                ? [[100, '0.4'], [105, '0.5']]
+                : []
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: { resultType: 'matrix', result: values.length ? [{ metric: {}, values }] : [] },
+        }),
+      }
+    }))
+
+    const series = await new TelemetryQuery('http://prom').unifiedFleetSeries({
+      userEmail: 'x@example.com',
+      endSec: 110,
+      windowSec: 10,
+      stepSec: 5,
+    })
+
+    expect(series.series.cost).toEqual([])
+    expect(series.series.tokens).toEqual([[100, 120], [105, 180]])
+    expect(series.series.duty[0]).toEqual([100, expect.closeTo(0.6)])
+    expect(series.series.duty[1]).toEqual([105, expect.closeTo(0.8)])
+  })
+
+  it('escapes regex metacharacters in alternate native session identities', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { resultType: 'matrix', result: [] } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new TelemetryQuery('http://prom').unifiedSessionSeries({
+      identity: { providerId: 'codex', sessionIds: ['run.a', 'thread(1)'] },
+      userEmail: '',
+      endSec: 110,
+      windowSec: 10,
+      stepSec: 5,
+    })
+
+    const query = new URL(fetchMock.mock.calls[0]![0]).searchParams.get('query') ?? ''
+    expect(query).toContain('session=~"run\\\\.a|thread\\\\(1\\\\)"')
+  })
+})
+
 describe('queryRange', () => {
   it('hits /api/v1/query_range and normalizes [ts, "1.5"] pairs to [ts, 1.5]', async () => {
     const fetchMock = vi.fn(async (_url: string) => ({

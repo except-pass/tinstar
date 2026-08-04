@@ -5,7 +5,10 @@ import { log } from '../logger.js'
 import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
 import { getRecentObservations } from '../observability/turn-length.js'
 import type { ClaudeTelemetryQuery } from '../providers/claude-observation-adapter.js'
-import type { TelemetryQuery } from '../observability/query.js'
+import type {
+  TelemetryQuery,
+  UnifiedSessionTelemetryIdentity,
+} from '../observability/query.js'
 import type {
   ProviderHistoricalTelemetry,
   ProviderObservationSnapshotFor,
@@ -14,12 +17,23 @@ import type {
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
 
+type ProviderTelemetryQuery = Pick<TelemetryQuery, 'providerSessionSeries'>
+  & Partial<Pick<
+    TelemetryQuery,
+    'unifiedTodayHud' | 'unifiedSessionHud' | 'unifiedSessionSeries' | 'unifiedFleetSeries'
+  >>
+
+type UnifiedTelemetryQuery = Pick<
+  TelemetryQuery,
+  'unifiedTodayHud' | 'unifiedSessionHud' | 'unifiedSessionSeries'
+>
+
 export interface TelemetryApiDeps {
   sse: SSEBroadcaster
   /** Provider-owned compatibility projection over the historical observation source. */
   query: ClaudeTelemetryQuery | null // null when state is 'disabled' or 'downloading'
   /** Provider-neutral history emitted from normalized native observation events. */
-  providerQuery?: Pick<TelemetryQuery, 'providerSessionSeries'> | null
+  providerQuery?: ProviderTelemetryQuery | null
   getState: () => ObservabilityState
   getProgress: () => HudSnapshot['progress']
   /** Last captured startup/runtime error from the observability stack. Null when healthy or never attempted. */
@@ -28,6 +42,10 @@ export interface TelemetryApiDeps {
   getDefaultUserEmail: () => string
   /** Resolve a tinstar session name to its Claude Code conversation UUID. */
   getSessionConversationId: (sessionName: string) => string | null
+  /** Resolve the provider plus every native alias for one managed session. */
+  getSessionTelemetryIdentity?: (
+    sessionName: string,
+  ) => UnifiedSessionTelemetryIdentity | null
   /** Inverse of getSessionConversationId — map conversation UUIDs back to tinstar run IDs. */
   getRunIdsForConversationIds: (conversationIds: string[]) => string[]
 }
@@ -75,20 +93,35 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
     }
     const lastError = deps.getLastError()
     if (lastError) base.error = lastError
-    if (state !== 'ready' || !deps.query) return base
+    const unifiedQuery = getUnifiedTelemetryQuery(deps.providerQuery)
+    if (state !== 'ready' || (!unifiedQuery && !deps.query)) return base
     const tzOffsetMinutes = new Date().getTimezoneOffset()
     try {
-      const sessionId = sessionName ? deps.getSessionConversationId(sessionName) ?? undefined : undefined
+      const identity = sessionName ? resolveSessionTelemetryIdentity(deps, sessionName) : null
       const [hud, burningConvIds] = await Promise.all([
-        deps.query.todayHud({
-          userEmail: deps.getDefaultUserEmail(),
-          tzOffsetMinutes,
-          sessionId,
-        }),
-        deps.query.burningSessions({ userEmail: deps.getDefaultUserEmail() }).catch((err) => {
+        unifiedQuery
+          ? sessionName
+            ? identity
+              ? unifiedQuery.unifiedSessionHud(identity, {
+                  userEmail: deps.getDefaultUserEmail(),
+                  tzOffsetMinutes,
+                })
+              : Promise.resolve(base)
+            : unifiedQuery.unifiedTodayHud({
+                userEmail: deps.getDefaultUserEmail(),
+                tzOffsetMinutes,
+              })
+          : deps.query!.todayHud({
+              userEmail: deps.getDefaultUserEmail(),
+              tzOffsetMinutes,
+              sessionId: sessionName
+                ? deps.getSessionConversationId(sessionName) ?? undefined
+                : undefined,
+            }),
+        deps.query?.burningSessions({ userEmail: deps.getDefaultUserEmail() }).catch((err) => {
           log.warn('telemetry', `burningSessions query failed: ${(err as Error).message}`)
           return [] as string[]
-        }),
+        }) ?? Promise.resolve([] as string[]),
       ])
       const burningRunIds = deps.getRunIdsForConversationIds(burningConvIds)
       return { ...hud, burningRunIds }
@@ -132,6 +165,34 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       const snap = await buildSnapshot()
       res.writeHead(200, json)
       res.end(JSON.stringify(snap))
+      return true
+    }
+    if (pathname === '/api/telemetry/hud/series' && req.method === 'GET') {
+      const endSec = Math.floor(Date.now() / 1_000)
+      const empty = emptySeries(endSec, 300, 5)
+      if (process.env.TINSTAR_FAST_SIM === '1') {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(makeFakeSeries({ endSec, windowSec: 300, stepSec: 5 })))
+        return true
+      }
+      if (deps.getState() !== 'ready' || !deps.providerQuery?.unifiedFleetSeries) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(empty))
+        return true
+      }
+      try {
+        const series = await deps.providerQuery.unifiedFleetSeries({
+          userEmail: deps.getDefaultUserEmail(),
+          endSec,
+          windowSec: 300,
+          stepSec: 5,
+        })
+        res.writeHead(200, json)
+        res.end(JSON.stringify(series))
+      } catch (error) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify({ ...empty, state: 'degraded', error: (error as Error).message }))
+      }
       return true
     }
     const providerSeriesMatch = pathname.match(
@@ -218,25 +279,37 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
         return true
       }
       const state = deps.getState()
-      if (state !== 'ready' || !deps.query) {
+      const unifiedQuery = getUnifiedTelemetryQuery(deps.providerQuery)
+      if (state !== 'ready' || (!unifiedQuery && !deps.query)) {
         res.writeHead(200, json)
         res.end(JSON.stringify({ ...empty, state }))
         return true
       }
-      const conversationId = deps.getSessionConversationId(seriesMatch[1] ?? '')
-      if (!conversationId) {
+      const sessionName = seriesMatch[1] ?? ''
+      const identity = resolveSessionTelemetryIdentity(deps, sessionName)
+      const conversationId = deps.getSessionConversationId(sessionName)
+      if (!identity && !conversationId) {
         res.writeHead(200, json)
         res.end(JSON.stringify(empty))
         return true
       }
       try {
-        const out = await deps.query.sessionSeries({
-          sessionId: conversationId,
-          userEmail: deps.getDefaultUserEmail(),
-          endSec: Math.floor(Date.now() / 1000),
-          windowSec: 300,
-          stepSec: 5,
-        })
+        const endSec = Math.floor(Date.now() / 1000)
+        const out = unifiedQuery && identity
+          ? await unifiedQuery.unifiedSessionSeries({
+              identity,
+              userEmail: deps.getDefaultUserEmail(),
+              endSec,
+              windowSec: 300,
+              stepSec: 5,
+            })
+          : await deps.query!.sessionSeries({
+              sessionId: conversationId!,
+              userEmail: deps.getDefaultUserEmail(),
+              endSec,
+              windowSec: 300,
+              stepSec: 5,
+            })
         res.writeHead(200, json)
         res.end(JSON.stringify(out))
       } catch (err) {
@@ -322,6 +395,28 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
   return { handle, startPolling, stopPolling }
 }
 
+function getUnifiedTelemetryQuery(
+  query: ProviderTelemetryQuery | null | undefined,
+): UnifiedTelemetryQuery | null {
+  if (!query
+    || !query.unifiedTodayHud
+    || !query.unifiedSessionHud
+    || !query.unifiedSessionSeries) return null
+  return query as UnifiedTelemetryQuery
+}
+
+function resolveSessionTelemetryIdentity(
+  deps: TelemetryApiDeps,
+  sessionName: string,
+): UnifiedSessionTelemetryIdentity | null {
+  const native = deps.getSessionTelemetryIdentity?.(sessionName)
+  if (native) return native
+  const conversationId = deps.getSessionConversationId(sessionName)
+  return conversationId
+    ? { providerId: 'claude', sessionIds: [sessionName, conversationId] }
+    : null
+}
+
 function latestProviderPoint(value: ProviderHistoricalTelemetry): string | null {
   let latest = Number.NEGATIVE_INFINITY
   let latestAt: string | null = null
@@ -338,3 +433,17 @@ function latestProviderPoint(value: ProviderHistoricalTelemetry): string | null 
 }
 
 export type TelemetryRoutes = ReturnType<typeof createTelemetryRoutes>
+
+function emptySeries(endSec: number, windowSec: number, stepSec: number) {
+  return {
+    startedAt: new Date((endSec - windowSec) * 1_000).toISOString(),
+    endedAt: new Date(endSec * 1_000).toISOString(),
+    stepSec,
+    series: {
+      cost: [] as [number, number | null][],
+      tokens: [] as [number, number | null][],
+      cache: [] as [number, number | null][],
+      duty: [] as [number, number | null][],
+    },
+  }
+}

@@ -77,6 +77,7 @@ import {
   type NatsManager,
 } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
+import { CodexOtelReceiver } from './observability/codex-otel.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
 import { OtlpExporter } from './stores/otlp-exporter'
@@ -716,6 +717,14 @@ export function initBackend(): RouteContext {
     stores: providerObservationStores,
     sink: otlpExporter,
   })
+  const codexOtel = new CodexOtelReceiver({
+    ingestor: providerObservationIngestor,
+    metricSink: otlpExporter,
+    statePath: join(getConfigRoot(), 'observability', 'codex-otel-state.json'),
+  })
+  void codexOtel.start().catch(error => {
+    log.warn('codex-otel', `receiver unavailable: ${(error as Error).message}`)
+  })
   const claudeObservations = createClaudeObservationAdapter({
     stores: providerObservationStores,
     sink: otlpExporter,
@@ -753,6 +762,26 @@ export function initBackend(): RouteContext {
       if (!sessionConfig) return null
       const sess = getSession(sessionConfig.dirs.sessions, name)
       return sess?.conversation?.id ?? null
+    },
+    getSessionTelemetryIdentity: (name: string) => {
+      if (!sessionConfig) return null
+      const session = getSession(sessionConfig.dirs.sessions, name)
+      if (!session) return null
+      const template = session.cliTemplate
+        ? sessionConfig.cliTemplates.find(candidate => candidate.id === session.cliTemplate) ?? null
+        : null
+      try {
+        const providerId = providerRegistry.resolveSession(session, template).provider.id
+        return {
+          providerId,
+          sessionIds: [...new Set([
+            session.name,
+            session.conversation?.id,
+          ].filter((value): value is string => Boolean(value?.trim())))],
+        }
+      } catch {
+        return null
+      }
     },
     getRunIdsForConversationIds: (conversationIds) => {
       if (!sessionConfig || conversationIds.length === 0) return []
@@ -807,6 +836,7 @@ export function initBackend(): RouteContext {
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
       try { await stopProcessNatsManager() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
       try { await observability.stop() } catch (e) { log.debug('shutdown', `observability: ${(e as Error).message}`) }
+      try { await codexOtel.stop() } catch (e) { log.debug('shutdown', `codexOtel: ${(e as Error).message}`) }
       try { telemetryRoutes.stopPolling() } catch (e) { log.debug('shutdown', `telemetry: ${(e as Error).message}`) }
       try { docStore.flush() } catch (e) { log.debug('shutdown', `docStore: ${(e as Error).message}`) }
       try { await slashUsage.flush() } catch (e) { log.debug('shutdown', `slashUsage: ${(e as Error).message}`) }

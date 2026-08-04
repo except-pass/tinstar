@@ -11,11 +11,7 @@ import { computeDeltaChip } from '../RunWorkspaceWidget/computeDeltaChip'
 import { useFleetTelemetrySeries } from '../../hooks/useFleetTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { getPref, setPref } from '../../lib/uiPrefs'
-import {
-  useProviderObservations,
-  useProviderQuotaObservations,
-} from '../../hooks/providerObservationsStore'
-import { ProviderFleetObservations } from './ProviderFleetObservations'
+import { useProviderQuotaObservations } from '../../hooks/providerObservationsStore'
 import { ProviderQuotaCards } from './ProviderQuotaCards'
 
 interface Props {
@@ -29,7 +25,6 @@ interface Props {
 
 export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embedded = false }: Props) {
   const { snapshot } = useTelemetryHud()
-  const providerObservations = useProviderObservations()
   const providerQuota = useProviderQuotaObservations()
   const fleetSeries = useFleetTelemetrySeries(snapshot)
   const config = useConfig()
@@ -74,9 +69,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
       </button>
     )
   }
-  const hasProviderData = providerObservations.observations.sessionUsage.length > 0
-    || providerObservations.observations.sessionContext.length > 0
-    || providerQuota.observations.length > 0
+  const hasProviderData = providerQuota.observations.length > 0
     || providerQuota.error !== null
   if ((!snapshot || snapshot.state === 'disabled') && !hasProviderData) return null
 
@@ -100,18 +93,11 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
         zIndex: 30,
       }
 
-  const modelChips = Object.entries(snapshot?.cost.byModel ?? {}).slice(0, 2)
-
   return (
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
       {snapshot && snapshot.state !== 'ready' && (
         <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
       )}
-      <ProviderFleetObservations
-        observations={providerObservations.observations}
-        managedSessions={providerObservations.managedSessions}
-        error={providerObservations.error}
-      />
       {(() => {
         if (snapshot?.state !== 'ready') return null
         const costTotal  = snapshot.cost.total
@@ -134,27 +120,15 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
         const dutyDelta   = computeDeltaChip('duty',   zip(fleetSeries.duty))
 
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             {panels.cost     && <StatSpark accent="gold"   label="COST"        value={costValueStr}   series={fleetSeries.cost}   delta={costDelta} />}
-            {panels.cost && modelChips.length > 0 && (
-              <div style={{ display: 'flex', gap: 5 }}>
-                {modelChips.map(([model, cost]) => (
-                  <div key={model} style={{ flex: 1, padding: '4px 6px', fontSize: 10,
-                      fontFamily: 'JetBrains Mono, monospace', borderRadius: 3,
-                      background: 'rgba(168,85,247,0.12)', borderLeft: '2px solid #a855f7' }}>
-                    <div style={{ fontSize: 8, opacity: 0.7, letterSpacing: 1 }}>{model.toUpperCase().slice(0, 10)}</div>
-                    <div style={{ fontWeight: 700, color: '#e2e8f0' }}>{fmtDollar(cost)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
             {panels.tokens   && <StatSpark accent="blue"   label="TOKENS"      value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />}
             {panels.cacheHit && <StatSpark accent="green"  label="CACHE HIT"   value={cacheValueStr}  series={fleetSeries.cache}  delta={cacheDelta} />}
-            {panels.duty     && <StatSpark accent="violet" label="DUTY · FLEET" value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />}
-            <TurnLengthFleet />
+            {panels.duty     && <StatSpark accent="violet" label="DUTY"         value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />}
           </div>
         )
       })()}
+      {panels.turnLength && <TurnLengthFleet />}
       <ProviderQuotaCards
         observations={providerQuota.observations}
         error={providerQuota.error}

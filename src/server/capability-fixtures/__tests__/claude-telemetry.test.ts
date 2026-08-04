@@ -13,7 +13,7 @@
  *   - the Tinstar-side turn-length metric, whose label names are also
  *     Claude-specific (`cc_conversation_id`).
  *
- * A provider with no OTLP exporter — Codex today — produces none of this.
+ * Providers with different OTel event names are normalized before this query surface.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'

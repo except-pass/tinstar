@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
+import { apiFetch } from '../apiClient'
 import type { HudSnapshot } from '../server/observability/types'
-import type { SeriesSnapshot } from './telemetrySeriesStore'
+import type { HudSeries } from '../server/observability/types'
+import {
+  mergeSeriesSnapshots,
+  seriesSnapshotFromHudSeries,
+  type SeriesSnapshot,
+} from './telemetrySeriesStore'
 
 const MAX_SAMPLES = 320
 
@@ -11,8 +17,8 @@ function appendCapped<T>(arr: T[], v: T): T[] {
 }
 
 /**
- * Fleet-level series buffer. No server backfill — accrues snapshot ticks over the
- * mount lifetime. CanvasHud is a singleton so a per-mount ring buffer is fine.
+ * Fleet-level series buffer. Restores five minutes from the shared server
+ * history, then appends live snapshot ticks.
  *
  * Mirror of useTelemetrySeries's shape so the same <StatSpark> + computeDeltaChip
  * stack works for fleet data.
@@ -21,6 +27,20 @@ export function useFleetTelemetrySeries(snapshot: HudSnapshot | null): SeriesSna
   const [series, setSeries] = useState<SeriesSnapshot>({
     tsSec: [], cost: [], tokens: [], cache: [], duty: [],
   })
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void apiFetch('/api/telemetry/hud/series', { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) return
+        const backfill = seriesSnapshotFromHudSeries(await response.json() as HudSeries)
+        setSeries(current => mergeSeriesSnapshots(backfill, current))
+      })
+      .catch(() => {
+        // Backfill is best-effort; live snapshots still build a useful tail.
+      })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     if (!snapshot || snapshot.state !== 'ready') return

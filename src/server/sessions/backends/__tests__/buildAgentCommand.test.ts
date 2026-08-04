@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildAgentCommand,
   providerLaunchEnvironmentCommands,
+  providerTelemetryCommandOptions,
   providerTelemetryEnvironmentCommands,
 } from '../tmux'
 import type { AgentDef } from '../tmux'
@@ -112,6 +113,42 @@ describe('provider telemetry environment reconciliation', () => {
       GENERIC_PROVIDER,
       tmpl('agent', 'agent resume'),
     )).toEqual([])
+  })
+
+  it('uses Codex OTel by default without leaking provider config into the template', () => {
+    const template = { ...tmpl('codex -- {prompt}', 'codex resume {sessionId}'), adapter: 'codex' }
+    const telemetry = providerTelemetryCommandOptions(
+      'worker / one',
+      CODEX_PROVIDER,
+      template,
+      'http://otel:4318',
+    )
+
+    expect(telemetry).toEqual({
+      sessionName: 'worker / one',
+      logsEndpoint: 'http://127.0.0.1:4319/v1/logs/worker%20%2F%20one',
+      metricsEndpoint: 'http://otel:4318/v1/metrics',
+    })
+    const command = buildAgentCommand({
+      provider: CODEX_PROVIDER,
+      template,
+      initialPrompt: 'hello',
+      telemetry,
+    })
+    expect(command).toContain('otel.environment="tinstar"')
+    expect(command).toContain('protocol = "json"')
+    expect(command).toContain('otel.log_user_prompt=false')
+    expect(command).toContain('http://127.0.0.1:4319/v1/logs/worker%20%2F%20one')
+    expect(command.indexOf('otel.environment')).toBeLessThan(command.indexOf(" -- 'hello'"))
+  })
+
+  it('omits Codex OTel flags when telemetry is explicitly disabled', () => {
+    const template = {
+      ...tmpl('codex -- {prompt}', 'codex resume {sessionId}'),
+      adapter: 'codex',
+      telemetry: false,
+    }
+    expect(providerTelemetryCommandOptions('worker', CODEX_PROVIDER, template)).toBeNull()
   })
 
   it('rejects an explicit telemetry opt-in for an unsupported provider', () => {

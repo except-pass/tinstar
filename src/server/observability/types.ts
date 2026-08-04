@@ -35,7 +35,7 @@ export interface HudSeries {
   stepSec: number    // resolution of each series (e.g., 5)
   series: {
     cost:   [number, number | null][]
-    tokens: [number, number | null][]  // tokens/min (rate)
+    tokens: [number, number | null][]  // cumulative observed tokens
     cache:  [number, number | null][]  // 0..1
     duty:   [number, number | null][]  // 0..1 per session, can exceed 1 for fleet
   }

@@ -50,7 +50,7 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
     expect(templates.find(template => template.id === 'claude-auto')?.telemetryState)
       .toBe('enabled')
     expect(templates.find(template => template.id === 'codex-full-auto')?.telemetryState)
-      .toBe('unsupported')
+      .toBe('enabled')
     expect(templates.find(template => template.id === 'shell')?.telemetryState)
       .toBe('unsupported')
   })
@@ -149,7 +149,7 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
     })
     expect(put.status).toBe(200)
     expect((await put.json() as { data: DiscoveredCliTemplate }).data.telemetryState)
-      .toBe('unsupported')
+      .toBe('enabled')
 
     // The bug: GET returned the boot-time snapshot, so the edit "reverted" in the
     // modal. It must now reflect the saved command.

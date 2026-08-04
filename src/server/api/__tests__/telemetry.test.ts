@@ -135,6 +135,44 @@ describe('GET /api/telemetry/hud — state: downloading', () => {
   })
 })
 
+describe('GET /api/telemetry/hud/series', () => {
+  it('returns provider-neutral fleet history when telemetry is ready', async () => {
+    const deps = makeDeps('ready', null, makeFakeSSE())
+    const fakeSeries = {
+      startedAt: '2026-08-04T19:00:00.000Z',
+      endedAt: '2026-08-04T19:05:00.000Z',
+      stepSec: 5,
+      series: {
+        cost: [[100, 1]] as [number, number][],
+        tokens: [[100, 120]] as [number, number][],
+        cache: [] as [number, number][],
+        duty: [[100, 0.6]] as [number, number][],
+      },
+    }
+    deps.providerQuery = {
+      providerSessionSeries: vi.fn(),
+      unifiedFleetSeries: vi.fn(async () => fakeSeries),
+    }
+    const routes = createTelemetryRoutes(deps)
+    const pathname = '/api/telemetry/hud/series'
+    const res = makeRes()
+
+    const handled = await routes.handle(
+      makeReq('GET', pathname),
+      res as unknown as ServerResponse,
+      pathname,
+    )
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).parsedBody).toEqual(fakeSeries)
+    expect(deps.providerQuery.unifiedFleetSeries).toHaveBeenCalledWith(expect.objectContaining({
+      userEmail: 'test@example.com',
+      windowSec: 300,
+      stepSec: 5,
+    }))
+  })
+})
+
 describe('GET /api/telemetry/hud — query throws', () => {
   it('responds 200 with state=degraded and error field', async () => {
     const sse = makeFakeSSE()
