@@ -98,7 +98,6 @@ import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessio
 import { probeNatsLiveStatus } from '../nats-health'
 import { reconnectSessionNats } from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
-import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
 import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
@@ -119,6 +118,7 @@ import {
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
+import { projectLegacySessionContextWindow } from '../providers/legacy-observation-projections'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -5225,6 +5225,32 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return slash === -1 ? rest : rest.slice(0, slash)
     }
 
+    function resolveObservationProvider(
+      session: Session,
+    ): { ok: true; providerId: string } | { ok: false; message: string } {
+      const template = session.cliTemplate
+        ? cfg.cliTemplates.find(candidate => candidate.id === session.cliTemplate) ?? null
+        : null
+      if (session.cliTemplate && !template) {
+        return {
+          ok: false,
+          message: `CLI template "${session.cliTemplate}" is not configured`,
+        }
+      }
+      try {
+        return {
+          ok: true,
+          providerId: (ctx.providerRegistry ?? defaultProviderRegistry)
+            .resolveSession(session, template).provider.id,
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+
     /**
      * Resolve which transcript file carries a session's history.
      *
@@ -5417,8 +5443,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           return true
         }
+        const provider = resolveObservationProvider(session)
+        if (!provider.ok) {
+          fail(res, 'CONFLICT', provider.message)
+          return true
+        }
         const convId = session.conversation?.id
-        const snap = convId && ctx.ccQuotaService ? ctx.ccQuotaService.getSessionContext(convId) : null
+        const observation = convId
+          ? ctx.providerObservationStores?.sessions.getContext(provider.providerId, convId)
+          : undefined
+        const snap = projectLegacySessionContextWindow(observation)
         ok(res, snap)
         return true
       }
@@ -5437,10 +5471,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'CONFLICT', 'Session has no active conversation')
           return true
         }
-        // Credentials injected explicitly — the sidecar gets a scoped env and no
-        // login shell, so nothing would re-export them. Same source as sessions.
-        getDetailedUsage(session.conversation.id, loadSecrets(cfg.dirs.secrets))
-          .then(data => ok(res, data))
+        const provider = resolveObservationProvider(session)
+        if (!provider.ok) {
+          fail(res, 'CONFLICT', provider.message)
+          return true
+        }
+        const providerId = provider.providerId
+        const observationAdapter = ctx.providerRegistry?.getObservations(providerId)
+        if (!observationAdapter) {
+          fail(res, 'CONFLICT', `Provider '${providerId}' does not expose detailed context`)
+          return true
+        }
+        observationAdapter.observe['context-breakdown']({
+          kind: 'context-breakdown',
+          scope: { kind: 'session', sessionId: session.conversation.id },
+        })
+          .then((snapshot) => {
+            if (snapshot.availability.state !== 'available') {
+              const capabilityUnavailable = snapshot.availability.state === 'unsupported'
+                || snapshot.availability.reason === 'not-applicable'
+              fail(
+                res,
+                capabilityUnavailable ? 'CONFLICT' : 'INTERNAL',
+                (
+                  snapshot.availability.state === 'unavailable'
+                    ? snapshot.availability.message
+                    : undefined
+                ) ?? snapshot.availability.reason,
+              )
+              return
+            }
+            const legacyContext = (
+              snapshot.detail as { legacyContext?: unknown } | undefined
+            )?.legacyContext
+            if (!legacyContext) {
+              fail(res, 'CONFLICT', `Provider '${providerId}' has no legacy context projection`)
+              return
+            }
+            ok(res, legacyContext)
+          })
           .catch(err => {
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
             fail(res, 'INTERNAL', (err as Error).message)

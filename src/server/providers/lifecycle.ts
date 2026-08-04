@@ -22,6 +22,7 @@ import {
   resetCodexOffset,
 } from '../sessions/codex-transcript'
 import type { ProviderTranscriptObservationEvent } from './observation-ingestor'
+import type { ProviderAdapter as ObservationProviderAdapter } from './contract'
 
 export interface ProviderTranscriptStatus {
   state: 'running' | 'idle'
@@ -145,6 +146,7 @@ export class ProviderCapabilityError extends Error {
  */
 export class ProviderAdapterRegistry {
   private readonly adapters = new Map<string, TerminalProviderAdapter>()
+  private readonly observationAdapters = new Map<string, ObservationProviderAdapter>()
 
   constructor(adapters: readonly TerminalProviderAdapter[] = []) {
     for (const adapter of adapters) this.register(adapter)
@@ -167,6 +169,39 @@ export class ProviderAdapterRegistry {
 
   get(providerId: string): TerminalProviderAdapter | undefined {
     return this.adapters.get(providerId)
+  }
+
+  registerObservations<T extends ObservationProviderAdapter>(adapter: T): T {
+    const provider = this.require(adapter.provider.id)
+    if (provider.provider.label !== adapter.provider.label) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${adapter.provider.id}" label `
+        + `"${adapter.provider.label}" does not match lifecycle label `
+        + `"${provider.provider.label}"`,
+      )
+    }
+    if (this.observationAdapters.has(adapter.provider.id)) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${adapter.provider.id}" is already registered`,
+      )
+    }
+    this.observationAdapters.set(adapter.provider.id, adapter)
+    return adapter
+  }
+
+  getObservations(providerId: string): ObservationProviderAdapter | undefined {
+    return this.observationAdapters.get(providerId)
+  }
+
+  requireObservations(providerId: string): ObservationProviderAdapter {
+    this.require(providerId)
+    const adapter = this.observationAdapters.get(providerId)
+    if (!adapter) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${providerId}" is not registered`,
+      )
+    }
+    return adapter
   }
 
   require(providerId: string): TerminalProviderAdapter {
