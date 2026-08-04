@@ -50,6 +50,7 @@ describe('derivePointStatus', () => {
   it('explicit resolved/dismissed win over any derivation', () => {
     expect(derivePointStatus({ replies: [reply('agent', 'a', 2)], resolvedAt: 5 })).toBe('resolved')
     expect(derivePointStatus({ replies: [reply('user', 'q', 1)], dismissedAt: 5 })).toBe('dismissed')
+    expect(derivePointStatus({ replies: [reply('agent', 'a', 2)], supersededAt: 5 })).toBe('superseded')
   })
 })
 
@@ -807,5 +808,49 @@ describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
     expect(store.getRun('run-1')!.slate).toBeUndefined()
 
     expect(await bridge.deletePoint('run-1', 'objective', actor)).toBe(false)
+  })
+})
+
+// Fix 4 — the author's claim about the work. A FILE-OWNED passthrough with the same
+// overwrite/clear semantics as `refresh`, and the same two silent-failure traps: miss
+// the projection spread and the field never reaches run.slate; let it reach
+// `derivePointStatus` and the Slate starts auto-resolving through a new door.
+describe('the author proposal on run.slate (fix 4)', () => {
+  it('projects onto run.slate and NEVER moves the status', async () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    await seedRunSlate(store, 'run-1', [
+      { id: 'p1', headline: 'Decision 6', proposal: { state: 'resolved', detail: 'shipped in #163', at: 5 } },
+    ], 100)
+
+    const surface = store.getRun('run-1')!.slate![0]!
+    expect(surface.proposal).toEqual({ state: 'resolved', detail: 'shipped in #163', at: 5 })
+    // THE INVARIANT. An author claiming "done" leaves the status exactly where the
+    // thread put it. Back this out and the Slate auto-resolves — the CMT-1302 failure.
+    expect(surface.status).toBe('open')
+  })
+
+  it('a claim-only change updates the surface (the zero-change guard must not swallow it)', async () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    await seedRunSlate(store, 'run-1', [
+      { id: 'p1', headline: 'D6', proposal: { state: 'working', detail: 'half a day', at: 5 } },
+    ], 100)
+    await seedRunSlate(store, 'run-1', [
+      { id: 'p1', headline: 'D6', proposal: { state: 'resolved', at: 5 } },
+    ], 200)
+    expect(store.getRun('run-1')!.slate![0]!.proposal?.state).toBe('resolved')
+  })
+
+  it('clears the claim when a later projection omits it', async () => {
+    // An author who rewrites a card and says nothing about progress is no longer
+    // claiming progress — which is why this lives on content rather than the thread.
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    await seedRunSlate(store, 'run-1', [
+      { id: 'p1', headline: 'D6', proposal: { state: 'working', at: 5 } },
+    ], 100)
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'D6' }], 200)
+    expect(store.getRun('run-1')!.slate![0]!.proposal).toBeUndefined()
   })
 })

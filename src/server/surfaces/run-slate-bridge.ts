@@ -75,7 +75,8 @@ export class RunSlateBridge {
 
   /** Resolve, reopen, or dismiss a point. */
   async setDisposition(
-    runId: string, localId: string, action: 'resolve' | 'reopen' | 'dismiss', actor: SurfacePrincipalRef,
+    runId: string, localId: string, action: 'resolve' | 'reopen' | 'dismiss' | 'supersede',
+    actor: SurfacePrincipalRef,
   ): Promise<BridgeResult> {
     const surface = this.find(runId, localId)
     if (!surface) return { reason: 'not-found' }

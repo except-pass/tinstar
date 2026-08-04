@@ -15,6 +15,7 @@ import {
 } from '../../hooks/providerObservationsStore'
 import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
 import { providerTokenTotal } from '../../domain/provider-capabilities'
+import { TimelinePanel } from './TimelinePanel'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -126,7 +127,7 @@ function SessionSection({
   providerRefreshError: string | null
 }) {
   const config = useConfig()
-  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
+  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true, timeline: true }
   const snap = useTelemetrySession(sessionId)
   const series = useTelemetrySeries(sessionId)
   const hasLegacyTelemetry = snap?.state === 'ready'
@@ -204,6 +205,7 @@ function SessionSection({
           <StatSpark accent="violet" label="DUTY · PROMETHEUS" value={dutyValue} series={dutySeries} delta={dutyDelta} />
         )}
         {panels.turnLength && <TurnLengthPanel sessionId={sessionId} />}
+        {panels.timeline && <TimelinePanel sessionId={sessionId} />}
       </div>
     </div>
   )

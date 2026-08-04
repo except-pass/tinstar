@@ -50,6 +50,20 @@ export interface SlateSourceEpoch {
   unreadable: string[]
 }
 
+// NO WITNESS RUNS HERE, and U3's optional seeding seam that once did was removed in
+// U4 rather than kept as a second scheduler (plan U3's own note: "if the seam turns
+// out to stall the watcher, the right move is to drop the seeder and lean entirely on
+// that predicate"). Two reasons it went:
+//
+//   · This function is awaited by the watcher's DEBOUNCED epoch handler, which runs
+//     on the poll floor for every watched run. A witness is a subprocess or a network
+//     round trip, so a slow first look delayed the file-watch epoch containing it —
+//     the file→record path stalling behind `git fetch`.
+//   · R8 ("a claim's first observed value is recorded before any deadline elapses")
+//     is met without it: the coordinator treats a claim with no stored value as
+//     immediately due, so the first look happens on the next five-second sweep rather
+//     than an interval later. One scheduler decides when a witness runs.
+
 export interface SlateSourceEpochOutcome {
   /** Bindings observed present this epoch. */
   observed: number
@@ -63,7 +77,16 @@ export interface SlateSourceEpochOutcome {
    *  wins; the rest are refused. Reported so the drop is observable rather than a
    *  surface that silently never appears. */
   duplicates: string[]
-  /** Anything the mutation service refused, with its reason. */
+  /**
+   * Anything the MUTATION SERVICE refused, with its reason.
+   *
+   * NOT the channel a refused CLAIM travels on, and the difference has bitten a
+   * reader of the plan already. Every entry here comes from a `!result.ok` branch —
+   * `ensureRunRoot`, `observeSource`, `markSourceMissing` — and it means the record
+   * was not written. A claim-refused entry projects SUCCESSFULLY under KTD5, so it
+   * never takes one of those branches. Its refusal rides on the entry, through
+   * `observeSource`, onto the record's host-owned `freshness.claimRefusals` (U6).
+   */
   refusals: { localId: string; reason: string }[]
 }
 
@@ -103,6 +126,9 @@ export function boundSlateRuns(surfaces: readonly Surface[]): { runId: string; w
  * after that is per-binding and independent, which is what makes "updating one
  * source file cannot retract a Surface owned by another file" true by construction
  * — a refusal on one binding neither blocks nor rolls back any other.
+ *
+ * NOTHING THAT LEAVES THE PROCESS RUNS HERE. See the note above the outcome type for
+ * why the claim-seeding seam that briefly did was removed.
  */
 export async function reconcileSlateEpoch(
   svc: SurfaceService,
@@ -163,6 +189,10 @@ export async function reconcileSlateEpoch(
       author: entry.author,
       content: entry.content,
       watermark: entry.watermark,
+      // Passed ALWAYS, including as an empty list, because this is the clear path
+      // too: an entry whose claims now parse cleanly has to take the old refusal off
+      // its card, and a field only sent when non-empty could never say so (plan U6).
+      claimRefusals: entry.claimRefusals ?? [],
       ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
     }, { ...ctx, at })
 

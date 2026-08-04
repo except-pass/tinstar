@@ -20,7 +20,10 @@
 // guard. It is server-only (rides the server esbuild bundle) and React-free.
 
 import { createHash, randomUUID } from 'node:crypto'
-import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus, SurfaceRefreshDeclaration } from '../../domain/types'
+import type {
+  A2uiContent, Point, PointAnchor, PointAuthor, PointStatus,
+  SurfaceClaim, SurfaceProposal, SurfaceRefreshDeclaration,
+} from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 
 /** The file-owned subset of a Point that a projection carries. Everything not here
@@ -47,6 +50,21 @@ export interface PointInput {
    *  vocabulary — so a persisted value only ever holds triggers the host implements.
    *  Rides the same file→store→bridge path as `refresh`. */
   refreshPolicy?: SurfaceRefreshDeclaration
+  /** File-owned author claim about the work (see `SurfaceProposal`). Parsed through
+   *  `parseProposal`, which drops anything outside the closed state vocabulary.
+   *  Rides the same file→store→bridge path as `refresh`. */
+  proposal?: SurfaceProposal
+  /** File-owned claims (plan U1/R1): what this surface says would prove it wrong.
+   *  Parsed through `parseSurfaceClaims`, which drops a malformed claim (or one
+   *  naming a witness kind this host does not implement, U6) and refuses an
+   *  oversized list whole. THREE-STATE — absent and `[]` are different answers and
+   *  both reach the canonical record, so this is read with `!== undefined` rather
+   *  than truthiness everywhere it is carried.
+   *
+   *  ONLY THE ACCEPTED CLAIMS. What the parser refused is host knowledge and does
+   *  not belong on a type documented as "the file-owned subset of a Point"; it rides
+   *  the source entry instead, onto `SurfaceFreshness.claimRefusals`. */
+  claims?: SurfaceClaim[]
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number
 }
@@ -62,16 +80,21 @@ export type SlateChange = {
 
 type EmitFn = (evt: SlateChange) => void
 
-/** Derive a point's status from its thread. `resolved`/`dismissed` are EXPLICIT and
- *  win over any derivation (they survive a file re-projection and are cleared only by
- *  an explicit reopen). Otherwise: no reply → open; last reply by the user → waiting
- *  (the agent owes an answer); last reply by the agent → discussing. The Slate never
- *  auto-resolves — that was the CMT-1302 failure this prevents. */
+/** Derive a point's status from its thread. `resolved`/`dismissed`/`superseded` are
+ *  EXPLICIT and win over any derivation (they survive a file re-projection and are
+ *  cleared only by an explicit reopen). Otherwise: no reply → open; last reply by the
+ *  user → waiting (the agent owes an answer); last reply by the agent → discussing.
+ *  The Slate never auto-resolves — that was the CMT-1302 failure this prevents.
+ *
+ *  `proposal` is DELIBERATELY NOT A PARAMETER. An author's claim that the work is
+ *  done is rendered beside the status and never becomes it; the moment a file could
+ *  set its own status, the Slate would auto-resolve again through a different door. */
 export function derivePointStatus(
-  p: Pick<Point, 'replies' | 'resolvedAt' | 'dismissedAt'>,
+  p: Pick<Point, 'replies' | 'resolvedAt' | 'dismissedAt' | 'supersededAt'>,
 ): PointStatus {
   if (p.dismissedAt != null) return 'dismissed'
   if (p.resolvedAt != null) return 'resolved'
+  if (p.supersededAt != null) return 'superseded'
   const last = (p.replies ?? []).at(-1)
   if (!last) return 'open'
   return last.author === 'user' ? 'waiting' : 'discussing'

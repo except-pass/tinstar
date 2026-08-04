@@ -17,7 +17,10 @@ export interface GlobalHotkeyHandlers {
 
 export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
   const handlersRef = useRef(handlers)
-  useEffect(() => { handlersRef.current = handlers })
+  // Keep the listener on one stable ref, but refresh its value during render.
+  // Workspace state can update continuously from telemetry/SSE; waiting for a
+  // passive effect can leave a keyboard event one render behind indefinitely.
+  handlersRef.current = handlers
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
