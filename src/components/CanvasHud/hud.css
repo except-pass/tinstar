@@ -226,3 +226,89 @@
 .cc-quota-text { font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.25; flex: 1; }
 .cc-quota-big  { font-size: 11px; font-weight: 700; color: #f1f5f9; }
 .cc-quota-sub  { color: rgba(255,255,255,0.5); font-size: 8.5px; }
+
+/* Provider-neutral quota cards. The old cc-quota classes remain during the
+ * compatibility window for plugin surfaces that still render CcQuotaCard. */
+.provider-quota-list { display: grid; gap: 8px; }
+.provider-quota-card {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.025);
+}
+.provider-quota-header { display: flex; align-items: baseline; gap: 6px; margin-bottom: 7px; }
+.provider-quota-title {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255,255,255,0.72);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-quota-account {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: rgba(255,255,255,0.42);
+  font: 8px 'JetBrains Mono', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-quota-freshness {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: rgba(255,255,255,0.42);
+  font: 8px 'JetBrains Mono', monospace;
+}
+.provider-quota-freshness-stale { color: #fbbf24; }
+.provider-quota-freshness-unknown { color: #f87171; }
+.provider-quota-freshness-error { color: #f87171; }
+.provider-quota-source {
+  overflow: hidden;
+  margin: -4px 0 7px;
+  color: rgba(255,255,255,0.38);
+  font: 8px 'JetBrains Mono', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-quota-row { display: flex; align-items: center; gap: 10px; }
+.provider-quota-row + .provider-quota-row { margin-top: 8px; }
+.provider-quota-text { min-width: 0; flex: 1; font-family: 'JetBrains Mono', monospace; }
+.provider-quota-big { color: #f1f5f9; font-size: 11px; font-weight: 700; }
+.provider-quota-sub { color: rgba(255,255,255,0.5); font-size: 8.5px; line-height: 1.35; }
+.provider-quota-gauge {
+  --quota-remaining: 0deg;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#60a5fa var(--quota-remaining), rgba(255,255,255,0.09) 0);
+  color: #dbeafe;
+  font: 8px 'JetBrains Mono', monospace;
+  position: relative;
+}
+.provider-quota-gauge::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: #111722;
+}
+.provider-quota-gauge > span { position: relative; z-index: 1; }
+.provider-quota-state {
+  padding: 6px 0 2px;
+  color: rgba(255,255,255,0.5);
+  font: 9px 'JetBrains Mono', monospace;
+}
+.provider-quota-error {
+  padding: 6px 8px;
+  border: 1px solid rgba(248,113,113,0.25);
+  border-radius: 5px;
+  background: rgba(248,113,113,0.08);
+  color: #fca5a5;
+  font: 9px 'JetBrains Mono', monospace;
+}

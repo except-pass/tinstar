@@ -204,3 +204,126 @@ describe('sessionSeries', () => {
     expect(out.series.duty).toEqual([])
   })
 })
+
+describe('providerSessionSeries', () => {
+  it('returns provider-labelled token and context history without inventing unsupported metrics', async () => {
+    const sampleValues: [number, string][] = [[100, '1'], [105, '2'], [110, '3']]
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: { resultType: 'matrix', result: [{ metric: {}, values: sampleValues }] },
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const q = new TelemetryQuery('http://prom:9090')
+    const out = await q.providerSessionSeries({
+      providerId: 'codex',
+      sessionId: 'run-1',
+      endSec: 110,
+      windowSec: 15,
+      stepSec: 5,
+    })
+
+    expect(fetchMock.mock.calls).toHaveLength(3)
+    expect(out.series.map(series => series.metric)).toEqual(['tokens'])
+    expect(out.series[0]?.points).toEqual([
+      { at: '1970-01-01T00:01:40.000Z', value: 1 },
+      { at: '1970-01-01T00:01:45.000Z', value: 2 },
+      { at: '1970-01-01T00:01:50.000Z', value: 3 },
+    ])
+    for (const call of fetchMock.mock.calls) {
+      const query = new URL(call[0]).searchParams.get('query') ?? ''
+      expect(query).toContain('provider="codex"')
+      expect(query).toContain('session="run-1"')
+      expect(query).toContain('max(tinstar_provider_session_tokens')
+      expect(query).not.toContain('sum(tinstar_provider_session_tokens')
+      expect(query).not.toContain('claude_code_')
+    }
+  })
+
+  it('derives a canonical total from input/output-only provider history', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const query = new URL(url).searchParams.get('query') ?? ''
+      const values = query.includes('token="input"')
+        ? [[100, '7'], [105, '9']]
+        : query.includes('token="output"')
+          ? [[100, '3'], [105, '4']]
+          : []
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: { resultType: 'matrix', result: values.length ? [{ metric: {}, values }] : [] },
+        }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new TelemetryQuery('http://prom:9090').providerSessionSeries({
+      providerId: 'future-provider',
+      sessionId: 'run-2',
+      endSec: 105,
+      windowSec: 5,
+      stepSec: 5,
+    })
+
+    expect(out.series[0]?.points).toEqual([
+      { at: '1970-01-01T00:01:40.000Z', value: 10 },
+      { at: '1970-01-01T00:01:45.000Z', value: 13 },
+    ])
+  })
+
+  it('preserves an observed one-sided token counter without inventing an empty zero series', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const query = new URL(url).searchParams.get('query') ?? ''
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: {
+            resultType: 'matrix',
+            result: query.includes('token="input"')
+              ? [{ metric: {}, values: [[100, '7']] }]
+              : [],
+          },
+        }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new TelemetryQuery('http://prom:9090').providerSessionSeries({
+      providerId: 'future-provider',
+      sessionId: 'run-3',
+      endSec: 100,
+      windowSec: 5,
+      stepSec: 5,
+    })
+
+    expect(out.series[0]?.points).toEqual([
+      { at: '1970-01-01T00:01:40.000Z', value: 7 },
+    ])
+  })
+
+  it('escapes provider and session identities before interpolating PromQL labels', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { resultType: 'matrix', result: [] } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const q = new TelemetryQuery('http://prom:9090')
+    await q.providerSessionSeries({
+      providerId: 'forge"} or vector(1)',
+      sessionId: 'run\\name\nnext',
+      endSec: 110,
+      windowSec: 15,
+      stepSec: 5,
+    })
+
+    const query = new URL(fetchMock.mock.calls[0]![0]).searchParams.get('query') ?? ''
+    expect(query).toContain('provider="forge\\"} or vector(1)"')
+    expect(query).toContain('session="run\\\\name\\nnext"')
+  })
+})

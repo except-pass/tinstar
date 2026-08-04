@@ -26,12 +26,15 @@ export interface CanvasHotkeyHandlers {
   onConstellationDissolve: () => void
 }
 
-export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
+export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers, enabled = true) {
   const handlersRef = useRef(handlers)
   useEffect(() => { handlersRef.current = handlers })
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (!enabledRef.current) return
       const active = document.activeElement
       const inEditable = isEditable(active) || active?.tagName === 'IFRAME'
       const h = handlersRef.current

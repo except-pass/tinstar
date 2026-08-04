@@ -59,6 +59,7 @@ Each entry is a **point** — the primitive the Slate is built from:
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` — attach the point to a decision or another surface by id |
 | `refresh` | no | file | the self-contained instruction a fresh author re-runs to regenerate this surface (see "the vacuum test" below) |
+| `claims` | no | file | what would **prove this surface wrong** — the host checks these itself, with no agent session. Declare at least one on every surface you author; see "Declare at least one claim" below |
 | `group` | no | file | **workbench set id** — give the *same* string to 2+ **question** points and they render side by side, one per column (see below). Open-point entries only; ignored on a `kind: "surface"` anchor |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if you omit it |
 
@@ -246,6 +247,29 @@ progress.)
 ## Make surfaces refreshable by a fresh author (the vacuum test)
 
 A surface's `refresh` recipe is its **authoring contract**: when it's self-contained, refreshing the surface spawns a *fresh, context-free* author (a headless child in the run's workdir) that re-runs the recipe and rewrites the file — off your (the main agent's) critical path. So write every living surface's recipe to pass the **vacuum test**: name its **source** (a PR, files, a query), its **derivation** (what to do with the source), and its **output** (what to rewrite). `"regenerate this surface"` fails — it assumes context a fresh author won't have. A surface whose only source is *this session* (e.g. "explain the session") is session-derived: it stays with you and needs no self-contained recipe. Capture the recipe at create time so the surface is born handoff-able.
+
+## Declare at least one claim
+
+A `refresh` recipe says *how to rebuild this card*. A **claim** says *what would prove it wrong* — and the host can check a claim on its own, with no session, no prompt and no worker. Most checks find nothing moved, which is exactly why they are worth running often.
+
+```json
+"claims": [
+  { "id": "u2", "witness": "unit-landed", "locus": "repo",
+    "params": { "plan": "docs/plans/2026-07-24-001-….md", "unit": "U2" } },
+  { "id": "api", "witness": "http-status", "locus": "infra",
+    "params": { "url": "http://127.0.0.1:5273/api/state" } }
+]
+```
+
+Two witness kinds ship and no others: **`unit-landed`** (has this plan unit merged on the tracked remote ref?) and **`http-status`** (what code does this URL answer?). A claim naming anything else is refused and the card says so.
+
+Three things worth knowing before you write one:
+
+- **Declare at least one on every surface you author.** A card with none says `nothing to check` on its own face — honest, but nothing can ever doubt it. If you genuinely looked and there is nothing witnessable, write `"claims": []` and mean it; that is a different statement from leaving the key out.
+- **Omission clears.** Rewriting the entry without `claims` deletes the declaration, exactly like `headline` and `content`.
+- **A `Stepper` step can be bound to a claim** — `{ "label": "…", "claim": "u2", "done": "landed" }` — and the host fills its status in from what it observed. Do that instead of writing statuses you then have to keep current.
+
+Full field reference, caps, refusal behaviour and worked examples: `docs/solutions/documentation-gaps/slate-surface-authoring-contract.md`.
 
 ## Canonical Surfaces: the API and CLI you can also use
 
