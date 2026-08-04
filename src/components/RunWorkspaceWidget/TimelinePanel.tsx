@@ -74,13 +74,14 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
   // not a preference about all of them.
   const [mode, setMode] = useState<StripMode>('timeline')
   const [activeCol, setActiveCol] = useState(0)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   if (!timeline) {
     // A failing route and a session that genuinely has no transcript are
     // different facts and must not render the same line.
     return (
       <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-        <Header mode={mode} onMode={setMode} />
+        <Header mode={mode} onMode={setMode} helpOpen={helpOpen} onHelp={() => setHelpOpen(h => !h)} />
         <div
           title={error ?? undefined}
           style={{ fontSize: 9, opacity: 0.65, fontFamily: 'JetBrains Mono, monospace' }}
@@ -96,7 +97,8 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
 
   return (
     <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-      <Header mode={mode} onMode={setMode} />
+      <Header mode={mode} onMode={setMode} helpOpen={helpOpen} onHelp={() => setHelpOpen(h => !h)} />
+      {helpOpen && <HelpBody />}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         {cols.map((c, i) => (
           <div
@@ -141,7 +143,12 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
   )
 }
 
-function Header({ mode, onMode }: { mode: StripMode; onMode: (m: StripMode) => void }) {
+function Header({ mode, onMode, helpOpen, onHelp }: {
+  mode: StripMode
+  onMode: (m: StripMode) => void
+  helpOpen: boolean
+  onHelp: () => void
+}) {
   const next = mode === 'timeline' ? 'percent' : 'timeline'
   return (
     <div style={{
@@ -150,7 +157,19 @@ function Header({ mode, onMode }: { mode: StripMode; onMode: (m: StripMode) => v
       display: 'flex', alignItems: 'center', gap: 4,
     }}>
       TIME
-      <span title={TIMELINE_HELP} style={{ opacity: 0.7, cursor: 'help' }}>ⓘ</span>
+      {/* A native `title` is unreliable inside the canvas widget and offers
+          nothing on click. This is a real control that opens real text. */}
+      <button
+        type="button"
+        data-testid="timeline-help-toggle"
+        aria-expanded={helpOpen}
+        aria-label="What the colours mean"
+        onClick={onHelp}
+        style={{
+          background: 'none', border: 0, padding: 0, font: 'inherit',
+          color: 'inherit', cursor: 'pointer', opacity: helpOpen ? 1 : 0.7,
+        }}
+      >ⓘ</button>
       <button
         type="button"
         data-testid="timeline-mode-toggle"
@@ -164,6 +183,20 @@ function Header({ mode, onMode }: { mode: StripMode; onMode: (m: StripMode) => v
           opacity: mode === 'percent' ? 1 : 0.6, lineHeight: 1.4,
         }}
       >{mode === 'percent' ? '%' : '⏱'}</button>
+    </div>
+  )
+}
+
+function HelpBody() {
+  return (
+    <div
+      data-testid="timeline-help"
+      style={{
+        fontSize: 9, lineHeight: 1.5, opacity: 0.75, marginBottom: 6,
+        fontFamily: 'JetBrains Mono, monospace', overflowWrap: 'anywhere',
+      }}
+    >
+      {TIMELINE_HELP}
     </div>
   )
 }
@@ -196,10 +229,10 @@ function buildColumns(tl: SessionTimeline, windowSec: number): { label: string; 
   const last = tl.turns[tl.turns.length - 1]
   const cols = [
     { label: 'Whole session', short: 'ALL', a: tl.t0, b: tl.t1 },
-    { label: 'Trailing window', short: 'WIN', a: Math.max(tl.t0, tl.t1 - windowSec), b: tl.t1 },
+    { label: 'Trailing window', short: 'LAST', a: Math.max(tl.t0, tl.t1 - windowSec), b: tl.t1 },
   ]
   if (last) {
-    cols.push({ label: last[2] ? 'Current turn' : 'Last turn', short: last[2] ? 'NOW' : 'LAST', a: last[0], b: last[1] })
+    cols.push({ label: last[2] ? 'Current turn' : 'Last turn', short: last[2] ? 'NOW' : 'TURN', a: last[0], b: last[1] })
   }
   return cols
 }

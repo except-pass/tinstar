@@ -62,6 +62,36 @@ describe('TimelinePanel', () => {
     expect(screen.queryByText(/no transcript/i)).not.toBeInTheDocument()
   })
 
+  it('opens real help text on click, not a native tooltip', () => {
+    // A `title` attribute is unreliable inside the canvas widget and does
+    // nothing at all on click, which is what a user naturally tries.
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
+    render(<TimelinePanel sessionId="s" />)
+    expect(screen.queryByTestId('timeline-help')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('timeline-help-toggle'))
+    expect(screen.getByTestId('timeline-help')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('timeline-help-toggle'))
+    expect(screen.queryByTestId('timeline-help')).not.toBeInTheDocument()
+  })
+
+  it('labels the trailing window so it reads as "Last 60m"', () => {
+    // Needs a session longer than the window, or the column honestly reports the
+    // shorter span it actually covers.
+    const long = {
+      ...tl,
+      t0: 0, t1: 4 * 3600,
+      turns: [[0, 4 * 3600, true]] as [number, number, boolean][],
+      bands: [{ start: 0, end: 4 * 3600, kind: 'tool' as const, name: 'exec', detail: '' }],
+    }
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: long, windowSec: 3600, loading: false, error: null })
+    render(<TimelinePanel sessionId="s" />)
+    expect(screen.getAllByText('LAST').length).toBeGreaterThan(0)
+    expect(screen.getByText('60m')).toBeInTheDocument()
+    expect(screen.queryByText('WIN')).not.toBeInTheDocument()
+  })
+
   it('offers a per-workspace mode toggle', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
     vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
