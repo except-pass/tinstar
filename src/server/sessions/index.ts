@@ -9,6 +9,7 @@ export {
   getSession,
   updateSession,
   deleteSession,
+  listSessionIdentityRecords,
   listSessions,
   setConversationId,
   setState,
@@ -18,6 +19,7 @@ export {
   type SessionBackend,
   type SessionWorkspace,
   type CreateSessionOpts,
+  type SessionIdentityRecord,
 } from './session'
 export {
   createWorktree,

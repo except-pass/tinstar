@@ -166,3 +166,33 @@ describe('handleWheel — ctrl/⌘ over a scroller yields instead of zooming (OP
     expect(result.current.camera.zoom).toBeGreaterThan(1)
   })
 })
+
+describe('useCanvasCamera — disabled presentation', () => {
+  it('keeps the underlying camera unchanged when external callers set or center it', () => {
+    const { result } = renderHook(() => useCanvasCamera(false))
+
+    act(() => {
+      result.current.setCamera({ x: 200, y: 300, zoom: 2 })
+      result.current.centerOn(10, 20, 400, 300, 1000, 800)
+    })
+
+    expect(result.current.camera).toEqual({ x: 0, y: 0, zoom: 1 })
+  })
+
+  it('does not mutate the underlying camera from wheel or Alt+Z', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const { result } = renderHook(() => useCanvasCamera(false))
+
+    act(() => {
+      result.current.handleWheel(new WheelEvent('wheel', {
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: -50,
+      }))
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', altKey: true }))
+    })
+
+    expect(result.current.camera).toEqual({ x: 0, y: 0, zoom: 1 })
+  })
+})

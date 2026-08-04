@@ -1,0 +1,46 @@
+{
+  "session_id": "00000000-0000-4000-8000-00000000c1a1",
+  "transcript_path": "/home/fixture/.claude/projects/-home-fixture-repo-demo/00000000-0000-4000-8000-00000000c1a1.jsonl",
+  "cwd": "/home/fixture/repo/demo",
+  "effort": {
+    "level": "medium"
+  },
+  "model": {
+    "id": "claude-sonnet-5",
+    "display_name": "Sonnet 5"
+  },
+  "workspace": {
+    "current_dir": "/home/fixture/repo/demo",
+    "project_dir": "/home/fixture/repo/demo",
+    "added_dirs": []
+  },
+  "version": "2.1.220",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0,
+    "total_duration_ms": 0,
+    "total_api_duration_ms": 0,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 8102,
+    "total_output_tokens": 0,
+    "context_window_size": 200000,
+    "current_usage": {
+      "input_tokens": 8102,
+      "output_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "used_percentage": 4,
+    "remaining_percentage": 96
+  },
+  "exceeds_200k_tokens": false,
+  "fast_mode": false,
+  "thinking": {
+    "enabled": false
+  }
+}

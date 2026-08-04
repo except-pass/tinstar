@@ -191,8 +191,32 @@ they are absent from the allowlist without being lost.
 | `sessions/context-usage.ts` | context-usage probe |
 
 Not changed: `infra/supervisor.ts` (Tinstar's own services), `execCommand.ts`,
-`commits.ts`, `status-watcher.ts`, `binaries.ts` (internal tooling — git,
-`pgrep`, version probes).
+`commits.ts`, `status-watcher.ts`, `binaries.ts`,
+`surfaces/witness-runtime.ts` (internal tooling — git, `pgrep`, version probes,
+the `unit-landed` Surface witness).
+
+### The witness runtime is on the internal-tooling side, deliberately
+
+`surfaces/witness-runtime.ts` runs `git fetch` / `git log` against a worktree
+Tinstar already tracks, to answer a Surface's own claim about whether a plan unit
+has landed. It is **host tooling**, not a guest running somebody's code — the same
+side of the line as `commits.ts` and `status-watcher.ts`, and it inherits for the
+same reason.
+
+Routing it through `guestEnv()` would be actively worse, not merely unnecessary:
+the allowlist exists to stop *Tinstar's* configuration reaching *someone else's*
+process, and here there is no someone else. A witness spawn is not a shell, so
+nothing rebuilds what is dropped (the "not a login shell" row of the table above),
+and `git fetch` over SSH needs `SSH_AUTH_SOCK` and the proxy/CA variables — which
+the allowlist does carry, so the only thing withholding them would buy is a
+witness that reports `unresolved` behind a proxy. The credentials being withheld
+would be the host's own.
+
+The argv is still built from **untrusted** input — claim parameters arrive from an
+agent-authored file. That is handled where it belongs, in the witness registry's
+parameter schema: the plan path must match `docs/plans/<file>.md`, the ref must be
+`<remote>/<branch>`, nothing may begin with `-`, and every spawn is an argv array
+with no shell. Env inheritance and argv hygiene are different problems.
 
 ## tmux specifics — verify, don't reason
 

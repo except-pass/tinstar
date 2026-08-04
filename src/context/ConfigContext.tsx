@@ -13,6 +13,7 @@ export interface TinstarConfigClient {
       cacheHit: boolean
       duty: boolean
       turnLength: boolean
+      timeline: boolean
     }
     // Mirrors WidgetSizePresets in src/widgets/widgetSizePresets.ts
     widgetSizePresets: {

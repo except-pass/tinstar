@@ -12,6 +12,12 @@
 // `overdue` are amber (worth a second look, not a claim of wrongness), `failed` is
 // rose. `current` renders NOTHING: a Slate where every card wears a green tick is
 // a Slate where nobody reads any of them.
+//
+// The two claim notes at the foot of this file — a declaration the host would not
+// accept, and one it could not resolve — are amber for the same reason: neither says
+// the surface is WRONG, only that one statement it makes has not been established.
+// Neither is green, and there is no green here at all: a witnessed surface says so
+// through its stamp (`SurfaceAge`), in low ink, without a tick.
 
 import type { SurfaceFreshness, SurfaceFreshnessPhase } from '../../types'
 
@@ -98,5 +104,96 @@ export function FreshnessBadge({ freshness, className }: {
         <span data-testid="freshness-overdue" className="text-amber-400/90">overdue</span>
       )}
     </span>
+  )
+}
+
+/**
+ * A claim the host read and would not accept (plan U6, R3).
+ *
+ * WHY THIS IS PROSE AND NOT A PILL. Every other signal on a Slate card is a state
+ * the host can fix on its own — a queued job runs, a stale surface refreshes. This
+ * one cannot: a mistyped witness kind stays mistyped until a person edits the file,
+ * and the only useful thing to render is the sentence that names it. A glyph would
+ * say "something is wrong here" to the one audience that already knows.
+ *
+ * Amber rather than rose. The surface is FINE — it is showing its newest content,
+ * with the bad claim simply absent (KTD5). What is broken is one statement it tried
+ * to make about the world, and rose is reserved for a refresh that actually failed.
+ */
+export function ClaimRefusalNote({ id, freshness }: {
+  id: string
+  freshness?: SurfaceFreshness
+}) {
+  const refusals = freshness?.claimRefusals
+  if (!refusals || refusals.length === 0) return null
+  return (
+    <div
+      data-testid={`claim-refusals-${id}`}
+      className="mt-2 rounded-sm border border-amber-400/25 bg-amber-400/5 px-2 py-1.5 font-sans text-[11px] leading-snug text-amber-200/90"
+    >
+      <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-amber-400/80">
+        {refusals.length === 1 ? 'claim not accepted' : `${refusals.length} claims not accepted`}
+      </div>
+      <ul className="mt-0.5 list-none">
+        {refusals.map((why) => (
+          <li key={why} className="text-ink-mid">{why}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * A claim the host accepted, ran, and could not resolve (plan U7, KTD8).
+ *
+ * A DIFFERENT SENTENCE FROM THE REFUSAL ABOVE, and the distinction is the whole
+ * reason a witness outcome is three-valued rather than two. `ClaimRefusalNote` says
+ * the host would not ACCEPT a declaration — a mistyped kind, parameters that do not
+ * fit. This says the host accepted it, went and looked, and came back unable to tell:
+ * the fetch failed, the host was unreachable, the ref did not exist. Under a
+ * two-valued contract that outcome is indistinguishable from a genuine absence, so a
+ * witness that has been broken since birth would agree with its own stored nothing
+ * and stamp the card verified for as long as it stayed broken.
+ *
+ * WHY IT IS ON THE CARD AT ALL. An unresolved claim never advances `witnessedAt`, so
+ * the stamp next door eventually ambers on its own — but "eventually" is fifteen
+ * minutes, and until then a card whose witness is dead looks exactly like a card
+ * whose witness is fine. This is the difference, stated immediately.
+ *
+ * Amber, matching the refusal note rather than the rose of a failed refresh. The
+ * surface is not wrong: its content is whatever it last was, and one statement it
+ * makes about the world is currently unverifiable. Rose stays reserved for work that
+ * actually failed.
+ *
+ * Prose and not a pill, for the refusal note's reason one field over: the useful
+ * thing to render is the sentence naming WHICH claim and WHY, and a glyph would say
+ * "something is off here" to a reader who then has nowhere to go.
+ */
+export function ClaimProblemNote({ id, freshness }: {
+  id: string
+  freshness?: SurfaceFreshness
+}) {
+  // Sorted by claim id so the list does not reshuffle between renders on a Record
+  // whose key order nothing guarantees.
+  const problems = Object.entries(freshness?.claimObservations ?? {})
+    .flatMap(([claimId, obs]) => (obs.problem ? [{ claimId, ...obs.problem }] : []))
+    .sort((a, b) => a.claimId.localeCompare(b.claimId))
+  if (problems.length === 0) return null
+  return (
+    <div
+      data-testid={`claim-problems-${id}`}
+      className="mt-2 rounded-sm border border-amber-400/25 bg-amber-400/5 px-2 py-1.5 font-sans text-[11px] leading-snug text-amber-200/90"
+    >
+      <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-amber-400/80">
+        {problems.length === 1 ? 'claim not checked' : `${problems.length} claims not checked`}
+      </div>
+      <ul className="mt-0.5 list-none">
+        {problems.map((p) => (
+          <li key={p.claimId} data-status={p.status} className="text-ink-mid">
+            <span className="font-mono text-ink-low">{p.claimId}</span> — {p.detail}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
