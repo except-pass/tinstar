@@ -35,6 +35,56 @@ curl -s "$TINSTAR_URL/api/state" | jq '{
 curl -s "$TINSTAR_URL/api/state" | jq '[.runs[] | select(.status == "running") | {id, task, sessionId}]'
 ```
 
+### Is a session actually working, or stuck on a prompt?
+
+A session parked on an unanswered permission prompt looks identical to one doing
+real work — it reports `running` either way, because from the outside a pending
+tool call is a pending tool call. `/timeline` tells the two apart by
+reconstructing where the session's wall-clock time actually went.
+
+```bash
+curl -s "$TINSTAR_URL/api/sessions/$NAME/timeline" | jq '.data.bands[-1]'
+```
+
+The band kinds are `approval`, `question`, `subagent`, `compact`, `tool`, `idle`
+and `think`. If the last band is `approval` or `question` and its `end` is close
+to now, **nobody has answered it** — the agent is blocked on a human, not busy.
+
+```bash
+# every session currently parked on a human, and for how long
+for s in $(curl -s "$TINSTAR_URL/api/sessions" | jq -r '.data[].name'); do
+  curl -s "$TINSTAR_URL/api/sessions/$s/timeline" | jq -r --arg s "$s" '
+    .data.bands[-1] // empty
+    | select(.kind == "approval" or .kind == "question")
+    | "\($s): \(.kind) for \(((.end - .start) / 60) | floor)m — \(.detail)"'
+done
+```
+
+Bands never overlap and always sum to the span, so totals can be taken directly:
+
+```bash
+# where this session's whole life went, as a percentage per kind
+curl -s "$TINSTAR_URL/api/sessions/$NAME/timeline" | jq '
+  .data as $d | ($d.t1 - $d.t0) as $span
+  | reduce $d.bands[] as $b ({}; .[$b.kind] += ($b.end - $b.start))
+  | with_entries(.value = ((.value / $span * 100) | round))'
+```
+
+Two caveats worth knowing before you act on this:
+
+- `think` is a **residual** — in-turn time with no tool outstanding. It absorbs
+  genuine reasoning and anything the transcript format doesn't record, so read it
+  as an upper bound, not a measurement.
+- `data` is `null` when the session has no resolvable transcript (a Codex session
+  with no workspace path, for instance). That is a real answer, not an error.
+
+Failures are reported separately as `marks`, and only a non-zero exit code counts
+— the words "error" and "failed" appear in a large share of ordinary tool output:
+
+```bash
+curl -s "$TINSTAR_URL/api/sessions/$NAME/timeline" | jq '.data.marks[] | select(.kind == "tool-failed")'
+```
+
 ## Controlling Agents
 
 ### Send a prompt to a session (preferred — queued, returns immediately)

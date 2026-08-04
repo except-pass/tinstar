@@ -19,26 +19,81 @@ const KI_QUESTION = BAND_KINDS.indexOf('question')
  * rendered vertically, so a "column" here is a row of the canvas: index 0 is the
  * earliest moment, which puts the past at the top (R9).
  */
-export function compositeColumns(
-  bands: Band[],
-  t0: number,
-  t1: number,
-  px: number,
-): (BandKind | null)[] {
+/** Where each band sits along the strip, in pixels. */
+export interface BandLayout {
+  /** Start offset per band. */
+  pos: Float64Array
+  /** Length per band. */
+  len: Float64Array
+  /** BAND_KINDS index per band. */
+  kind: Int8Array
+}
+
+/** Bands in time order, positioned proportionally — the honest picture. */
+export function timelineLayout(bands: Band[], t0: number, t1: number, px: number): BandLayout {
   const span = Math.max(t1 - t0, 1e-9)
+  const n = bands.length
+  const out: BandLayout = { pos: new Float64Array(n), len: new Float64Array(n), kind: new Int8Array(n) }
+  for (let i = 0; i < n; i++) {
+    const b = bands[i]!
+    out.pos[i] = ((b.start - t0) / span) * px
+    out.len[i] = ((b.end - b.start) / span) * px
+    out.kind[i] = BAND_KINDS.indexOf(b.kind)
+  }
+  return out
+}
+
+/**
+ * Bands regrouped by kind, laid end to end — the mix, with time discarded.
+ *
+ * Kinds keep BAND_KINDS order and bands keep their chronological order within a
+ * kind, so the transition between layouts is a stable rearrangement: every band
+ * has one destination and like slides to like.
+ */
+export function percentLayout(bands: Band[], px: number): BandLayout {
+  const n = bands.length
+  const out: BandLayout = { pos: new Float64Array(n), len: new Float64Array(n), kind: new Int8Array(n) }
+  let total = 0
+  for (let i = 0; i < n; i++) {
+    const b = bands[i]!
+    out.kind[i] = BAND_KINDS.indexOf(b.kind)
+    out.len[i] = b.end - b.start
+    total += out.len[i]!
+  }
+  const scale = px / Math.max(total, 1e-9)
+  const order = Array.from({ length: n }, (_, i) => i)
+    .sort((a, b) => (out.kind[a]! - out.kind[b]!) || a - b)
+  let acc = 0
+  for (const i of order) {
+    out.pos[i] = acc
+    out.len[i] = out.len[i]! * scale
+    acc += out.len[i]!
+  }
+  return out
+}
+
+/**
+ * Award each pixel from an explicit pixel layout.
+ *
+ * Split out from `compositeColumns` so the same occupancy rule serves both
+ * layouts and every frame of the transition between them — the rule must not
+ * change mid-animation or bands would flicker colour as they move.
+ */
+export function compositeLayout(layout: BandLayout, px: number): (BandKind | null)[] {
   const nk = BAND_KINDS.length
   const acc = new Float64Array(px * nk)
+  const n = layout.kind.length
 
-  for (const b of bands) {
-    const x = ((b.start - t0) / span) * px
-    const x2 = ((b.end - t0) / span) * px
+  for (let i = 0; i < n; i++) {
+    const ki = layout.kind[i]!
+    if (ki < 0) continue
+    const x = layout.pos[i]!
+    const x2 = x + layout.len[i]!
     let a = Math.floor(x)
     let z = Math.ceil(x2)
     if (z <= a) z = a + 1
     if (a < 0) a = 0
     if (z > px) z = px
-    const ki = BAND_KINDS.indexOf(b.kind)
-    if (ki < 0) continue
     for (let c = a; c < z; c++) {
       const ov = Math.min(x2, c + 1) - Math.max(x, c)
       // A band thinner than a pixel still registers, just with negligible
@@ -59,6 +114,22 @@ export function compositeColumns(
     if (acc[base + KI_APPROVAL]! > 0) best = KI_APPROVAL
     else if (acc[base + KI_QUESTION]! > 0) best = KI_QUESTION
     out[c] = best < 0 ? null : BAND_KINDS[best]!
+  }
+  return out
+}
+
+/** Convenience: composite bands in time order. */
+export function compositeColumns(bands: Band[], t0: number, t1: number, px: number): (BandKind | null)[] {
+  return compositeLayout(timelineLayout(bands, t0, t1, px), px)
+}
+
+/** Blend two layouts of the same bands — the frame-by-frame transition. */
+export function lerpLayout(a: BandLayout, b: BandLayout, p: number): BandLayout {
+  const n = a.kind.length
+  const out: BandLayout = { pos: new Float64Array(n), len: new Float64Array(n), kind: a.kind }
+  for (let i = 0; i < n; i++) {
+    out.pos[i] = a.pos[i]! + (b.pos[i]! - a.pos[i]!) * p
+    out.len[i] = a.len[i]! + (b.len[i]! - a.len[i]!) * p
   }
   return out
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useConfig } from '../../context/ConfigContext'
 import { useSessionTimeline } from '../../hooks/useSessionTimeline'
-import { TimelineStrip, BAND_COLOR } from '../Telemetry/TimelineStrip'
+import { TimelineStrip, BAND_COLOR, type StripMode } from '../Telemetry/TimelineStrip'
 import type { Band, BandKind, SessionTimeline } from '../../server/sessions/timeline/types'
 
 const MAX_STRIP_PX = 260
@@ -69,13 +69,19 @@ export function TimelinePanel({ sessionId }: { sessionId: string }) {
 function TimelinePanelInner({ sessionId }: { sessionId: string }) {
   const { timeline, windowSec, error } = useSessionTimeline(sessionId)
   const [hovered, setHovered] = useState<Band | null>(null)
+  // Per-workspace, deliberately: flipping one run's strips must not touch
+  // another's. Local state, not config — this is a way of looking at one run,
+  // not a preference about all of them.
+  const [mode, setMode] = useState<StripMode>('timeline')
+  const [activeCol, setActiveCol] = useState(0)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   if (!timeline) {
     // A failing route and a session that genuinely has no transcript are
     // different facts and must not render the same line.
     return (
       <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-        <Header />
+        <Header mode={mode} onMode={setMode} helpOpen={helpOpen} onHelp={() => setHelpOpen(h => !h)} />
         <div
           title={error ?? undefined}
           style={{ fontSize: 9, opacity: 0.65, fontFamily: 'JetBrains Mono, monospace' }}
@@ -91,10 +97,15 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
 
   return (
     <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-      <Header />
+      <Header mode={mode} onMode={setMode} helpOpen={helpOpen} onHelp={() => setHelpOpen(h => !h)} />
+      {helpOpen && <HelpBody />}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        {cols.map(c => (
-          <div key={c.label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {cols.map((c, i) => (
+          <div
+            key={c.label}
+            style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
+            onMouseEnter={() => setActiveCol(i)}
+          >
             <TimelineStrip
               bands={clip(timeline.bands, c.a, c.b)}
               marks={timeline.marks}
@@ -102,11 +113,12 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
               t1={c.b}
               heightPx={stripHeightPx(c.b - c.a, longest)}
               label={`${c.label} — ${fmt(c.b - c.a)}`}
+              mode={mode}
               onHover={setHovered}
             />
             <span style={{
-              fontSize: 8, opacity: 0.55, fontFamily: 'JetBrains Mono, monospace',
-              letterSpacing: 0.5,
+              fontSize: 8, opacity: i === activeCol ? 0.95 : 0.45,
+              fontFamily: 'JetBrains Mono, monospace', letterSpacing: 0.5,
             }}>{c.short}</span>
             <span style={{
               fontSize: 8, opacity: 0.75, fontFamily: 'JetBrains Mono, monospace',
@@ -115,7 +127,10 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
           </div>
         ))}
       </div>
-      <Shares label={cols[0]!.short} bands={clip(timeline.bands, cols[0]!.a, cols[0]!.b)} />
+      <Shares
+        label={(cols[activeCol] ?? cols[0]!).short}
+        bands={clip(timeline.bands, (cols[activeCol] ?? cols[0]!).a, (cols[activeCol] ?? cols[0]!).b)}
+      />
       <div style={{
         fontSize: 9, opacity: 0.65, marginTop: 4, minHeight: 12,
         fontFamily: 'JetBrains Mono, monospace',
@@ -128,14 +143,60 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
   )
 }
 
-function Header() {
+function Header({ mode, onMode, helpOpen, onHelp }: {
+  mode: StripMode
+  onMode: (m: StripMode) => void
+  helpOpen: boolean
+  onHelp: () => void
+}) {
+  const next = mode === 'timeline' ? 'percent' : 'timeline'
   return (
     <div style={{
       fontSize: 9, letterSpacing: 2, opacity: 0.55,
       fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
+      display: 'flex', alignItems: 'center', gap: 4,
     }}>
       TIME
-      <span title={TIMELINE_HELP} style={{ marginLeft: 4, opacity: 0.7, cursor: 'help' }}>ⓘ</span>
+      {/* A native `title` is unreliable inside the canvas widget and offers
+          nothing on click. This is a real control that opens real text. */}
+      <button
+        type="button"
+        data-testid="timeline-help-toggle"
+        aria-expanded={helpOpen}
+        aria-label="What the colours mean"
+        onClick={onHelp}
+        style={{
+          background: 'none', border: 0, padding: 0, font: 'inherit',
+          color: 'inherit', cursor: 'pointer', opacity: helpOpen ? 1 : 0.7,
+        }}
+      >ⓘ</button>
+      <button
+        type="button"
+        data-testid="timeline-mode-toggle"
+        aria-pressed={mode === 'percent'}
+        title={mode === 'timeline' ? 'Group by kind' : 'Back to time order'}
+        onClick={() => onMode(next)}
+        style={{
+          marginLeft: 'auto', cursor: 'pointer', background: 'none',
+          border: '1px solid currentColor', borderRadius: 2, padding: '0 3px',
+          font: 'inherit', letterSpacing: 1, color: 'inherit',
+          opacity: mode === 'percent' ? 1 : 0.6, lineHeight: 1.4,
+        }}
+      >{mode === 'percent' ? '%' : '⏱'}</button>
+    </div>
+  )
+}
+
+function HelpBody() {
+  return (
+    <div
+      data-testid="timeline-help"
+      style={{
+        fontSize: 9, lineHeight: 1.5, opacity: 0.75, marginBottom: 6,
+        fontFamily: 'JetBrains Mono, monospace', overflowWrap: 'anywhere',
+      }}
+    >
+      {TIMELINE_HELP}
     </div>
   )
 }
@@ -168,10 +229,10 @@ function buildColumns(tl: SessionTimeline, windowSec: number): { label: string; 
   const last = tl.turns[tl.turns.length - 1]
   const cols = [
     { label: 'Whole session', short: 'ALL', a: tl.t0, b: tl.t1 },
-    { label: 'Trailing window', short: 'WIN', a: Math.max(tl.t0, tl.t1 - windowSec), b: tl.t1 },
+    { label: 'Trailing window', short: 'LAST', a: Math.max(tl.t0, tl.t1 - windowSec), b: tl.t1 },
   ]
   if (last) {
-    cols.push({ label: last[2] ? 'Current turn' : 'Last turn', short: last[2] ? 'NOW' : 'LAST', a: last[0], b: last[1] })
+    cols.push({ label: last[2] ? 'Current turn' : 'Last turn', short: last[2] ? 'NOW' : 'TURN', a: last[0], b: last[1] })
   }
   return cols
 }

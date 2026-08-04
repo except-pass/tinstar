@@ -541,6 +541,87 @@ export const spec = {
         responses: { 200: { description: 'Metric list' } },
       },
     },
+    '/api/sessions/{name}/timeline': {
+      get: {
+        tags: ['Observability'],
+        summary: "Where a session's wall-clock time went",
+        description:
+          'Reconstructs a session\'s time usage from its own transcript (Claude Code or Codex). ' +
+          'Bands never overlap and always sum to the span, so they can be totalled directly. ' +
+          'Retroactive: works on sessions that started long before this endpoint existed.\n\n' +
+          'The band kinds that matter for orchestration are `approval` (the agent is parked on a ' +
+          'permission prompt nobody has answered) and `question` (it asked something and is waiting ' +
+          'for a reply). To check whether a session is stuck on you right now, read the last band: ' +
+          'if its kind is `approval` or `question` and its `end` is close to now, nobody has answered it.\n\n' +
+          '`think` is a residual — in-turn time with no tool outstanding — so treat it as an upper ' +
+          'bound rather than a measurement. `data` is null when the session has no resolvable ' +
+          'transcript; that is a legitimate answer, not an error.',
+        parameters: [
+          { name: 'name', in: 'path', required: true, schema: { type: 'string' }, description: 'Tinstar session name' },
+          { name: 'windowSec', in: 'query', schema: { type: 'integer', minimum: 1 }, description: 'Trailing window in seconds (default 3600). Echoed back; the response always carries the full span.' },
+        ],
+        responses: {
+          200: {
+            description: 'Reconstructed timeline, or null when no transcript resolves',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      nullable: true,
+                      properties: {
+                        t0: { type: 'number', description: 'Epoch seconds of the first transcript entry' },
+                        t1: { type: 'number', description: 'Epoch seconds of the right edge — extends to now while a call is in flight' },
+                        windowSec: { type: 'integer' },
+                        partial: { type: 'boolean', description: 'True when a cold parse yielded early and more remains' },
+                        bands: {
+                          type: 'array',
+                          description: 'Non-overlapping, ordered, tiling [t0, t1]',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              start: { type: 'number' },
+                              end: { type: 'number' },
+                              kind: { type: 'string', enum: ['approval', 'question', 'subagent', 'compact', 'tool', 'idle', 'think'] },
+                              name: { type: 'string', description: 'Tool name, or a label such as "waiting on you"' },
+                              detail: { type: 'string', description: 'Command or argument snippet' },
+                            },
+                          },
+                        },
+                        marks: {
+                          type: 'array',
+                          description: 'Point failures. Only a non-zero exit code counts.',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              at: { type: 'number' },
+                              kind: { type: 'string', enum: ['tool-failed', 'subagent-interrupted'] },
+                              name: { type: 'string' },
+                              detail: { type: 'string' },
+                            },
+                          },
+                        },
+                        turns: {
+                          type: 'array',
+                          description: '[start, end, isOpen] per turn, epoch seconds',
+                          items: { type: 'array', items: { type: 'number' } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          404: { description: 'session not found' },
+          500: { description: 'reconstruction failed' },
+        },
+      },
+    },
+
     '/api/telemetry/turn-length': {
       get: {
         tags: ['Observability'],
