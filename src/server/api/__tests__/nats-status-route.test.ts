@@ -5,9 +5,10 @@ import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { handleRequest, type RouteContext } from '../routes'
+import { handleRequest, resetSessionBackendOwnersForTests, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import { natsControlSocketPath } from '../../sessions/backends/tmux'
+import { createSession, setState } from '../../sessions'
 
 function makeCtx(root: string): RouteContext {
   const cfg = {
@@ -40,6 +41,7 @@ let httpServer: ReturnType<typeof createServer>
 let baseUrl: string
 
 beforeEach(async () => {
+  resetSessionBackendOwnersForTests()
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-nats-status-route-'))
   const ctx = makeCtx(tmpRoot)
   httpServer = createServer((req, res) => {
@@ -52,12 +54,15 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const s of netServers.splice(0)) s.close()
   await new Promise<void>(r => httpServer.close(() => r()))
+  resetSessionBackendOwnersForTests()
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
 describe('GET /api/sessions/:name/nats-status', () => {
   it('returns observed connection + live subscriptions from the channel-server', async () => {
     const name = `probe-target-${process.pid}`
+    createSession(join(tmpRoot, 'sessions'), { name, backend: 'tmux' })
+    setState(join(tmpRoot, 'sessions'), name, 'idle')
     const sock = natsControlSocketPath(name)
     await fakeChannelServer(sock, { natsState: 'OPEN', subscriptions: ['tinstar.t', 'tinstar.t.me'] })
 
@@ -71,7 +76,10 @@ describe('GET /api/sessions/:name/nats-status', () => {
   })
 
   it('returns connection=down (no NATS here) when no channel-server is listening', async () => {
-    const res = await fetch(`${baseUrl}/api/sessions/no-server-${process.pid}/nats-status`)
+    const name = `no-server-${process.pid}`
+    createSession(join(tmpRoot, 'sessions'), { name, backend: 'tmux' })
+    setState(join(tmpRoot, 'sessions'), name, 'idle')
+    const res = await fetch(`${baseUrl}/api/sessions/${name}/nats-status`)
     expect(res.status).toBe(200)
     const body = await res.json() as { data: { connection: string; subscriptions: string[] } }
     expect(body.data.connection).toBe('down')

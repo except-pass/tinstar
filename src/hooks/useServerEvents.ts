@@ -352,6 +352,12 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
       // forever and a retracted surface would never leave the card. Take it from
       // the incoming run explicitly: absent key = cleared.
       slate: next.slate,
+      // NATS self-healing clears these fields with `undefined`. Like the fields
+      // above, those keys disappear during JSON serialization; explicitly
+      // taking the incoming values prevents stale subscriptions from surviving
+      // forever in the browser after the server disables NATS.
+      natsSubject: next.natsSubject,
+      natsSubscriptions: next.natsSubscriptions,
       touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
       recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
     })

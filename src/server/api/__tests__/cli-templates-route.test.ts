@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { loadConfig } from '../../sessions/config'
 import type { CliTemplate } from '../../sessions/config'
+import { log } from '../../logger'
 
 // One ctx + server reused across requests, so a write that reassigns
 // ctx.sessionConfig is visible to the next request — the exact shape of the
@@ -33,12 +34,107 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-async function getTemplates(): Promise<CliTemplate[]> {
-  const r = await fetch(`${base}/api/cli-templates`)
-  return (await r.json() as { data: CliTemplate[] }).data
+interface DiscoveredCliTemplate extends CliTemplate {
+  telemetryState: 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
 }
 
-describe('PUT /api/cli-templates/:name — save reflects immediately', () => {
+async function getTemplates(): Promise<DiscoveredCliTemplate[]> {
+  const r = await fetch(`${base}/api/cli-templates`)
+  return (await r.json() as { data: DiscoveredCliTemplate[] }).data
+}
+
+describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
+  it('returns the resolved provider telemetry state for every template', async () => {
+    const templates = await getTemplates()
+
+    expect(templates.find(template => template.id === 'claude-auto')?.telemetryState)
+      .toBe('enabled')
+    expect(templates.find(template => template.id === 'codex-full-auto')?.telemetryState)
+      .toBe('unsupported')
+    expect(templates.find(template => template.id === 'shell')?.telemetryState)
+      .toBe('unsupported')
+  })
+
+  it('returns disabled for a supported provider with an explicit opt-out', async () => {
+    const post = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Quiet Claude',
+        adapter: 'claude',
+        telemetry: false,
+        startCmd: 'claude -- {prompt}',
+        resumeCmd: 'claude --resume latest',
+      }),
+    })
+
+    expect(post.status).toBe(200)
+    expect((await post.json() as { data: DiscoveredCliTemplate }).data.telemetryState)
+      .toBe('disabled')
+    expect((await getTemplates()).find(template => template.name === 'Quiet Claude')?.telemetryState)
+      .toBe('disabled')
+  })
+
+  it('returns unavailable for a configured template whose adapter is not registered', async () => {
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      cliTemplates: [{
+        id: 'missing-provider-template',
+        name: 'Missing Provider',
+        adapter: 'not-installed',
+        startCmd: 'missing -- {prompt}',
+        resumeCmd: 'missing resume',
+      }],
+    }))
+    ctx.sessionConfig = loadConfig({ _rootDir: root })
+
+    expect((await getTemplates()).find(template => template.id === 'missing-provider-template')?.telemetryState)
+      .toBe('unavailable')
+  })
+
+  it('warns for a legacy id-less template and removes it when a replacement is saved', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      cliTemplates: [{
+        name: 'Legacy Agent',
+        adapter: 'generic',
+        startCmd: 'legacy -- {prompt}',
+        resumeCmd: 'legacy resume',
+      }],
+    }))
+
+    const reloaded = loadConfig({ _rootDir: root })
+    expect(reloaded.cliTemplates.some(template => template.name === 'Legacy Agent')).toBe(false)
+    expect(reloaded.cliTemplates.every(template => template.id.length > 0)).toBe(true)
+    expect(warn).toHaveBeenCalledWith(
+      'config',
+      expect.stringContaining('Ignoring CLI template "Legacy Agent" because it has no stable "id"'),
+    )
+    warn.mockClear()
+    ctx.sessionConfig = reloaded
+
+    const replacement = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Legacy Agent',
+        adapter: 'generic',
+        startCmd: 'legacy -- {prompt}',
+        resumeCmd: 'legacy resume',
+      }),
+    })
+    expect(replacement.status).toBe(200)
+    const persisted = JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')) as {
+      cliTemplates: CliTemplate[]
+    }
+    expect(persisted.cliTemplates).toHaveLength(1)
+    expect(persisted.cliTemplates[0]).toMatchObject({
+      name: 'Legacy Agent',
+      id: expect.any(String),
+    })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('an edited default template is visible on the next GET (no restart)', async () => {
     // Sanity: the default codex template is present and unedited.
     const before = await getTemplates()
@@ -46,12 +142,14 @@ describe('PUT /api/cli-templates/:name — save reflects immediately', () => {
     expect(codexBefore).toBeTruthy()
 
     const edited = { ...codexBefore!, startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' }
-    const put = await fetch(`${base}/api/cli-templates/${encodeURIComponent('Codex (full auto)')}`, {
+    const put = await fetch(`${base}/api/cli-templates/${encodeURIComponent(codexBefore!.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(edited),
     })
     expect(put.status).toBe(200)
+    expect((await put.json() as { data: DiscoveredCliTemplate }).data.telemetryState)
+      .toBe('unsupported')
 
     // The bug: GET returned the boot-time snapshot, so the edit "reverted" in the
     // modal. It must now reflect the saved command.
@@ -79,6 +177,101 @@ describe('PUT /api/cli-templates/:name — save reflects immediately', () => {
     expect(after.some(t => t.name === 'My Agent')).toBe(true)
   })
 
+  it('round-trips telemetry:true through both POST and PUT', async () => {
+    const post = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Telemetry Agent',
+        adapter: 'claude',
+        telemetry: true,
+        startCmd: 'observe -- {prompt}',
+        resumeCmd: 'observe resume',
+      }),
+    })
+    expect(post.status).toBe(200)
+    expect((await getTemplates()).find(t => t.name === 'Telemetry Agent')?.telemetry).toBe(true)
+
+    const telemetryTemplate = (await getTemplates()).find(t => t.name === 'Telemetry Agent')!
+    const put = await fetch(`${base}/api/cli-templates/${encodeURIComponent(telemetryTemplate.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Telemetry Agent',
+        adapter: 'claude',
+        telemetry: true,
+        startCmd: 'observe-v2 -- {prompt}',
+        resumeCmd: 'observe-v2 resume',
+      }),
+    })
+    expect(put.status).toBe(200)
+    expect((await getTemplates()).find(t => t.name === 'Telemetry Agent')).toMatchObject({
+      telemetry: true,
+      startCmd: 'observe-v2 -- {prompt}',
+    })
+
+    const file = JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')) as { cliTemplates: CliTemplate[] }
+    expect(file.cliTemplates.find(t => t.name === 'Telemetry Agent')?.telemetry).toBe(true)
+  })
+
+  it('renames a template without changing its stable reference', async () => {
+    const original = (await getTemplates()).find(t => t.name === 'Codex (full auto)')!
+    const put = await fetch(`${base}/api/cli-templates/${encodeURIComponent(original.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Renamed Codex',
+        adapter: 'codex',
+        startCmd: 'codex -- {prompt}',
+        resumeCmd: 'codex resume --last',
+      }),
+    })
+
+    expect(put.status).toBe(200)
+    const renamed = (await getTemplates()).find(t => t.id === original.id)
+    expect(renamed?.name).toBe('Renamed Codex')
+    expect((await getTemplates()).some(t => t.name === 'Codex (full auto)')).toBe(false)
+  })
+
+  it('rejects telemetry that the selected provider cannot supply without saving it', async () => {
+    const post = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Impossible Telemetry',
+        adapter: 'generic',
+        telemetry: true,
+        startCmd: 'generic -- {prompt}',
+        resumeCmd: 'generic resume',
+      }),
+    })
+
+    expect(post.status).toBe(400)
+    expect(await post.json()).toMatchObject({
+      error: { message: expect.stringContaining('does not support terminal capability "telemetry"') },
+    })
+    expect((await getTemplates()).some(t => t.name === 'Impossible Telemetry')).toBe(false)
+  })
+
+  it('rejects an unknown provider adapter without poisoning persisted config', async () => {
+    const post = await fetch(`${base}/api/cli-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Typo Agent',
+        adapter: 'cluade',
+        startCmd: 'typo -- {prompt}',
+        resumeCmd: 'typo resume',
+      }),
+    })
+
+    expect(post.status).toBe(400)
+    expect(await post.json()).toMatchObject({
+      error: { message: 'Provider adapter "cluade" is not registered' },
+    })
+    expect((await getTemplates()).some(t => t.name === 'Typo Agent')).toBe(false)
+  })
+
   it('deleting a user override is reflected on the next GET', async () => {
     // Add, then delete; the deletion must stick without a restart.
     await fetch(`${base}/api/cli-templates`, {
@@ -86,7 +279,8 @@ describe('PUT /api/cli-templates/:name — save reflects immediately', () => {
       body: JSON.stringify({ name: 'Temp', adapter: 'generic', startCmd: 'x -- {prompt}', resumeCmd: 'x' }),
     })
     expect((await getTemplates()).some(t => t.name === 'Temp')).toBe(true)
-    const del = await fetch(`${base}/api/cli-templates/${encodeURIComponent('Temp')}`, { method: 'DELETE' })
+    const temp = (await getTemplates()).find(t => t.name === 'Temp')!
+    const del = await fetch(`${base}/api/cli-templates/${encodeURIComponent(temp.id)}`, { method: 'DELETE' })
     expect(del.status).toBe(200)
     expect((await getTemplates()).some(t => t.name === 'Temp')).toBe(false)
   })

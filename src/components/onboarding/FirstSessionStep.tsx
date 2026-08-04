@@ -38,7 +38,7 @@ export function FirstSessionStep() {
           name: name.trim(),
           backend: 'tmux',
           project,
-          cliTemplate: 'claude',
+          cliTemplate: 'claude-multi-agent',
         }),
       })
       if (!res.ok) {

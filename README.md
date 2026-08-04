@@ -37,7 +37,7 @@ Paste this into Claude Code:
 npx tinstar
 ```
 
-The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
+The CLI checks for dependencies (Claude Code, tmux, ttyd, lsof), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
 
 ## The Canvas
 
@@ -121,6 +121,7 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **Claude Code** — installed and authenticated (`claude auth login`)
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
+- **lsof** — verifies that each web terminal serves the intended session (`brew install lsof` / `apt install lsof`)
 - **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
 
 ## Ports

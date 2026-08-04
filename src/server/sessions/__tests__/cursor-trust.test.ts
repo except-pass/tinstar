@@ -29,7 +29,7 @@ describe('cursorTrustMarkerPath', () => {
 })
 
 describe('isCursorAgentTemplate', () => {
-  const t = (startCmd: string): CliTemplate => ({ name: 'x', startCmd, resumeCmd: startCmd })
+  const t = (startCmd: string): CliTemplate => ({ id: 'x', name: 'x', startCmd, resumeCmd: startCmd })
   it('recognizes an `agent` command (even when renamed / adapter-less)', () => {
     expect(isCursorAgentTemplate(t('agent --yolo -- {prompt}'))).toBe(true)
   })

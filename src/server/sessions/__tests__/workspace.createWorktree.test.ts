@@ -46,9 +46,9 @@ describe('createWorktree .claude inheritance', () => {
     git(['add', '-f', '.claude'], repo)
     git(['commit', '-m', 'track claude'], repo)
 
-    const wtPath = await createWorktree(repo, 'sess-tracked')
-    expect(wtPath).toBe(worktreeDir(repo, 'sess-tracked'))
-    expect(existsSync(join(wtPath, '.claude', 'settings.local.json'))).toBe(true)
+    const result = await createWorktree(repo, 'sess-tracked')
+    expect(result).toEqual({ path: worktreeDir(repo, 'sess-tracked'), created: true })
+    expect(existsSync(join(result.path, '.claude', 'settings.local.json'))).toBe(true)
   })
 
   it('copies untracked .claude from the base repo into a fresh worktree', async () => {
@@ -56,10 +56,19 @@ describe('createWorktree .claude inheritance', () => {
     mkdirSync(claude)
     writeFileSync(join(claude, 'settings.local.json'), '{"local":true}\n')
 
-    const wtPath = await createWorktree(repo, 'sess-local')
-    expect(existsSync(join(wtPath, '.claude', 'settings.local.json'))).toBe(true)
-    expect(readFileSync(join(wtPath, '.claude', 'settings.local.json'), 'utf-8')).toBe(
+    const result = await createWorktree(repo, 'sess-local')
+    expect(result.created).toBe(true)
+    expect(existsSync(join(result.path, '.claude', 'settings.local.json'))).toBe(true)
+    expect(readFileSync(join(result.path, '.claude', 'settings.local.json'), 'utf-8')).toBe(
       '{"local":true}\n',
     )
+  })
+
+  it('reports reuse without claiming ownership of an existing worktree', async () => {
+    const first = await createWorktree(repo, 'sess-existing')
+    const second = await createWorktree(repo, 'sess-existing')
+
+    expect(first.created).toBe(true)
+    expect(second).toEqual({ path: first.path, created: false })
   })
 })

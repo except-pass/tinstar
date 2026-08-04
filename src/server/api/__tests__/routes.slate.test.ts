@@ -34,7 +34,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { handleRequest, type RouteContext } from '../routes'
+import { handleRequest, resetSessionBackendOwnersForTests, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import { seedRunSlate } from '../../stores/__tests__/seedRunSlate'
 import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
@@ -130,6 +130,7 @@ function withServer(fn: (srv: Harness) => Promise<void>): () => Promise<void> {
     const srv = createTestServer(root)
     try { await fn(srv) } finally {
       await srv.close()
+      resetSessionBackendOwnersForTests()
       rmSync(root, { recursive: true, force: true })
     }
   }
@@ -660,6 +661,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
 
   it('compose offloads to an author when enabled', withServer(async srv => {
     seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
       method: 'POST', body: JSON.stringify({ prompt: 'Build a PR review surface' }),

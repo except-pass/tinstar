@@ -1,13 +1,24 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { Session, SessionNats } from '../session'
 import { portWindowsOverlap, type TinstarConfig, type CliTemplate, type PortWindow } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { serializeByKey } from './serializeByKey'
+import {
+  describeTtydFailure,
+  type NonCausalInterruptionError,
+  TTYD_NON_CAUSAL_INTERRUPTION,
+} from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { log } from '../../logger'
+import {
+  defaultProviderRegistry,
+  providerTelemetryEnabled,
+  requireProviderCapability,
+  type TerminalProviderAdapter,
+} from '../../providers/lifecycle'
 
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
@@ -23,6 +34,7 @@ const rawExecFileAsync = promisify(execFile)
 // that run no tmux commands stay responsive throughout, which is exactly the reported
 // symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
 const TMUX_EXEC_TIMEOUT_MS = 10_000
+const strictProbeWarnings = new Set<string>()
 function execFileAsync(
   file: string,
   args: readonly string[],
@@ -134,6 +146,73 @@ export async function tmuxHasSession(tmuxName: string): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+/** Return true only for tmux's known, ordinary "session is absent" failures. */
+export function isOrdinaryTmuxSessionMiss(
+  error: unknown,
+  stderr: string | Buffer | undefined,
+): boolean {
+  const failure = error as {
+    code?: string | number
+    killed?: boolean
+    signal?: NodeJS.Signals | string | null
+  }
+  if (
+    (failure.code !== 1 && failure.code !== '1')
+    || failure.killed === true
+    || failure.signal != null
+  ) {
+    return false
+  }
+
+  const message = (
+    typeof stderr === 'string' ? stderr : stderr?.toString('utf8') ?? ''
+  ).trim()
+  return (
+    /^can't find session:.*$/i.test(message)
+    || /^no server running on.*$/i.test(message)
+  )
+}
+
+/**
+ * Probe tmux without collapsing transport/process failures into "not found".
+ *
+ * `tmux has-session` uses exit 1 for a normal miss. Spawn failures, timeouts,
+ * and signals mean we could not establish backend absence and must propagate
+ * so lifecycle cleanup retains its durable recovery evidence.
+ */
+export async function tmuxHasSessionStrict(tmuxName: string): Promise<boolean> {
+  try {
+    await execFileAsync('tmux', ['has-session', '-t', exactTmuxSessionTarget(tmuxName)])
+    strictProbeWarnings.delete(tmuxName)
+    return true
+  } catch (err) {
+    const failure = err as {
+      code?: string | number
+      killed?: boolean
+      signal?: NodeJS.Signals | null
+      stderr?: string | Buffer
+    }
+    if (isOrdinaryTmuxSessionMiss(failure, failure.stderr)) {
+      strictProbeWarnings.delete(tmuxName)
+      return false
+    }
+    if (!strictProbeWarnings.has(tmuxName)) {
+      strictProbeWarnings.add(tmuxName)
+      const stderr = (
+        typeof failure.stderr === 'string'
+          ? failure.stderr
+          : failure.stderr?.toString('utf8') ?? ''
+      ).trim()
+      log.warn(
+        'tmux',
+        `${tmuxName}: strict liveness probe was inconclusive`
+        + `${stderr ? `: ${stderr}` : `: ${(err as Error).message}`}`,
+      )
+    }
+    throw err
   }
 }
 
@@ -400,6 +479,7 @@ function writeIfChanged(path: string, content: string): void {
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
+  provider?: TerminalProviderAdapter
   template?: CliTemplate | null
   skipPermissions?: boolean
   sessionId?: string | null
@@ -416,6 +496,7 @@ export function buildAgentCommand(opts: {
    * leaves the command byte-identical to pre-override behavior. */
   modelOverride?: string | null
 }): string {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveTemplate(opts.template)
   // Option flags that must sit before the ` -- {prompt}` separator. Collected
   // here and spliced in exactly once during assembly below, so a ` -- ` inside
   // any flag *value* — a session-name-derived --mcp-config path, or a prompt /
@@ -427,11 +508,25 @@ export function buildAgentCommand(opts: {
 
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    let cmd = interpolateTemplate(tmpl, {
+    const values = {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
-    })
+    }
+    // Split the template before interpolating opaque persona/prompt values.
+    // Otherwise a literal ` -- ` inside {agentPrompt} looks like the command's
+    // prompt boundary and provider flags get inserted into quoted persona text.
+    const promptPlaceholder = tmpl.indexOf('{prompt}')
+    const separator = promptPlaceholder === -1
+      ? -1
+      : tmpl.lastIndexOf(' -- ', promptPlaceholder)
+    if (separator !== -1) {
+      head = interpolateTemplate(tmpl.slice(0, separator), values)
+      const interpolatedTail = interpolateTemplate(tmpl.slice(separator), values)
+      promptTail = interpolatedTail ? ` ${interpolatedTail}` : ''
+    } else {
+      head = interpolateTemplate(tmpl, values)
+    }
     // Couple the dev-channels flag to the nats-mcp.json that defines the server
     // it names. Templates bake in `--dangerously-load-development-channels
     // server:nats` unconditionally, but the config is only written when NATS is
@@ -442,22 +537,29 @@ export function buildAgentCommand(opts: {
     // NATS wasn't provisioned so the command stays internally consistent, and
     // inject `--mcp-config <path>` when it was so Claude can find the server.
     //
-    // `--mcp-config` / `--dangerously-load-development-channels` are
-    // Claude-specific: a non-Claude adapter (cursor's `agent`, codex) hard-errors
-    // on `--mcp-config` and dies to a bare shell. Only wire NATS for a claude
-    // template. Missing adapter ⇒ claude (built-in claude templates predate the
-    // adapter field, and the legacy no-template path below is always claude).
-    const isClaudeTemplate = (opts.template?.adapter ?? 'claude') === 'claude'
-    if (opts.nats?.enabled && isClaudeTemplate) {
-      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
-    } else {
-      cmd = cmd.replace(/\s*--dangerously-load-development-channels\s+server:nats/g, '')
+    // The provider capability — not its ID — decides whether this transport can
+    // be wired. A future provider can implement a different command strategy
+    // without entering shared command-builder conditionals.
+    if (opts.nats?.enabled) {
+      const nats = requireProviderCapability(provider, 'nats')
+      // Templates are user-editable and may or may not bake in the provider's
+      // enable flag. Normalize both forms to one provider-owned flag so enabled
+      // launches never omit it and legacy multi-agent templates never duplicate
+      // it. The disabledPattern belongs to the provider for the same reason the
+      // inserted flags do: shared assembly must not know provider CLI syntax.
+      head = head.replace(nats.command.disabledPattern, '')
+      preFlags.push(nats.command.enableFlag)
+      if (opts.nats.mcpConfigPath) {
+        preFlags.push(
+          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
+        )
+      }
+    } else if (provider.terminal.capabilities.nats.state === 'supported') {
+      head = head.replace(
+        provider.terminal.capabilities.nats.detail.command.disabledPattern,
+        '',
+      )
     }
-    // Split the prompt separator off once, before any flag text (which may itself
-    // contain ' -- ') is spliced in.
-    const idx = cmd.indexOf(' -- ')
-    if (idx !== -1) { head = cmd.slice(0, idx); promptTail = cmd.slice(idx) }
-    else head = cmd
     // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
@@ -475,8 +577,13 @@ export function buildAgentCommand(opts: {
     // Add NATS channel support — the dev-channels resolver reads the server from
     // the per-session nats-mcp.json passed via --mcp-config.
     if (opts.nats?.enabled) {
-      cmd += ' --dangerously-load-development-channels server:nats'
-      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
+      const nats = requireProviderCapability(provider, 'nats')
+      cmd += ` ${nats.command.enableFlag}`
+      if (opts.nats.mcpConfigPath) {
+        preFlags.push(
+          `${nats.command.configFlag} ${bashSingleQuote(opts.nats.mcpConfigPath)}`,
+        )
+      }
     }
     if (opts.appendSystemPrompt) {
       preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
@@ -602,12 +709,14 @@ export async function createTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    provider?: TerminalProviderAdapter
     resume?: boolean
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveTemplate(opts.template)
   const tmuxName = tmuxSessionName(config, opts.session.name)
 
   const tmuxArgs = ['-f', '/dev/null', 'new', '-d', '-s', tmuxName]
@@ -665,23 +774,12 @@ export async function createTmuxSession(
     }
   }
 
-  // Inject OTLP telemetry env vars when telemetry is enabled on the CLI template
-  if (opts.template?.telemetry !== false) {
-    const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318'
-    const telemetryVars: Record<string, string> = {
-      CLAUDE_CODE_ENABLE_TELEMETRY: '1',
-      OTEL_METRICS_EXPORTER: 'otlp',
-      OTEL_LOGS_EXPORTER: 'otlp',
-      OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
-      OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
-      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
-      OTEL_METRIC_EXPORT_INTERVAL: '10000',
-      OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${opts.session.name}`,
-    }
-    for (const [key, value] of Object.entries(telemetryVars)) {
-      await execFileAsync('tmux', ['set-environment', '-t', tmuxTarget, key, value])
-    }
-  }
+  await syncProviderTelemetryEnvironment(
+    tmuxTarget,
+    opts.session.name,
+    provider,
+    opts.template,
+  )
 
   // Scoped env, half 2 of 2: repair for an already-running tmux server. The
   // server is long-lived and SHARED (no -L/-S socket — see the SCOPE note
@@ -702,7 +800,9 @@ export async function createTmuxSession(
   // session config dir (outside any repo) + per-session topics file, passed to
   // Claude via --mcp-config below. No workspace path required.
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
@@ -712,10 +812,12 @@ export async function createTmuxSession(
       jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true, mcpConfigPath }
+    autoAcceptNatsWarning = nats.command.autoAcceptWarning
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
 
   const agentCmd = buildAgentCommand({
+    provider,
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
@@ -739,7 +841,7 @@ export async function createTmuxSession(
 
   // Auto-accept dev channel warning by polling for the prompt and sending Enter
   // More robust than fixed timeout - waits for actual prompt to appear
-  if (natsOpts?.enabled) {
+  if (natsOpts?.enabled && autoAcceptNatsWarning) {
     autoAcceptDevChannelWarning(tmuxName).catch((err) => {
       log.debug('tmux', `dev-channel auto-accept failed: ${(err as Error).message}`)
     })
@@ -757,17 +859,32 @@ export async function startTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    provider?: TerminalProviderAdapter
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
+  const provider = opts.provider ?? defaultProviderRegistry.resolveSession(
+    opts.session,
+    opts.template,
+  )
   const tmuxName = tmuxSessionName(config, opts.session.name)
   const exists = await tmuxHasSession(tmuxName)
 
   if (!exists) {
-    return createTmuxSession(config, { ...opts, resume: true })
+    return createTmuxSession(config, { ...opts, provider, resume: true })
   }
+
+  // Existing tmux sessions retain session-scoped variables across agent
+  // restarts. Reconcile both sides of the policy: inject newly enabled
+  // provider telemetry and remove provider-owned variables when disabled.
+  await syncProviderTelemetryEnvironment(
+    exactTmuxSessionTarget(tmuxName),
+    opts.session.name,
+    provider,
+    opts.template,
+  )
 
   // Re-scrub on restart: a session created before guest-env scoping existed
   // still carries Tinstar's env, and restarting its agent is the one moment we
@@ -780,7 +897,9 @@ export async function startTmuxSession(
 
   // Generate NATS channel config if enabled — see createTmuxSession for details.
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
@@ -790,9 +909,11 @@ export async function startTmuxSession(
       jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true, mcpConfigPath }
+    autoAcceptNatsWarning = nats.command.autoAcceptWarning
   }
 
   const agentCmd = buildAgentCommand({
+    provider,
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
@@ -811,7 +932,7 @@ export async function startTmuxSession(
 
   // Same dev-channel auto-accept as createTmuxSession — restarting an exited
   // agent re-shows Claude's NATS warning prompt and must also be accepted.
-  if (natsOpts?.enabled) {
+  if (natsOpts?.enabled && autoAcceptNatsWarning) {
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured (restart)`)
     autoAcceptDevChannelWarning(tmuxName).catch((err) => {
       log.debug('tmux', `dev-channel auto-accept failed (restart): ${(err as Error).message}`)
@@ -823,29 +944,84 @@ export async function startTmuxSession(
   return { port: opts.port, ttydPid }
 }
 
-export async function stopTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
-  stopManagedTtyd(session.name)
+async function syncProviderTelemetryEnvironment(
+  tmuxTarget: string,
+  sessionName: string,
+  provider: TerminalProviderAdapter,
+  template: CliTemplate | null | undefined,
+): Promise<void> {
+  const commands = providerTelemetryEnvironmentCommands(
+    tmuxTarget,
+    sessionName,
+    provider,
+    template,
+  )
+  for (const args of commands) await execFileAsync('tmux', args)
+}
+
+/** Pure telemetry reconciliation plan shared by create and existing-session start. */
+export function providerTelemetryEnvironmentCommands(
+  tmuxTarget: string,
+  sessionName: string,
+  provider: TerminalProviderAdapter,
+  template: CliTemplate | null | undefined,
+  endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+): string[][] {
+  const support = provider.terminal.capabilities.telemetry
+  if (support.state === 'unsupported') {
+    // An explicit opt-in is a configuration error and must still fail fast.
+    // With telemetry off (explicitly or by provider default), an unsupported
+    // provider has no environment to reconcile.
+    if (template?.telemetry === true) requireProviderCapability(provider, 'telemetry')
+    return []
+  }
+  const enabled = providerTelemetryEnabled(provider, template)
+
+  const telemetryVars = support.detail.environment({
+    sessionName,
+    endpoint,
+  })
+  return Object.entries(telemetryVars).map(([key, value]) =>
+    enabled
+      ? ['set-environment', '-t', tmuxTarget, key, value]
+      : ['set-environment', '-t', tmuxTarget, '-r', key],
+  )
+}
+
+export async function stopTmuxSession(
+  config: TinstarConfig,
+  session: Session,
+): Promise<void> {
+  stopManagedTtyd(session.name, {
+    cancellationReason: 'session stop requested',
+  })
 
   const tmuxName = tmuxSessionName(config, session.name)
+  strictProbeWarnings.delete(tmuxName)
   const target = exactTmuxSessionTarget(tmuxName)
   log.info('tmux', `${session.name}: stopping tmux session`, { target })
   try {
     await execFileAsync('tmux', ['kill-session', '-t', target])
-  } catch {
-    // Already gone
+  } catch (err) {
+    const failure = err as { stderr?: string | Buffer }
+    if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
 }
 
 export async function deleteTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
-  stopManagedTtyd(session.name)
+  stopManagedTtyd(session.name, {
+    cancellationReason: 'session deletion requested',
+  })
 
   const tmuxName = tmuxSessionName(config, session.name)
+  strictProbeWarnings.delete(tmuxName)
   const target = exactTmuxSessionTarget(tmuxName)
   log.info('tmux', `${session.name}: deleting tmux session`, { target })
   try {
     await execFileAsync('tmux', ['kill-session', '-t', target])
-  } catch {
-    // Already gone
+  } catch (err) {
+    const failure = err as { stderr?: string | Buffer }
+    if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
 }
 
@@ -854,20 +1030,17 @@ export async function reattachTmuxSession(
   opts: { session: Session; port: number },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
-  claimedPorts.add(opts.port)
+  // The boot rehydration path has already reclaimed persisted ports, while a
+  // freshly allocated port is claimed by findPort(). Do not claim again here:
+  // if the lifecycle becomes stale during this await, the caller must be able
+  // to release its claim without this helper silently recreating it.
 
-  // If ttyd is already running on this port (e.g. another server instance owns it),
-  // adopt it rather than killing and restarting — avoids a kill/restart cycle when
-  // npx tinstar and npm run dev share the same config dir.
-  try {
-    const lsof = execSync(
-      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
-      { encoding: 'utf-8' },
-    ).trim()
-    if (lsof) {
-      return { port: opts.port, ttydPid: Number(lsof.split('\n')[0]) }
-    }
-  } catch { /* no ttyd running — proceed to start */ }
+  // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
+  // any unrelated HTTP listener) must never make this session look healthy.
+  const incumbent = (await ttydIncumbentsOnPortStrict(opts.port)).find(
+    candidate => candidate.tmuxTarget === tmuxName,
+  )
+  if (incumbent) return { port: opts.port, ttydPid: incumbent.pid }
 
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
   return { port: opts.port, ttydPid }
@@ -876,16 +1049,22 @@ export async function reattachTmuxSession(
 /** Capture a tmux pane's rendered screen. With `scrollback`, include that many
  *  lines of history (capture-pane -S -<n>). Shared by status detection, the
  *  codex transcript, and the GET /api/sessions/:name/screen endpoint. */
-export async function captureScreen(tmuxName: string, scrollback?: number): Promise<string> {
+export async function captureScreen(
+  tmuxName: string,
+  scrollback?: number,
+  timeoutMs?: number,
+): Promise<string> {
   const args = ['capture-pane', '-t', exactTmuxPaneTarget(tmuxName), '-p']
   if (scrollback && scrollback > 0) args.push('-S', `-${scrollback}`)
-  const { stdout } = await execFileAsync('tmux', args)
+  const { stdout } = timeoutMs === undefined
+    ? await execFileAsync('tmux', args)
+    : await execFileAsync('tmux', args, { timeout: timeoutMs })
   return stdout
 }
 
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
   const tmuxName = tmuxSessionName(config, sessionName)
-  const exists = await tmuxHasSession(tmuxName)
+  const exists = await tmuxHasSessionStrict(tmuxName)
   return exists ? 'exists' : 'missing'
 }
 
@@ -895,12 +1074,20 @@ interface ManagedTtydEntry {
   child: ChildProcess
   tmuxName: string
   port: number
+  startToken: symbol
   stopped: boolean
   restartTimer?: ReturnType<typeof setTimeout>
   onRestart?: (pid: number) => void
 }
 
 const managedTtyd = new Map<string, ManagedTtydEntry>()
+const ttydStartTokens = new Map<string, symbol>()
+const ttydStartChains = new Map<string, Promise<unknown>>()
+const pendingTtydStartTokens = new Map<string, Set<symbol>>()
+const ttydStartCancellationReasons = new Map<
+  symbol,
+  TtydStartCancellationReason
+>()
 
 // Epoch-ms of recent auto-restarts per session, for the circuit breaker.
 // Kept module-level (not on the entry) so it survives startTtyd's internal
@@ -945,6 +1132,18 @@ export interface TtydIncumbent {
   tmuxTarget: string | null
 }
 
+/** Exact process/target identity required before publishing a terminal port. */
+export function ttydIncumbentMatchesSession(
+  incumbents: readonly TtydIncumbent[],
+  pid: number | undefined,
+  tmuxName: string,
+): boolean {
+  return pid !== undefined
+    && incumbents.some(
+      incumbent => incumbent.pid === pid && incumbent.tmuxTarget === tmuxName,
+    )
+}
+
 /**
  * Extract the tmux session a ttyd attaches from its full `ps -o args=` line.
  * Anchors on the tmux client invocation (`tmux … attach[-session] … -t NAME`),
@@ -962,30 +1161,285 @@ export function tmuxTargetFromArgs(args: string): string | null {
   return target.startsWith('=') ? target.slice(1) : target
 }
 
-/** ttyd processes listening on `port`, each with the tmux session it attaches. */
-export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
-  const out: TtydIncumbent[] = []
-  let pidLines: string
+let ttydIdentityInspectionState: 'unknown' | 'available' | 'unavailable' = 'unknown'
+let ttydIdentityInspectionWarned = false
+let ttydIdentityInspectionRetryAt = 0
+let ttydIdentityInspectionFailureEpoch = 0
+const TTYD_IDENTITY_INSPECTION_RETRY_MS = 30_000
+
+export class TtydIdentityInspectionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'TtydIdentityInspectionError'
+  }
+}
+
+export type TtydStartInterruptionStage =
+  | 'preflight'
+  | 'pre-spawn'
+  | 'post-spawn'
+  | 'settlement'
+
+export type TtydStartCancellationReason =
+  | 'session stop requested'
+  | 'session deletion requested'
+  | 'reattach inconclusive-surface compensation'
+  | 'reattach lifecycle ownership lost'
+  | 'reattach unhealthy-surface retirement'
+  | 'reattach verification compensation'
+  | 'reattach publication compensation'
+  | 'reattach failure compensation'
+  | 'surface refresh launch compensation'
+  | 'surface refresh retirement'
+  | `automatic restart abandoned: ${string}`
+
+export class TtydStartSupersededError extends Error {
+  constructor(
+    sessionName: string,
+    readonly stage: TtydStartInterruptionStage,
+    options?: ErrorOptions,
+  ) {
+    super(`ttyd start for ${sessionName} was superseded at ${stage}`, options)
+    this.name = 'TtydStartSupersededError'
+  }
+}
+
+function describeTtydInterruptionForMessage(interrupted: unknown): string {
   try {
-    pidLines = execSync(
-      `lsof -ti :${port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
-      { encoding: 'utf-8' },
-    ).trim()
+    return describeTtydFailure(interrupted)
   } catch {
-    return out // nothing on the port
+    return '[interruption diagnostic unavailable]'
   }
-  if (!pidLines) return out
-  for (const line of pidLines.split('\n')) {
-    const pid = Number(line)
-    if (!pid) continue
-    let tmuxTarget: string | null = null
-    try {
-      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      tmuxTarget = tmuxTargetFromArgs(args)
-    } catch { /* process vanished between lsof and ps */ }
-    out.push({ pid, tmuxTarget })
+}
+
+export class TtydStartCancelledError
+  extends Error
+  implements NonCausalInterruptionError {
+  readonly diagnosticSummary: string
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION] = true as const
+
+  constructor(
+    sessionName: string,
+    /** Boundary stage inherited from the supersession this cancellation replaces. */
+    readonly stage: TtydStartInterruptionStage,
+    /** Lifecycle action that removed ownership of this start. */
+    readonly reason: TtydStartCancellationReason,
+    /** Primary diagnostic: the original failure, outside `cause` so it cannot imply supersession. */
+    readonly interrupted: unknown,
+    /** Reserved for an additional failure while cleaning up the interrupted start. */
+    options?: ErrorOptions,
+  ) {
+    const summary =
+      `ttyd start for ${sessionName} was cancelled at ${stage}`
+      + `; cancellation reason: ${reason}`
+    super(
+      summary + '; interrupted failure: '
+        + describeTtydInterruptionForMessage(interrupted),
+      options,
+    )
+    this.name = 'TtydStartCancelledError'
+    this.diagnosticSummary = summary
   }
-  return out
+}
+
+export class TtydStartCancellationReceiptError
+  extends Error
+  implements NonCausalInterruptionError {
+  readonly diagnosticSummary: string
+  readonly [TTYD_NON_CAUSAL_INTERRUPTION] = true as const
+
+  constructor(
+    sessionName: string,
+    /** Original interruption kept non-causal so supersession cannot be inferred. */
+    readonly interrupted: unknown,
+    /** Optional cleanup aggregate; its sibling errors remain non-causal. */
+    options?: ErrorOptions,
+  ) {
+    const summary =
+      `ttyd start for ${sessionName} lost ownership without a cancellation receipt`
+    super(
+      summary + '; interrupted failure: '
+        + describeTtydInterruptionForMessage(interrupted),
+      options,
+    )
+    this.name = 'TtydStartCancellationReceiptError'
+    this.diagnosticSummary = summary
+  }
+}
+
+export function findTtydStartSupersededError(
+  err: unknown,
+): TtydStartSupersededError | null {
+  return findTtydStartCause(
+    err,
+    (candidate): candidate is TtydStartSupersededError =>
+      candidate instanceof TtydStartSupersededError,
+  )
+}
+
+function findTtydStartCause<T extends Error>(
+  err: unknown,
+  matches: (candidate: Error) => candidate is T,
+): T | null {
+  // Adapter and lifecycle boundaries may each preserve a failure as `cause`,
+  // so walk the complete native cause chain. The Set deliberately terminates
+  // malformed cycles. AggregateError siblings are not causal wrappers and are
+  // intentionally outside both interruption classifiers: cancellation cleanup
+  // aggregates contain a supersession sibling that must stay non-causal.
+  const seen = new Set<Error>()
+  let candidate = err
+  while (candidate instanceof Error && !seen.has(candidate)) {
+    if (matches(candidate)) return candidate
+    seen.add(candidate)
+    candidate = candidate.cause
+  }
+  return null
+}
+
+function markTtydIdentityInspectionAvailable(
+  probeFailureEpoch: number,
+): void {
+  // A success that began before a newer failure is stale evidence and must
+  // not clear the newer cooldown.
+  if (ttydIdentityInspectionFailureEpoch !== probeFailureEpoch) return
+  ttydIdentityInspectionState = 'available'
+  ttydIdentityInspectionRetryAt = 0
+  ttydIdentityInspectionWarned = false
+}
+
+function markTtydIdentityInspectionUnavailable(): void {
+  ttydIdentityInspectionFailureEpoch += 1
+  ttydIdentityInspectionState = 'unavailable'
+  ttydIdentityInspectionRetryAt = Date.now()
+    + TTYD_IDENTITY_INSPECTION_RETRY_MS
+}
+
+/** Whether strict identity inspection is in a non-destructive retry cooldown. */
+export function ttydIdentityInspectionUnavailable(): boolean {
+  return (
+    ttydIdentityInspectionState === 'unavailable'
+    && Date.now() < ttydIdentityInspectionRetryAt
+  )
+}
+
+interface IdentityExecFailure {
+  code?: string | number
+  stdout?: string | Buffer
+  stderr?: string | Buffer
+  killed?: boolean
+  signal?: NodeJS.Signals | null
+}
+
+type IdentityExec = (
+  file: string,
+  args: readonly string[],
+  opts?: { timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>
+
+function inspectionOutput(value: string | Buffer | undefined): string {
+  return typeof value === 'string'
+    ? value.trim()
+    : value?.toString('utf8').trim() ?? ''
+}
+
+/**
+ * lsof/pgrep/ps use exit 1 with no diagnostics for an ordinary empty match.
+ * Anything with diagnostics, a signal, or a forced kill is infrastructure
+ * failure and must remain inconclusive.
+ */
+export function isCleanInspectionMiss(err: unknown): boolean {
+  const failure = err as IdentityExecFailure
+  return (
+    (failure.code === 1 || failure.code === '1')
+    && inspectionOutput(failure.stdout) === ''
+    && inspectionOutput(failure.stderr) === ''
+    && failure.killed !== true
+    && failure.signal == null
+  )
+}
+
+async function inspectTtydPid(
+  pid: number,
+  run: IdentityExec,
+): Promise<TtydIncumbent | null> {
+  let comm: string
+  try {
+    comm = (await run(
+      'ps',
+      ['-o', 'comm=', '-p', String(pid)],
+      { timeout: 2_000 },
+    )).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return null
+    throw err
+  }
+  if (basename(comm.trim()) !== 'ttyd') return null
+
+  try {
+    const { stdout: args } = await run(
+      'ps',
+      ['-o', 'args=', '-p', String(pid)],
+      { timeout: 2_000 },
+    )
+    return { pid, tmuxTarget: tmuxTargetFromArgs(args) }
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return null
+    throw err
+  }
+}
+
+/** Strict, bounded host inspection without global retry/circuit state. */
+export async function inspectTtydIncumbentsOnPort(
+  port: number,
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  let stdout: string
+  try {
+    stdout = (await run(
+      'lsof',
+      ['-w', '-ti', `:${port}`],
+      { timeout: 2_000 },
+    )).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return []
+    throw err
+  }
+
+  const pids = stdout
+    .split('\n')
+    .map(Number)
+    .filter(pid => Number.isInteger(pid) && pid > 0)
+  const inspected = await Promise.all(pids.map(pid => inspectTtydPid(pid, run)))
+  return inspected.filter((entry): entry is TtydIncumbent => entry !== null)
+}
+
+/**
+ * Async, strict counterpart used by periodic readiness verification.
+ * Exit 1 with no output means the port has no listeners; every other lsof
+ * or ps failure is inconclusive. Failures enter a cooldown so a misconfigured
+ * service cannot thrash, while later boundaries can recover from a transient.
+ */
+export async function ttydIncumbentsOnPortStrict(
+  port: number,
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  if (ttydIdentityInspectionUnavailable()) {
+    throw new TtydIdentityInspectionError(
+      'terminal identity inspection is in retry cooldown',
+    )
+  }
+  const probeFailureEpoch = ttydIdentityInspectionFailureEpoch
+  try {
+    const incumbents = await inspectTtydIncumbentsOnPort(port, run)
+    markTtydIdentityInspectionAvailable(probeFailureEpoch)
+    return incumbents
+  } catch (err) {
+    markTtydIdentityInspectionUnavailable()
+    throw new TtydIdentityInspectionError(
+      `terminal identity inspection failed: ${(err as Error).message}`,
+      { cause: err },
+    )
+  }
 }
 
 /**
@@ -1007,28 +1461,48 @@ export function ttydPidsToReclaim(
   return { kill, foreign }
 }
 
-/** Every ttyd process on the machine, each with the tmux session it attaches. */
-export function allTtydIncumbents(): TtydIncumbent[] {
-  const out: TtydIncumbent[] = []
-  let pidLines: string
+export async function inspectAllTtydIncumbents(
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  let stdout: string
   try {
-    // pgrep exits 1 (throws) when no ttyd is running — caught below.
-    pidLines = execSync('pgrep -x ttyd', { encoding: 'utf-8' }).trim()
-  } catch {
-    return out
+    stdout = (await run('pgrep', ['-x', 'ttyd'], { timeout: 2_000 })).stdout
+  } catch (err) {
+    if (isCleanInspectionMiss(err)) return []
+    throw err
   }
-  if (!pidLines) return out
-  for (const line of pidLines.split('\n')) {
-    const pid = Number(line)
-    if (!pid) continue
-    let tmuxTarget: string | null = null
-    try {
-      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      tmuxTarget = tmuxTargetFromArgs(args)
-    } catch { /* process vanished between pgrep and ps */ }
-    out.push({ pid, tmuxTarget })
+  const pids = stdout
+    .split('\n')
+    .map(Number)
+    .filter(pid => Number.isInteger(pid) && pid > 0)
+  const inspected = await Promise.all(pids.map(pid => inspectTtydPid(pid, run)))
+  return inspected.filter((entry): entry is TtydIncumbent => entry !== null)
+}
+
+/**
+ * Every ttyd process on the machine, inspected asynchronously with timeouts
+ * and the same cooldown used by the port-scoped strict probe.
+ */
+export async function allTtydIncumbentsStrict(
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  if (ttydIdentityInspectionUnavailable()) {
+    throw new TtydIdentityInspectionError(
+      'terminal identity inspection is in retry cooldown',
+    )
   }
-  return out
+  const probeFailureEpoch = ttydIdentityInspectionFailureEpoch
+  try {
+    const incumbents = await inspectAllTtydIncumbents(run)
+    markTtydIdentityInspectionAvailable(probeFailureEpoch)
+    return incumbents
+  } catch (err) {
+    markTtydIdentityInspectionUnavailable()
+    throw new TtydIdentityInspectionError(
+      `terminal process inspection failed: ${(err as Error).message}`,
+      { cause: err },
+    )
+  }
 }
 
 /**
@@ -1111,7 +1585,20 @@ async function listLiveTmuxSessionNames(): Promise<Set<string> | null> {
 export async function reapOrphanTtyds(prefix: string): Promise<number> {
   const live = await listLiveTmuxSessionNames()
   if (live === null) return 0 // liveness unknown — never risk killing live ttyds
-  const pids = orphanTtydPidsToReap(allTtydIncumbents(), live, prefix)
+  let incumbents: TtydIncumbent[]
+  try {
+    // GC is best-effort and already fails safe. Keep its probe outside the
+    // shared user-facing cooldown so a background pgrep/ps timeout cannot
+    // reject terminal creation or readiness verification for 30 seconds.
+    incumbents = await inspectAllTtydIncumbents()
+  } catch (err) {
+    log.warn(
+      'ttyd',
+      `orphan sweep skipped because process inspection failed: ${(err as Error).message}`,
+    )
+    return 0
+  }
+  const pids = orphanTtydPidsToReap(incumbents, live, prefix)
   for (const pid of pids) {
     try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
   }
@@ -1121,14 +1608,212 @@ export async function reapOrphanTtyds(prefix: string): Promise<number> {
   return pids.length
 }
 
-export function startTtyd(opts: {
+export interface StartTtydOptions {
   tmuxName: string
   port: number
   sessionName: string
-}): Promise<number | undefined> {
+}
+
+export interface StartTtydAttemptDeps {
+  incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
+  allIncumbents: () => Promise<TtydIncumbent[]>
+  stopManaged: typeof stopManagedTtyd
+  killProcess: (pid: number) => void
+  spawnProcess: (opts: StartTtydOptions) => ChildProcess
+  schedule: typeof setTimeout
+  tmuxAlive: (tmuxName: string) => Promise<boolean>
+  enqueueRestart: (
+    opts: StartTtydOptions,
+    startToken: symbol,
+  ) => Promise<number | undefined>
+}
+
+const startTtydAttemptDeps: StartTtydAttemptDeps = {
+  incumbentsOnPort: ttydIncumbentsOnPortStrict,
+  allIncumbents: allTtydIncumbentsStrict,
+  stopManaged: stopManagedTtyd,
+  killProcess: pid => process.kill(pid, 'SIGTERM'),
+  spawnProcess: opts => spawn('ttyd', [
+    '-W',
+    '-p', String(opts.port),
+    '-t', 'titleFixed=Tinstar',
+    '-t', 'theme={"background":"#000000"}',
+    'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
+  ], {
+    stdio: 'ignore',
+    env: tmuxClientEnv(),
+  }),
+  schedule: setTimeout,
+  tmuxAlive: tmuxHasSession,
+  enqueueRestart: enqueueTtydStart,
+}
+
+function enqueueTtydStart(
+  opts: StartTtydOptions,
+  startToken: symbol,
+  deps: StartTtydAttemptDeps = startTtydAttemptDeps,
+): Promise<number | undefined> {
+  const pendingForSession = pendingTtydStartTokens.get(opts.sessionName)
+    ?? new Set<symbol>()
+  pendingForSession.add(startToken)
+  pendingTtydStartTokens.set(opts.sessionName, pendingForSession)
+  const isCurrent = () =>
+    ttydStartTokens.get(opts.sessionName) === startToken
+  let mutated = false
+  const trackedDeps: StartTtydAttemptDeps = {
+    ...deps,
+    stopManaged: (...args) => {
+      mutated = true
+      return deps.stopManaged(...args)
+    },
+  }
+  const attempt = serializeByKey(ttydStartChains, opts.sessionName, async () => {
+    try {
+      return await startTtydForTokenAttempt(
+        opts,
+        startToken,
+        isCurrent,
+        trackedDeps,
+      )
+    } catch (err) {
+      // A newer request can arrive while this task is rejecting. Classify at
+      // the serialized public settlement boundary so stale generic child
+      // errors cannot make background compensation invalidate the queued
+      // winner's token.
+      if (isCurrent()) throw err
+      const replacementPending = ttydStartTokens.has(opts.sessionName)
+      const superseded = findTtydStartSupersededError(err)
+      let cleanupError: unknown
+      if (mutated) {
+        // T1 may have killed its incumbent and spawned a child before failing.
+        // Remove only T1's managed surface without changing the token.
+        try {
+          deps.stopManaged(
+            opts.sessionName,
+            { resetHistory: false, invalidateStarts: false },
+          )
+          log.info(
+            'ttyd',
+            `${opts.sessionName}: removed stale `
+              + `${replacementPending ? 'superseded' : 'cancelled'} start surface`,
+          )
+        } catch (cleanupErr) {
+          // Production cleanup is currently noexcept. Keep this containment
+          // because the dependency seam is injectable and a future cleanup
+          // change must not expose a generic error across a replacement token.
+          log.warn(
+            'ttyd',
+            `${opts.sessionName}: stale start cleanup failed: `
+              + `${(cleanupErr as Error).message}`,
+          )
+          cleanupError = cleanupErr
+        }
+      }
+      const combinedFailure = cleanupError === undefined
+        ? null
+        : new AggregateError(
+            [err, cleanupError],
+            `stale ttyd start cleanup failed for ${opts.sessionName}`,
+          )
+      if (!replacementPending) {
+        if (superseded) {
+          const cancellationReason = ttydStartCancellationReasons.get(startToken)
+          if (!cancellationReason) {
+            throw new TtydStartCancellationReceiptError(
+              opts.sessionName,
+              err,
+              combinedFailure ? { cause: combinedFailure } : undefined,
+            )
+          }
+          throw new TtydStartCancelledError(
+            opts.sessionName,
+            superseded.stage,
+            cancellationReason,
+            err,
+            combinedFailure ? { cause: combinedFailure } : undefined,
+          )
+        }
+        if (combinedFailure) throw combinedFailure
+        throw err
+      }
+      if (superseded && !combinedFailure) throw err
+      throw new TtydStartSupersededError(
+        opts.sessionName,
+        superseded?.stage ?? 'settlement',
+        { cause: combinedFailure ?? err },
+      )
+    }
+  })
+  return attempt.finally(() => {
+    const pending = pendingTtydStartTokens.get(opts.sessionName)
+    if (pending?.delete(startToken)) {
+      ttydStartCancellationReasons.delete(startToken)
+      if (pending.size === 0) pendingTtydStartTokens.delete(opts.sessionName)
+    }
+  })
+}
+
+/**
+ * Latest-request-wins, per-session serialized ttyd launch.
+ *
+ * A superseded attempt rejects instead of reporting a false success with no
+ * PID. Public create/start callers hold exclusive lifecycle ownership and must
+ * propagate that cancellation; background reattach explicitly translates it
+ * into a non-destructive retry at the next boundary.
+ */
+export function startTtyd(
+  opts: StartTtydOptions,
+): Promise<number | undefined> {
+  return startTtydWithDeps(opts, startTtydAttemptDeps)
+}
+
+/** Internal dependency seam for deterministic lifecycle concurrency tests. */
+export function startTtydWithDeps(
+  opts: StartTtydOptions,
+  deps: StartTtydAttemptDeps,
+): Promise<number | undefined> {
+  const startToken = Symbol(opts.sessionName)
+  ttydStartTokens.set(opts.sessionName, startToken)
+  return enqueueTtydStart(opts, startToken, deps)
+}
+
+export async function startTtydForTokenAttempt(
+  opts: StartTtydOptions,
+  startToken: symbol,
+  isCurrent: () => boolean,
+  deps: StartTtydAttemptDeps = startTtydAttemptDeps,
+): Promise<number | undefined> {
+  if (!isCurrent()) {
+    throw new TtydStartSupersededError(opts.sessionName, 'preflight')
+  }
+
+  // Resolve both inventories before taking any destructive action. Operational
+  // lsof/pgrep/ps failures therefore abort this attempt without killing a
+  // surface whose identity we could not prove.
+  let portIncumbents: TtydIncumbent[]
+  let allIncumbents: TtydIncumbent[]
+  try {
+    [portIncumbents, allIncumbents] = await Promise.all([
+      deps.incumbentsOnPort(opts.port),
+      deps.allIncumbents(),
+    ])
+  } catch (err) {
+    if (err instanceof TtydIdentityInspectionError) throw err
+    throw new TtydIdentityInspectionError(
+      `terminal process inspection failed: ${(err as Error).message}`,
+      { cause: err },
+    )
+  }
+  if (!isCurrent()) {
+    throw new TtydStartSupersededError(opts.sessionName, 'pre-spawn')
+  }
+
   // resetHistory:false — preserve the restart-rate history across an
   // auto-restart so the circuit breaker can count cumulative restarts.
-  stopManagedTtyd(opts.sessionName, { resetHistory: false })
+  deps.stopManaged(
+    opts.sessionName,
+    { resetHistory: false, invalidateStarts: false },
+  )
 
   // Reclaim the port from an orphaned ttyd (e.g. after a server restart), but
   // ONLY from our own previous ttyd or one we can't identify. Killing a ttyd
@@ -1137,9 +1822,9 @@ export function startTtyd(opts: {
   // flaps between the two terminals. If a foreign session holds the port we
   // leave it alone and let the bind fail — the circuit breaker then backs off
   // instead of warring.
-  const { kill, foreign } = ttydPidsToReclaim(ttydIncumbentsOnPort(opts.port), opts.tmuxName)
+  const { kill, foreign } = ttydPidsToReclaim(portIncumbents, opts.tmuxName)
   for (const pid of kill) {
-    try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+    try { deps.killProcess(pid) } catch { /* already dead */ }
   }
   if (foreign.length > 0) {
     log.warn('ttyd', `${opts.sessionName}: port ${opts.port} held by another session (${foreign.map(f => f.tmuxTarget).join(', ')}); not killing it`)
@@ -1150,30 +1835,21 @@ export function startTtyd(opts: {
   // tmux session) on its old port. The port-scoped pass above only sees the new
   // port, so those orphans pile up — one per restart — and double-attach the
   // session. Exact session match so a child hand session is never swept in.
-  const staleSessionPids = ttydPidsForSession(allTtydIncumbents(), opts.tmuxName)
+  const portKills = new Set(kill)
+  const staleSessionPids = ttydPidsForSession(allIncumbents, opts.tmuxName)
+    .filter(pid => !portKills.has(pid))
   if (staleSessionPids.length > 0) {
     log.info('ttyd', `${opts.sessionName}: reaping ${staleSessionPids.length} stale ttyd(s) on other ports for ${opts.tmuxName}`)
     for (const pid of staleSessionPids) {
-      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+      try { deps.killProcess(pid) } catch { /* already dead */ }
     }
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn('ttyd', [
-      '-W',
-      '-p', String(opts.port),
-      '-t', 'titleFixed=Tinstar',
-      '-t', 'theme={"background":"#000000"}',
-      'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
-    ], {
-      stdio: 'ignore',
-      // ttyd is a guest boundary twice over: it is the tmux CLIENT that attaches
-      // the session (tmux's `update-environment` copies a listed subset of the
-      // client's env into the session on attach), and a user can drop to a plain
-      // shell inside the terminal it serves. Neither should see Tinstar's env.
-      // tmuxClientEnv, not guestEnv: its `tmux attach` must find our socket.
-      env: tmuxClientEnv(),
-    })
+    // ttyd is a guest boundary twice over: it is the tmux CLIENT that attaches
+    // the session and a user can drop to a shell inside it. The default
+    // spawnProcess therefore uses tmuxClientEnv rather than the server env.
+    const child = deps.spawnProcess(opts)
 
     child.on('error', reject)
 
@@ -1183,16 +1859,23 @@ export function startTtyd(opts: {
     // port (a second backend on the same config dir). See shouldRestartTtyd.
     child.on('exit', (code) => {
       const entry = managedTtyd.get(opts.sessionName)
-      if (!entry || entry.stopped) {
-        managedTtyd.delete(opts.sessionName)
-        return
-      }
-      void tmuxHasSession(opts.tmuxName).then((tmuxAlive) => {
+      if (
+        !entry
+        || entry.child !== child
+        || entry.startToken !== startToken
+        || entry.stopped
+        || !isCurrent()
+      ) return
+      void deps.tmuxAlive(opts.tmuxName).then((tmuxAlive) => {
         const cur = managedTtyd.get(opts.sessionName)
-        if (!cur || cur.stopped) {
-          managedTtyd.delete(opts.sessionName)
-          return
-        }
+        if (
+          !cur
+          || cur !== entry
+          || cur.child !== child
+          || cur.startToken !== startToken
+          || cur.stopped
+          || !isCurrent()
+        ) return
         const now = Date.now()
         const history = (ttydRestartHistory.get(opts.sessionName) ?? []).filter(
           (t) => now - t < TTYD_RESTART_WINDOW_MS,
@@ -1201,17 +1884,36 @@ export function startTtyd(opts: {
         if (!decision.restart) {
           log.info('ttyd', `${opts.sessionName}: exited (code ${code}), not restarting (${decision.reason})`)
           managedTtyd.delete(opts.sessionName)
+          if (ttydStartTokens.get(opts.sessionName) === startToken) {
+            invalidateTtydStarts(
+              opts.sessionName,
+              `automatic restart abandoned: ${decision.reason}`,
+            )
+          }
           ttydRestartHistory.delete(opts.sessionName)
           return
         }
         log.info('ttyd', `${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
-        cur.restartTimer = setTimeout(() => {
+        cur.restartTimer = deps.schedule(() => {
+          if (
+            managedTtyd.get(opts.sessionName) !== cur
+            || cur.stopped
+            || !isCurrent()
+          ) return
           ttydRestartHistory.set(opts.sessionName, [...history, Date.now()])
-          startTtyd(opts).then(pid => {
+          deps.enqueueRestart(opts, startToken).then(pid => {
+            if (!isCurrent()) return
             log.info('ttyd', `${opts.sessionName}: restarted`, { pid })
+            const restarted = managedTtyd.get(opts.sessionName)
+            if (restarted?.startToken === startToken) {
+              restarted.onRestart = cur.onRestart
+            }
             if (cur.onRestart && pid) cur.onRestart(pid)
           }).catch(err => {
-            log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
+            if (isExpectedTtydStartInterruption(err)) return
+            log.error('ttyd', `${opts.sessionName}: restart failed`, {
+              error: describeTtydFailure(err),
+            })
           })
         }, 2000)
       })
@@ -1221,15 +1923,43 @@ export function startTtyd(opts: {
       child,
       tmuxName: opts.tmuxName,
       port: opts.port,
+      startToken,
       stopped: false,
     })
 
     // Give ttyd a moment to bind the port
-    setTimeout(() => resolve(child.pid), 500)
+    deps.schedule(() => {
+      if (!isCurrent()) {
+        reject(new TtydStartSupersededError(opts.sessionName, 'post-spawn'))
+        return
+      }
+      resolve(child.pid)
+    }, 500)
   })
 }
 
-export function stopManagedTtyd(sessionName: string, opts: { resetHistory?: boolean } = {}): void {
+export function isExpectedTtydStartInterruption(err: unknown): boolean {
+  return err instanceof TtydStartSupersededError
+    || err instanceof TtydStartCancelledError
+}
+
+export function stopManagedTtyd(
+  sessionName: string,
+  opts:
+    | {
+        resetHistory?: boolean
+        invalidateStarts?: true
+        cancellationReason: TtydStartCancellationReason
+      }
+    | {
+        resetHistory?: boolean
+        invalidateStarts: false
+        cancellationReason?: never
+      },
+): void {
+  if (opts.invalidateStarts !== false) {
+    invalidateTtydStarts(sessionName, opts.cancellationReason)
+  }
   const entry = managedTtyd.get(sessionName)
   if (entry) {
     entry.stopped = true
@@ -1244,9 +1974,40 @@ export function stopManagedTtyd(sessionName: string, opts: { resetHistory?: bool
   if (opts.resetHistory !== false) ttydRestartHistory.delete(sessionName)
 }
 
+function invalidateTtydStarts(
+  sessionName: string,
+  reason: TtydStartCancellationReason,
+): void {
+  const pending = pendingTtydStartTokens.get(sessionName)
+  if (pending) {
+    for (const token of pending) {
+      // The first invalidation removed ownership. Later compensation steps
+      // (for example refresh retirement followed by tmux deletion) must not
+      // rewrite that receipt while the same start is still settling.
+      if (!ttydStartCancellationReasons.has(token)) {
+        ttydStartCancellationReasons.set(token, reason)
+      }
+    }
+  }
+  ttydStartTokens.delete(sessionName)
+}
+
+/** Test-only fault injection for one session's otherwise unreachable invariant. */
+export function clearTtydStartCancellationReasonForTests(
+  sessionName: string,
+): void {
+  const pending = pendingTtydStartTokens.get(sessionName)
+  if (!pending) return
+  for (const token of pending) ttydStartCancellationReasons.delete(token)
+}
+
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {
   const entry = managedTtyd.get(sessionName)
   if (entry) entry.onRestart = callback
+}
+
+export function managedTtydPort(sessionName: string): number | null {
+  return managedTtyd.get(sessionName)?.port ?? null
 }
 
 /**
@@ -1333,15 +2094,74 @@ async function doSendPrompt(tmuxName: string, prompt: string): Promise<void> {
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {
   const { timeout = 5000, interval = 500 } = opts
-  const start = Date.now()
-  while (Date.now() - start < timeout) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now()
+    const controller = new AbortController()
+    const abortTimer = setTimeout(() => controller.abort(), remaining)
     try {
-      const response = await fetch(`http://localhost:${port}/`)
+      const response = await fetch(
+        `http://localhost:${port}/`,
+        { signal: controller.signal },
+      )
       if (response.ok) return true
     } catch {
       // Not ready yet
+    } finally {
+      clearTimeout(abortTimer)
     }
-    await new Promise(r => setTimeout(r, interval))
+    const delay = Math.min(interval, Math.max(0, deadline - Date.now()))
+    if (delay > 0) await new Promise(r => setTimeout(r, delay))
   }
   return false
+}
+
+interface TtydSurfaceVerificationDeps {
+  incumbentsOnPort: (port: number) => Promise<TtydIncumbent[]>
+  healthCheck: typeof healthCheck
+}
+
+/**
+ * Prove both sides of the terminal surface: the listening process is the
+ * expected PID attached to the exact tmux session, and its HTTP endpoint is
+ * ready. Recheck process identity after the await so an exit/rebind cannot
+ * smuggle a foreign listener through the readiness gate.
+ */
+export async function verifyTtydSessionSurface(
+  opts: {
+    port: number
+    pid: number | undefined
+    tmuxName: string
+    timeout?: number
+    interval?: number
+  },
+  deps: TtydSurfaceVerificationDeps = {
+    incumbentsOnPort: ttydIncumbentsOnPortStrict,
+    healthCheck,
+  },
+): Promise<'verified' | 'unhealthy' | 'inconclusive'> {
+  // Readiness is the slow side of startup. Wait for ttyd to bind before asking
+  // lsof which process owns the socket, avoiding a race with startTtyd's
+  // intentionally short spawn delay.
+  if (!await deps.healthCheck(
+    opts.port,
+    { timeout: opts.timeout, interval: opts.interval },
+  )) return 'unhealthy'
+  try {
+    const incumbents = await deps.incumbentsOnPort(opts.port)
+    return ttydIncumbentMatchesSession(
+      incumbents,
+      opts.pid,
+      opts.tmuxName,
+    ) ? 'verified' : 'unhealthy'
+  } catch (err) {
+    if (!ttydIdentityInspectionWarned) {
+      ttydIdentityInspectionWarned = true
+      log.warn(
+        'ttyd',
+        `terminal identity verification is unavailable: ${(err as Error).message}`,
+      )
+    }
+    return 'inconclusive'
+  }
 }

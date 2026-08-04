@@ -33,6 +33,7 @@ export {
   setProjectFlag,
   reorderProjects,
   type WorktreeInfo,
+  type CreateWorktreeResult,
   type ProjectMeta,
 } from './workspace'
 export { detectConversationId, ensureResumeReady } from './resume'
@@ -40,4 +41,3 @@ export { reconcileSessionStates, type ReconcileOpts } from './reconcile'
 
 import * as tmuxBackend from './backends/tmux'
 export { tmuxBackend }
-

@@ -6,7 +6,18 @@ import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
-import { handleRequest, ensureMarshalSession, type RouteContext } from './api/routes'
+import {
+  acquirePersistedSessionBackendLeaseForConfig,
+  clearStoppedSessionPort,
+  ensureMarshalSession,
+  finishBootSessionDeletion,
+  handleRequest,
+  invalidatePersistedSessionBackendGenerationForConfig,
+  persistedSessionBackendGenerationForConfig,
+  probeOrRetireSessionBackendForReconcile,
+  reserveBootSessionDeletion,
+  type RouteContext,
+} from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
@@ -21,12 +32,16 @@ import {
   saveActiveSpaceId,
   reconcileSessionStates,
   tmuxBackend,
+  deleteSession,
   getSession,
+  listSessions,
   updateSession,
   interactivePortWindow,
   refreshConfigProblem,
   type TinstarConfig,
+  type Session,
 } from './sessions'
+import type { Run } from '../domain/types'
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
@@ -42,10 +57,13 @@ import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
-import { registerSaloonSubs } from './api/saloonBridge'
+import { rehydrateSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
+import {
+  describeTtydFailure,
+} from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
@@ -56,6 +74,7 @@ import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
+import { createDefaultProviderRegistry } from './providers/lifecycle'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -63,11 +82,590 @@ import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 // accepted as-is — prod only calls initBackend once.
 let shutdownRegistered = false
 
+/** NATS fields mirrored from durable Session truth onto the Run projection.
+ * Historical subjects on disabled sessions are deliberately not live state. */
+export function sessionNatsProjection(
+  session: Pick<Session, 'nats'>,
+): Pick<Run, 'natsEnabled' | 'natsSubject' | 'natsSubscriptions'> {
+  if (!session.nats?.enabled) {
+    return {
+      natsEnabled: false,
+      natsSubject: undefined,
+      natsSubscriptions: undefined,
+    }
+  }
+  return {
+    natsEnabled: true,
+    natsSubject: session.nats.subscriptions[1] ?? session.nats.subscriptions[0],
+    natsSubscriptions: session.nats.subscriptions,
+  }
+}
+
+/**
+ * Rebuild fields whose durable authority is Session during boot. In
+ * particular, Run.port must never resurrect a stale proxy target after a
+ * crash between Session retirement and the debounced docstore write.
+ */
+export function rehydrateRunProjectionFromSession(
+  existingRun: Run,
+  session: Pick<
+    Session,
+    'port' | 'background' | 'nats' | 'natsControlOrphanedAt'
+  >,
+  agentIcon?: string,
+): Run {
+  return {
+    ...existingRun,
+    port: session.port ?? null,
+    background: session.background ?? false,
+    ...sessionNatsProjection(session),
+    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
+    agentIcon: agentIcon ?? existingRun.agentIcon,
+  }
+}
+
+/** Return only sessions that may rejoin live boot-time services. A durable
+ * deletion marker means the record exists solely so a later DELETE can finish
+ * backend cleanup. Purge any stale Run projection immediately, regardless of
+ * whether the NATS callback or the main rehydration loop observes it first. */
+export function getLiveSessionForBoot(
+  docStore: DocumentStore,
+  sessionsDir: string,
+  name: string,
+): Session | null {
+  if (existsSync(join(sessionsDir, name, '.deleting'))) {
+    docStore.deleteRun(name)
+    return null
+  }
+  return getSession(sessionsDir, name)
+}
+
+export function startupReattachStillCurrent(
+  config: TinstarConfig,
+  expectedSession: Pick<Session, 'name' | 'created'>,
+  expectedGeneration: string,
+): boolean {
+  const current = getSession(config.dirs.sessions, expectedSession.name)
+  if (!current) return false
+  return (
+    current.created === expectedSession.created
+    && current.state !== 'stopped'
+    && current.state !== 'creating'
+    && persistedSessionBackendGenerationForConfig(
+      config,
+      expectedSession.name,
+    ) === expectedGeneration
+  )
+}
+
+interface DeletingSessionBootCleanupDeps {
+  deleteTmuxSession: (config: TinstarConfig, session: Session) => Promise<void>
+  getTmuxSessionState: (
+    config: TinstarConfig,
+    sessionName: string,
+  ) => Promise<'exists' | 'missing'>
+  deleteSession: (sessionsDir: string, sessionName: string) => boolean
+  releasePort: (port: number) => void
+}
+
+interface DeletingSessionBootRehydrateDeps extends DeletingSessionBootCleanupDeps {
+  claimPort: (port: number) => void
+  reserveBootSessionDeletion: typeof reserveBootSessionDeletion
+  finishBootSessionDeletion: typeof finishBootSessionDeletion
+}
+
+/**
+ * Make one fail-safe cleanup attempt for durable mid-delete evidence at boot.
+ * A confirmed backend miss finishes the deletion; a live backend or failed
+ * probe retains both the record and its claimed port for an explicit retry.
+ */
+export async function reconcileDeletingSessionOnBoot(
+  config: TinstarConfig,
+  session: Session,
+  deps: DeletingSessionBootCleanupDeps = {
+    deleteTmuxSession: tmuxBackend.deleteTmuxSession,
+    getTmuxSessionState: tmuxBackend.getTmuxSessionState,
+    deleteSession,
+    releasePort: tmuxBackend.releasePort,
+  },
+): Promise<'deleted' | 'retained'> {
+  try {
+    await deps.deleteTmuxSession(config, session)
+  } catch (err) {
+    // A failed teardown command is not itself proof that the backend survived.
+    // The strict probe below is the only authority for destructive cleanup.
+    log.warn(
+      'rehydrate',
+      `partially-deleted session teardown failed: `
+      + `${session.name}: ${(err as Error).message}`,
+    )
+  }
+  try {
+    const backendState = await deps.getTmuxSessionState(config, session.name)
+    if (backendState !== 'missing') {
+      log.warn(
+        'rehydrate',
+        `retaining partially-deleted session with a live backend: ${session.name}`,
+      )
+      return 'retained'
+    }
+  } catch (err) {
+    log.warn(
+      'rehydrate',
+      `retaining partially-deleted session after backend probe failed: `
+      + `${session.name}: ${(err as Error).message}`,
+    )
+    return 'retained'
+  }
+
+  if (!deps.deleteSession(config.dirs.sessions, session.name)) {
+    log.warn(
+      'rehydrate',
+      `retaining partially-deleted session after record cleanup failed: ${session.name}`,
+    )
+    return 'retained'
+  }
+  if (session.port) deps.releasePort(session.port)
+  log.info('rehydrate', `finished partially-deleted session cleanup: ${session.name}`)
+  return 'deleted'
+}
+
+/**
+ * Wire durable deletion evidence into boot ownership, port accounting, strict
+ * backend cleanup, and generation-safe owner release.
+ */
+export async function rehydrateDeletingSessionOnBoot(
+  config: TinstarConfig,
+  name: string,
+  deps: DeletingSessionBootRehydrateDeps = {
+    deleteTmuxSession: tmuxBackend.deleteTmuxSession,
+    getTmuxSessionState: tmuxBackend.getTmuxSessionState,
+    deleteSession,
+    releasePort: tmuxBackend.releasePort,
+    claimPort: tmuxBackend.claimPort,
+    reserveBootSessionDeletion,
+    finishBootSessionDeletion,
+  },
+): Promise<'deleted' | 'retained' | 'conflict'> {
+  const deletingSession = getSession(config.dirs.sessions, name)
+  if (deletingSession?.backend === 'tmux' && deletingSession.port) {
+    deps.claimPort(deletingSession.port)
+  }
+  const cleanupToken = deps.reserveBootSessionDeletion(
+    config.dirs.sessions,
+    config.sessions.prefix,
+    name,
+  )
+  if (!cleanupToken) {
+    log.warn(
+      'rehydrate',
+      `retaining partially-deleted session with conflicting backend ownership: ${name}`,
+    )
+    return 'conflict'
+  }
+
+  const recoverySession = deletingSession ?? { name, port: null } as Session
+  try {
+    const outcome = await reconcileDeletingSessionOnBoot(
+      config,
+      recoverySession,
+      deps,
+    )
+    deps.finishBootSessionDeletion(
+      config.dirs.sessions,
+      name,
+      cleanupToken,
+      outcome,
+    )
+    return outcome
+  } catch (err) {
+    deps.finishBootSessionDeletion(
+      config.dirs.sessions,
+      name,
+      cleanupToken,
+      'retained',
+    )
+    throw err
+  }
+}
+
+export async function afterBootDeletionCleanups<T>(
+  cleanups: readonly Promise<void>[],
+  action: () => Promise<T>,
+): Promise<T> {
+  await Promise.allSettled(cleanups)
+  return action()
+}
+
+export interface VerifiedSessionTtydReattachDeps {
+  identityInspectionUnavailable: () => boolean
+  isIdentityInspectionError: (err: unknown) => boolean
+  findSupersededError: (
+    err: unknown,
+  ) => tmuxBackend.TtydStartSupersededError | null
+  acquireLease: (
+    config: TinstarConfig,
+    name: string,
+    generation: string,
+  ) => { token: string; release: () => void } | null
+  getSession: typeof getSession
+  findPort: (config: TinstarConfig) => Promise<number>
+  reattach: typeof tmuxBackend.reattachTmuxSession
+  isCurrent: typeof startupReattachStillCurrent
+  verifySurface: typeof tmuxBackend.verifyTtydSessionSurface
+  stopTtyd: typeof tmuxBackend.stopManagedTtyd
+  releasePort: typeof tmuxBackend.releasePort
+  updateSession: typeof updateSession
+  tmuxName: typeof tmuxBackend.tmuxSessionName
+  onTtydRestart: typeof tmuxBackend.onTtydRestart
+}
+
+const verifiedSessionTtydReattachDeps: VerifiedSessionTtydReattachDeps = {
+  identityInspectionUnavailable: tmuxBackend.ttydIdentityInspectionUnavailable,
+  isIdentityInspectionError: err =>
+    err instanceof tmuxBackend.TtydIdentityInspectionError,
+  findSupersededError: tmuxBackend.findTtydStartSupersededError,
+  acquireLease: acquirePersistedSessionBackendLeaseForConfig,
+  getSession,
+  findPort: config => tmuxBackend.findPort(interactivePortWindow(config)),
+  reattach: tmuxBackend.reattachTmuxSession,
+  isCurrent: startupReattachStillCurrent,
+  verifySurface: tmuxBackend.verifyTtydSessionSurface,
+  stopTtyd: tmuxBackend.stopManagedTtyd,
+  releasePort: tmuxBackend.releasePort,
+  updateSession,
+  tmuxName: tmuxBackend.tmuxSessionName,
+  onTtydRestart: tmuxBackend.onTtydRestart,
+}
+
+/**
+ * Restore one strictly observed live session's terminal surface.
+ *
+ * This is a two-phase port/publication transaction: verify the existing port,
+ * durably retire it if suspect, verify any replacement, then publish Session
+ * and Run together. Compensation retains claims whenever rollback is uncertain.
+ */
+export async function reattachVerifiedSessionTtydAttempt(
+  config: TinstarConfig,
+  docStore: DocumentStore,
+  name: string,
+  verifiedGeneration: string,
+  deps: VerifiedSessionTtydReattachDeps = verifiedSessionTtydReattachDeps,
+): Promise<boolean> {
+  if (deps.identityInspectionUnavailable()) return false
+  const lease = deps.acquireLease(config, name, verifiedGeneration)
+  if (!lease) return false
+  let freshPort: number | null = null
+  let session: Session | null = null
+  let sessionPublished = false
+  let priorRun: ReturnType<DocumentStore['getRun']> = undefined
+  let runPublicationAttempted = false
+  let reattachSurfaceCompensated = false
+  // A compensation receipt applies only to the surface produced by the most
+  // recent reattach. Later catch handling must not stop that surface twice.
+  const stopReattachSurface = (
+    sessionName: string,
+    cancellationReason: tmuxBackend.TtydStartCancellationReason,
+  ): void => {
+    deps.stopTtyd(sessionName, { cancellationReason })
+    reattachSurfaceCompensated = true
+  }
+  // Every reattach must pass through this wrapper: creating a new surface
+  // invalidates the prior surface's teardown receipt.
+  const reattach = (
+    currentSession: Session,
+    port: number,
+  ): ReturnType<VerifiedSessionTtydReattachDeps['reattach']> => {
+    reattachSurfaceCompensated = false
+    return deps.reattach(config, { session: currentSession, port })
+  }
+  const abandonInconclusiveSurface = (): false => {
+    if (freshPort != null) {
+      stopReattachSurface(
+        session?.name ?? name,
+        'reattach inconclusive-surface compensation',
+      )
+      deps.releasePort(freshPort)
+    }
+    return false
+  }
+  try {
+    session = deps.getSession(config.dirs.sessions, name)
+    if (
+      !session
+      || session.state === 'stopped'
+      || session.state === 'creating'
+    ) return false
+    let port = session.port ?? await deps.findPort(config)
+    if (session.port == null) freshPort = port
+    let result = await reattach(session, port)
+    if (!deps.isCurrent(config, session, lease.token)) {
+      stopReattachSurface(
+        session.name,
+        'reattach lifecycle ownership lost',
+      )
+      if (freshPort != null) deps.releasePort(freshPort)
+      return false
+    }
+    let surfaceState = await deps.verifySurface({
+      port: result.port,
+      pid: result.ttydPid,
+      tmuxName: deps.tmuxName(config, session.name),
+    })
+    if (surfaceState === 'inconclusive') {
+      return abandonInconclusiveSurface()
+    }
+    if (
+      surfaceState === 'unhealthy'
+      && session.port != null
+      && deps.isCurrent(config, session, lease.token)
+    ) {
+      stopReattachSurface(
+        session.name,
+        'reattach unhealthy-surface retirement',
+      )
+      const staleSession = session
+      const stalePort = session.port
+      const staleRun = docStore.getRun(session.name)
+      const clearedSession = deps.updateSession(
+        config.dirs.sessions,
+        session.name,
+        { port: null, ttydPid: null },
+      )
+      if (!clearedSession) {
+        throw new Error(`failed to retire stale port ${stalePort}`)
+      }
+      try {
+        if (staleRun && staleRun.port != null) {
+          docStore.upsertRun(session.name, { ...staleRun, port: null })
+        }
+      } catch (err) {
+        const sessionRolledBack = deps.updateSession(
+          config.dirs.sessions,
+          staleSession.name,
+          {
+            port: staleSession.port,
+            ttydPid: staleSession.ttydPid ?? null,
+          },
+        ) !== null
+        try {
+          if (staleRun) docStore.upsertRun(staleSession.name, staleRun)
+        } catch {
+          // The old claim remains held below when either rollback fails.
+        }
+        if (!sessionRolledBack) {
+          log.warn(
+            'reattach',
+            `${name}: retaining stale port claim after retirement rollback failed`,
+          )
+        }
+        throw err
+      }
+      deps.releasePort(stalePort)
+      session = clearedSession
+      port = await deps.findPort(config)
+      freshPort = port
+      result = await reattach(session, port)
+      if (!deps.isCurrent(config, session, lease.token)) {
+        stopReattachSurface(
+          session.name,
+          'reattach lifecycle ownership lost',
+        )
+        deps.releasePort(port)
+        return false
+      }
+      surfaceState = await deps.verifySurface({
+        port: result.port,
+        pid: result.ttydPid,
+        tmuxName: deps.tmuxName(config, session.name),
+      })
+    }
+    if (surfaceState === 'inconclusive') {
+      return abandonInconclusiveSurface()
+    }
+    if (
+      surfaceState !== 'verified'
+      || !deps.isCurrent(config, session, lease.token)
+    ) {
+      stopReattachSurface(
+        session.name,
+        surfaceState === 'verified'
+          ? 'reattach lifecycle ownership lost'
+          : 'reattach verification compensation',
+      )
+      if (surfaceState === 'verified') {
+        if (freshPort != null) deps.releasePort(freshPort)
+        return false
+      }
+      throw new Error(`ttyd on port ${result.port} did not become ready`)
+    }
+    const updated = deps.updateSession(
+      config.dirs.sessions,
+      session.name,
+      { port: result.port, ttydPid: result.ttydPid ?? null },
+    )
+    if (!updated) {
+      stopReattachSurface(
+        session.name,
+        'reattach publication compensation',
+      )
+      if (freshPort != null) deps.releasePort(freshPort)
+      return false
+    }
+    sessionPublished = true
+    const sessionName = session.name
+    deps.onTtydRestart(sessionName, (newPid) => {
+      const callbackLease = deps.acquireLease(
+        config,
+        sessionName,
+        lease.token,
+      )
+      if (!callbackLease) return
+      try {
+        deps.updateSession(config.dirs.sessions, sessionName, { ttydPid: newPid })
+      } finally {
+        callbackLease.release()
+      }
+    })
+    priorRun = docStore.getRun(session.name)
+    if (priorRun && priorRun.port !== result.port) {
+      runPublicationAttempted = true
+      docStore.upsertRun(session.name, { ...priorRun, port: result.port })
+    }
+    log.info('reattach', `${session.name}: ttyd ready on :${result.port}`)
+    return true
+  } catch (err) {
+    // A newer lifecycle boundary owns whatever terminal survives, but cannot
+    // inherit our allocator claim: findPort skips claimed ports and verifies a
+    // real bind before reuse. Return the fresh claim without stopping a surface
+    // that may already belong to the winning boundary.
+    const superseded = deps.findSupersededError(err)
+    if (superseded) {
+      if (freshPort != null) deps.releasePort(freshPort)
+      if (deps.isIdentityInspectionError(superseded.cause)) {
+        log.warn(
+          'reattach',
+          `${name}: identity inspection failed while reattach was superseded: `
+            + `${(superseded.cause as Error).message}`,
+        )
+      }
+      log.info(
+        'reattach',
+        `${name}: reattach superseded at ${superseded.stage}`
+          + ' by a newer lifecycle boundary',
+      )
+      return false
+    }
+    // Strict host-inspection failures are explicitly inconclusive: reattach
+    // has not created a replacement, so tearing down the incumbent would turn
+    // an observation outage into a terminal outage.
+    const inspectionInconclusive = deps.isIdentityInspectionError(err)
+    if (!inspectionInconclusive && !reattachSurfaceCompensated) {
+      stopReattachSurface(
+        name,
+        'reattach failure compensation',
+      )
+    }
+    let rollbackComplete = true
+    if (sessionPublished && session) {
+      try {
+        rollbackComplete = deps.updateSession(
+          config.dirs.sessions,
+          session.name,
+          {
+            port: session.port ?? null,
+            ttydPid: session.ttydPid ?? null,
+          },
+        ) !== null
+      } catch (rollbackErr) {
+        rollbackComplete = false
+        log.warn(
+          'reattach',
+          `${name}: failed to roll back Session publication: `
+          + `${(rollbackErr as Error).message}`,
+        )
+      }
+    }
+    if (runPublicationAttempted && priorRun) {
+      try {
+        docStore.upsertRun(name, priorRun)
+      } catch (rollbackErr) {
+        rollbackComplete = false
+        log.warn(
+          'reattach',
+          `${name}: failed to roll back Run projection: `
+          + `${(rollbackErr as Error).message}`,
+        )
+      }
+    }
+    if (freshPort != null) {
+      if (rollbackComplete) {
+        deps.releasePort(freshPort)
+      } else {
+        log.warn(
+          'reattach',
+          `${name}: retaining port ${freshPort} after publication rollback failed`,
+        )
+      }
+    }
+    log.warn(
+      'reattach',
+      `${name}: failed to reattach: ${describeTtydFailure(err)}`,
+    )
+    return false
+  } finally {
+    lease.release()
+  }
+}
+
+/** Serialize reattach attempts by session name while allowing different names in parallel. */
+export function createSessionTtydReattachSingleFlight(
+  operation: (name: string, generation: string) => Promise<boolean>,
+): (name: string, generation: string) => Promise<boolean> {
+  const inFlight = new Map<string, {
+    tail: Promise<boolean>
+    byGeneration: Map<string, Promise<boolean>>
+  }>()
+  return (name, generation) => {
+    const existingState = inFlight.get(name)
+    const existingAttempt = existingState?.byGeneration.get(generation)
+    if (existingAttempt) return existingAttempt
+    // A newer backend generation must not collapse onto a stale attempt.
+    // Queue it behind the current name-scoped mutation, then run with its own
+    // lease once the older attempt has released.
+    const attempt = (
+      existingState
+        ? existingState.tail.catch(() => false).then(
+          () => operation(name, generation),
+        )
+        : operation(name, generation)
+    ).finally(() => {
+      const current = inFlight.get(name)
+      if (!current) return
+      if (current.byGeneration.get(generation) === attempt) {
+        current.byGeneration.delete(generation)
+      }
+      if (current.tail === attempt && current.byGeneration.size === 0) {
+        inFlight.delete(name)
+      }
+    })
+    const state = existingState ?? {
+      tail: attempt,
+      byGeneration: new Map<string, Promise<boolean>>(),
+    }
+    state.tail = attempt
+    state.byGeneration.set(generation, attempt)
+    inFlight.set(name, state)
+    return attempt
+  }
+}
+
 export function initBackend(): RouteContext {
   // Instantiate core components
   const bus = new EventBus()
   const docStore = new DocumentStore()
   const otelStore = new OTelStore()
+  const providerRegistry = createDefaultProviderRegistry()
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
@@ -176,9 +774,9 @@ export function initBackend(): RouteContext {
       const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of sessEntries) {
         if (!entry.isDirectory()) continue
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
-        registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
+        rehydrateSaloonSubs(natsTraffic, sess)
       }
     }
 
@@ -205,7 +803,7 @@ export function initBackend(): RouteContext {
       const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of healthEntries) {
         if (!entry.isDirectory()) continue
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
         if (sess?.nats?.enabled) natsHealth.trackSession(sess.name)
       }
       natsHealth.start()
@@ -237,6 +835,7 @@ export function initBackend(): RouteContext {
   }
 
   let sessionConfig: TinstarConfig | null = null
+  const bootDeletionCleanups: Promise<void>[] = []
 
   // --- Session management ---
   if (process.env.TINSTAR_NO_SESSIONS !== '1') {
@@ -328,12 +927,27 @@ export function initBackend(): RouteContext {
       for (const entry of sessEntries) {
         if (!entry.isDirectory()) continue
         const deletingMarker = join(sessionConfig.dirs.sessions, entry.name, '.deleting')
-        if (existsSync(deletingMarker)) {
-          log.info('rehydrate', `cleaning up partially-deleted session dir: ${entry.name}`)
-          rmSync(join(sessionConfig.dirs.sessions, entry.name), { recursive: true, force: true })
+        const sess = getLiveSessionForBoot(docStore, sessionConfig.dirs.sessions, entry.name)
+        if (!sess && existsSync(deletingMarker)) {
+          // The marker is durable evidence that backend teardown may still be
+          // incomplete. Hide its Run and NATS projections, reclaim its port
+          // immediately, then make one strict backend probe: confirmed absence
+          // finishes deletion while a live/unknown result remains recoverable.
+          const cleanup = rehydrateDeletingSessionOnBoot(
+            sessionConfig,
+            entry.name,
+          )
+            .then(() => undefined)
+            .catch(err => {
+              log.warn(
+                'rehydrate',
+                `partially-deleted session cleanup crashed: `
+                + `${entry.name}: ${(err as Error).message}`,
+              )
+            })
+          bootDeletionCleanups.push(cleanup)
           continue
         }
-        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
         // Reclaim any port already bound to this session so a different session's
         // start path can't grab it via findPort() and trigger a ttyd kill war.
@@ -341,7 +955,7 @@ export function initBackend(): RouteContext {
           tmuxBackend.claimPort(sess.port)
         }
         const existingRun = docStore.getRun(sess.name)
-        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
+        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.id === sess.cliTemplate) : null
         if (!existingRun) {
           docStore.upsertRun(sess.name, {
             id: sess.name,
@@ -360,11 +974,9 @@ export function initBackend(): RouteContext {
             port: sess.port ?? null,
             backend: sess.backend ?? null,
             agentIcon: tpl?.icon,
-            natsEnabled: sess.nats?.enabled ?? false,
             // Direct subject is the second subscription (index 1) in two-tier model
-            // Format: [broadcast, direct] where direct = broadcast + session name
-            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
-            natsSubscriptions: sess.nats?.subscriptions,
+            // Format: [broadcast, direct] where direct = broadcast + session name.
+            ...sessionNatsProjection(sess),
             natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             taskId: '',
             worktreeId: '',
@@ -386,15 +998,11 @@ export function initBackend(): RouteContext {
           // the (status, blocked) pair so a persisted blocked flip re-derives
           // attention (AE4) — mirroring it here first would trip the mutator's
           // equality short-circuit and leave attention stale.
-          const refreshed = {
-            ...existingRun,
-            background: sess.background ?? false,
-            natsEnabled: sess.nats?.enabled ?? false,
-            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
-            natsSubscriptions: sess.nats?.subscriptions,
-            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
-            agentIcon: tpl?.icon ?? existingRun.agentIcon,
-          }
+          const refreshed = rehydrateRunProjectionFromSession(
+            existingRun,
+            sess,
+            tpl?.icon,
+          )
           docStore.upsertRun(sess.name, refreshed)
           const persistedBlocked = sess.blocked ?? false
           if (runNeedsStatusCorrection(existingRun, sess.state, persistedBlocked)) {
@@ -434,6 +1042,9 @@ export function initBackend(): RouteContext {
       // current value, and forces it false on `stopped` — the only state
       // reconcile emits — so a dead session can't keep a blocked flag.
       const onStateChanged = (name: string, state: SessionStatus, blocked?: boolean) => {
+        if (state === 'stopped') {
+          clearStoppedSessionPort(cfg, docStore, name)
+        }
         docStore.updateRunStatus(name, state, blocked)
         readyQueue.onStatusChange(name, state)
         sse.setReadyQueue(readyQueue.getQueue())
@@ -445,31 +1056,41 @@ export function initBackend(): RouteContext {
         })
       }
 
+      const reattachVerifiedSessionTtyd = createSessionTtydReattachSingleFlight(
+        (name, generation) =>
+          reattachVerifiedSessionTtydAttempt(
+            cfg,
+            docStore,
+            name,
+            generation,
+          ),
+      )
+
+      const confirmedLiveSessionGenerations = new Map<string, string>()
       reconcileSessionStates(cfg.dirs.sessions, {
-        getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
+        getTmuxSessionState: name =>
+          probeOrRetireSessionBackendForReconcile(cfg, name),
+        onTmuxSessionStateObserved: (name, observation) => {
+          if (observation.state === 'exists') {
+            confirmedLiveSessionGenerations.set(name, observation.generation)
+          }
+        },
+        beforeStateChanged: (name, _state, observation) =>
+          invalidatePersistedSessionBackendGenerationForConfig(
+            cfg,
+            name,
+            observation.generation,
+          ),
         onStateChanged: (name, state) => {
           onStateChanged(name, state)
           log.info('reconcile', `${name}: startup correction to ${state}`)
         },
-      }).then(async (sessions) => {
-        // Reattach ttyd for tmux sessions that survived a server crash
-        for (const session of sessions) {
-          if (session.state === 'stopped' || session.state === 'creating') continue
-          const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
-          try {
-            const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
-            updateSession(cfg.dirs.sessions, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
-            tmuxBackend.onTtydRestart(session.name, (newPid) => {
-              updateSession(cfg.dirs.sessions, session.name, { ttydPid: newPid })
-            })
-            const run = docStore.getRun(session.name)
-            if (run && run.port !== result.port) {
-              docStore.upsertRun(session.name, { ...run, port: result.port })
-            }
-            log.info('reattach', `${session.name}: ttyd restarted on :${result.port}`)
-          } catch (err) {
-            log.warn('reattach', `${session.name}: failed to reattach: ${(err as Error).message}`)
-          }
+      }).then(async () => {
+        // Only publish a terminal after a strict positive tmux observation and
+        // a successful ttyd readiness check. Inconclusive boot probes remain
+        // fail-closed here and are retried by the periodic reconciliation.
+        for (const [name, generation] of confirmedLiveSessionGenerations) {
+          await reattachVerifiedSessionTtyd(name, generation)
         }
 
         // GC ttyds left squatting ports by prior backend lifecycles (their tmux
@@ -479,8 +1100,11 @@ export function initBackend(): RouteContext {
           .then(n => { if (n > 0) log.info('reconcile', `startup orphan sweep reaped ${n} ttyd(s)`) })
           .catch(err => log.warn('reconcile', `startup orphan sweep failed: ${(err as Error).message}`))
 
+        // Re-read after reattachment: deletion can start while the startup
+        // probes are in flight, and deletion-marked records are not live.
+        const currentSessions = await listSessions(cfg.dirs.sessions)
         // Seed the ready queue from all current session states so '[' works immediately after restart
-        for (const session of sessions) {
+        for (const session of currentSessions) {
           readyQueue.onStatusChange(session.name, session.state)
         }
         sse.setReadyQueue(readyQueue.getQueue())
@@ -503,19 +1127,63 @@ export function initBackend(): RouteContext {
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
           resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
+          captureBackendGeneration: name =>
+            persistedSessionBackendGenerationForConfig(cfg, name),
+          isBackendGenerationCurrent: (name, generation) =>
+            persistedSessionBackendGenerationForConfig(cfg, name) === generation,
+          providerRegistry,
         })
         watcher.start()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
 
       // Periodic session state reconciliation (30s)
       setInterval(() => {
+        const verifiedLiveGenerations = new Map<string, string>()
         reconcileSessionStates(cfg.dirs.sessions, {
-          getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
+          getTmuxSessionState: name =>
+            probeOrRetireSessionBackendForReconcile(cfg, name),
+          onTmuxSessionStateObserved: (name, observation) => {
+            if (observation.state === 'exists') {
+              verifiedLiveGenerations.set(name, observation.generation)
+            }
+          },
+          beforeStateChanged: (name, _state, observation) =>
+            invalidatePersistedSessionBackendGenerationForConfig(
+              cfg,
+              name,
+              observation.generation,
+            ),
           onStateChanged: (name, state) => {
             onStateChanged(name, state)
             log.info('reconcile', `${name}: state corrected to ${state}`)
           },
-        }).catch(err => console.error('[reconcile] error:', (err as Error).message))
+        })
+          .then(async () => {
+            await Promise.allSettled(
+              [...verifiedLiveGenerations].map(async ([name, generation]) => {
+                const session = getSession(cfg.dirs.sessions, name)
+                if (
+                  !session
+                  || session.state === 'stopped'
+                  || session.state === 'creating'
+                ) return
+                if (tmuxBackend.ttydIdentityInspectionUnavailable()) return
+                const surfaceState = session.port == null
+                  ? 'unhealthy'
+                  : await tmuxBackend.verifyTtydSessionSurface({
+                    port: session.port,
+                    pid: session.ttydPid ?? undefined,
+                    tmuxName: tmuxBackend.tmuxSessionName(cfg, session.name),
+                    timeout: 750,
+                    interval: 150,
+                  })
+                if (surfaceState === 'unhealthy') {
+                  await reattachVerifiedSessionTtyd(name, generation)
+                }
+              }),
+            )
+          })
+          .catch(err => console.error('[reconcile] error:', (err as Error).message))
         // Drain any ttyds whose tmux session has since died, so the port pool
         // can't slowly fill with squatters between restarts.
         tmuxBackend.reapOrphanTtyds(cfg.sessions.prefix)
@@ -655,15 +1323,20 @@ export function initBackend(): RouteContext {
     simulatorTestApiEnabled: fastSim,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
+    providerRegistry,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
   }
 
   // Auto-start the marshal so it's always available without a UI nudge.
-  // Deferred so it doesn't block server startup or interleave with the
-  // session rehydration that just ran above.
+  // Deferred so it doesn't block server startup. Await any durable deletion
+  // retries first: a successfully cleaned stale marshal must be recreated
+  // after its boot owner releases the name, not rejected once and forgotten.
   setImmediate(() => {
-    ensureMarshalSession(ctx)
+    afterBootDeletionCleanups(
+      bootDeletionCleanups,
+      () => ensureMarshalSession(ctx),
+    )
       .then(result => {
         if (!result.ok) log.warn('marshal-boot', `auto-start failed: ${result.error.code} ${result.error.message}`)
         else log.info('marshal-boot', `marshal session ready: ${result.data.state}`)

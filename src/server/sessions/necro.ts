@@ -18,7 +18,12 @@ export interface NecroResult {
   /** Name of the revived (re-materialized) session, when revivable. */
   sessionName?: string
   /** Why revive was refused, when not revivable. */
-  reason?: 'transcript-unavailable'
+  reason?:
+    | 'transcript-unavailable'
+    | 'provider-unsupported'
+    | 'template-unavailable'
+    | 'provider-unavailable'
+    | 'provider-mismatch'
   /** True when the original worktree was gone and revive fell back to a
    *  substitute cwd — the agent remembers the conversation but its code context
    *  is absent (AE1). */
@@ -37,6 +42,18 @@ export interface NecroDeps {
   hasSnapshot: (convId: string) => boolean
   /** Whether a session dir with this name currently exists (live or stopped). */
   sessionExists: (name: string) => boolean
+  /** Optional atomic name claim shared across create/revive paths. The coupled
+   * capability makes every accepted claim finish as committed or aborted. */
+  nameReservation?: {
+    /** Return a generation token, or null when another writer claimed the name. */
+    reserve: (name: string) => string | null
+    /** Commit ownership, release a clean abort, or retain an orphaned backend. */
+    finish: (
+      name: string,
+      token: string,
+      outcome: 'committed' | 'aborted' | 'orphaned',
+    ) => void
+  }
   /** Whether a filesystem path still exists (used to test the worktree). */
   pathExists: (path: string) => boolean
   /** Fully launch the revived session: place the transcript at the resume path,
@@ -50,7 +67,7 @@ export interface NecroDeps {
    *  revive doesn't leave an orphan that later name-collision probes skip over.
    *  Async so the caller can tear down the tmux/ttyd backend and release the port
    *  before removing the session dir. */
-  onLaunchFailed?: (name: string) => void | Promise<void>
+  onLaunchFailed?: (name: string) => boolean | void | Promise<boolean | void>
 }
 
 /** Pick a session name for the revived agent that doesn't collide with a live one.
@@ -75,20 +92,53 @@ export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps)
     return { revivable: false, reason: 'transcript-unavailable' }
   }
 
-  const name = reviveName(tombstone.sessionName, deps.sessionExists)
-
-  // AE1: original worktree may be gone — fall back to no cwd (caller resolves one).
+  // Probe the old workspace before claiming a live session name. A filesystem
+  // probe may throw, and no reservation should exist yet if it does.
   const hasWorkspace = !!tombstone.workspacePath && deps.pathExists(tombstone.workspacePath)
   const workspacePath = hasWorkspace ? tombstone.workspacePath! : null
+
+  const rejectedNames = new Set<string>()
+  let name: string
+  let reservationToken: string | null = null
+  for (;;) {
+    name = reviveName(
+      tombstone.sessionName,
+      candidate => rejectedNames.has(candidate) || deps.sessionExists(candidate),
+    )
+    if (!deps.nameReservation) break
+    reservationToken = deps.nameReservation.reserve(name)
+    if (reservationToken) {
+      break
+    }
+    rejectedNames.add(name)
+  }
 
   // Bind the stored convId (fidelity) — resume against exactly this conversation.
   // On failure, roll back the half-created session and leave the grave intact
   // (not consumed) so a retry can try again.
+  let launchSucceeded = false
+  let cleanupConfirmed = deps.onLaunchFailed === undefined
   try {
-    await deps.launch({ name, convId: tombstone.convId, workspacePath })
-  } catch (err) {
-    await deps.onLaunchFailed?.(name)
-    throw err
+    try {
+      await deps.launch({ name, convId: tombstone.convId, workspacePath })
+      launchSucceeded = true
+    } catch (err) {
+      const cleanupResult = await deps.onLaunchFailed?.(name)
+      cleanupConfirmed = cleanupResult !== false
+      throw err
+    }
+  } finally {
+    if (reservationToken) {
+      deps.nameReservation!.finish(
+        name,
+        reservationToken,
+        launchSucceeded
+          ? 'committed'
+          : cleanupConfirmed
+            ? 'aborted'
+            : 'orphaned',
+      )
+    }
   }
 
   // Raised — the grave leaves the graveyard. Re-deleting the live session will

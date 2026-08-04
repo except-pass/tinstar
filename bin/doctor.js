@@ -141,6 +141,11 @@ async function doctor() {
       return { status: 'pass', label: `ttyd${v ? ' ' + v : ''}` }
     })(),
     (() => {
+      const out = cmdExists('lsof')
+      if (!out) return { status: 'fail', label: 'lsof — not found', detail: 'terminal ownership cannot be verified' }
+      return { status: 'pass', label: 'lsof' }
+    })(),
+    (() => {
       const out = cmdExists('expect')
       if (!out) return { status: 'warn', label: 'expect — not installed', detail: 'multi-agent NATS prompts require manual accept' }
       const v = cmdVersion('expect', ['-v']) || ''

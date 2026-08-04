@@ -1,4 +1,5 @@
 import type { NatsTrafficBridge } from '../nats-traffic'
+import type { Session } from '../sessions/session'
 
 function saloonKey(sessionName: string): string {
   return `saloon:${sessionName}`
@@ -19,6 +20,16 @@ export function unregisterSaloonSubs(
 ): void {
   if (!bridge) return
   bridge.removeWidget(saloonKey(sessionName))
+}
+
+/** Rehydrate only live bus membership. Disabled sessions may retain historical
+ * subjects in old records, but those are not active subscriptions. */
+export function rehydrateSaloonSubs(
+  bridge: NatsTrafficBridge | undefined,
+  session: Pick<Session, 'name' | 'nats'>,
+): void {
+  if (!session.nats?.enabled) return
+  registerSaloonSubs(bridge, session.name, session.nats.subscriptions)
 }
 
 // Full-bus wildcard. NATS `>` matches one-or-more trailing tokens, so this

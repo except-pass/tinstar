@@ -14,12 +14,47 @@ import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
 import { type Project, parseProjects, sortByOrder, reorderByDrop } from '../lib/projects'
 
 interface CliTemplate {
+  id: string
   name: string
   icon?: string
   adapter?: string
   telemetry?: boolean
+  telemetryState: 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
   startCmd: string
   resumeCmd: string
+}
+
+function telemetryBadge(template: CliTemplate): {
+  label: string
+  title: string
+  className: string
+} {
+  switch (template.telemetryState) {
+    case 'enabled':
+      return {
+        label: 'telem',
+        title: 'OTLP telemetry enabled',
+        className: 'text-emerald-600',
+      }
+    case 'disabled':
+      return {
+        label: 'no telem',
+        title: 'OTLP telemetry disabled',
+        className: 'text-slate-600',
+      }
+    case 'unsupported':
+      return {
+        label: 'n/a',
+        title: 'This provider does not support OTLP telemetry',
+        className: 'text-slate-600',
+      }
+    default:
+      return {
+        label: 'n/a',
+        title: 'Provider telemetry capability is unavailable',
+        className: 'text-slate-600',
+      }
+  }
 }
 
 type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets' | 'plugins'
@@ -72,7 +107,7 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
   const [newTplAdapter, setNewTplAdapter] = useState('generic')
   const [newTplStart, setNewTplStart] = useState('')
   const [newTplResume, setNewTplResume] = useState('')
-  const [newTplTelemetry, setNewTplTelemetry] = useState(true)
+  const [newTplTelemetry, setNewTplTelemetry] = useState<boolean | undefined>(undefined)
   const [templateError, setTemplateError] = useState<string | null>(null)
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
@@ -225,19 +260,27 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
     setNewTplName('')
     setNewTplIcon('')
     setNewTplAdapter('generic')
-    setNewTplTelemetry(true)
+    setNewTplTelemetry(undefined)
     setNewTplStart('')
     setNewTplResume('')
     fetchTemplates()
-  }, [newTplName, newTplStart, newTplResume, fetchTemplates])
+  }, [
+    newTplName,
+    newTplIcon,
+    newTplAdapter,
+    newTplTelemetry,
+    newTplStart,
+    newTplResume,
+    fetchTemplates,
+  ])
 
-  const handleDeleteTemplate = useCallback(async (name: string) => {
-    await apiFetch(`/api/cli-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  const handleDeleteTemplate = useCallback(async (id: string) => {
+    await apiFetch(`/api/cli-templates/${encodeURIComponent(id)}`, { method: 'DELETE' })
     fetchTemplates()
   }, [fetchTemplates])
 
   const handleEditTemplate = useCallback((t: CliTemplate) => {
-    setEditingTemplate(t.name)
+    setEditingTemplate(t.id)
     setEditDraft({ ...t })
   }, [])
 
@@ -472,9 +515,9 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
               {templates.length === 0 ? (
                 <div className="text-xs text-slate-500 py-2">No templates configured.</div>
               ) : (
-                templates.map(t => editingTemplate === t.name && editDraft ? (
+                templates.map(t => editingTemplate === t.id && editDraft ? (
                   <div
-                    key={t.name}
+                    key={t.id}
                     className="px-3 py-3 bg-surface-base rounded border border-primary/30 space-y-2"
                   >
                     <div className="flex gap-2">
@@ -504,25 +547,30 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                       </div>
                       <div className="w-24">
                         <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
-                        <select
+                        <input
+                          type="text"
+                          list="provider-adapter-ids"
                           value={editDraft.adapter ?? 'generic'}
                           onChange={e => setEditDraft({ ...editDraft, adapter: e.target.value })}
+                          placeholder="provider id"
                           className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-                        >
-                          <option value="claude">claude</option>
-                          <option value="codex">codex</option>
-                          <option value="generic">generic</option>
-                        </select>
+                        />
                       </div>
                     </div>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editDraft.telemetry !== false}
-                        onChange={e => setEditDraft({ ...editDraft, telemetry: e.target.checked })}
-                        className="accent-primary w-3.5 h-3.5"
-                      />
-                      <span className="text-xs text-slate-300">Enable telemetry</span>
+                    <label className="flex items-center gap-2">
+                      <span className="text-xs text-slate-300">Telemetry</span>
+                      <select
+                        value={editDraft.telemetry == null ? 'default' : String(editDraft.telemetry)}
+                        onChange={e => setEditDraft({
+                          ...editDraft,
+                          telemetry: e.target.value === 'default' ? undefined : e.target.value === 'true',
+                        })}
+                        className="px-2 py-1 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                      >
+                        <option value="default">Provider default</option>
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                      </select>
                       <span className="text-2xs text-slate-600">(OTLP metrics export)</span>
                     </label>
                     <div>
@@ -560,7 +608,7 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                   </div>
                 ) : (
                   <div
-                    key={t.name}
+                    key={t.id}
                     className="px-3 py-2 bg-surface-base rounded border border-white/5 group cursor-pointer hover:border-white/10"
                     onClick={() => handleEditTemplate(t)}
                   >
@@ -573,12 +621,18 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                       <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
                         {t.name}
                       </span>
+                      <span className="text-2xs text-slate-600 font-mono" title="Stable template ID">
+                        {t.id}
+                      </span>
                       {t.adapter && (
                         <span className="text-2xs text-slate-600 font-mono">{t.adapter}</span>
                       )}
-                      {t.telemetry !== false && (
-                        <span className="text-2xs text-emerald-600" title="OTLP telemetry enabled">telem</span>
-                      )}
+                      <span
+                        className={`text-2xs ${telemetryBadge(t).className}`}
+                        title={telemetryBadge(t).title}
+                      >
+                        {telemetryBadge(t).label}
+                      </span>
                       <span className="flex-1" />
                       <button
                         className="text-xs text-slate-500 hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mr-1"
@@ -589,7 +643,7 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                       </button>
                       <button
                         className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                        onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.name) }}
+                        onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.id) }}
                         aria-label={`Remove ${t.name}`}
                       >
                         ×
@@ -635,27 +689,39 @@ export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }
                 </div>
                 <div className="w-24">
                   <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
-                  <select
+                  <input
+                    type="text"
+                    list="provider-adapter-ids"
                     value={newTplAdapter}
-                    onChange={e => setNewTplAdapter(e.target.value)}
+                    onChange={e => {
+                      setNewTplAdapter(e.target.value)
+                      setNewTplTelemetry(undefined)
+                    }}
+                    placeholder="provider id"
                     className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-                  >
-                    <option value="claude">claude</option>
-                    <option value="codex">codex</option>
-                    <option value="generic">generic</option>
-                  </select>
+                  />
+                  <datalist id="provider-adapter-ids">
+                    <option value="claude" />
+                    <option value="codex" />
+                    <option value="generic" />
+                  </datalist>
                 </div>
               </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newTplTelemetry}
-                  onChange={e => setNewTplTelemetry(e.target.checked)}
-                  className="accent-primary w-3.5 h-3.5"
-                />
-                <span className="text-xs text-slate-300">Enable telemetry</span>
-                <span className="text-2xs text-slate-600">(OTLP metrics export)</span>
-              </label>
+                <label className="flex items-center gap-2">
+                  <span className="text-xs text-slate-300">Telemetry</span>
+                  <select
+                    value={newTplTelemetry == null ? 'default' : String(newTplTelemetry)}
+                    onChange={e => setNewTplTelemetry(
+                      e.target.value === 'default' ? undefined : e.target.value === 'true',
+                    )}
+                    className="px-2 py-1 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                  >
+                    <option value="default">Provider default</option>
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </select>
+                  <span className="text-2xs text-slate-600">(OTLP metrics export)</span>
+                </label>
               <div>
                 <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Start command</label>
                 <input

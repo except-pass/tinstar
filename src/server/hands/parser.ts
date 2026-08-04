@@ -32,7 +32,7 @@ export function parseHandFile(content: string): Hand | null {
     return {
       name,
       description: (frontmatter.description as string) ?? '',
-      cliTemplate: (frontmatter.cliTemplate as string) ?? 'Claude (multi-agent)',
+      cliTemplate: (frontmatter.cliTemplate as string) ?? 'claude-multi-agent',
       prompt,
       ...(frontmatter.systemPrompt ? { systemPrompt: frontmatter.systemPrompt as string } : {}),
     }

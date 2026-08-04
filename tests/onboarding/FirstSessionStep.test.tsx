@@ -25,7 +25,7 @@ describe('FirstSessionStep', () => {
     expect(screen.getByText('tinstar')).toBeTruthy()
   })
 
-  it('POSTs to /api/sessions with project + cliTemplate=claude', async () => {
+  it('POSTs to /api/sessions with the stable Claude template ID', async () => {
     fetchMock
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, data: { tinstar: '/repo/tinstar' } }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
@@ -35,6 +35,6 @@ describe('FirstSessionStep', () => {
     fireEvent.click(screen.getByTestId('session-start'))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     const body = JSON.parse(fetchMock.mock.calls[1]![1].body)
-    expect(body).toMatchObject({ name: 'first', project: 'tinstar', cliTemplate: 'claude', backend: 'tmux' })
+    expect(body).toMatchObject({ name: 'first', project: 'tinstar', cliTemplate: 'claude-multi-agent', backend: 'tmux' })
   })
 })

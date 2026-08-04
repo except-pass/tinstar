@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import { createSession, getSession } from '../../sessions/session'
+import { tmuxBackend } from '../../sessions'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
 import type { Run, RecapEntry, Tombstone } from '../../../domain/types'
 import type { BusEvent } from '../../types'
@@ -17,6 +18,7 @@ interface Harness {
   docStore: DocumentStore
   events: BusEvent[]
   sessionsDir: string
+  sessionConfig: RouteContext['sessionConfig']
   fetch(path: string, init?: RequestInit): Promise<Response>
   close(): Promise<void>
 }
@@ -42,7 +44,7 @@ function createTestServer(root: string): Harness {
     bus: { emit: (ev: BusEvent) => events.push(ev) },
     natsTraffic: undefined,
     natsHealth: undefined,
-    readyQueue: { onDelete: () => {}, getQueue: () => [] },
+    readyQueue: { onDelete: () => {}, onStatusChange: () => {}, getQueue: () => [] },
     sse: { setReadyQueue: () => {}, broadcastReadyQueueUpdate: () => {} },
   } as unknown as RouteContext
 
@@ -60,6 +62,7 @@ function createTestServer(root: string): Harness {
     docStore,
     events,
     sessionsDir: cfg.dirs.sessions,
+    sessionConfig: cfg as unknown as RouteContext['sessionConfig'],
     async fetch(path, init) {
       await ready
       const headers = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> ?? {}) }
@@ -194,15 +197,82 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
     }
   })
 
-  it('does not tombstone a session with no convId', async () => {
+  it('persists provider and template identity so revive cannot cross providers', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, {
+        name: 'codex-retired',
+        backend: 'tmux',
+        adapter: 'codex',
+        cliTemplate: 'Codex',
+      })
+      const convId = getSession(srv.sessionsDir, 'codex-retired')!.conversation.id!
+      seedRun(srv.docStore, 'codex-retired', recap())
+
+      expect((await srv.fetch('/api/sessions/codex-retired', { method: 'DELETE' })).status)
+        .toBe(200)
+
+      expect(srv.docStore.getTombstone(convId)).toMatchObject({
+        provider: 'codex',
+        cliTemplate: 'Codex',
+      })
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects deletion of a missing session without creating a tombstone', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
     const srv = createTestServer(root)
     try {
       // No session dir created → getSession returns null → no convId → nothing to necro.
       const res = await srv.fetch('/api/sessions/ghost', { method: 'DELETE' })
-      expect(res.status).toBe(200)
+      expect(res.status).toBe(404)
       expect(srv.docStore.getAllTombstones()).toHaveLength(0)
       expect(srv.events.some(e => e.type === 'managed_session.retired')).toBe(false)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('deletes a docstore-only run without requiring a terminal session record', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      seedRun(srv.docStore, 'plugin-run', recap())
+
+      const res = await srv.fetch('/api/sessions/plugin-run', { method: 'DELETE' })
+
+      expect(res.status).toBe(200)
+      expect(srv.docStore.getRun('plugin-run')).toBeUndefined()
+      expect(srv.events).toContainEqual(expect.objectContaining({
+        type: 'managed_session.deleted',
+        payload: { name: 'plugin-run' },
+      }))
+      expect(srv.docStore.getAllTombstones()).toHaveLength(0)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('deletes a simulator run addressed by its differing session id', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      seedRun(srv.docStore, 'R-242', recap())
+      srv.docStore.upsertRun('R-242', {
+        ...srv.docStore.getRun('R-242')!,
+        sessionId: 'CLD-4093',
+      })
+
+      const res = await srv.fetch('/api/sessions/CLD-4093', { method: 'DELETE' })
+
+      expect(res.status).toBe(200)
+      expect(srv.docStore.getRun('R-242')).toBeUndefined()
     } finally {
       await srv.close()
       rmSync(root, { recursive: true, force: true })
@@ -312,6 +382,105 @@ describe('GET/POST /api/graveyard', () => {
       expect(body.data.revivable).toBe(false)
       expect(body.data.reason).toBe('transcript-unavailable')
     } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses non-Claude graves instead of launching Claude with a foreign conversation id', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone({
+        ...makeTomb('codex-grave', 'Codex lifecycle work'),
+        provider: 'codex',
+        cliTemplate: 'Codex',
+      })
+
+      const res = await srv.fetch('/api/graveyard/codex-grave/revive', { method: 'POST' })
+
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({
+        data: { revivable: false, reason: 'provider-unsupported' },
+      })
+      expect(srv.docStore.getTombstone('codex-grave')).toBeDefined()
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a Claude grave when its stable template ID is no longer configured', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone({
+        ...makeTomb('claude-custom-grave', 'Custom Claude lifecycle work'),
+        provider: 'claude',
+        cliTemplate: 'deleted-custom-claude',
+      })
+
+      const res = await srv.fetch('/api/graveyard/claude-custom-grave/revive', { method: 'POST' })
+
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({
+        data: { revivable: false, reason: 'template-unavailable' },
+      })
+      expect(srv.docStore.getTombstone('claude-custom-grave')).toBeDefined()
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('revives through the tombstone template ID instead of the default Claude command', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    const findPort = vi.spyOn(tmuxBackend, 'findPort').mockResolvedValue(6123)
+    const start = vi.spyOn(tmuxBackend, 'startTmuxSession').mockResolvedValue({
+      port: 6123,
+      ttydPid: 4242,
+    })
+    const onRestart = vi.spyOn(tmuxBackend, 'onTtydRestart').mockImplementation(() => {})
+    try {
+      const template = {
+        id: 'custom-claude',
+        name: 'My renamed Claude',
+        adapter: 'claude',
+        telemetry: false,
+        startCmd: 'custom-claude start -- {prompt}',
+        resumeCmd: 'custom-claude resume {sessionId}',
+      }
+      srv.sessionConfig!.cliTemplates.push(template)
+      srv.docStore.upsertTombstone({
+        ...makeTomb('claude-custom-live', 'Custom Claude lifecycle work'),
+        provider: 'claude',
+        cliTemplate: template.id,
+      })
+      const snapshot = graveyardSnapshotPath(root, 'claude-custom-live')
+      mkdirSync(dirname(snapshot), { recursive: true })
+      writeFileSync(snapshot, '{"type":"user","message":{"content":"continue"}}\n')
+
+      const res = await srv.fetch('/api/graveyard/claude-custom-live/revive', { method: 'POST' })
+
+      expect(res.status).toBe(200)
+      const body = await res.json() as { data: { revivable: boolean; sessionName: string } }
+      expect(body).toMatchObject({ data: { revivable: true } })
+      expect(start).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          template: expect.objectContaining({ id: template.id }),
+          provider: expect.objectContaining({ provider: expect.objectContaining({ id: 'claude' }) }),
+        }),
+      )
+      expect(getSession(srv.sessionsDir, body.data.sessionName)).toMatchObject({
+        cliTemplate: template.id,
+        adapter: 'claude',
+      })
+    } finally {
+      findPort.mockRestore()
+      start.mockRestore()
+      onRestart.mockRestore()
       await srv.close()
       rmSync(root, { recursive: true, force: true })
     }

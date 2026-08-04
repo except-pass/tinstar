@@ -64,4 +64,13 @@ describe('serializeByKey', () => {
     const ok = serializeByKey(chains, 'sess', async () => 'ok')
     await expect(ok).resolves.toBe('ok')
   })
+
+  it('forgets a settled key after its latest queued task finishes', async () => {
+    const chains = new Map<string, Promise<unknown>>()
+
+    await serializeByKey(chains, 'sess', async () => 'ok')
+    await Promise.resolve()
+
+    expect(chains.has('sess')).toBe(false)
+  })
 })

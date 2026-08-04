@@ -9,7 +9,9 @@ export async function run(argv) {
     const resp = await httpJson(`${baseUrl}/api/cli-templates`)
     const arr = resp?.data ?? resp ?? []
     if (Array.isArray(arr)) {
-      for (const t of arr) console.log(`${t.name}\t${t.cmd || ''}`)
+      for (const t of arr) {
+        console.log(`${t.id}\t${t.name}\t${t.adapter || ''}\t${t.startCmd || ''}`)
+      }
     }
     return
   }

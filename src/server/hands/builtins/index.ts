@@ -174,14 +174,14 @@ const BUILTIN_HANDS: Hand[] = [
   {
     name: MARSHAL_AGENT_NAME,
     description: MARSHAL_AGENT_DESCRIPTION,
-    // Uses the dedicated 'Marshal' CLI template (claude + sonnet, NATS-enabled).
+    // Uses the dedicated 'marshal' CLI template ID (Claude + Sonnet, NATS-enabled).
     // The template injects MARSHAL_AGENT_PROMPT via --append-system-prompt, so
     // the persona is the main conversation's system prompt (and survives
     // `/clear`). The hand's `prompt` is just the one-shot intro instruction
     // that fires at first turn.
-    // Override by adding a 'Marshal' entry to cliTemplates in
+    // Override by adding a 'marshal' ID entry to cliTemplates in
     // ~/.config/tinstar/config.json or define your own in user hands dir.
-    cliTemplate: 'Marshal',
+    cliTemplate: 'marshal',
     prompt: MARSHAL_INTRO_PROMPT,
     systemPrompt: MARSHAL_AGENT_PROMPT,
   },

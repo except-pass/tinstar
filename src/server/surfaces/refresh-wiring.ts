@@ -23,6 +23,7 @@ import { getSession, loadSecrets, updateSession, deleteSession, createSession } 
 import * as tmuxBackend from '../sessions/backends/tmux'
 import { refreshConfigProblem, type TinstarConfig } from '../sessions/config'
 import { launchRefreshWorker } from '../sessions/surfaceAuthor'
+import { defaultProviderRegistry } from '../providers/lifecycle'
 import type { SurfaceService } from './surface-service'
 import { SurfaceRefreshJobStore } from './surface-refresh-jobs'
 import {
@@ -174,10 +175,29 @@ export interface RefreshWiringInput {
   reobserveRun: (runId: string) => Promise<void>
 }
 
-/** Build the coordinator with the real host effects behind it. */
-export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefreshCoordinator {
+export interface RefreshWorkerTerminalStops {
+  compensateLaunch: (name: string) => void
+  retire: (name: string) => void
+}
+
+function buildRefreshWorkerTerminalStops(): RefreshWorkerTerminalStops {
+  return {
+    compensateLaunch: name => tmuxBackend.stopManagedTtyd(name, {
+      cancellationReason: 'surface refresh launch compensation',
+    }),
+    retire: name => tmuxBackend.stopManagedTtyd(name, {
+      cancellationReason: 'surface refresh retirement',
+    }),
+  }
+}
+
+/** Build the coordinator's real host effects; exported as a typed wiring seam. */
+export function buildRefreshCoordinatorDeps(
+  input: RefreshWiringInput,
+): RefreshCoordinatorDeps {
   const { cfg, docStore, service, reobserveRun } = input
   const jobs = SurfaceRefreshJobStore.open(cfg.dirs.root)
+  const terminalStops = buildRefreshWorkerTerminalStops()
   // Built once. The registry's runners take their effects at CALL time, so this is a
   // plain record of two functions and holds nothing open between passes.
   const witnessDeps = defaultWitnessDeps()
@@ -232,6 +252,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
       if (!worktree) return { ok: false, message: 'no worktree is recorded for this Surface' }
       const recipe = surface.content.recipe
       if (!recipe) return { ok: false, message: 'this Surface declares no refresh recipe' }
+      const provider = defaultProviderRegistry.resolveTemplate(null)
       const result = await launchRefreshWorker({
         config: cfg,
         worktree,
@@ -240,6 +261,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
         stagingPath: job.stagingPath,
         recipe,
         headline: surface.content.headline,
+        providerAdapter: provider.provider.id,
         secrets: loadSecrets(cfg.dirs.secrets),
         spaceId: surface.spaceId,
         writeFile: (path, data) => writeFileSync(path, data, 'utf8'),
@@ -250,8 +272,14 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
         deleteSession,
         updateSession,
         startSession: ({ session, port, secrets }) =>
-          tmuxBackend.createTmuxSession(cfg, { session, secrets, port, template: null }),
-        stopSession: name => tmuxBackend.stopManagedTtyd(name),
+          tmuxBackend.createTmuxSession(cfg, {
+            session,
+            secrets,
+            port,
+            template: null,
+            provider,
+          }),
+        stopSession: terminalStops.compensateLaunch,
         // A cast, because the launcher takes the run shape as an opaque record —
         // it may not import the Run type without dragging the whole document model
         // into the sessions layer. The fields it actually builds are asserted by
@@ -274,7 +302,7 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
     retireWorker: name => retireRefreshWorker({
       name,
       getSession: () => getSession(cfg.dirs.sessions, name),
-      stopTtyd: () => tmuxBackend.stopManagedTtyd(name),
+      stopTtyd: () => terminalStops.retire(name),
       deleteTmux: session => tmuxBackend.deleteTmuxSession(cfg, session as Session),
       deleteRun: () => docStore.deleteRun(name),
       deleteSession: () => { deleteSession(cfg.dirs.sessions, name) },
@@ -324,7 +352,14 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
 
   try { mkdirSync(jobs.stagingDir, { recursive: true }) } catch { /* reported by the store */ }
   if (problem) log.warn('refresh', `background refresh workers disabled — ${problem}`)
-  return new SurfaceRefreshCoordinator(deps)
+  return deps
+}
+
+/** Build the coordinator with the real host effects behind it. */
+export function buildRefreshCoordinator(
+  input: RefreshWiringInput,
+): SurfaceRefreshCoordinator {
+  return new SurfaceRefreshCoordinator(buildRefreshCoordinatorDeps(input))
 }
 
 /**

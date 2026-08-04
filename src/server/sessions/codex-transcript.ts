@@ -4,7 +4,6 @@ import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { log } from '../logger'
 import { readTail } from './transcript-parser'
-import { captureScreen } from './backends/tmux'
 import type { RecapEntry } from '../../types'
 
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
@@ -101,6 +100,7 @@ export async function discoverTranscript(
   workdir: string,
   createdAt: string,
   tmuxTarget: string,
+  captureScreen?: (tmuxName: string, scrollback?: number) => Promise<string>,
 ): Promise<string | null> {
   const candidates = listCandidateFiles(createdAt)
   const cwdMatches = candidates.filter(f => {
@@ -114,6 +114,7 @@ export async function discoverTranscript(
   // Multiple matches — cross-reference with tmux pane
   let tmuxText: string
   try {
+    if (!captureScreen) return cwdMatches[0]!
     tmuxText = await captureScreen(tmuxTarget, 200)
   } catch {
     // Can't capture pane — return most recent match

@@ -81,14 +81,14 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
   -d '{
     "name": "my-feature",
     "backend": "tmux",
-    "cliTemplate": "Claude (multi-agent)",
+    "cliTemplate": "claude-multi-agent",
     "project": "myproject",
     "worktree": true,
     "prompt": "Read context/entrypoint.md, then continue the work: <clear first task>."
   }'
 ```
 
-`cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions. `prompt` is the kickoff message (preferred). The separate `POST /api/sessions/<name>/prompt` endpoint is for **steering an already-running** session, not for the initial kickoff.
+`cliTemplate: "claude-multi-agent"` enables NATS. Template references are stable IDs from `tinstar templates list`, not renameable display names. Omit only for plain non-collaborative sessions. `prompt` is the kickoff message (preferred). The separate `POST /api/sessions/<name>/prompt` endpoint is for **steering an already-running** session, not for the initial kickoff.
 
 ## Editor widgets (file on canvas)
 
@@ -136,7 +136,7 @@ Cross-cutting NATS channels any session can join regardless of task hierarchy â€
 
 Subject: `tinstar.breakout.<room-name>`. No pre-registration â€” the room exists as soon as someone publishes to it.
 
-**Requires:** target session must have NATS enabled (`cliTemplate: "Claude (multi-agent)"`), otherwise the subscription API returns `NATS_DISABLED`.
+**Requires:** target session must have NATS enabled (`cliTemplate: "claude-multi-agent"`), otherwise the subscription API returns `NATS_DISABLED`.
 
 ```bash
 SESSION="my-session"

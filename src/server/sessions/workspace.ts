@@ -60,38 +60,63 @@ export async function checkWorktreeBranch(projectPath: string, name: string): Pr
   return { ok: true, action: 'create' }
 }
 
-export async function createWorktree(projectPath: string, sessionName: string): Promise<string> {
+export interface CreateWorktreeResult {
+  path: string
+  /** False when the requested worktree already existed and was reused. */
+  created: boolean
+}
+
+export async function createWorktree(
+  projectPath: string,
+  sessionName: string,
+): Promise<CreateWorktreeResult> {
   const wtDir = worktreeDir(projectPath, sessionName)
   mkdirSync(dirname(wtDir), { recursive: true })
 
   if (existsSync(wtDir)) {
-    return wtDir
+    return { path: wtDir, created: false }
   }
 
-  // Decide -b (new branch) vs attach (existing branch) up front rather than
-  // blindly retrying without -b on any failure — that old fallback masked the
-  // real error and emitted "invalid reference" when the name was actually blocked.
-  const check = await checkWorktreeBranch(projectPath, sessionName)
-  if (!check.ok) {
-    throw new WorktreeBranchConflictError(sessionName, check.conflict)
-  }
-  if (check.action === 'attach') {
-    await git(['-C', projectPath, 'worktree', 'add', wtDir, sessionName])
-  } else {
-    await git(['-C', projectPath, 'worktree', 'add', wtDir, '-b', sessionName])
-  }
+  let added = false
+  try {
+    // Decide -b (new branch) vs attach (existing branch) up front rather than
+    // blindly retrying without -b on any failure — that old fallback masked the
+    // real error and emitted "invalid reference" when the name was actually blocked.
+    const check = await checkWorktreeBranch(projectPath, sessionName)
+    if (!check.ok) {
+      throw new WorktreeBranchConflictError(sessionName, check.conflict)
+    }
+    if (check.action === 'attach') {
+      await git(['-C', projectPath, 'worktree', 'add', wtDir, sessionName])
+    } else {
+      await git(['-C', projectPath, 'worktree', 'add', wtDir, '-b', sessionName])
+    }
+    added = true
 
-  // Inherit .claude from the base repo when the worktree doesn't already have
-  // one. Tracked `.claude` (or a prior checkout) already lands via `git worktree
-  // add`; re-copying then throws EEXIST — especially when the tree contains
-  // symlinks (Node's cpSync fails hard on those).
-  const baseClaude = join(projectPath, '.claude')
-  const wtClaude = join(wtDir, '.claude')
-  if (existsSync(baseClaude) && !existsSync(wtClaude)) {
-    cpSync(baseClaude, wtClaude, { recursive: true })
-  }
+    // Inherit .claude from the base repo when the worktree doesn't already have
+    // one. Tracked `.claude` (or a prior checkout) already lands via `git worktree
+    // add`; re-copying then throws EEXIST — especially when the tree contains
+    // symlinks (Node's cpSync fails hard on those).
+    const baseClaude = join(projectPath, '.claude')
+    const wtClaude = join(wtDir, '.claude')
+    if (existsSync(baseClaude) && !existsSync(wtClaude)) {
+      cpSync(baseClaude, wtClaude, { recursive: true })
+    }
 
-  return wtDir
+    return { path: wtDir, created: true }
+  } catch (err) {
+    // Once `git worktree add` succeeds this function owns the new worktree.
+    // Compensate a later copy/setup failure here because the caller cannot know
+    // creation happened until this function returns.
+    if (added) {
+      try {
+        await deleteWorktree(projectPath, sessionName)
+      } catch {
+        // Preserve the setup error that explains why creation failed.
+      }
+    }
+    throw err
+  }
 }
 
 export async function deleteWorktree(projectPath: string, sessionName: string): Promise<void> {
