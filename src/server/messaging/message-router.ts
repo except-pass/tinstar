@@ -572,6 +572,12 @@ function processRouterOwners(): Map<string, ProcessRouterOwner> {
 }
 
 export interface MessageRouterOwnerLease {
+  /**
+   * Drain the previous responder, then run this generation's ledger open and
+   * recovery as one serialized owner transition. A superseded queued lease
+   * never invokes `prepare`.
+   */
+  handoff(prepare: () => Promise<void>): Promise<boolean>
   /** Start only if this is still the newest backend for the config root. */
   start(service: NatsMessageRouterService): Promise<boolean>
   /** Stop this lease's responder without disturbing a newer backend. */
@@ -595,13 +601,33 @@ export function reserveMessageRouterOwner(configRoot: string): MessageRouterOwne
   owners.set(configRoot, state)
   const generation = ++state.generation
 
-  state.transition = state.transition.then(async () => {
+  const drained = state.transition.then(async () => {
     const active = state.active
     state.active = null
     if (active) await active.stop()
   })
+  state.transition = drained.catch(() => {})
+  let handoff: Promise<boolean> | null = null
 
   return {
+    handoff(prepare) {
+      if (handoff) return handoff
+      const preparation = state.transition.then(async () => {
+        // Preserve the original drain failure for this lease without poisoning
+        // the process-global queue used by later HMR generations.
+        await drained
+        if (state.generation !== generation) return false
+
+        // This callback owns the transition until it settles. A newer reserve
+        // can mark this generation stale, but its open/recovery is queued after
+        // this callback and therefore cannot touch the ledger concurrently.
+        await prepare()
+        return state.generation === generation
+      })
+      state.transition = preparation.then(() => {}, () => {})
+      handoff = preparation
+      return preparation
+    },
     async start(service) {
       let started = false
       const activation = state.transition.then(async () => {

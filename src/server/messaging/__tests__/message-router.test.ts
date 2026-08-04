@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { acquireBackendSingleton } from '../../infra/lock'
+import { DeliveryLedger } from '../delivery-ledger'
 import type {
   LiveDeliveryResult,
   RecipientExclusion,
@@ -330,6 +332,130 @@ describe('NATS request/reply boundary', () => {
       'second:start',
       'second:stop',
     ])
+  })
+
+  it('drains an old acceptance before replacement state opens and preserves both writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'message-router-hmr-'))
+    const lockPath = join(dir, 'server.lock')
+    const lock = acquireBackendSingleton(lockPath)
+    if (!lock.acquired) throw new Error('test setup could not acquire backend singleton')
+    const calls: string[] = []
+    let releaseWrite!: () => void
+    const writeFinished = new Promise<void>(resolve => { releaseWrite = resolve })
+    const ids = ['msg-before-handoff', 'msg-after-handoff']
+    const openLedger = () => DeliveryLedger.open({
+      dir,
+      lockPath,
+      createMessageId: () => ids.shift() ?? 'msg-unused',
+    })
+    const oldLedger = openLedger()
+    const accept = (requestId: string) => oldLedger.accept({
+      requestId,
+      sender: { sessionId: 'sender', incarnation: 'sender-v1' },
+      destination: { subject: 'tinstar.agent.receiver' },
+      text: requestId,
+      recipients: [{
+        providerId: 'codex',
+        sessionId: 'receiver',
+        incarnation: 'receiver-v1',
+      }],
+    })
+    const first = {
+      start: vi.fn(async () => { calls.push('first:start') }),
+      stop: vi.fn(async () => {
+        calls.push('first:draining')
+        await writeFinished
+        await accept('req-before-handoff')
+        calls.push('first:stopped')
+      }),
+    } as unknown as NatsMessageRouterService
+    const firstLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
+    await firstLease.start(first)
+
+    const secondLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
+    let replacement: DeliveryLedger | null = null
+    const replacementOpen = secondLease.handoff(async () => {
+      calls.push('replacement:open')
+      replacement = openLedger()
+      await replacement.accept({
+        requestId: 'req-after-handoff',
+        sender: { sessionId: 'sender', incarnation: 'sender-v1' },
+        destination: { subject: 'tinstar.agent.receiver' },
+        text: 'req-after-handoff',
+        recipients: [{
+          providerId: 'codex',
+          sessionId: 'receiver',
+          incarnation: 'receiver-v1',
+        }],
+      })
+    })
+    await Promise.resolve()
+    expect(calls).toEqual(['first:start', 'first:draining'])
+
+    releaseWrite()
+    await expect(replacementOpen).resolves.toBe(true)
+    expect(calls).toEqual([
+      'first:start',
+      'first:draining',
+      'first:stopped',
+      'replacement:open',
+    ])
+    expect(replacement!.getMessage('msg-before-handoff')).toBeDefined()
+    expect(replacement!.getMessage('msg-after-handoff')).toBeDefined()
+    await secondLease.stop()
+    rmSync(`${lockPath}.mark`, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('skips a queued handoff that a rapid replacement supersedes', async () => {
+    let releaseDrain!: () => void
+    const drainHeld = new Promise<void>(resolve => { releaseDrain = resolve })
+    const first = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { await drainHeld }),
+    } as unknown as NatsMessageRouterService
+    const firstLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
+    await firstLease.start(first)
+
+    const secondLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
+    const secondPrepare = vi.fn(async () => {})
+    const secondHandoff = secondLease.handoff(secondPrepare)
+    const thirdLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
+    const thirdPrepare = vi.fn(async () => {})
+    const thirdHandoff = thirdLease.handoff(thirdPrepare)
+
+    releaseDrain()
+    await expect(secondHandoff).resolves.toBe(false)
+    await expect(thirdHandoff).resolves.toBe(true)
+    expect(secondPrepare).not.toHaveBeenCalled()
+    expect(thirdPrepare).toHaveBeenCalledOnce()
+    await thirdLease.stop()
+  })
+
+  it('holds the owner transition through recovery before a newer handoff begins', async () => {
+    const calls: string[] = []
+    let releaseRecovery!: () => void
+    const recoveryHeld = new Promise<void>(resolve => { releaseRecovery = resolve })
+    const secondLease = reserveMessageRouterOwner('/cfg/hmr-serialized-recovery')
+    const secondHandoff = secondLease.handoff(async () => {
+      calls.push('second:open')
+      await recoveryHeld
+      calls.push('second:recovered')
+    })
+    await vi.waitFor(() => expect(calls).toEqual(['second:open']))
+
+    const thirdLease = reserveMessageRouterOwner('/cfg/hmr-serialized-recovery')
+    const thirdHandoff = thirdLease.handoff(async () => {
+      calls.push('third:open')
+    })
+    await Promise.resolve()
+    expect(calls).toEqual(['second:open'])
+
+    releaseRecovery()
+    await expect(secondHandoff).resolves.toBe(false)
+    await expect(thirdHandoff).resolves.toBe(true)
+    expect(calls).toEqual(['second:open', 'second:recovered', 'third:open'])
+    await thirdLease.stop()
   })
 
   it('makes no-responder and timeout failures visible to the sender', async () => {
