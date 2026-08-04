@@ -35,8 +35,15 @@ The mechanism that re-dispatches named server-sent events from a single shared e
 
 ## Surfaces
 
+### Focus mode
+A per-browser view of one Run Workspace that temporarily fits the existing workspace to the available canvas viewport at normal visual scale. Focus mode suppresses canvas arrangement and non-run widget interactions without changing the saved canvas layout, so returning to the canvas restores the prior arrangement. Distinct from the `Z` canvas utility and from the separate phone-oriented mobile projection.
+
+While Focus mode is active, mounted built-in Run Workspaces share the same transient viewport geometry and responsive presentation. Cycling changes which prepared workspace is visible rather than resizing terminals; genuine viewport changes may resize them, and leaving Focus restores each saved Canvas layout.
+
 ### The Slate
 A region of a run's workspace card where an agent, the user, or any local process paints small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. Surfaces are described in A2UI and drawn by the shared host renderer. Authoring is file-in (a process writes a surface file into the run's worktree; a server watcher validates and projects it onto the run), while threads, lifecycle status, and control answers are answered HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run.
+
+Slate content is **semi-ephemeral**: surfaces are cheap to wipe and re-author, so a change to the authoring contract is resolved by clearing the Slate rather than by migrating it. This is why breaking changes to surface shape are acceptable and why durable value belongs in host-owned machinery rather than in any individual card.
 
 ### Addressable point
 The single primitive the Slate is built from: a durable, threaded item authored by an agent, a user, or a process, optionally anchored to a decision or a whole surface, carrying an append-only discussion thread and a soft lifecycle (open, discussing, waiting, resolved, dismissed). A Roundup notice, a canvas pin, and a per-surface discussion are the same object with a different anchor and default author. One id is reserved: a point at `objective` is the run's Objective and may only be written by the user, so a file-authored or HTTP-created point may not claim it.
@@ -58,3 +65,21 @@ A collapsible, scoped projection of surfaces that need the user, are actively ch
 
 ### A2UI
 The bounded, host-rendered UI description language a surface's body is written in: a flat set of components — text, layout rows and columns, lists, cards, links, and interactive controls — referenced by id from one root. Closed vocabulary, open composition: an agent composes from a fixed catalog the host draws in its own theme, rather than shipping arbitrary markup or styles. A body that is not valid A2UI is rejected at the boundary and never renders.
+
+### Claim
+A falsifiable statement a surface makes about the world, declared alongside its body: it names the kind of check that could refute it, what that check needs to run, and where the check is made. A claim never states what is currently true — only what would prove the surface wrong — which is why the declaration belongs to the surface's author while every value later observed for it belongs to the host. Editing a claim is an authoring change; observing one is not.
+
+A surface may declare any number, including none. Declaring an empty list is itself a statement — the author looked and found nothing checkable — and is deliberately kept distinct from never having said. The authoring convention is that a newly authored surface declares at least one. Components in the body may reference a claim by id, which is how a card's own contents can be derived from what the host observed instead of from what its author believed on the day they wrote it.
+
+### Witness
+The host-owned check that can settle one claim, named by kind from a closed set the host implements. A claim naming a kind the host does not have, or supplying the wrong parameters for the kind it names, is refused and reported on the card rather than only logged — and refusing costs that one claim, never the whole surface.
+
+Running a witness produces one of three outcomes, and the third is the load-bearing one: a value a completed lookup returned, "nobody could look", or "this claim is broken and someone must edit it". Only a value can agree with what was stored, so a witness that has been failing since it was written can never keep confirming its own card. A witness runs without waking an agent, which is what makes checking a surface cheap and rebuilding it rare.
+
+### Locus
+Where a claim's truth lives — the repository a run works in, or deployed infrastructure reached over the network. Distinct from what *announced* a change: an announcement says something happened, a locus says where the observation that could falsify a claim is made, and one locus is reachable from several kinds of announcement. Because a locus is declared, it narrows work in both directions: a commit reaches only the surfaces whose claims are about the repository, and a surface whose claims are all about infrastructure is left alone by it while still being checked on its own schedule.
+
+### Unwitnessed
+A surface that declares nothing which could prove it wrong. Distinct from stale, overdue, or unverified — those are all statements about a surface the host *could* check. Unwitnessed means there is nothing to check, and the card says so plainly instead of passing for current. It gates no controls and changes no scheduling: it is an honesty label, not a state anything acts on.
+
+A surface that does declare a claim but has never had one checked is a third thing, and reads differently again — it shows no age at all, because the age a surface displays is the last moment every one of its claims held, not the last time its file was saved.

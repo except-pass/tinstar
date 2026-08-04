@@ -28,6 +28,18 @@ describe('uiPrefs singletons', () => {
   it('returns undefined for unset fields', () => {
     expect(getPref('hudVisible')).toBeUndefined()
   })
+
+  it('round-trips the Focus mode browser default', () => {
+    setPref('focusMode', true)
+    expect(getPref('focusMode')).toBe(true)
+    setPref('focusMode', false)
+    expect(getPref('focusMode')).toBe(false)
+  })
+
+  it('falls back for malformed preference storage', () => {
+    localStorage.setItem('tinstar-ui-prefs', '{ definitely not json')
+    expect(getPref('focusMode')).toBeUndefined()
+  })
 })
 
 describe('uiPrefs JSON helpers', () => {

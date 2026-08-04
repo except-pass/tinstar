@@ -9,6 +9,7 @@ import { clamp01 } from '../pins/pinGestures'
 import { captureWidgetContext } from '../pins/captureWidgetContext'
 import { getPinCapture } from '../pins/captureRegistry'
 import type { Pin } from '../domain/pinSet'
+import { FocusPresentationProvider, type FocusPresentation } from '../focusMode/FocusPresentationContext'
 
 const DRAG_THRESHOLD = 5
 
@@ -93,6 +94,11 @@ interface CanvasWidgetShellProps {
   onApplySizePreset?: (preset: 'small' | 'medium' | 'large') => void
   /** Which preset the current size matches — highlights that button, or null. */
   activeSizePreset?: 'small' | 'medium' | 'large' | null
+  /** Keep non-target widgets mounted without exposing them to focus or pointer input. */
+  hidden?: boolean
+  /** Disable canvas-owned editing gestures and chrome while the widget is presented in Focus. */
+  interactionLocked?: boolean
+  presentation?: FocusPresentation
 }
 
 export function CanvasWidgetShell({
@@ -136,6 +142,9 @@ export function CanvasWidgetShell({
   onClearAllPins,
   onApplySizePreset,
   activeSizePreset,
+  hidden = false,
+  interactionLocked = false,
+  presentation = 'canvas',
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -177,6 +186,7 @@ export function CanvasWidgetShell({
   // Pointer down on shell: fire selection + start drag if on handle
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (interactionLocked) return
       if (e.button !== 0 || spaceHeldRef.current) return
       // Prevent canvas from treating this as an empty-canvas click (would deselect)
       e.stopPropagation()
@@ -198,11 +208,12 @@ export function CanvasWidgetShell({
         containerRef.current?.setPointerCapture(e.pointerId)
       }
     },
-    [nodeId, spaceHeldRef, dragHandleSelector, layout.x, layout.y, onSelect],
+    [interactionLocked, nodeId, spaceHeldRef, dragHandleSelector, layout.x, layout.y, onSelect],
   )
 
   const handlePointerMove = useCallback(
     (e: ReactPointerEvent) => {
+      if (interactionLocked) return
       if (!dragging.current) return
       const dx = (e.clientX - dragStart.current.x) / zoom
       const dy = (e.clientY - dragStart.current.y) / zoom
@@ -222,7 +233,7 @@ export function CanvasWidgetShell({
       onMove(nodeId, Math.round(dragStart.current.originX + dx), Math.round(dragStart.current.originY + dy))
       onDragMove?.(nodeId, e.clientX, e.clientY)
     },
-    [nodeId, zoom, onMove, onDragStart, onDragMove],
+    [interactionLocked, nodeId, zoom, onMove, onDragStart, onDragMove],
   )
 
   const handlePointerUp = useCallback(() => {
@@ -237,6 +248,7 @@ export function CanvasWidgetShell({
   // Resize handle (bottom-right corner)
   const handleResizeDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (interactionLocked) return
       if (e.button !== 0) return
       e.stopPropagation()
       ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
@@ -250,11 +262,12 @@ export function CanvasWidgetShell({
       }
       onResizeStart?.(nodeId)
     },
-    [layout.width, layout.height, nodeId, onResizeStart],
+    [interactionLocked, layout.width, layout.height, nodeId, onResizeStart],
   )
 
   const handleResizeMove = useCallback(
     (e: ReactPointerEvent) => {
+      if (interactionLocked) return
       if (!resizing.current) return
       const dx = (e.clientX - resizeStart.current.x) / zoom
       const dy = (e.clientY - resizeStart.current.y) / zoom
@@ -272,7 +285,7 @@ export function CanvasWidgetShell({
       lastResizeSize.current = { width, height }
       onResize(nodeId, width, height)
     },
-    [nodeId, zoom, onResize, minSize],
+    [interactionLocked, nodeId, zoom, onResize, minSize],
   )
 
   const handleResizeUp = useCallback(() => {
@@ -281,8 +294,9 @@ export function CanvasWidgetShell({
   }, [nodeId, onResizeEnd])
 
   const handleDoubleClick = useCallback(() => {
+    if (interactionLocked) return
     onDoubleClickZoom?.(nodeId)
-  }, [nodeId, onDoubleClickZoom])
+  }, [interactionLocked, nodeId, onDoubleClickZoom])
 
   // Shared teardown for pin place-drag — clears the placing ref and lowers the
   // iframe guard. Called from pointer-up, onPointerCancel, onLostPointerCapture,
@@ -304,6 +318,7 @@ export function CanvasWidgetShell({
   // within the widget body (cancel if released outside the widget).
   const handlePinPlaceDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (interactionLocked) return
       if (e.button !== 0) return
       e.stopPropagation()
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -311,7 +326,7 @@ export function CanvasWidgetShell({
       setPinGhost({ x: e.clientX, y: e.clientY })
       onPinDragActive?.(true)
     },
-    [onPinDragActive],
+    [interactionLocked, onPinDragActive],
   )
 
   // While a place-drag is active, follow the cursor with the ghost note. Pointer
@@ -356,6 +371,21 @@ export function CanvasWidgetShell({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => { endPinPlace() }, [])
 
+  useEffect(() => {
+    const el = containerRef.current as (HTMLDivElement & { inert: boolean }) | null
+    if (el) el.inert = hidden
+  }, [hidden])
+
+  useEffect(() => {
+    if (!interactionLocked) return
+    dragging.current = false
+    dragMoved.current = false
+    resizing.current = false
+    resizeMoved.current = false
+    setIsDragging(false)
+    endPinPlace()
+  }, [interactionLocked, endPinPlace])
+
   // Escape cancels any in-progress drag or resize
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -381,6 +411,7 @@ export function CanvasWidgetShell({
   // fire the normal selection. Generic across all iframe-backed widgets.
   useEffect(() => {
     function onWindowBlur() {
+      if (interactionLocked || hidden) return
       if (isSelected) return
       if (!document.hasFocus()) return // OS-level blur (tab/app switch), not an in-page iframe focus grab
       const active = document.activeElement
@@ -394,7 +425,7 @@ export function CanvasWidgetShell({
     }
     window.addEventListener('blur', onWindowBlur)
     return () => window.removeEventListener('blur', onWindowBlur)
-  }, [isSelected, nodeId, onSelect])
+  }, [hidden, interactionLocked, isSelected, nodeId, onSelect])
 
   return (
     <div
@@ -404,6 +435,8 @@ export function CanvasWidgetShell({
       data-selected={isSelected ? 'true' : undefined}
       data-focused={isFocused ? 'true' : undefined}
       data-widget-type={registration.type}
+      aria-hidden={hidden || undefined}
+      tabIndex={-1}
       className={`absolute ${frameClass} ${isSpawning ? 'widget-spawning' : 'transition-opacity duration-150'} ${isDimmed ? 'opacity-40' : 'opacity-100'} ${isFocused ? 'ring-2 ring-primary' : ''}`}
       style={{
         left: Math.round(layout.x),
@@ -412,6 +445,8 @@ export function CanvasWidgetShell({
         height: Math.round(layout.height),
         zIndex: registration.isContainer ? undefined
           : isDragging ? 30 : isSelected ? 20 : isHovered ? 10 : undefined,
+        visibility: hidden ? 'hidden' : undefined,
+        pointerEvents: hidden ? 'none' : undefined,
         ...(isSpawning && spawnColor ? spawnGlowVars(spawnColor) : {}),
       }}
       onPointerDown={handlePointerDown}
@@ -422,18 +457,20 @@ export function CanvasWidgetShell({
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >
-      <WidgetIdProvider id={nodeId}>
-        <WidgetComponent
-          data={data}
-          zoom={zoom}
-          isSelected={isSelected}
-          isDragging={isDragging}
-          isHovered={isHovered}
-          isDropTarget={isDropTarget}
-        />
-      </WidgetIdProvider>
+      <FocusPresentationProvider value={presentation}>
+        <WidgetIdProvider id={nodeId}>
+          <WidgetComponent
+            data={data}
+            zoom={zoom}
+            isSelected={isSelected}
+            isDragging={isDragging}
+            isHovered={isHovered}
+            isDropTarget={isDropTarget}
+          />
+        </WidgetIdProvider>
+      </FocusPresentationProvider>
 
-      {pinnable && !registration.rendersOwnPinMarkers && pins && onRepositionPin && (
+      {!interactionLocked && pinnable && !registration.rendersOwnPinMarkers && pins && onRepositionPin && (
         <PinLayer
           pins={pins}
           accent={pinAccent ?? '#00f0ff'}
@@ -450,7 +487,7 @@ export function CanvasWidgetShell({
         />
       )}
 
-      {pinnable && (isHovered || isSelected) && pins && pins.length > 0 && (() => {
+      {!interactionLocked && pinnable && (isHovered || isSelected) && pins && pins.length > 0 && (() => {
         const unsentCount = pins.filter(p => !p.sentAt).length
         const sendDisabled = !pinCanSubmit || unsentCount === 0
         const sendTitle = !pinCanSubmit
@@ -486,7 +523,7 @@ export function CanvasWidgetShell({
         )
       })()}
 
-      {pinnable && (isHovered || isSelected) && onCreatePin && (
+      {!interactionLocked && pinnable && (isHovered || isSelected) && onCreatePin && (
         <button
           data-testid="pin-drop-affordance"
           className="pointer-events-auto absolute left-1 bottom-0 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
@@ -503,7 +540,7 @@ export function CanvasWidgetShell({
         </button>
       )}
 
-      {onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
+      {!interactionLocked && onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
         <div className="pointer-events-none absolute inset-0">
           {(['left','right','top','bottom'] as const).filter(edge => !occupiedEdges?.has(edge)).map(edge => {
             const posStyle: React.CSSProperties =
@@ -532,7 +569,7 @@ export function CanvasWidgetShell({
         </div>
       )}
 
-      {onApplySizePreset && (isHovered || isSelected) && (
+      {!interactionLocked && onApplySizePreset && (isHovered || isSelected) && (
         <div
           data-testid="size-preset-toolbar"
           className="pointer-events-auto absolute right-1 top-0 z-20 flex items-center gap-0.5 rounded border border-primary/40 bg-slate-900/90 px-0.5 py-0.5"
@@ -559,21 +596,23 @@ export function CanvasWidgetShell({
       )}
 
       {/* Resize handle — bottom-right corner */}
-      <div
-        className="absolute right-0 bottom-0 w-3 h-3 cursor-se-resize z-10"
-        style={{
-          background:
-            'linear-gradient(135deg, transparent 50%, rgba(0, 240, 255, 0.25) 50%)',
-        }}
-        onPointerDown={handleResizeDown}
-        onPointerMove={handleResizeMove}
-        onPointerUp={handleResizeUp}
-        onPointerCancel={handleResizeUp}
-      />
+      {!interactionLocked && (
+        <div
+          className="absolute right-0 bottom-0 w-3 h-3 cursor-se-resize z-10"
+          style={{
+            background:
+              'linear-gradient(135deg, transparent 50%, rgba(0, 240, 255, 0.25) 50%)',
+          }}
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeUp}
+          onPointerCancel={handleResizeUp}
+        />
+      )}
 
       {/* Ghost note trailing the cursor during a pin place-drag. Portaled to
           document.body so it floats over iframes and escapes the canvas transform. */}
-      {pinGhost && createPortal(
+      {!interactionLocked && pinGhost && createPortal(
         <div
           data-testid="pin-ghost"
           style={{ position: 'fixed', left: pinGhost.x, top: pinGhost.y, transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 70, opacity: 0.7 }}
