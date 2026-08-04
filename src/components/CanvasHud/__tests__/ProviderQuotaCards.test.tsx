@@ -82,6 +82,59 @@ describe('<ProviderQuotaCards>', () => {
     expect(within(codexTeamB).queryByText(/Primary window/)).toBeNull()
   })
 
+  it('restores duration-specific quota visuals for Claude windows', () => {
+    const observation = quota('claude', 'default', [
+      {
+        id: 'five-hour',
+        label: '5 hours',
+        windowMinutes: 300,
+        usedPercent: 67,
+        resetsAt: '2026-08-01T15:13:00.000Z',
+      },
+      {
+        id: 'seven-day',
+        label: '7 days',
+        windowMinutes: 10_080,
+        usedPercent: 25,
+        resetsAt: '2026-08-05T12:00:00.000Z',
+      },
+    ])
+
+    const view = render(<ProviderQuotaCards observations={[observation]} nowMs={NOW} />)
+    const card = view.getByTestId('provider-quota-card-claude-default')
+
+    expect(within(card).getByTestId('cycle-trough')).toBeTruthy()
+    expect(within(card).getByTestId('bar-trough')).toBeTruthy()
+    expect(within(card).queryByTestId('provider-quota-gauge')).toBeNull()
+  })
+
+  it('chooses Codex visuals by native duration rather than primary/secondary order', () => {
+    const observation = quota('codex', 'default', [
+      {
+        id: 'primary',
+        label: 'Primary',
+        windowMinutes: 10_080,
+        usedPercent: 40,
+        resetsAt: '2026-08-05T12:00:00.000Z',
+      },
+      {
+        id: 'secondary',
+        label: 'Secondary',
+        windowMinutes: 300,
+        usedPercent: 8.5,
+        resetsAt: '2026-08-01T15:13:00.000Z',
+      },
+    ])
+
+    const view = render(<ProviderQuotaCards observations={[observation]} nowMs={NOW} />)
+    const card = view.getByTestId('provider-quota-card-codex-default')
+
+    expect(within(card).getByText(/Primary · 40% used/)).toBeTruthy()
+    expect(within(card).getByText(/Secondary · 9% used/)).toBeTruthy()
+    expect(within(card).getByTestId('bar-trough')).toBeTruthy()
+    expect(within(card).getByTestId('cycle-trough')).toBeTruthy()
+  })
+
   it('keeps tuple identities distinct when provider or account IDs contain NUL', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
@@ -151,6 +204,7 @@ describe('<ProviderQuotaCards>', () => {
     expect(view.getByText('32% left')).toBeTruthy()
     expect(view.getByRole('img').getAttribute('aria-label'))
       .toBe('Primary: 68% used, 32% remaining')
+    expect(view.getByTestId('provider-quota-gauge')).toBeTruthy()
     expect(view.queryByText('33% left')).toBeNull()
   })
 

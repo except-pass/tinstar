@@ -6,6 +6,7 @@ import {
   allTtydIncumbentsStrict,
   clearTtydStartCancellationReasonForTests,
   inspectAllTtydIncumbents,
+  inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
   isExpectedTtydStartInterruption,
@@ -221,7 +222,7 @@ describe('verified ttyd session surfaces', () => {
       })
 
       await expect(ttydIncumbentsOnPortStrict(6123, failingRun))
-        .rejects.toThrow('terminal identity inspection failed')
+        .rejects.toThrow('Terminal safety check failed')
       expect(ttydIdentityInspectionUnavailable()).toBe(true)
 
       now += 30_001
@@ -258,6 +259,37 @@ describe('verified ttyd session surfaces', () => {
       )).resolves.toEqual([])
       expect(ttydIdentityInspectionUnavailable()).toBe(false)
     } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('reports the failed command, retry time, and safety reason during cooldown', async () => {
+    let now = 75_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await expect(ttydIncumbentsOnPortStrict(6123, vi.fn(async () => {
+        throw inspectionFailure({
+          code: 'ETIMEDOUT',
+          stdout: '',
+          stderr: '',
+          killed: true,
+          signal: 'SIGTERM',
+          cmd: 'lsof -w -ti :6123',
+        })
+      }))).rejects.toThrow(
+        'Terminal safety check failed: lsof timed out or was interrupted. No terminal was started to protect existing sessions.',
+      )
+
+      now += 5_000
+      await expect(ttydIncumbentsOnPortStrict(6123)).rejects.toThrow(
+        'Terminal safety check temporarily unavailable; retry in 25s. The last check failed because lsof timed out or was interrupted. Session start is paused to protect existing terminals.',
+      )
+    } finally {
+      now += 30_001
+      await ttydIncumbentsOnPortStrict(
+        6123,
+        vi.fn(async () => ({ stdout: '', stderr: '' })),
+      )
       nowSpy.mockRestore()
     }
   })
@@ -306,6 +338,21 @@ describe('verified ttyd session surfaces', () => {
         stderr: '',
         killed: true,
         signal: 'SIGTERM',
+      })
+    }))).rejects.toThrow('inspection failed')
+
+    expect(ttydIdentityInspectionUnavailable()).toBe(false)
+  })
+
+  it('keeps background readiness failures out of the session-start cooldown', async () => {
+    await expect(inspectTtydIncumbentsForReadiness(6123, vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+        cmd: 'lsof -w -ti :6123',
       })
     }))).rejects.toThrow('inspection failed')
 
