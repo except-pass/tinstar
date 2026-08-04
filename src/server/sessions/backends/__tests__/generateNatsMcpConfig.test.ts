@@ -11,6 +11,7 @@ function nats(subs: string[]): SessionNats {
 }
 
 const COMMON = {
+  agentIncarnation: 'alpha-v1',
   channelServerPackage: 'github:except-pass/nats-channel-mcp',
   bunPath: '/home/ubuntu/.bun/bin/bun',
   natsUrl: 'nats://127.0.0.1:4666',
@@ -56,6 +57,8 @@ describe('generateNatsMcpConfig', () => {
     expect(natsArg).toBeGreaterThanOrEqual(0)
     expect(parsed.mcpServers.nats.args[natsArg + 1]).toBe(COMMON.natsUrl)
     expect(parsed.mcpServers.nats.env).toEqual({
+      TINSTAR_SESSION_NAME: 'alpha',
+      TINSTAR_AGENT_INCARNATION: COMMON.agentIncarnation,
       TINSTAR_NATS_URL: COMMON.natsUrl,
       TINSTAR_MESSAGE_ROUTER_SUBJECT: COMMON.routerSubject,
       TINSTAR_MESSAGE_ROUTER_AUTH: COMMON.routerAuth,

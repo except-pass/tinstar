@@ -1,10 +1,18 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 
-import { buildAgentCommand, providerTelemetryEnvironmentCommands } from '../tmux'
+import {
+  buildAgentCommand,
+  providerLaunchEnvironmentCommands,
+  providerTelemetryEnvironmentCommands,
+} from '../tmux'
 import type { AgentDef } from '../tmux'
 import type { CliTemplate } from '../../config'
 import {
   CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
   GENERIC_PROVIDER,
   ProviderCapabilityError,
   type TerminalProviderAdapter,
@@ -113,6 +121,35 @@ describe('provider telemetry environment reconciliation', () => {
       GENERIC_PROVIDER,
       { ...tmpl('agent', 'agent resume'), telemetry: true },
     )).toThrow(ProviderCapabilityError)
+  })
+})
+
+describe('provider launch environment reconciliation', () => {
+  it('forwards a custom CODEX_HOME without teaching tmux about Codex', () => {
+    const previous = process.env.CODEX_HOME
+    process.env.CODEX_HOME = '/srv/codex-home'
+    try {
+      expect(providerLaunchEnvironmentCommands('=tinstar-worker', CODEX_PROVIDER))
+        .toEqual([[
+          'set-environment', '-t', '=tinstar-worker', 'CODEX_HOME', '/srv/codex-home',
+        ]])
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previous
+    }
+  })
+
+  it('removes stale CODEX_HOME when the host no longer configures it', () => {
+    const previous = process.env.CODEX_HOME
+    delete process.env.CODEX_HOME
+    try {
+      expect(providerLaunchEnvironmentCommands('=tinstar-worker', CODEX_PROVIDER))
+        .toEqual([[
+          'set-environment', '-t', '=tinstar-worker', '-r', 'CODEX_HOME',
+        ]])
+    } finally {
+      if (previous !== undefined) process.env.CODEX_HOME = previous
+    }
   })
 })
 
@@ -280,8 +317,11 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
             detail: {
               transport: 'forge-channel',
               command: {
-                enableFlag: '--channel nats',
-                configFlag: '--channel-config',
+                launchFlags: (path) => [
+                  '--channel nats',
+                  ...(path ? [`--channel-config '${path}'`] : []),
+                ],
+                forwardServerEnvironment: false,
                 disabledPattern: /\s*--channel\s+nats/g,
                 autoAcceptWarning: false,
               },
@@ -316,12 +356,34 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     })).toThrow('Provider "generic" does not support terminal capability "nats"')
   })
 
-  it('rejects NATS for Codex instead of silently dropping its config', () => {
+  it.each([false, true])('keeps ordinary Codex commands while adding standard MCP config (resume=%s)', (resume) => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-command-'))
+    const mcpConfigPath = join(dir, 'nats-mcp.json')
+    writeFileSync(mcpConfigPath, JSON.stringify({
+      mcpServers: {
+        nats: {
+          command: '/usr/bin/bun',
+          args: ['x', 'nats-channel-mcp'],
+          env: { TINSTAR_MESSAGE_ROUTER_AUTH: 'secret' },
+        },
+      },
+    }))
     const codex: CliTemplate = { id: 'codex-full-auto', name: 'Codex (full auto)', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' }
-    expect(() => buildAgentCommand({
-      template: codex, sessionId: 'sid', resume: false, initialPrompt: 'do the work',
-      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
-    })).toThrow('Provider "codex" does not support terminal capability "nats"')
+    const cmd = buildAgentCommand({
+      template: codex, sessionId: 'sid', resume, initialPrompt: 'do the work',
+      nats: { enabled: true, mcpConfigPath },
+    })
+
+    expect(cmd.startsWith(resume ? 'codex resume ' : 'codex ')).toBe(true)
+    expect(cmd).toContain(`-c 'mcp_servers.tinstar_message_router={command="/usr/bin/bun"`)
+    expect(cmd).toContain(`enabled_tools=["reply"]`)
+    expect(cmd).toContain(`disabled_tools=[]`)
+    expect(cmd).toContain(`-c 'mcp_servers.tinstar_message_router.tools.reply.approval_mode="approve"'`)
+    expect(cmd).toContain(`required=true`)
+    expect(cmd).not.toContain('secret')
+    expect(cmd).not.toContain('--mcp-config')
+    if (resume) expect(cmd).toContain('resume --last --sandbox workspace-write')
+    else expect(cmd.endsWith("-- 'do the work'")).toBe(true)
   })
 
   it('legacy fallback (no template) includes both flags when NATS is provisioned', () => {

@@ -20,11 +20,13 @@ import {
   parseCodexRecapEntries,
   readCodexStatus,
   resetCodexOffset,
+  codexHomeDir,
 } from '../sessions/codex-transcript'
 import {
   defineProviderDeliveryAdapter,
   type ProviderDeliveryAdapter,
 } from './contract'
+import { codexMcpLaunchFlags } from './codex-mcp'
 import type { ProviderTranscriptObservationEvent } from './observation-ingestor'
 import type { ProviderAdapter as ObservationProviderAdapter } from './contract'
 
@@ -36,6 +38,12 @@ export interface ProviderTranscriptStatus {
 export interface ProviderTranscriptDiscovery {
   session: Session
   tmuxName: string
+  /**
+   * The managed terminal's actual launch directory. This stays separate from
+   * the optional workspace record: standalone sessions have no workspace but
+   * Codex still records its terminal cwd in the rollout metadata.
+   */
+  workingDirectory?: string | null
   captureScreen?: (tmuxName: string, scrollback?: number) => Promise<string>
 }
 
@@ -78,8 +86,10 @@ interface ProviderNatsLaunchCapability {
   /** Provider-defined diagnostic label; shared lifecycle code never branches on it. */
   transport: string
   command: {
-    enableFlag: string
-    configFlag: string
+    /** Provider-owned shell fragments injected before the prompt separator. */
+    launchFlags: (mcpConfigPath?: string | null) => readonly string[]
+    /** The provider reads descriptor env values from its inherited environment. */
+    forwardServerEnvironment: boolean
     disabledPattern: RegExp
     autoAcceptWarning: boolean
   }
@@ -122,6 +132,11 @@ export interface TerminalProviderAdapter {
     /** Preserve Claude's historical implicit telemetry; other providers opt in. */
     defaultTelemetry: boolean
     transcript: ProviderTranscriptAdapter | null
+    /** Provider-owned environment reconciled on every managed agent launch. */
+    managedEnvironment?: {
+      names: readonly string[]
+      values: () => Record<string, string>
+    }
   }
   /** Provider-owned final mile; configured by the host when it needs runtime dependencies. */
   delivery?: ProviderDeliveryAdapter | null
@@ -315,8 +330,8 @@ const claudeTranscript: ProviderTranscriptAdapter = {
 const codexRolloutObservations = new CodexRolloutObservationSource()
 
 const codexTranscript: ProviderTranscriptAdapter = {
-  async discover({ session, tmuxName, captureScreen }) {
-    const workdir = session.workspace?.path
+  async discover({ session, tmuxName, workingDirectory, captureScreen }) {
+    const workdir = session.workspace?.path ?? workingDirectory
     if (!workdir) return null
     return discoverCodexTranscript(
       session.name,
@@ -346,6 +361,10 @@ const codexTranscript: ProviderTranscriptAdapter = {
   parseRecapWhileIdle: true,
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 const unsupportedNats = (provider: string): TerminalProviderCapabilities['nats'] => ({
   state: 'unsupported',
   reason: `${provider} has no managed NATS launch transport`,
@@ -368,8 +387,11 @@ export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
         detail: {
           transport: 'claude-development-channel',
           command: {
-            enableFlag: '--dangerously-load-development-channels server:nats',
-            configFlag: '--mcp-config',
+            launchFlags: (mcpConfigPath) => [
+              '--dangerously-load-development-channels server:nats',
+              ...(mcpConfigPath ? [`--mcp-config ${shellQuote(mcpConfigPath)}`] : []),
+            ],
+            forwardServerEnvironment: false,
             disabledPattern: /\s*--dangerously-load-development-channels\s+server:nats/g,
             autoAcceptWarning: true,
           },
@@ -402,11 +424,34 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
   sessionLifecycle: 'terminal',
   terminal: {
     capabilities: {
-      nats: unsupportedNats('Codex'),
+      nats: {
+        state: 'supported',
+        detail: {
+          transport: 'codex-stdio-mcp',
+          command: {
+            launchFlags: (mcpConfigPath) => (
+              mcpConfigPath ? codexMcpLaunchFlags(mcpConfigPath) : []
+            ),
+            forwardServerEnvironment: true,
+            // Managed flags are always generated from the current descriptor;
+            // there is no provider flag that belongs baked into templates.
+            disabledPattern: /\b\B/g,
+            autoAcceptWarning: false,
+          },
+        },
+      },
       telemetry: unsupportedTelemetry('Codex'),
     },
     defaultTelemetry: false,
     transcript: codexTranscript,
+    managedEnvironment: {
+      names: ['CODEX_HOME'],
+      values: (): Record<string, string> => {
+        const configured = process.env.CODEX_HOME?.trim()
+        if (!configured) return {}
+        return { CODEX_HOME: codexHomeDir() }
+      },
+    },
   },
 }
 

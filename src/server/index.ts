@@ -85,6 +85,7 @@ import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
 import { createClaudeDeliveryAdapter } from './providers/claude-delivery'
+import { registerCodexDelivery } from './providers/codex-delivery-wiring'
 import { DeliveryLedger } from './messaging/delivery-ledger'
 import {
   DeliveryRetryScheduler,
@@ -868,6 +869,7 @@ export function initBackend(): RouteContext {
       // explicitly retry-safe failures/deferrals are attempted; ambiguous
       // in-flight work is never duplicated blindly. The persisted recipient
       // incarnation remains the target when a session name has been reused.
+      const loggedPendingDeliveries = new Set<string>()
       const activeConfig = sessionConfig
       const activeLedger = deliveryLedger
       const recovery = new DeliveryRecoveryCoordinator({
@@ -957,7 +959,27 @@ export function initBackend(): RouteContext {
         )
       }
 
-      deliveryRetryScheduler = new DeliveryRetryScheduler(activeLedger, providerRegistry)
+      deliveryRetryScheduler = new DeliveryRetryScheduler(activeLedger, providerRegistry, {
+        onOutcomes: (outcomes) => {
+          for (const outcome of outcomes) {
+            if (outcome.state === 'pending') {
+              if (!loggedPendingDeliveries.has(outcome.deliveryId)) {
+                loggedPendingDeliveries.add(outcome.deliveryId)
+                log.info('message-router', `scheduled delivery ${outcome.deliveryId} is pending`, {
+                  reason: outcome.reason,
+                })
+              }
+              continue
+            }
+            loggedPendingDeliveries.delete(outcome.deliveryId)
+            if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+              log.warn('message-router', `scheduled delivery ${outcome.deliveryId} ${outcome.state}`, {
+                reason: outcome.reason,
+              })
+            }
+          }
+        },
+      })
       const recovered = await replaceDeliveryRetryScheduler(deliveryRetryScheduler)
       for (const outcome of recovered) {
         if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
@@ -1105,6 +1127,7 @@ export function initBackend(): RouteContext {
           },
         ),
       }))
+      registerCodexDelivery(providerRegistry, sessionConfig)
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches

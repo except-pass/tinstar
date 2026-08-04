@@ -1,57 +1,19 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { acquireBackendSingleton } from '../../infra/lock'
+import { describe, expect, it, vi } from 'vitest'
 import { createDefaultProviderRegistry } from '../../providers/lifecycle'
 import {
-  DELIVERY_DISPATCH_CONCURRENCY,
   DeliveryRetryScheduler,
   dispatchAcceptedMessage,
   recoverAcceptedMessages,
-  replaceDeliveryRetryScheduler,
-  runDeliveryRetrySchedulerNow,
-  stopDeliveryRetryScheduler,
 } from '../delivery-dispatch'
 import { DeliveryLedger } from '../delivery-ledger'
 import {
   ClaudeChannelControlError,
   createClaudeDeliveryAdapter,
 } from '../../providers/claude-delivery'
+import { acceptedLedger, roots } from './delivery-dispatch-fixture'
 
-const roots: string[] = []
-afterEach(async () => {
-  await stopDeliveryRetryScheduler()
-  vi.useRealTimers()
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
-})
-
-async function acceptedLedger(recipients = [{
-  providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3',
-}], options: {
-  maxOutstandingDeliveries?: number
-  now?: () => number
-  createMessageId?: () => string
-} = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'tinstar-dispatch-'))
-  roots.push(root)
-  const lockPath = join(root, 'server.lock')
-  if (!acquireBackendSingleton(lockPath).acquired) throw new Error('could not acquire test lock')
-  const ledger = DeliveryLedger.open({
-    dir: root, lockPath, createMessageId: () => 'msg-7', ...options,
-  })
-  const accepted = await ledger.accept({
-    requestId: 'request-7',
-    sender: { sessionId: 'sender', incarnation: 'sender-v2' },
-    destination: { subject: 'agents.receiver' },
-    text: 'hello once',
-    recipients,
-  })
-  if (!accepted.accepted) throw new Error(accepted.reason)
-  return { ledger, accepted }
-}
-
-describe('durable provider dispatch', () => {
+describe('durable provider dispatch acceptance', () => {
   it('claims the ledger attempt once and passes the complete router stamp', async () => {
     const { ledger, accepted } = await acceptedLedger()
     const accept = vi.fn(async (request) => ({
@@ -60,7 +22,7 @@ describe('durable provider dispatch', () => {
       messageId: request.messageId,
       attempt: request.attempt,
       recipient: request.recipient,
-      acceptedAt: '2026-08-01T12:00:02.000Z',
+      acceptedAt: '2026-08-01T12:00:02Z',
       attemptRef: request.deliveryId,
     }))
     const registry = createDefaultProviderRegistry()
@@ -91,8 +53,123 @@ describe('durable provider dispatch', () => {
         expect.objectContaining({ state: 'in-flight', attempt: 1 }),
         expect.objectContaining({
           state: 'accepted', attempt: 1, attemptRef: 'msg-7/d/1',
+          providerAcceptedAt: '2026-08-01T12:00:02.000Z',
         }),
       ]),
+    })
+  })
+
+  it('loads a broadcast envelope once while recovering its due recipients', async () => {
+    const { ledger } = await acceptedLedger([
+      { providerId: 'claude', sessionId: 'receiver-a', incarnation: 'receiver-a-v1' },
+      { providerId: 'claude', sessionId: 'receiver-b', incarnation: 'receiver-b-v1' },
+      { providerId: 'claude', sessionId: 'receiver-c', incarnation: 'receiver-c-v1' },
+    ])
+    const getMessage = vi.spyOn(ledger, 'getMessage')
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'delivered' as const,
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          deliveredAt: '2026-08-01T12:00:02.000Z',
+          evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
+        }
+      },
+    })
+
+    await expect(recoverAcceptedMessages(ledger, registry)).resolves.toEqual([
+      { deliveryId: 'msg-7/d/1', state: 'delivered' },
+      { deliveryId: 'msg-7/d/2', state: 'delivered' },
+      { deliveryId: 'msg-7/d/3', state: 'delivered' },
+    ])
+    expect(getMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not load a not-due broadcast for a provider without confirmation', async () => {
+    const { ledger } = await acceptedLedger([
+      { providerId: 'claude', sessionId: 'receiver-a', incarnation: 'receiver-a-v1' },
+      { providerId: 'claude', sessionId: 'receiver-b', incarnation: 'receiver-b-v1' },
+      { providerId: 'claude', sessionId: 'receiver-c', incarnation: 'receiver-c-v1' },
+    ])
+    const retryAt = '2026-08-02T12:00:00.000Z'
+    for (const delivery of ledger.getMessage('msg-7')!.deliveries) {
+      await ledger.transition({
+        deliveryId: delivery.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'pending', attempt: 0, reason: 'provider is busy', retryAt },
+      })
+    }
+    const getMessage = vi.spyOn(ledger, 'getMessage')
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept() {
+        throw new Error('not-due delivery must not be attempted')
+      },
+    })
+
+    await expect(recoverAcceptedMessages(ledger, registry, {
+      now: () => Date.parse('2026-08-01T12:00:00.000Z'),
+    })).resolves.toEqual([])
+    expect(getMessage).not.toHaveBeenCalled()
+  })
+
+  it('closes an acceptance-only provider outcome as ambiguous instead of leaking capacity', async () => {
+    const { ledger } = await acceptedLedger(undefined, { maxOutstandingDeliveries: 1 })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'accepted',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: '2026-08-01T12:00:02.000Z',
+        }
+      },
+    })
+
+    await dispatchAcceptedMessage('msg-7', ledger, registry)
+    const reason = 'Provider "claude" accepted attempt 1 but exposes no confirmation '
+      + 'evidence; delivery outcome is ambiguous'
+    await expect(recoverAcceptedMessages(ledger, registry)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'ambiguous', reason,
+    }])
+    expect(ledger.listRecoverable()).toEqual([])
+  })
+
+  it('keeps provider acceptance recoverable when its timestamp is malformed', async () => {
+    const now = Date.parse('2026-08-01T12:00:03.000Z')
+    const { ledger } = await acceptedLedger(undefined, { now: () => now })
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', {
+      async accept(request) {
+        return {
+          state: 'accepted',
+          providerId: 'claude',
+          messageId: request.messageId,
+          attempt: request.attempt,
+          recipient: request.recipient,
+          acceptedAt: 'not-a-provider-timestamp',
+          attemptRef: request.deliveryId,
+        }
+      },
+    })
+
+    await expect(dispatchAcceptedMessage('msg-7', ledger, registry, {
+      now: () => now,
+    })).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'accepted',
+    }])
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'accepted',
+      history: expect.arrayContaining([expect.objectContaining({
+        providerAcceptedAt: '2026-08-01T12:00:03.000Z',
+      })]),
     })
   })
 
@@ -224,412 +301,4 @@ describe('durable provider dispatch', () => {
     expect(restartedLedger.listRecoverable()).toEqual([])
   })
 
-  it('does not retry a deferred attempt until its explicit retryAt', async () => {
-    let now = Date.parse('2026-08-01T12:00:00.000Z')
-    const { ledger } = await acceptedLedger(undefined, { now: () => now })
-    const attempts: number[] = []
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', {
-      async accept(request) {
-        attempts.push(request.attempt)
-        if (request.attempt === 1) {
-          return {
-            state: 'deferred',
-            providerId: 'claude',
-            messageId: request.messageId,
-            attempt: request.attempt,
-            recipient: request.recipient,
-            checkedAt: new Date(now).toISOString(),
-            reason: 'channel warming up',
-            retryAt: '2026-08-01T12:00:05.000Z',
-          }
-        }
-        return {
-          state: 'delivered',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          deliveredAt: new Date(now).toISOString(),
-          evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
-        }
-      },
-    })
-    const scheduler = new DeliveryRetryScheduler(ledger, registry, {
-      now: () => now,
-      retryDelayMs: 1_000,
-    })
-
-    await scheduler.start()
-    now += 4_999
-    await scheduler.runNow()
-    expect(attempts).toEqual([1])
-    now += 1
-    await scheduler.runNow()
-    await scheduler.stop()
-
-    expect(attempts).toEqual([1, 2])
-    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'delivered', attempt: 2,
-    })
-  })
-
-  it('stops a prior-module retry loop when HMR installs a separately evaluated scheduler', async () => {
-    vi.useFakeTimers()
-    const firstEvaluation = await import('../delivery-dispatch')
-    vi.resetModules()
-    const secondEvaluation = await import('../delivery-dispatch')
-    expect(firstEvaluation.DeliveryRetryScheduler)
-      .not.toBe(secondEvaluation.DeliveryRetryScheduler)
-    const now = Date.parse('2026-08-01T12:00:00.000Z')
-    const first = await acceptedLedger(undefined, { now: () => now })
-    const second = await acceptedLedger(undefined, { now: () => now })
-    let firstCalls = 0
-    const firstRegistry = createDefaultProviderRegistry()
-    firstRegistry.registerDelivery('claude', {
-      async accept(request) {
-        firstCalls += 1
-        return {
-          state: 'deferred',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          checkedAt: new Date(now).toISOString(),
-          reason: 'still unavailable',
-          retryAt: new Date(now).toISOString(),
-        }
-      },
-    })
-    const secondRegistry = createDefaultProviderRegistry()
-    secondRegistry.registerDelivery('claude', {
-      async accept(request) {
-        return {
-          state: 'delivered',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          deliveredAt: new Date(now).toISOString(),
-          evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
-        }
-      },
-    })
-
-    await firstEvaluation.replaceDeliveryRetryScheduler(
-      new firstEvaluation.DeliveryRetryScheduler(
-        first.ledger,
-        firstRegistry,
-        { now: () => now, pollMs: 10 },
-      ),
-    )
-    expect(firstCalls).toBe(1)
-    await secondEvaluation.replaceDeliveryRetryScheduler(
-      new secondEvaluation.DeliveryRetryScheduler(
-        second.ledger,
-        secondRegistry,
-        { now: () => now, pollMs: 10 },
-      ),
-    )
-    const callsAtReplacement = firstCalls
-
-    await vi.advanceTimersByTimeAsync(50)
-    expect(firstCalls).toBe(callsAtReplacement)
-    expect(second.ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'delivered', attempt: 1,
-    })
-  })
-
-  it('does not let stale generation cleanup stop the newer retry scheduler', async () => {
-    let firstStarted!: () => void
-    let releaseFirst!: () => void
-    const firstStartedGate = new Promise<void>(resolve => { firstStarted = resolve })
-    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
-    const first = {
-      start: vi.fn(async () => {
-        firstStarted()
-        await firstGate
-        return []
-      }),
-      stop: vi.fn(async () => {}),
-      runNow: vi.fn(async () => []),
-    } as unknown as DeliveryRetryScheduler
-    const second = {
-      start: vi.fn(async () => []),
-      stop: vi.fn(async () => {}),
-      runNow: vi.fn(async () => []),
-    } as unknown as DeliveryRetryScheduler
-
-    const firstActivation = replaceDeliveryRetryScheduler(first)
-    await firstStartedGate
-    const secondActivation = replaceDeliveryRetryScheduler(second)
-    releaseFirst()
-    await firstActivation
-    await secondActivation
-
-    await stopDeliveryRetryScheduler(first)
-    await runDeliveryRetrySchedulerNow()
-
-    expect(first.stop).toHaveBeenCalledTimes(2)
-    expect(second.stop).not.toHaveBeenCalled()
-    expect(second.runNow).toHaveBeenCalledOnce()
-  })
-
-  it('clears the retry interval when the initial recovery sweep rejects', async () => {
-    vi.useFakeTimers()
-    const scheduler = new DeliveryRetryScheduler({
-      listRecoverable: () => { throw new Error('ledger read failed') },
-      getMessage: vi.fn(),
-      getDelivery: vi.fn(),
-      transition: vi.fn(),
-    }, createDefaultProviderRegistry(), { pollMs: 10 })
-
-    await expect(replaceDeliveryRetryScheduler(scheduler)).rejects.toThrow('ledger read failed')
-
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
-  it('reports both scheduler start and rollback failures', async () => {
-    const scheduler = {
-      start: vi.fn(async () => { throw new Error('initial sweep failed') }),
-      stop: vi.fn(async () => { throw new Error('timer cleanup failed') }),
-    } as unknown as DeliveryRetryScheduler
-
-    await expect(replaceDeliveryRetryScheduler(scheduler)).rejects.toThrow(
-      'retry scheduler start failed (initial sweep failed); rollback failed (timer cleanup failed)',
-    )
-  })
-
-  it('recovers accepted work after restart with the persisted recipient incarnation', async () => {
-    const { ledger } = await acceptedLedger()
-    const root = roots.at(-1)!
-    const recoveredLedger = DeliveryLedger.open({
-      dir: root,
-      lockPath: join(root, 'server.lock'),
-    })
-    const accept = vi.fn(async (request) => ({
-      state: 'accepted' as const,
-      providerId: 'claude',
-      messageId: request.messageId,
-      attempt: request.attempt,
-      recipient: request.recipient,
-      acceptedAt: '2026-08-01T12:00:02.000Z',
-    }))
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', { accept })
-
-    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'accepted', attempt: 0,
-    })
-    await expect(recoverAcceptedMessages(recoveredLedger, registry)).resolves.toEqual([{
-      deliveryId: 'msg-7/d/1', state: 'accepted',
-    }])
-    expect(accept).toHaveBeenCalledOnce()
-    expect(accept).toHaveBeenCalledWith(expect.objectContaining({
-      recipient: {
-        providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3',
-      },
-    }))
-    expect(recoveredLedger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'accepted', attempt: 1,
-    })
-    await expect(recoverAcceptedMessages(recoveredLedger, registry)).resolves.toEqual([])
-    expect(accept).toHaveBeenCalledOnce()
-  })
-
-  it('records explicit channel rejection instead of silently succeeding', async () => {
-    const { ledger } = await acceptedLedger()
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', {
-      async accept(request) {
-        return {
-          state: 'rejected',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          checkedAt: '2026-08-01T12:00:02.000Z',
-          reason: 'Claude channel is not subscribed',
-          retryable: true,
-        }
-      },
-    })
-
-    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
-      deliveryId: 'msg-7/d/1',
-      state: 'failed',
-      reason: 'Claude channel is not subscribed',
-    }])
-    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'failed', attempt: 1,
-      history: expect.arrayContaining([
-        expect.objectContaining({ retryable: true }),
-      ]),
-    })
-  })
-
-  it('keeps a replacement process terminal instead of migrating the obligation', async () => {
-    const { ledger } = await acceptedLedger()
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', {
-      async accept(request) {
-        expect(request.recipient).toEqual({
-          providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3',
-        })
-        return {
-          state: 'rejected',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          checkedAt: '2026-08-01T12:00:02.000Z',
-          reason: 'delivery recipient was replaced',
-          retryable: false,
-        }
-      },
-    })
-
-    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
-      deliveryId: 'msg-7/d/1',
-      state: 'failed',
-      reason: 'delivery recipient was replaced',
-    }])
-    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'failed',
-      attempt: 1,
-      recipient: {
-        providerId: 'claude', sessionId: 'receiver', incarnation: 'receiver-v3',
-      },
-      history: expect.arrayContaining([
-        expect.objectContaining({
-          state: 'failed', reason: 'delivery recipient was replaced', retryable: false,
-        }),
-      ]),
-    })
-    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
-      deliveryId: 'msg-7/d/1', state: 'skipped',
-    }])
-  })
-
-  it('leaves a lost final-mile acknowledgement in-flight for exact recovery', async () => {
-    const { ledger } = await acceptedLedger()
-    const registry = createDefaultProviderRegistry()
-    const accept = vi.fn(async () => { throw new Error('acknowledgement timeout') })
-    registry.registerDelivery('claude', {
-      accept,
-    })
-
-    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
-      deliveryId: 'msg-7/d/1',
-      state: 'ambiguous',
-      reason: 'acknowledgement timeout',
-    }])
-    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
-      state: 'in-flight', attempt: 1,
-    })
-    await expect(recoverAcceptedMessages(ledger, registry)).resolves.toEqual([])
-    expect(accept).toHaveBeenCalledOnce()
-  })
-
-  it('bounds a large broadcast while preserving recipient result order', async () => {
-    const recipientCount = DELIVERY_DISPATCH_CONCURRENCY * 3 + 5
-    const recipients = Array.from({ length: recipientCount }, (_, index) => ({
-      providerId: 'claude',
-      sessionId: `receiver-${index + 1}`,
-      incarnation: `receiver-${index + 1}-v1`,
-    }))
-    const { ledger } = await acceptedLedger(recipients)
-    let active = 0
-    let peak = 0
-    let started = 0
-    let releaseFirstBatch!: () => void
-    const firstBatch = new Promise<void>(resolve => { releaseFirstBatch = resolve })
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', {
-      async accept(request) {
-        active += 1
-        started += 1
-        peak = Math.max(peak, active)
-        if (started === DELIVERY_DISPATCH_CONCURRENCY) releaseFirstBatch()
-        await firstBatch
-        await new Promise<void>(resolve => queueMicrotask(resolve))
-        active -= 1
-        return {
-          state: 'accepted',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          acceptedAt: '2026-08-01T12:00:02.000Z',
-        }
-      },
-    })
-
-    const outcomes = await dispatchAcceptedMessage('msg-7', ledger, registry)
-
-    expect(peak).toBe(DELIVERY_DISPATCH_CONCURRENCY)
-    expect(outcomes).toHaveLength(recipientCount)
-    expect(outcomes.map(outcome => outcome.deliveryId)).toEqual(
-      Array.from({ length: recipientCount }, (_, index) => `msg-7/d/${index + 1}`),
-    )
-    expect(outcomes.every(outcome => outcome.state === 'accepted')).toBe(true)
-  })
-
-  it('shares the concurrency bound across simultaneous messages', async () => {
-    const recipients = Array.from(
-      { length: DELIVERY_DISPATCH_CONCURRENCY + 5 },
-      (_, index) => ({
-        providerId: 'claude',
-        sessionId: `receiver-${index + 1}`,
-        incarnation: `receiver-${index + 1}-v1`,
-      }),
-    )
-    const first = await acceptedLedger(recipients)
-    const second = await acceptedLedger(recipients)
-    let active = 0
-    let peak = 0
-    let started = 0
-    let release!: () => void
-    let saturated!: () => void
-    const gate = new Promise<void>(resolve => { release = resolve })
-    const atLimit = new Promise<void>(resolve => { saturated = resolve })
-    const registry = createDefaultProviderRegistry()
-    registry.registerDelivery('claude', {
-      async accept(request) {
-        active += 1
-        started += 1
-        peak = Math.max(peak, active)
-        if (started === DELIVERY_DISPATCH_CONCURRENCY) saturated()
-        await gate
-        active -= 1
-        return {
-          state: 'accepted',
-          providerId: 'claude',
-          messageId: request.messageId,
-          attempt: request.attempt,
-          recipient: request.recipient,
-          acceptedAt: '2026-08-01T12:00:02.000Z',
-        }
-      },
-    })
-
-    const dispatches = Promise.all([
-      dispatchAcceptedMessage('msg-7', first.ledger, registry),
-      dispatchAcceptedMessage('msg-7', second.ledger, registry),
-    ])
-    await atLimit
-    expect(active).toBe(DELIVERY_DISPATCH_CONCURRENCY)
-    expect(peak).toBe(DELIVERY_DISPATCH_CONCURRENCY)
-    expect(started).toBe(DELIVERY_DISPATCH_CONCURRENCY)
-    release()
-
-    const [firstOutcomes, secondOutcomes] = await dispatches
-    expect(peak).toBe(DELIVERY_DISPATCH_CONCURRENCY)
-    expect(firstOutcomes.map(outcome => outcome.deliveryId)).toEqual(
-      recipients.map((_, index) => `msg-7/d/${index + 1}`),
-    )
-    expect(secondOutcomes.map(outcome => outcome.deliveryId)).toEqual(
-      recipients.map((_, index) => `msg-7/d/${index + 1}`),
-    )
-  })
 })

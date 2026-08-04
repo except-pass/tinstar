@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import {
+  appendFileSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -35,6 +36,8 @@ interface TestContext {
     maxTerminalMessages?: number
     maxOutstandingDeliveries?: number
     maxHistoryEntries?: number
+    maxJournalEntries?: number
+    maxJournalBytes?: number
   }) => DeliveryLedger
 }
 
@@ -72,6 +75,12 @@ async function withLedger(
             : {}),
           ...(options.maxHistoryEntries !== undefined
             ? { maxHistoryEntries: options.maxHistoryEntries }
+            : {}),
+          ...(options.maxJournalEntries !== undefined
+            ? { maxJournalEntries: options.maxJournalEntries }
+            : {}),
+          ...(options.maxJournalBytes !== undefined
+            ? { maxJournalBytes: options.maxJournalBytes }
             : {}),
         })
       },
@@ -181,7 +190,7 @@ describe('DeliveryLedger acceptance', () => {
 
       const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
       expect(Object.keys(snapshot).sort()).toEqual([
-        'deliveries', 'messages', 'version',
+        'deliveries', 'journal', 'messages', 'version',
       ])
       expect(snapshot.version).toBe(DELIVERY_LEDGER_SCHEMA_VERSION)
       expect(snapshot.messages).toHaveLength(1)
@@ -225,21 +234,14 @@ describe('DeliveryLedger acceptance', () => {
       const { io, log } = recordingIo()
       const restarted = DeliveryLedger.open({ dir, lockPath: join(dir, 'server.lock'), io })
       await restarted.accept(input('req-next'))
-      const tempFsync = log.indexOf(`fsync ${paths.temp}`)
-      const backupWrite = log.indexOf(`write ${paths.backupTemp}`)
-      const backupFsync = log.indexOf(`fsync ${paths.backupTemp}`)
-      const backupRename = log.indexOf(
-        `rename ${paths.backupTemp} -> ${paths.backup}`,
-      )
-      const primaryRename = log.indexOf(`rename ${paths.temp} -> ${paths.primary}`)
+      const journalWrite = log.indexOf(`write ${paths.journal}`)
+      const journalFsync = log.indexOf(`fsync ${paths.journal}`)
       const dirFsync = log.indexOf(`fsync ${dir}`)
-      expect(tempFsync).toBeGreaterThanOrEqual(0)
-      expect(backupWrite).toBeGreaterThan(tempFsync)
-      expect(backupFsync).toBeGreaterThan(backupWrite)
-      expect(primaryRename).toBeGreaterThan(backupFsync)
-      expect(backupRename).toBeGreaterThan(primaryRename)
-      expect(primaryRename).toBeGreaterThan(tempFsync)
-      expect(dirFsync).toBeGreaterThan(backupRename)
+      expect(journalWrite).toBeGreaterThanOrEqual(0)
+      expect(journalFsync).toBeGreaterThan(journalWrite)
+      expect(dirFsync).toBeGreaterThan(journalFsync)
+      expect(log).not.toContain(`write ${paths.temp}`)
+      expect(log).not.toContain(`write ${paths.backupTemp}`)
       expect(readFileSync(paths.backup, 'utf8')).toBe(
         readFileSync(paths.primary, 'utf8'),
       )
@@ -298,7 +300,11 @@ describe('DeliveryLedger acceptance', () => {
           return nodeDeliveryLedgerIo.open(path, flags)
         },
       }
-      const replacement = open({ ids: ['msg-backup-failure'], io })
+      const replacement = open({
+        ids: ['msg-backup-failure'],
+        io,
+        maxJournalBytes: 1,
+      })
       await expect(replacement.accept(input('req-backup-failure')))
         .resolves.toMatchObject({ accepted: false, reason: 'write-failed' })
       expect(replacement.getMessage('msg-backup-failure')).toBeUndefined()
@@ -332,7 +338,11 @@ describe('DeliveryLedger acceptance', () => {
           fdPaths.delete(fd)
         },
       }
-      const replacement = open({ ids: ['msg-backup-fsync'], io })
+      const replacement = open({
+        ids: ['msg-backup-fsync'],
+        io,
+        maxJournalBytes: 1,
+      })
       await expect(replacement.accept(input('req-backup-fsync')))
         .resolves.toMatchObject({ accepted: false, reason: 'write-failed' })
       expect(replacement.getMessage('msg-backup-fsync')).toBeUndefined()
@@ -354,7 +364,11 @@ describe('DeliveryLedger acceptance', () => {
           nodeDeliveryLedgerIo.rename(from, to)
         },
       }
-      const uncertain = open({ ids: ['msg-backup-rename'], io })
+      const uncertain = open({
+        ids: ['msg-backup-rename'],
+        io,
+        maxJournalBytes: 1,
+      })
       await expect(uncertain.accept(input('req-backup-rename')))
         .resolves.toMatchObject({ accepted: false, reason: 'write-uncertain' })
       expect(uncertain.health).toBe('write-uncertain')
@@ -428,7 +442,7 @@ describe('DeliveryLedger acceptance', () => {
   })
 
   it('owns acceptance intent before queued work begins', async () => {
-    await withLedger(async ({ paths, open }) => {
+    await withLedger(async ({ open }) => {
       let release!: () => void
       let entered!: () => void
       const held = new Promise<void>(resolve => { release = resolve })
@@ -484,9 +498,10 @@ describe('DeliveryLedger acceptance', () => {
       expect(Object.keys(owned.deliveries[0]!.recipient).sort()).toEqual([
         'incarnation', 'providerId', 'sessionId',
       ])
-      const persisted = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      expect(persisted.messages[1]).toEqual(owned.message)
-      expect(persisted.deliveries[1]).toEqual(owned.deliveries[0])
+      expect(open().getMessage(owned.message.id)).toEqual({
+        message: owned.message,
+        deliveries: owned.deliveries,
+      })
     })
   })
 
@@ -565,6 +580,340 @@ describe('DeliveryLedger acceptance', () => {
 })
 
 describe('DeliveryLedger reload and recovery', () => {
+  it('durably journals transitions without rewriting both snapshots', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-journaled'] })
+      const accepted = await ledger.accept(input('req-journaled', {
+        recipients: [
+          {
+            providerId: 'codex',
+            sessionId: 'reviewer-b',
+            incarnation: 'reviewer-b-v1',
+          },
+          {
+            providerId: 'claude',
+            sessionId: 'reviewer-a',
+            incarnation: 'reviewer-a-v1',
+          },
+        ],
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const snapshotBefore = readFileSync(paths.primary, 'utf8')
+
+      await expect(ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })).resolves.toMatchObject({ updated: true })
+
+      expect(readFileSync(paths.primary, 'utf8')).toBe(snapshotBefore)
+      expect(readFileSync(paths.journal, 'utf8'))
+        .toContain('"sequence":1')
+      const reopened = open()
+      expect(reopened.getDelivery(accepted.deliveries[0]!.id)).toMatchObject({
+        state: 'in-flight',
+        attempt: 1,
+      })
+      expect(reopened.getMessage(accepted.message.id)?.deliveries.map(
+        delivery => delivery.id,
+      )).toEqual(accepted.deliveries.map(delivery => delivery.id))
+    })
+  })
+
+  it('keeps journaled history monotonic when the wall clock moves backwards', async () => {
+    await withLedger(async ({ open }) => {
+      let now = 3_000
+      const ledger = open({ ids: ['msg-backwards-clock'], now: () => now })
+      const accepted = await ledger.accept(input('req-backwards-clock'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+
+      now = 4_000
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })).resolves.toMatchObject({
+        updated: true,
+        delivery: { updatedAt: '1970-01-01T00:00:04.000Z' },
+      })
+
+      now = 2_000
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: {
+          state: 'failed',
+          attempt: 1,
+          reason: 'retry later',
+          retryable: true,
+        },
+      })).resolves.toMatchObject({
+        updated: true,
+        delivery: { updatedAt: '1970-01-01T00:00:04.000Z' },
+      })
+
+      const reopened = open()
+      expect(reopened.health).toBe('healthy')
+      expect(reopened.getDelivery(deliveryId)).toMatchObject({
+        state: 'failed',
+        updatedAt: '1970-01-01T00:00:04.000Z',
+      })
+    })
+  })
+
+  it('recovers through a torn journal tail and repairs it before another mutation', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-torn-journal'] })
+      const accepted = await ledger.accept(input('req-torn-journal'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      await ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      appendFileSync(
+        paths.journal,
+        '{"version":1,"generation":"torn',
+      )
+
+      const recovered = open()
+      expect(recovered.health).toBe('recovered')
+      expect(recovered.getDelivery(deliveryId)).toMatchObject({
+        state: 'in-flight',
+        attempt: 1,
+      })
+      await expect(recovered.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: {
+          state: 'failed',
+          attempt: 1,
+          reason: 'retry later',
+          retryable: true,
+        },
+      })).resolves.toMatchObject({ updated: true })
+
+      expect(open().getDelivery(deliveryId)).toMatchObject({
+        state: 'failed',
+        attempt: 1,
+      })
+    })
+  })
+
+  it('periodically compacts journaled state into synchronized snapshots', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({
+        ids: ['msg-compact-journal'],
+        maxJournalEntries: 1,
+      })
+      const accepted = await ledger.accept(input('req-compact-journal'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      await ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      await ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        next: {
+          state: 'failed',
+          attempt: 1,
+          reason: 'retry later',
+          retryable: true,
+        },
+      })
+
+      expect(readFileSync(paths.journal, 'utf8')).toBe('')
+      expect(readFileSync(paths.primary, 'utf8')).toBe(
+        readFileSync(paths.backup, 'utf8'),
+      )
+      expect(JSON.parse(readFileSync(paths.primary, 'utf8')).deliveries[0])
+        .toMatchObject({ state: 'failed', attempt: 1 })
+      expect(open({ maxJournalEntries: 1 }).getDelivery(deliveryId))
+        .toMatchObject({ state: 'failed', attempt: 1 })
+    })
+  })
+
+  it('refuses an unknown journal schema instead of silently losing newer state', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-newer-journal'] })
+      await ledger.accept(input('req-newer-journal'))
+      writeFileSync(
+        paths.journal,
+        '{"version":999}\n',
+      )
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.journal).toMatchObject({ kind: 'unknown-version' })
+      await expect(faulted.accept(input('req-refused-journal-downgrade')))
+        .resolves.toEqual({ accepted: false, reason: 'faulted-read-only' })
+    })
+  })
+
+  it('faults read-only when a complete journal record has a mutated hash', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-mutated-journal-hash'] })
+      const accepted = await ledger.accept(input('req-mutated-journal-hash'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      await ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      const entry = JSON.parse(readFileSync(paths.journal, 'utf8'))
+      entry.hash = `${entry.hash[0] === '0' ? '1' : '0'}${entry.hash.slice(1)}`
+      writeFileSync(paths.journal, `${JSON.stringify(entry)}\n`)
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.journal).toMatchObject({
+        kind: 'malformed',
+        detail: 'journal line 1 failed its integrity check',
+      })
+      await expect(faulted.accept(input('req-after-mutated-hash')))
+        .resolves.toEqual({ accepted: false, reason: 'faulted-read-only' })
+    })
+  })
+
+  it('faults read-only when the snapshot checkpoint disagrees with the journal generation', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-checkpoint-disagreement'] })
+      const accepted = await ledger.accept(input('req-checkpoint-disagreement'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      await ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      for (const path of [paths.primary, paths.backup]) {
+        const snapshot = JSON.parse(readFileSync(path, 'utf8'))
+        snapshot.journal.generation = 'different-generation'
+        writeFileSync(path, JSON.stringify(snapshot))
+      }
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.journal).toMatchObject({
+        kind: 'malformed',
+        detail: 'journal generation does not match its snapshot',
+      })
+      await expect(faulted.accept(input('req-after-checkpoint-disagreement')))
+        .resolves.toEqual({ accepted: false, reason: 'faulted-read-only' })
+    })
+  })
+
+  it('faults read-only when the snapshot checkpoint hash disagrees with its journal entry', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-checkpoint-hash'] })
+      const accepted = await ledger.accept(input('req-checkpoint-hash'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      await ledger.transition({
+        deliveryId: accepted.deliveries[0]!.id,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })
+      for (const path of [paths.primary, paths.backup]) {
+        const snapshot = JSON.parse(readFileSync(path, 'utf8'))
+        snapshot.journal.sequence = 1
+        snapshot.journal.hash = 'f'.repeat(64)
+        writeFileSync(path, JSON.stringify(snapshot))
+      }
+
+      const faulted = open()
+      expect(faulted.health).toBe('faulted-read-only')
+      expect(faulted.fault?.journal).toMatchObject({
+        kind: 'malformed',
+        detail: 'journal checkpoint hash does not match its snapshot',
+      })
+      await expect(faulted.accept(input('req-after-checkpoint-hash')))
+        .resolves.toEqual({ accepted: false, reason: 'faulted-read-only' })
+    })
+  })
+
+  it('upgrades legacy snapshots before journaling so older writers fail closed', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({ ids: ['msg-legacy-base'] })
+      await ledger.accept(input('req-legacy-base'))
+      const legacy = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      legacy.version = 1
+      delete legacy.journal
+      writeFileSync(paths.primary, JSON.stringify(legacy))
+      writeFileSync(paths.backup, JSON.stringify(legacy))
+      writeFileSync(paths.journal, '')
+
+      const upgraded = open({ ids: ['msg-after-upgrade'] })
+      expect(upgraded.getMessage('msg-legacy-base')).toBeDefined()
+      await expect(upgraded.accept(input('req-after-upgrade')))
+        .resolves.toMatchObject({ accepted: true })
+
+      const primary = JSON.parse(readFileSync(paths.primary, 'utf8'))
+      expect(primary.version).toBe(DELIVERY_LEDGER_SCHEMA_VERSION)
+      expect(primary.version).toBeGreaterThan(1)
+      expect(primary.journal).toMatchObject({
+        sequence: 0,
+        hash: '0'.repeat(64),
+      })
+      expect(primary.messages).toHaveLength(2)
+      expect(readFileSync(paths.backup, 'utf8')).toBe(
+        readFileSync(paths.primary, 'utf8'),
+      )
+    })
+  })
+
+  it('freezes on an ambiguous journal sync and replays a complete record on reopen', async () => {
+    await withLedger(async ({ open }) => {
+      let failJournalSync = false
+      const ledger = open({
+        ids: ['msg-journal-sync'],
+        beforeStep: step => {
+          if (failJournalSync && step === 'fsync-journal') {
+            throw new Error('journal fsync failed')
+          }
+        },
+      })
+      const accepted = await ledger.accept(input('req-journal-sync'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      failJournalSync = true
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })).resolves.toMatchObject({
+        updated: false,
+        reason: 'write-uncertain',
+      })
+      expect(ledger.health).toBe('write-uncertain')
+      expect(ledger.getDelivery(deliveryId)).toMatchObject({ state: 'accepted' })
+
+      expect(open().getDelivery(deliveryId)).toMatchObject({
+        state: 'in-flight',
+        attempt: 1,
+      })
+    })
+  })
+
   it('survives service replacement with message and recipient identity intact', async () => {
     await withLedger(async ({ open }) => {
       const first = open({ ids: ['msg-restart'], now: () => 2_000 })
@@ -581,6 +930,32 @@ describe('DeliveryLedger reload and recovery', () => {
       })
       expect(replacement.listRecoverable().map(delivery => delivery.id)).toEqual([
         'msg-restart/d/1',
+      ])
+    })
+  })
+
+  it('preserves acceptance FIFO when timestamps tie and message ids sort backwards', async () => {
+    await withLedger(async ({ open }) => {
+      const first = open({
+        ids: ['msg-z-first', 'msg-a-second'],
+        now: () => 2_000,
+      })
+      await expect(first.accept(input('req-first'))).resolves.toMatchObject({
+        accepted: true,
+        message: { id: 'msg-z-first', acceptedAt: '1970-01-01T00:00:02.000Z' },
+      })
+      await expect(first.accept(input('req-second'))).resolves.toMatchObject({
+        accepted: true,
+        message: { id: 'msg-a-second', acceptedAt: '1970-01-01T00:00:02.000Z' },
+      })
+
+      expect(first.listRecoverable().map(delivery => delivery.messageId)).toEqual([
+        'msg-z-first',
+        'msg-a-second',
+      ])
+      expect(open().listRecoverable().map(delivery => delivery.messageId)).toEqual([
+        'msg-z-first',
+        'msg-a-second',
       ])
     })
   })
@@ -635,7 +1010,10 @@ describe('DeliveryLedger reload and recovery', () => {
 
   it('rejects provider-owned detail injected into persisted domain records', async () => {
     await withLedger(async ({ paths, open }) => {
-      const ledger = open({ ids: ['msg-provider-detail'] })
+      const ledger = open({
+        ids: ['msg-provider-detail'],
+        maxJournalBytes: 1,
+      })
       const accepted = await ledger.accept(input('req-provider-detail'))
       if (!accepted.accepted || accepted.details !== 'retained') {
         throw new Error('expected retained acceptance')
@@ -749,7 +1127,10 @@ describe('DeliveryLedger reload and recovery', () => {
 
   it('rejects parseable snapshots whose history crosses a terminal state', async () => {
     await withLedger(async ({ paths, open }) => {
-      const ledger = open({ ids: ['msg-history-one', 'msg-history-two'] })
+      const ledger = open({
+        ids: ['msg-history-one', 'msg-history-two'],
+        maxJournalBytes: 1,
+      })
       await ledger.accept(input('req-history-one'))
       await ledger.accept(input('req-history-two'))
 
@@ -948,7 +1329,7 @@ describe('DeliveryLedger transitions and retention', () => {
   })
 
   it('owns normalized transition evidence before queued work begins', async () => {
-    await withLedger(async ({ paths, open }) => {
+    await withLedger(async ({ open }) => {
       let holdWrite = false
       let release!: () => void
       let entered!: () => void
@@ -957,7 +1338,7 @@ describe('DeliveryLedger transitions and retention', () => {
       const ledger = open({
         ids: ['msg-owned-event', 'msg-blocker'],
         beforeStep: async step => {
-          if (holdWrite && step === 'write-temp') {
+          if (holdWrite && step === 'append-journal') {
             entered()
             await held
           }
@@ -1002,8 +1383,8 @@ describe('DeliveryLedger transitions and retention', () => {
           reference: 'event-1',
         },
       })
-      const persisted = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      expect(persisted.deliveries[0].history.at(-1)).toEqual(event)
+      expect(open().getDelivery(accepted.deliveries[0]!.id)?.history.at(-1))
+        .toEqual(event)
     })
   })
 
@@ -1268,11 +1649,418 @@ describe('DeliveryLedger transitions and retention', () => {
       expect(steps).toEqual([
         'write-temp', 'fsync-temp', 'write-backup-temp',
         'rename-primary', 'rename-backup', 'fsync-dir',
-        'write-temp', 'fsync-temp', 'write-backup-temp',
-        'rename-primary', 'rename-backup', 'fsync-dir',
+        'append-journal', 'fsync-journal', 'fsync-dir',
       ])
     })
   })
+
+  it('settles every grouped transition only after the shared directory sync', async () => {
+    await withLedger(async ({ open }) => {
+      let holdGroupSync = false
+      let release!: () => void
+      let entered!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      const atGroupSync = new Promise<void>(resolve => { entered = resolve })
+      const steps: DeliveryLedgerWriteStep[] = []
+      const ledger = open({
+        ids: ['msg-group-durable'],
+        beforeStep: async step => {
+          if (!holdGroupSync) return
+          steps.push(step)
+          if (step === 'fsync-dir') {
+            entered()
+            await held
+          }
+        },
+      })
+      const accepted = await ledger.accept(input('req-group-durable', {
+        recipients: [
+          {
+            providerId: 'claude',
+            sessionId: 'agent-a',
+            incarnation: 'agent-a-v1',
+          },
+          {
+            providerId: 'codex',
+            sessionId: 'agent-b',
+            incarnation: 'agent-b-v1',
+          },
+        ],
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained grouped acceptance')
+      }
+
+      holdGroupSync = true
+      let settled = 0
+      const transitions = accepted.deliveries.map(delivery => {
+        const transitioning = ledger.transition({
+          deliveryId: delivery.id,
+          expected: { state: 'accepted', attempt: 0 },
+          next: { state: 'in-flight', attempt: 1 },
+        })
+        void transitioning.then(() => { settled++ })
+        return transitioning
+      })
+      await atGroupSync
+      expect(steps).toEqual(['append-journal', 'fsync-journal', 'fsync-dir'])
+      expect(settled).toBe(0)
+
+      release()
+      await expect(Promise.all(transitions)).resolves.toEqual([
+        expect.objectContaining({ updated: true }),
+        expect.objectContaining({ updated: true }),
+      ])
+      expect(settled).toBe(2)
+    })
+  })
+
+  it('does not install a grouped candidate when journal writing fails before progress', async () => {
+    await withLedger(async ({ open }) => {
+      let failAppend = false
+      const ledger = open({
+        ids: ['msg-group-write-failed'],
+        beforeStep: step => {
+          if (failAppend && step === 'append-journal') {
+            throw new Error('journal unavailable before write')
+          }
+        },
+      })
+      const accepted = await ledger.accept(input('req-group-write-failed', {
+        recipients: [
+          {
+            providerId: 'claude',
+            sessionId: 'agent-a',
+            incarnation: 'agent-a-v1',
+          },
+          {
+            providerId: 'codex',
+            sessionId: 'agent-b',
+            incarnation: 'agent-b-v1',
+          },
+        ],
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained grouped acceptance')
+      }
+
+      failAppend = true
+      const results = await Promise.all(accepted.deliveries.map(delivery => (
+        ledger.transition({
+          deliveryId: delivery.id,
+          expected: { state: 'accepted', attempt: 0 },
+          next: { state: 'in-flight', attempt: 1 },
+        })
+      )))
+      expect(results).toEqual([
+        expect.objectContaining({ updated: false, reason: 'write-failed' }),
+        expect.objectContaining({ updated: false, reason: 'write-failed' }),
+      ])
+      expect(ledger.health).toBe('healthy')
+      expect(accepted.deliveries.every(delivery => (
+        ledger.getDelivery(delivery.id)?.state === 'accepted'
+      ))).toBe(true)
+    })
+  })
+
+  it('freezes without installing a grouped candidate after a partial journal write', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const fdPaths = new Map<number, string>()
+      let journalWriteCalls = 0
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        open(path, flags) {
+          const fd = nodeDeliveryLedgerIo.open(path, flags)
+          fdPaths.set(fd, path)
+          return fd
+        },
+        writeBuffer(fd, data) {
+          if (fdPaths.get(fd) !== paths.journal) {
+            return nodeDeliveryLedgerIo.writeBuffer(fd, data)
+          }
+          journalWriteCalls++
+          if (journalWriteCalls > 1) throw new Error('journal failed after partial write')
+          return nodeDeliveryLedgerIo.writeBuffer(fd, data.subarray(0, 16))
+        },
+        close(fd) {
+          nodeDeliveryLedgerIo.close(fd)
+          fdPaths.delete(fd)
+        },
+      }
+      const ledger = open({ ids: ['msg-group-write-uncertain'], io })
+      const accepted = await ledger.accept(input('req-group-write-uncertain', {
+        recipients: [
+          {
+            providerId: 'claude',
+            sessionId: 'agent-a',
+            incarnation: 'agent-a-v1',
+          },
+          {
+            providerId: 'codex',
+            sessionId: 'agent-b',
+            incarnation: 'agent-b-v1',
+          },
+        ],
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained grouped acceptance')
+      }
+
+      const results = await Promise.all(accepted.deliveries.map(delivery => (
+        ledger.transition({
+          deliveryId: delivery.id,
+          expected: { state: 'accepted', attempt: 0 },
+          next: { state: 'in-flight', attempt: 1 },
+        })
+      )))
+      expect(results).toEqual([
+        expect.objectContaining({ updated: false, reason: 'write-uncertain' }),
+        expect.objectContaining({ updated: false, reason: 'write-uncertain' }),
+      ])
+      expect(ledger.health).toBe('write-uncertain')
+      expect(accepted.deliveries.every(delivery => (
+        ledger.getDelivery(delivery.id)?.state === 'accepted'
+      ))).toBe(true)
+
+      const reopened = open()
+      expect(reopened.health).toBe('recovered')
+      expect(accepted.deliveries.every(delivery => (
+        reopened.getDelivery(delivery.id)?.state === 'accepted'
+      ))).toBe(true)
+    })
+  })
+
+  it('rejects an invalid grouped prefix before it can become a durable torn tail', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const fdPaths = new Map<number, string>()
+      let armPartialGroupWrite = false
+      let groupJournalWrites = 0
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        open(path, flags) {
+          const fd = nodeDeliveryLedgerIo.open(path, flags)
+          fdPaths.set(fd, path)
+          return fd
+        },
+        writeBuffer(fd, data) {
+          if (!armPartialGroupWrite || fdPaths.get(fd) !== paths.journal) {
+            return nodeDeliveryLedgerIo.writeBuffer(fd, data)
+          }
+          groupJournalWrites++
+          if (groupJournalWrites > 1) throw new Error('crashed after one complete group record')
+          const firstRecordBytes = data.indexOf(0x0a) + 1
+          return nodeDeliveryLedgerIo.writeBuffer(fd, data.subarray(0, firstRecordBytes))
+        },
+        close(fd) {
+          nodeDeliveryLedgerIo.close(fd)
+          fdPaths.delete(fd)
+        },
+      }
+      const ledger = open({ ids: ['msg-invalid-group-prefix'], io })
+      const accepted = await ledger.accept(input('req-invalid-group-prefix'))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained acceptance')
+      }
+      const deliveryId = accepted.deliveries[0]!.id
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'accepted', attempt: 0 },
+        next: { state: 'in-flight', attempt: 1 },
+      })).resolves.toMatchObject({ updated: true })
+      await expect(ledger.transition({
+        deliveryId,
+        expected: { state: 'in-flight', attempt: 1 },
+        countsAsSendAttempt: true,
+        next: { state: 'accepted', attempt: 1 },
+      })).resolves.toMatchObject({ updated: true })
+
+      armPartialGroupWrite = true
+      const results = await Promise.all([
+        ledger.transition({
+          deliveryId,
+          expected: { state: 'accepted', attempt: 1 },
+          next: { state: 'in-flight', attempt: 2 },
+        }),
+        ledger.transition({
+          deliveryId,
+          expected: { state: 'in-flight', attempt: 2 },
+          countsAsSendAttempt: true,
+          next: { state: 'accepted', attempt: 2 },
+        }),
+      ])
+
+      expect(results[0]).toMatchObject({ updated: false, reason: 'write-failed' })
+      expect(results[1]).toMatchObject({ updated: false, reason: 'stale-delivery' })
+      expect(groupJournalWrites).toBe(0)
+      expect(ledger.health).toBe('healthy')
+
+      const reopened = open()
+      expect(reopened.health).not.toBe('faulted-read-only')
+      expect(reopened.getDelivery(deliveryId)).toMatchObject({
+        state: 'accepted', attempt: 1,
+        providerAcceptance: { attempt: 1 },
+      })
+    })
+  })
+
+  it('compacts a grouped transition atomically when the journal bound is reached', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const ledger = open({
+        ids: ['msg-group-compaction'],
+        maxJournalEntries: 1,
+      })
+      const accepted = await ledger.accept(input('req-group-compaction', {
+        recipients: [
+          {
+            providerId: 'claude',
+            sessionId: 'agent-a',
+            incarnation: 'agent-a-v1',
+          },
+          {
+            providerId: 'codex',
+            sessionId: 'agent-b',
+            incarnation: 'agent-b-v1',
+          },
+        ],
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained grouped acceptance')
+      }
+
+      await expect(Promise.all(accepted.deliveries.map(delivery => (
+        ledger.transition({
+          deliveryId: delivery.id,
+          expected: { state: 'accepted', attempt: 0 },
+          next: { state: 'in-flight', attempt: 1 },
+        })
+      )))).resolves.toEqual([
+        expect.objectContaining({ updated: true }),
+        expect.objectContaining({ updated: true }),
+      ])
+      expect(readFileSync(paths.journal, 'utf8')).toBe('')
+
+      const reopened = open({ maxJournalEntries: 1 })
+      expect(accepted.deliveries.every(delivery => (
+        reopened.getDelivery(delivery.id)?.state === 'in-flight'
+      ))).toBe(true)
+    })
+  })
+
+  it('group-commits high-cardinality transitions while provider work stays concurrent', async () => {
+    await withLedger(async ({ paths, open }) => {
+      const recipientCount = 1_024
+      const providerConcurrency = 16
+      const fdPaths = new Map<number, string>()
+      let journalOpens = 0
+      let journalWrites = 0
+      let journalFsyncs = 0
+      let directoryFsyncs = 0
+      const io: DeliveryLedgerIo = {
+        ...nodeDeliveryLedgerIo,
+        open(path, flags) {
+          const fd = nodeDeliveryLedgerIo.open(path, flags)
+          fdPaths.set(fd, path)
+          if (path === paths.journal && flags === 'a') journalOpens++
+          return fd
+        },
+        writeBuffer(fd, data) {
+          if (fdPaths.get(fd) === paths.journal) journalWrites++
+          return nodeDeliveryLedgerIo.writeBuffer(fd, data)
+        },
+        fsync(fd) {
+          if (fdPaths.get(fd) === paths.journal) journalFsyncs++
+          if (fdPaths.get(fd) === paths.dir) directoryFsyncs++
+          // The durability ordering is what this high-cardinality test observes;
+          // skipping physical sync keeps its runtime independent of the host disk.
+        },
+        close(fd) {
+          nodeDeliveryLedgerIo.close(fd)
+          fdPaths.delete(fd)
+        },
+      }
+      const ledger = open({
+        ids: ['msg-high-cardinality'],
+        io,
+        maxOutstandingDeliveries: recipientCount,
+        maxJournalEntries: recipientCount + 1,
+        maxJournalBytes: 64 * 1024 * 1024,
+      })
+      const accepted = await ledger.accept(input('req-high-cardinality', {
+        recipients: Array.from({ length: recipientCount }, (_, index) => ({
+          providerId: index % 2 === 0 ? 'codex' : 'claude',
+          sessionId: `agent-${String(index).padStart(4, '0')}`,
+          incarnation: `agent-${index}-v1`,
+        })),
+      }))
+      if (!accepted.accepted || accepted.details !== 'retained') {
+        throw new Error('expected retained high-cardinality acceptance')
+      }
+      journalOpens = 0
+      journalWrites = 0
+      journalFsyncs = 0
+      directoryFsyncs = 0
+
+      let activeProviders = 0
+      let peakProviders = 0
+      const results = []
+      for (let offset = 0; offset < recipientCount; offset += providerConcurrency) {
+        let release!: () => void
+        const gate = new Promise<void>(resolve => { release = resolve })
+        const wave = accepted.deliveries
+          .slice(offset, offset + providerConcurrency)
+          .map(async delivery => {
+            activeProviders++
+            peakProviders = Math.max(peakProviders, activeProviders)
+            await gate
+            activeProviders--
+            return ledger.transition({
+              deliveryId: delivery.id,
+              expected: { state: 'accepted', attempt: 0 },
+              next: { state: 'in-flight', attempt: 1 },
+            })
+          })
+        expect(activeProviders).toBe(providerConcurrency)
+        release()
+        results.push(...await Promise.all(wave))
+      }
+
+      expect(peakProviders).toBe(providerConcurrency)
+      expect(results).toHaveLength(recipientCount)
+      expect(results.every(result => result.updated)).toBe(true)
+      expect(journalFsyncs).toBeLessThanOrEqual(
+        Math.ceil(recipientCount / providerConcurrency),
+      )
+      expect(journalFsyncs).toBeLessThan(recipientCount)
+      expect(journalOpens).toBe(journalFsyncs)
+      expect(journalWrites).toBe(journalFsyncs)
+      expect(directoryFsyncs).toBe(journalFsyncs)
+
+      const entries = readFileSync(paths.journal, 'utf8')
+        .trimEnd()
+        .split('\n')
+        .map(line => JSON.parse(line))
+      expect(entries).toHaveLength(recipientCount)
+      for (let index = 0; index < entries.length; index++) {
+        expect(entries[index]).toMatchObject({
+          sequence: index + 1,
+          previousHash: index === 0 ? '0'.repeat(64) : entries[index - 1].hash,
+          patch: {
+            upsertDeliveries: [{ id: accepted.deliveries[index]!.id }],
+          },
+        })
+      }
+
+      const reopened = open({
+        maxOutstandingDeliveries: recipientCount,
+        maxJournalEntries: recipientCount + 1,
+        maxJournalBytes: 64 * 1024 * 1024,
+      })
+      expect(reopened.listRecoverable()).toHaveLength(recipientCount)
+      expect(reopened.listRecoverable().every(delivery => (
+        delivery.state === 'in-flight' && delivery.attempt === 1
+      ))).toBe(true)
+    })
+  }, 30_000)
 
   it('prunes only terminal non-retryable messages by age and count', async () => {
     await withLedger(async ({ open }) => {
@@ -1323,7 +2111,7 @@ describe('DeliveryLedger transitions and retention', () => {
   })
 
   it('enforces the terminal message count without pruning active work', async () => {
-    await withLedger(async ({ paths, open }) => {
+    await withLedger(async ({ open }) => {
       let now = 0
       const ledger = open({
         ids: ['msg-old-count', 'msg-active-count', 'msg-retry-count', 'msg-new-count'],
@@ -1366,15 +2154,18 @@ describe('DeliveryLedger transitions and retention', () => {
       expect(ledger.getMessage(active.message.id)).toBeDefined()
       expect(ledger.getMessage(retryable.message.id)).toBeDefined()
       expect(ledger.getMessage(newFinal.message.id)).toBeDefined()
-      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      expect(snapshot.messages.map((message: { id: string }) => message.id).sort())
+      const replacement = open({ retentionMs: 10_000, maxTerminalMessages: 1 })
+      expect([
+        active.message.id,
+        retryable.message.id,
+        newFinal.message.id,
+      ].filter(id => replacement.getMessage(id)).sort())
         .toEqual([
           active.message.id,
           retryable.message.id,
           newFinal.message.id,
         ].sort())
 
-      const replacement = open({ retentionMs: 10_000, maxTerminalMessages: 1 })
       expect(replacement.getMessage(oldFinal.message.id)).toBeUndefined()
       expect(replacement.listRecoverable().map(delivery => delivery.messageId).sort())
         .toEqual([active.message.id, retryable.message.id].sort())
@@ -1382,7 +2173,7 @@ describe('DeliveryLedger transitions and retention', () => {
   })
 
   it('bounds request identity with the terminal detail retention policy', async () => {
-    await withLedger(async ({ paths, open }) => {
+    await withLedger(async ({ open }) => {
       let now = 0
       const ledger = open({
         ids: ['msg-pruned', 'msg-trigger', 'msg-reaccepted'],
@@ -1407,10 +2198,7 @@ describe('DeliveryLedger transitions and retention', () => {
       now = 1
       await ledger.accept(input('req-trigger'))
       expect(ledger.getMessage('msg-pruned')).toBeUndefined()
-      const snapshot = JSON.parse(readFileSync(paths.primary, 'utf8'))
-      expect(snapshot.messages.find(
-        (record: { requestId: string }) => record.requestId === 'req-pruned',
-      )).toBeUndefined()
+      expect(open({ now: () => now }).getMessage('msg-pruned')).toBeUndefined()
       const reacceptedInput = input('req-pruned', {
         text: 'new logical work after retention',
       })

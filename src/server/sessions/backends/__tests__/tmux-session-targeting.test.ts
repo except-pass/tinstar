@@ -9,6 +9,7 @@ vi.mock('node:util', async (orig) => {
 import {
   deleteTmuxSession,
   getTmuxAgentIdentity,
+  getTmuxSessionWorkingDirectory,
   getTmuxSessionState,
   healthCheck,
   reattachTmuxSession,
@@ -29,6 +30,19 @@ beforeEach(() => {
 })
 
 describe('session-scoped tmux targets', () => {
+  it('reads the managed pane directory through an exact tmux target', async () => {
+    execFileMock.mockResolvedValue({ stdout: '/tmp/standalone-agent\n', stderr: '' })
+
+    await expect(getTmuxSessionWorkingDirectory(config, 'parent'))
+      .resolves.toBe('/tmp/standalone-agent')
+
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      ['display-message', '-p', '-t', '=tinstar-parent:', '#{pane_current_path}'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+  })
+
   it('keeps a surviving agent identity stable and rotates it on relaunch', async () => {
     let launchToken = 'launch-one'
     execFileMock.mockImplementation(async (file: string, args: string[]) => {

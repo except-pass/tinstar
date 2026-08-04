@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type {
   ProviderCapabilities,
   ProviderObservationKind,
@@ -498,6 +498,16 @@ describe('provider capability contract', () => {
         retryAt: '2026-07-30T12:00:03.000Z',
       },
       {
+        state: 'unobservable',
+        providerId: 'forge',
+        messageId: 'msg-retry',
+        attempt: 2,
+        recipient: { providerId: 'forge', sessionId: 'run-forge' },
+        checkedAt: CHECKED_AT,
+        reason: 'Provider evidence is temporarily unavailable',
+        retryAt: '2026-07-30T12:00:03.000Z',
+      },
+      {
         state: 'failed',
         providerId: 'forge',
         messageId: 'msg-retry',
@@ -510,7 +520,9 @@ describe('provider capability contract', () => {
     ] satisfies ProviderDeliveryConfirmation[]
 
     expect(acceptances.map((result) => result.state)).toEqual(['deferred', 'rejected'])
-    expect(confirmations.map((result) => result.state)).toEqual(['pending', 'failed'])
+    expect(confirmations.map((result) => result.state)).toEqual([
+      'pending', 'unobservable', 'failed',
+    ])
   })
 
   it('keeps router acceptance separate from final-mile acceptance and confirmation', async () => {
@@ -933,6 +945,40 @@ describe('provider capability contract', () => {
       },
     })
     expect(acceptCalls).toBe(0)
+  })
+
+  it('guards provider abandonment and keeps re-guarding idempotent', async () => {
+    const delivery = forge.delivery
+    if (!delivery) throw new Error('expected delivery adapter')
+    const abandon = vi.fn(async () => {})
+    const guarded = defineProviderAdapter({
+      ...forge,
+      delivery: { ...delivery, abandon },
+    })
+    const reguarded = defineProviderAdapter(guarded)
+    const request = {
+      messageId: 'msg-abandon',
+      deliveryId: 'msg-abandon/d/1',
+      attempt: 2,
+      acceptedAt: CHECKED_AT,
+      sender: { sessionId: 'run-sender', incarnation: 'sender-v1' },
+      destination: { subject: 'agents.forge' },
+      recipient: { providerId: 'forge', sessionId: 'run-forge', incarnation: 'forge-v1' },
+      text: 'Discard deferred work',
+    }
+    if (!reguarded.delivery?.abandon) throw new Error('expected abandonment adapter')
+
+    await reguarded.delivery.abandon(request)
+    expect(abandon).toHaveBeenCalledOnce()
+    await expect(reguarded.delivery.abandon({
+      ...request,
+      attempt: 0,
+    })).rejects.toThrow('attempt must be positive')
+    await expect(reguarded.delivery.abandon({
+      ...request,
+      recipient: { ...request.recipient, providerId: 'boundary' },
+    })).rejects.toThrow('addressed to provider "boundary"')
+    expect(abandon).toHaveBeenCalledOnce()
   })
 
   it('rejects confirmation for another provider before invoking the adapter', async () => {
