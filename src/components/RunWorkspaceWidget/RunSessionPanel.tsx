@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { RecapEntry, SessionStatus } from '../../types'
 import { resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
@@ -33,11 +33,33 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
   const accent = resolveRunAccent(color)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+  const terminalFrameRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
+      const terminalFrame = terminalFrameRef.current
+      if (!terminalFrame || e.source !== terminalFrame.contentWindow) return
+      let expectedOrigin: string
+      try {
+        expectedOrigin = new URL(terminalFrame.src, window.location.href).origin
+      } catch {
+        return
+      }
+      if (e.origin !== expectedOrigin) return
       if (e.data?.type === 'terminal-focus-toggle' && e.data?.sessionName === sessionId) {
         onTerminalToggle?.()
+      }
+      if (e.data?.type === 'terminal-session-cycle' && e.data?.sessionName === sessionId) {
+        const action = e.data?.action
+        if (action === 'ready-next' || action === 'ready-prev' || action === 'all-next' || action === 'all-prev') {
+          window.dispatchEvent(new CustomEvent('tinstar:terminal-session-cycle', { detail: { action } }))
+        }
+      }
+      if (e.data?.type === 'terminal-scroll-boundary' && e.data?.sessionName === sessionId) {
+        const direction = e.data?.direction
+        if (direction === 'previous' || direction === 'next') {
+          window.dispatchEvent(new CustomEvent('tinstar:terminal-scroll-boundary', { detail: { direction } }))
+        }
       }
     }
     window.addEventListener('message', onMessage)
@@ -132,6 +154,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
           terminalFocused={terminalFocused}
           zoom={zoom}
           onTerminalPointerFocus={onTerminalPointerFocus}
+          terminalFrameRef={terminalFrameRef}
           promptComposerExpanded={promptComposerExpanded}
           onPromptComposerToggle={onPromptComposerToggle}
           composerFocusTrigger={composerFocusTrigger}

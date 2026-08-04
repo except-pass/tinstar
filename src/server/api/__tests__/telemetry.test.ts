@@ -393,6 +393,87 @@ describe('GET /api/telemetry/session/:name/series', () => {
   })
 })
 
+describe('GET /api/telemetry/provider/:provider/session/:session/series', () => {
+  it('returns normalized native provider history with identity and freshness', async () => {
+    const sse = makeFakeSSE()
+    const deps = makeDeps('ready', null, sse)
+    deps.providerQuery = {
+      providerSessionSeries: vi.fn(async () => ({
+        series: [{
+          metric: 'tokens',
+          unit: 'tokens',
+          points: [{ at: '2026-08-01T11:59:55.000Z', value: 1_200 }],
+        }],
+      })),
+    }
+    const routes = createTelemetryRoutes(deps)
+    const pathname = '/api/telemetry/provider/codex/session/run-1/series'
+    const res = makeRes()
+
+    const handled = await routes.handle(
+      makeReq('GET', pathname),
+      res as unknown as ServerResponse,
+      pathname,
+    )
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    expect((res as unknown as FakeRes).parsedBody).toMatchObject({
+      kind: 'historical-telemetry',
+      providerId: 'codex',
+      scope: { kind: 'session', sessionId: 'run-1' },
+      source: { id: 'provider-metrics' },
+      freshness: { state: 'fresh', observedAt: '2026-08-01T11:59:55.000Z' },
+      availability: {
+        state: 'available',
+        value: { series: [{ metric: 'tokens' }] },
+      },
+    })
+    expect(deps.providerQuery.providerSessionSeries).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'codex',
+      sessionId: 'run-1',
+      windowSec: 300,
+      stepSec: 5,
+    }))
+  })
+
+  it('reports provider history as unavailable instead of returning zero while the source is down', async () => {
+    const deps = makeDeps('disabled', null, makeFakeSSE())
+    const routes = createTelemetryRoutes(deps)
+    const pathname = '/api/telemetry/provider/codex/session/run-1/series'
+    const res = makeRes()
+
+    await routes.handle(makeReq('GET', pathname), res as unknown as ServerResponse, pathname)
+
+    expect((res as unknown as FakeRes).parsedBody).toMatchObject({
+      providerId: 'codex',
+      availability: {
+        state: 'unavailable',
+        reason: 'temporarily-unavailable',
+      },
+    })
+  })
+
+  it('reports an all-empty provider series as not observed with unknown freshness', async () => {
+    const deps = makeDeps('ready', null, makeFakeSSE())
+    deps.providerQuery = {
+      providerSessionSeries: vi.fn(async () => ({
+        series: [{ metric: 'tokens', unit: 'tokens', points: [] }],
+      })),
+    }
+    const routes = createTelemetryRoutes(deps)
+    const pathname = '/api/telemetry/provider/codex/session/new-run/series'
+    const res = makeRes()
+
+    await routes.handle(makeReq('GET', pathname), res as unknown as ServerResponse, pathname)
+
+    expect((res as unknown as FakeRes).parsedBody).toMatchObject({
+      freshness: { state: 'unknown', observedAt: null },
+      availability: { state: 'unavailable', reason: 'not-observed' },
+    })
+  })
+})
+
 describe('startPolling — change detection', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })

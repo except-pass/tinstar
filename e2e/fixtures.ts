@@ -32,7 +32,7 @@ export const test = base.extend<
 
       // Poll until ready
       const url = `http://localhost:${port}`
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + 60_000
       let ready = false
       while (Date.now() < deadline) {
         try {
@@ -43,7 +43,7 @@ export const test = base.extend<
       }
       if (!ready) {
         child.kill('SIGTERM')
-        throw new Error(`Worker ${workerIndex} backend on port ${port} failed to start within 10s`)
+        throw new Error(`Worker ${workerIndex} backend on port ${port} failed to start within 60s`)
       }
 
       await use(url)
@@ -59,7 +59,7 @@ export const test = base.extend<
       })
       await rm(dataDir, { recursive: true, force: true })
     },
-    { scope: 'worker' },
+    { scope: 'worker', timeout: 60_000 },
   ],
 
   context: async ({ browser, serverUrl }, use) => {

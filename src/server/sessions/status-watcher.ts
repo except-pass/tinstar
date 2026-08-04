@@ -14,6 +14,8 @@ import {
   type ProviderAdapterRegistry,
   type ProviderTranscriptAdapter,
 } from '../providers/lifecycle'
+import type { ProviderTranscriptObservationEvent } from '../providers/observation-ingestor'
+import type { ProviderSource } from '../../domain/provider-capabilities'
 
 export interface StatusWatcherOpts {
   sessionsDir: string
@@ -30,6 +32,16 @@ export interface StatusWatcherOpts {
   onRecapEntries?: (name: string, entries: RecapEntry[]) => void
   /** Called once per tick with the set of session names currently on disk */
   onSessionsListed?: (names: Set<string>) => void
+  /** Provider-neutral normalized transcript observations. */
+  onObservations?: (
+    providerId: string,
+    sessionId: string,
+    accountRef: string,
+    source: ProviderSource,
+    observations: ProviderTranscriptObservationEvent[],
+  ) => void
+  /** Clear session-scoped observation state when an incarnation is retired. */
+  onSessionObservationsCleared?: (providerId: string, sessionId: string) => void
   /** Poll interval in ms (default 3000) */
   intervalMs?: number
   /** Maximum time for one provider transcript discovery (default 15000ms). */
@@ -81,6 +93,8 @@ export class StatusWatcher {
   private readonly transcriptAdapters = new Map<string, ProviderTranscriptAdapter>()
   /** Guards all name-keyed caches against session-name reuse. */
   private readonly sessionIncarnations = new Map<string, string>()
+  /** Provider owning the current session incarnation, retained for cleanup. */
+  private readonly observationProviders = new Map<string, string>()
   /** Rate-limit diagnostics while lifecycle ownership is intentionally fenced. */
   private readonly backendOwnershipWarnings = new Set<string>()
 
@@ -153,7 +167,9 @@ export class StatusWatcher {
 
     let transcript: ProviderTranscriptAdapter | null
     try {
-      transcript = this.providerRegistry.resolveSession(session).terminal.transcript
+      const provider = this.providerRegistry.resolveSession(session)
+      this.observationProviders.set(session.name, provider.provider.id)
+      transcript = provider.terminal.transcript
     } catch (err) {
       log.warn(
         'status-watcher',
@@ -252,6 +268,26 @@ export class StatusWatcher {
     if (!transcriptPath) {
       await this.checkProcessTree(session)
       return
+    }
+
+    if (transcript.observations) {
+      try {
+        const observations = transcript.observations.read(session.name, transcriptPath)
+        if (observations.length > 0) {
+          this.opts.onObservations?.(
+            this.observationProviders.get(session.name)!,
+            session.name,
+            transcript.observations.accountRef,
+            transcript.observations.source,
+            observations,
+          )
+        }
+      } catch (err) {
+        log.warn(
+          'status-watcher',
+          `${session.name}: provider observations failed: ${(err as Error).message}`,
+        )
+      }
     }
 
     const detail = transcript.readStatus(transcriptPath)
@@ -598,6 +634,7 @@ export class StatusWatcher {
       ...this.idleStreak.keys(),
       ...this.processTreeOverride,
       ...this.sessionIncarnations.keys(),
+      ...this.observationProviders.keys(),
       ...this.backendOwnershipWarnings,
     ])
     for (const name of knownNames) {
@@ -631,6 +668,7 @@ export class StatusWatcher {
   }
 
   private clearSessionCaches(name: string): void {
+    const providerId = this.observationProviders.get(name)
     try {
       this.transcriptAdapters.get(name)?.resetOffset(name)
     } catch (err) {
@@ -639,6 +677,17 @@ export class StatusWatcher {
         `${name}: provider transcript cleanup failed: ${(err as Error).message}`,
       )
     } finally {
+      if (providerId) {
+        try {
+          this.opts.onSessionObservationsCleared?.(providerId, name)
+        } catch (err) {
+          log.warn(
+            'status-watcher',
+            `${name}: provider observation cleanup failed: ${(err as Error).message}`,
+          )
+        }
+      }
+      this.observationProviders.delete(name)
       this.transcriptAdapters.delete(name)
       this.clearTransientSessionCaches(name)
       this.sessionIncarnations.delete(name)

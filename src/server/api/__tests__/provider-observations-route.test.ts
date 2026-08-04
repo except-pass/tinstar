@@ -1,0 +1,181 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { ProviderCurrentObservationsWire } from '../../../domain/provider-observation-wire'
+import { CcQuotaService } from '../../cc-quota/service'
+import { ProviderObservationIngestor } from '../../providers/observation-ingestor'
+import { ProviderCurrentObservationStores } from '../../providers/observation-stores'
+import { buildManagedProviderSessionView, handleRequest, type RouteContext } from '../routes'
+import { createDefaultProviderRegistry } from '../../providers/lifecycle'
+
+describe('GET /api/provider-observations', () => {
+  let server: ReturnType<typeof createServer>
+  let baseUrl: string
+
+  beforeEach(async () => {
+    const now = Date.parse('2026-08-01T12:00:01.000Z')
+    const stores = new ProviderCurrentObservationStores({ now: () => now })
+    const quota = new CcQuotaService({
+      now: () => now,
+      observationStores: stores,
+    })
+    quota.ingest({
+      session_id: 'claude-session',
+      rate_limits: {
+        five_hour: { used_percentage: 40, resets_at: 1_785_588_800 },
+      },
+    })
+
+    const ingestor = new ProviderObservationIngestor({
+      stores,
+      now: () => now,
+    })
+    ingestor.ingest({
+      providerId: 'codex',
+      sessionId: 'codex-session',
+      accountRef: 'default',
+      source: { id: 'rollout', label: 'Codex rollout events' },
+      event: {
+        id: 'codex-event-1',
+        observedAt: '2026-08-01T12:00:00.000Z',
+        replayed: true,
+        sessionUsage: {
+          model: 'gpt-5.4',
+          cumulativeTokens: { total: 1_000 },
+        },
+      },
+    })
+
+    const ctx = {
+      ccQuotaService: quota,
+      providerObservationStores: stores,
+    } as RouteContext
+    server = createServer((req, res) => {
+      void handleRequest(ctx, req, res).then((handled) => {
+        if (!handled) {
+          res.statusCode = 404
+          res.end()
+        }
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, resolve))
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+
+  afterEach(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  })
+
+  it('returns Codex rollout and Claude statusline data from the same store', async () => {
+    const response = await fetch(`${baseUrl}/api/provider-observations`)
+    const body = await response.json() as ProviderCurrentObservationsWire
+
+    expect(response.status).toBe(200)
+    expect(body.version).toBe(1)
+    expect(body.sessionUsage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        providerId: 'codex',
+        scope: { kind: 'session', sessionId: 'codex-session' },
+        availability: expect.objectContaining({
+          value: expect.objectContaining({ model: 'gpt-5.4' }),
+        }),
+      }),
+    ]))
+    expect(body.providerQuota).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        providerId: 'claude',
+        scope: { kind: 'provider', accountRef: 'default' },
+        availability: expect.objectContaining({ state: 'available' }),
+      }),
+    ]))
+  })
+})
+
+describe('managed provider observation aliases', () => {
+  it('maps native conversation IDs to host sessions without provider-specific branches', () => {
+    const view = buildManagedProviderSessionView([
+      {
+        name: 'claude-run',
+        adapter: 'claude',
+        cliTemplate: null,
+        conversation: { id: 'claude-conversation-uuid' },
+      },
+      {
+        name: 'codex-run',
+        adapter: 'codex',
+        cliTemplate: null,
+        conversation: { id: null },
+      },
+    ], createDefaultProviderRegistry())
+
+    expect(view).toEqual([
+      {
+        hostSessionId: 'claude-run',
+        providerId: 'claude',
+        providerSessionIds: ['claude-run', 'claude-conversation-uuid'],
+      },
+      {
+        hostSessionId: 'codex-run',
+        providerId: 'codex',
+        providerSessionIds: ['codex-run'],
+      },
+    ])
+  })
+
+  it('resolves a legacy session through its configured template', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'legacy-codex-run',
+      adapter: null,
+      cliTemplate: 'codex-custom',
+      conversation: { id: 'thread-1' },
+    }], createDefaultProviderRegistry(), [{
+      id: 'codex-custom',
+      name: 'Codex custom',
+      adapter: 'codex',
+      startCmd: 'codex',
+      resumeCmd: 'codex resume',
+    }])
+
+    expect(view).toEqual([{
+      hostSessionId: 'legacy-codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['legacy-codex-run', 'thread-1'],
+    }])
+  })
+
+  it('keeps a modern session mapped when its saved template no longer exists', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'codex-run',
+      adapter: 'codex',
+      cliTemplate: 'renamed-template',
+      conversation: { id: 'thread-2' },
+    }], createDefaultProviderRegistry(), [])
+
+    expect(view).toEqual([{
+      hostSessionId: 'codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['codex-run', 'thread-2'],
+    }])
+  })
+
+  it('keeps a modern persisted adapter authoritative after its template changes provider', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'codex-run',
+      adapter: 'codex',
+      cliTemplate: 'edited-template',
+      conversation: { id: 'thread-3' },
+    }], createDefaultProviderRegistry(), [{
+      id: 'edited-template',
+      name: 'Edited template',
+      adapter: 'claude',
+      startCmd: 'claude',
+      resumeCmd: 'claude --resume',
+    }])
+
+    expect(view).toEqual([{
+      hostSessionId: 'codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['codex-run', 'thread-3'],
+    }])
+  })
+})
