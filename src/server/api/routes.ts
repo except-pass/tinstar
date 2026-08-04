@@ -1722,6 +1722,7 @@ export interface RouteContext {
   providerRegistry?: ProviderAdapterRegistry
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
+  providerObservationStores?: import('../providers/observation-stores').ProviderCurrentObservationStores
   slashRegistry?: SlashCommandRegistry
   slashUsage?: SlashUsage
   otlpExporter?: OtlpExporter
@@ -2446,6 +2447,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // Raw cc-quota snapshot shape (ADR 0001 exception); consumed by useCcQuota
     // which expects the raw payload, not the envelope.
     json(res, ctx.ccQuotaService.getSnapshot())
+    return true
+  }
+
+  // GET /api/provider-observations — one provider-neutral view shared by
+  // native provider readers and legacy sources such as Claude's statusline.
+  if (method === 'GET' && ctx.providerObservationStores && url === '/api/provider-observations') {
+    json(res, ctx.providerObservationStores.toWire())
     return true
   }
 
