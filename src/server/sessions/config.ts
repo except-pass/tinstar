@@ -113,6 +113,7 @@ export interface TinstarConfig {
       cacheHit: boolean
       duty: boolean
       turnLength: boolean
+      timeline: boolean
     }
     /** S/M/L quick-resize presets. Shape mirrors widgetSizePresets.ts on the client. */
     widgetSizePresets: {
@@ -384,6 +385,7 @@ export const BASE_CONFIG = {
       cacheHit: false,
       duty: true,
       turnLength: true,
+      timeline: true,
     },
     // Keep in sync with DEFAULT_WIDGET_SIZE_PRESETS in src/widgets/widgetSizePresets.ts
     widgetSizePresets: {
@@ -413,7 +415,22 @@ export const BASE_CONFIG = {
     maxConcurrentWorkers: 4,
     workerTimeoutMs: 10 * 60_000,
     sweepMs: 5_000,
-    defaultIntervalMs: 30 * 60_000,
+    // SIX HOURS, raised from thirty minutes on measured evidence: across a
+    // three-hour session every one of twelve periodic fires returned "no change",
+    // and the surface that most needed periodic verification was tracking a number
+    // that drifts WEEKLY. A thirty-minute floor against a weekly-drifting answer is
+    // roughly three hundred wasted background agents per real change.
+    //
+    // The periodic tick is an AUDIT of whether a declaration is still complete, not a
+    // sampling of the world — the world is sampled by triggers and by witnesses.
+    //
+    // This is the interval for an author who declared a policy and no number. An
+    // author who knows their cadence should say so — `intervalMs: 86400000` for a
+    // daily check. A Surface whose sources are all in the repo is already covered by
+    // `git-revision` for the moments its answer can change; the deadline is the
+    // backstop for the trigger that never arrived, which is why a claim-bearing
+    // Surface earns one regardless of where its claims look.
+    defaultIntervalMs: 6 * 60 * 60_000,
   },
 }
 

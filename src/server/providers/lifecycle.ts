@@ -1,4 +1,8 @@
-import type { CapabilitySupport, ProviderIdentity } from '../../domain/provider-capabilities'
+import type {
+  CapabilitySupport,
+  ProviderIdentity,
+  ProviderSource,
+} from '../../domain/provider-capabilities'
 import type { RecapEntry } from '../../types'
 import type { CliTemplate } from '../sessions/config'
 import type { Session } from '../sessions/session'
@@ -11,6 +15,7 @@ import {
   resetOffset,
 } from '../sessions/transcript-parser'
 import {
+  CodexRolloutObservationSource,
   discoverTranscript as discoverCodexTranscript,
   parseCodexRecapEntries,
   readCodexStatus,
@@ -22,6 +27,8 @@ import {
   type ProviderDeliveryAdapter,
 } from './contract'
 import { codexMcpLaunchFlags } from './codex-mcp'
+import type { ProviderTranscriptObservationEvent } from './observation-ingestor'
+import type { ProviderAdapter as ObservationProviderAdapter } from './contract'
 
 export interface ProviderTranscriptStatus {
   state: 'running' | 'idle'
@@ -40,6 +47,17 @@ export interface ProviderTranscriptDiscovery {
   captureScreen?: (tmuxName: string, scrollback?: number) => Promise<string>
 }
 
+export interface ProviderTranscriptObservations {
+  /** Stable native source identity surfaced on provider-neutral snapshots. */
+  source: ProviderSource
+  /** Stable configured account identity; single-account providers use `default`. */
+  accountRef: string
+  read(
+    sessionName: string,
+    transcriptPath: string,
+  ): ProviderTranscriptObservationEvent[]
+}
+
 /**
  * Provider-owned transcript behavior consumed by the shared managed-session
  * watcher. New providers implement this interface instead of adding their ID
@@ -50,6 +68,8 @@ export interface ProviderTranscriptAdapter {
   readStatus(transcriptPath: string): ProviderTranscriptStatus | null
   parseRecapEntries(sessionName: string, transcriptPath: string): RecapEntry[]
   resetOffset(sessionName: string): void
+  /** Optional normalized native observations, polled independently of status. */
+  observations?: ProviderTranscriptObservations
   /** Number of identical idle observations required before running -> idle. */
   idleDebouncePolls?: number
   /** Parse offset-based recap entries on unchanged idle observations too. */
@@ -148,6 +168,7 @@ export class ProviderCapabilityError extends Error {
 export class ProviderAdapterRegistry {
   private readonly adapters = new Map<string, TerminalProviderAdapter>()
   private readonly deliveries = new Map<string, ProviderDeliveryAdapter>()
+  private readonly observationAdapters = new Map<string, ObservationProviderAdapter>()
 
   constructor(adapters: readonly TerminalProviderAdapter[] = []) {
     for (const adapter of adapters) this.register(adapter)
@@ -188,6 +209,39 @@ export class ProviderAdapterRegistry {
 
   get(providerId: string): TerminalProviderAdapter | undefined {
     return this.adapters.get(providerId)
+  }
+
+  registerObservations<T extends ObservationProviderAdapter>(adapter: T): T {
+    const provider = this.require(adapter.provider.id)
+    if (provider.provider.label !== adapter.provider.label) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${adapter.provider.id}" label `
+        + `"${adapter.provider.label}" does not match lifecycle label `
+        + `"${provider.provider.label}"`,
+      )
+    }
+    if (this.observationAdapters.has(adapter.provider.id)) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${adapter.provider.id}" is already registered`,
+      )
+    }
+    this.observationAdapters.set(adapter.provider.id, adapter)
+    return adapter
+  }
+
+  getObservations(providerId: string): ObservationProviderAdapter | undefined {
+    return this.observationAdapters.get(providerId)
+  }
+
+  requireObservations(providerId: string): ObservationProviderAdapter {
+    this.require(providerId)
+    const adapter = this.observationAdapters.get(providerId)
+    if (!adapter) {
+      throw new ProviderAdapterResolutionError(
+        `Provider observation adapter "${providerId}" is not registered`,
+      )
+    }
+    return adapter
   }
 
   require(providerId: string): TerminalProviderAdapter {
@@ -273,6 +327,8 @@ const claudeTranscript: ProviderTranscriptAdapter = {
   conversationProjectDir: getProjectDir,
 }
 
+const codexRolloutObservations = new CodexRolloutObservationSource()
+
 const codexTranscript: ProviderTranscriptAdapter = {
   async discover({ session, tmuxName, workingDirectory, captureScreen }) {
     const workdir = session.workspace?.path ?? workingDirectory
@@ -290,7 +346,17 @@ const codexTranscript: ProviderTranscriptAdapter = {
     return state ? { state } : null
   },
   parseRecapEntries: parseCodexRecapEntries,
-  resetOffset: resetCodexOffset,
+  observations: {
+    source: { id: 'rollout', label: 'Codex rollout events' },
+    accountRef: 'default',
+    read(sessionName, transcriptPath) {
+      return codexRolloutObservations.read(sessionName, transcriptPath)
+    },
+  },
+  resetOffset(sessionName) {
+    resetCodexOffset(sessionName)
+    codexRolloutObservations.reset(sessionName)
+  },
   idleDebouncePolls: 1,
   parseRecapWhileIdle: true,
 }

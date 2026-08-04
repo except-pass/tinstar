@@ -44,7 +44,7 @@ import { SlateCleanButton } from './SlateCleanButton'
 import { SurfaceDegradedBanner } from './SurfaceDegradedBanner'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
-import { FreshnessBadge } from './FreshnessBadge'
+import { ClaimProblemNote, ClaimRefusalNote, FreshnessBadge } from './FreshnessBadge'
 import { useNow } from '../../hooks/useNow'
 import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
 import { surfaceHaystack } from './slateSearch'
@@ -704,17 +704,22 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               Sent — but that session isn’t reachable right now.
             </div>
           ) : null
-          // Freshness footer: "updated Xm ago", ambering when the surface hasn't been
-          // tended in a while — the visible cue so a stale assertion gets a second look.
-          // A ⚡ leads it when the surface self-refreshes from a recipe (fast path).
+          // Freshness footer: the witness stamp ("checked Xm ago" / "not yet checked"
+          // / "nothing to check"), ambering when a witnessed surface has drifted past
+          // the horizon. A ⚡ leads it when the surface self-refreshes from a recipe.
           const footer = (
             <div className="mt-1 flex items-center justify-end gap-1.5">
-              {/* The host's own verdict sits LEFT of the age, because it outranks
-                  it: "the repo moved under this" is evidence, "updated 8m ago" is
-                  a guess. Renders nothing when the surface is verified. */}
+              {/* The host's own verdict sits LEFT of the stamp, because it outranks
+                  it: "the repo moved under this" is evidence about the content,
+                  the stamp is about when anyone last looked. Renders nothing when
+                  the surface is verified. */}
               <FreshnessBadge freshness={surface.freshness} />
               {surface.refresh && <FastPathBadge className="text-[10px]" />}
-              <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+              <SurfaceAge
+                witnessedAt={surface.freshness?.witnessedAt}
+                unwitnessed={surface.unwitnessed}
+                now={now}
+              />
             </div>
           )
 
@@ -783,6 +788,20 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                       ⚠
                     </span>
                   )}
+                  {/* Same argument as the ⚠ above, one field over: a collapsed card
+                      still has to say that one of its claims was refused, or
+                      minimizing a surface hides the only trace of the mistake. The
+                      sentences themselves are on the hover — a collapsed row has no
+                      space for prose, and expanding is one click. */}
+                  {(surface.freshness?.claimRefusals?.length ?? 0) > 0 && (
+                    <span
+                      data-testid={`claim-refusals-marker-${surface.id}`}
+                      title={surface.freshness!.claimRefusals!.join(' ')}
+                      className="shrink-0 text-[10px] leading-none text-amber-400/90"
+                    >
+                      ⚑
+                    </span>
+                  )}
                   <span
                     data-testid={`slate-minimized-title-${surface.id}`}
                     className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-ink-mid"
@@ -794,7 +813,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                         trustworthy — that is most of what a title row is for. */}
                     <FreshnessBadge freshness={surface.freshness} />
                     {surface.refresh && <FastPathBadge className="text-[10px]" />}
-                    <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+                    <SurfaceAge
+                      witnessedAt={surface.freshness?.witnessedAt}
+                      unwitnessed={surface.unwitnessed}
+                      now={now}
+                    />
                   </span>
                 </div>
               </div>
@@ -820,6 +843,16 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   <A2uiRenderer content={surface.body} />
                 </A2uiErrorBoundary>
               )}
+              {/* A claim this surface DECLARED that the host would not accept (U6).
+                  Above the footer, because it is about the content just rendered
+                  rather than about how fresh it is — and the content IS the new one:
+                  a refused claim costs that claim, never the surface (KTD5). */}
+              <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />
+              {/* And a claim the host DID accept but could not resolve (U7). Below
+                  the refusal because it is the weaker statement of the two: a
+                  refusal is permanent until a person edits the file, an unresolved
+                  witness may well resolve on the next sweep. */}
+              <ClaimProblemNote id={surface.id} freshness={surface.freshness} />
               {note}
               {footer}
             </div>

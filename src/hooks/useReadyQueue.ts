@@ -66,7 +66,8 @@ export function cyclePrev(
 ): Run | null {
   if (names.length === 0) return null
   const currentName = runs.find(r => r.id === currentRunId)?.sessionId ?? null
-  const idx = currentName ? names.indexOf(currentName) : 0
+  const foundIndex = currentName ? names.indexOf(currentName) : -1
+  const idx = foundIndex >= 0 ? foundIndex : 0
   const prevName = names[(idx - 1 + names.length) % names.length]
   return runs.find(r => r.sessionId === prevName) ?? null
 }

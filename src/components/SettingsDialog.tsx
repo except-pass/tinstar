@@ -61,9 +61,11 @@ type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets' | 'plugin
 
 interface Props {
   onClose: () => void
+  focusMode?: boolean
+  onFocusModeChange?: (focusMode: boolean) => void
 }
 
-export function SettingsDialog({ onClose }: Props) {
+export function SettingsDialog({ onClose, focusMode = false, onFocusModeChange }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const projectsRef = useRef<HTMLDivElement>(null)
   const agentsRef = useRef<HTMLDivElement>(null)
@@ -941,6 +943,17 @@ export function SettingsDialog({ onClose }: Props) {
               <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
                 Run Session
               </h5>
+              <label className="mb-3 flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={focusMode}
+                  onChange={e => onFocusModeChange?.(e.target.checked)}
+                  className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
+                />
+                <span className="text-xs text-slate-300 group-hover:text-slate-100 transition-colors">
+                  Open in Focus mode
+                </span>
+              </label>
               <label className="flex items-center gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
@@ -978,6 +991,7 @@ export function SettingsDialog({ onClose }: Props) {
                   ['cacheHit',   'Cache hit'],
                   ['duty',       'Duty cycle'],
                   ['turnLength', 'Turn length'],
+                  ['timeline',   'Where the time went'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-3 cursor-pointer group">
                     <input

@@ -175,10 +175,32 @@ export type ProviderSessionUsage = {
       /** Some providers expose request usage without a session-wide counter. */
       cumulativeTokens?: ProviderTokenUsage
       latestTurnTokens: ProviderTokenUsage
-    }
+  }
 )
 
-export interface ProviderSessionContext {
+/** Return a displayable input/output token total without treating absence as zero. */
+export function providerTokenTotal(
+  tokens: ProviderTokenUsage | null | undefined,
+): number | null {
+  if (!tokens) return null
+  if (tokens.total !== undefined) return tokens.total
+  if (tokens.input === undefined && tokens.output === undefined) return null
+  return (tokens.input ?? 0) + (tokens.output ?? 0)
+}
+
+/**
+ * Prefer a session-wide token total when it can be derived. A cumulative bag
+ * may legally contain only cache/reasoning counters, so fall back to the latest
+ * turn when that bag has no displayable input/output total.
+ */
+export function providerSessionTokenTotal(
+  usage: ProviderSessionUsage | null | undefined,
+): number | null {
+  return providerTokenTotal(usage?.cumulativeTokens)
+    ?? providerTokenTotal(usage?.latestTurnTokens)
+}
+
+interface ProviderSessionContextFields {
   /**
    * Shared normalized names intentionally differ from the Claude-specific
    * `SessionContextSnapshot` fields in `src/server/cc-quota/types.ts`.
@@ -188,6 +210,9 @@ export interface ProviderSessionContext {
   windowTokens?: number
   usedPercent?: number
 }
+
+/** A context observation always contains at least one real measurement. */
+export type ProviderSessionContext = RequireAtLeastOne<ProviderSessionContextFields>
 
 export interface ProviderQuotaWindow {
   /** Provider-native stable key; no shared 5-hour/7-day vocabulary is assumed. */

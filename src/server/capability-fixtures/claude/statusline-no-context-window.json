@@ -1,0 +1,19 @@
+{
+  "session_id": "00000000-0000-4000-8000-00000000c1a3",
+  "cwd": "/home/fixture/repo/demo",
+  "model": {
+    "id": "claude-opus-5",
+    "display_name": "Opus 5"
+  },
+  "version": "2.1.118",
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 33,
+      "resets_at": 1785450000
+    },
+    "seven_day": {
+      "used_percentage": 77,
+      "resets_at": 1785636000
+    }
+  }
+}

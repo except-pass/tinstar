@@ -1271,6 +1271,16 @@ function isFinal(delivery: DeliveryRecord): boolean {
   return delivery.state === 'failed' && lastDeliveryEvent(delivery).retryable === false
 }
 
+function evidenceEqual(
+  left: DeliveryEvidence | undefined,
+  right: DeliveryEvidence | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.source.id === right.source.id
+    && left.source.label === right.source.label
+    && left.reference === right.reference
+}
+
 function transitionProblem(
   current: Pick<DeliveryRecord, 'state' | 'attempt' | 'history'>,
   next: Omit<DeliveryStateEvent, 'at'>,
@@ -1287,10 +1297,15 @@ function transitionProblem(
   if (delta === 1 && next.state !== 'in-flight') {
     return 'a new attempt must begin in-flight'
   }
+  const previous = lastDeliveryEvent(current)
   if (delta === 0
     && next.state === current.state
-    && next.reason === lastDeliveryEvent(current).reason
-    && next.retryAt === lastDeliveryEvent(current).retryAt) {
+    && next.reason === previous.reason
+    && next.retryAt === previous.retryAt
+    && next.retryable === previous.retryable
+    && next.attemptRef === previous.attemptRef
+    && next.providerAcceptedAt === previous.providerAcceptedAt
+    && evidenceEqual(next.evidence, previous.evidence)) {
     return 'transition must change state or attempt metadata'
   }
   if ((next.state === 'in-flight' || next.state === 'delivered')

@@ -42,6 +42,7 @@ import {
   listSessions,
   updateSession,
   interactivePortWindow,
+  loadSecrets,
   refreshConfigProblem,
   type TinstarConfig,
   type Session,
@@ -79,7 +80,6 @@ import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
 import { OtlpExporter } from './stores/otlp-exporter'
-import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
@@ -95,6 +95,9 @@ import {
 } from './messaging/delivery-dispatch'
 import { deriveMessageRouterSessionKey } from './messaging/message-router-auth'
 import {
+  DeliveryRecoveryCoordinator,
+} from './messaging/delivery-recovery'
+import {
   NatsMessageRouterService,
   messageRouterActivationDecision,
   messageRouterMasterKey,
@@ -103,6 +106,10 @@ import {
   stopAllMessageRouters,
   type MessageRouterOwnerLease,
 } from './messaging/message-router'
+import { ProviderCurrentObservationStores } from './providers/observation-stores'
+import { ProviderObservationIngestor } from './providers/observation-ingestor'
+import { createClaudeObservationAdapter } from './providers/claude-observation-adapter'
+import { getDetailedUsage } from './sessions/context-usage'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -694,6 +701,7 @@ export function initBackend(): RouteContext {
   const docStore = new DocumentStore()
   const otelStore = new OTelStore()
   const providerRegistry = createDefaultProviderRegistry()
+  let sessionConfig: TinstarConfig | null = null
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
@@ -703,7 +711,23 @@ export function initBackend(): RouteContext {
   const slashUsage = new SlashUsage(resolveSlashUsagePath())
   // Debounced flush every 5s while dirty
   setInterval(() => { void slashUsage.flush() }, 5_000).unref()
-  const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
+  const providerObservationStores = new ProviderCurrentObservationStores()
+  const providerObservationIngestor = new ProviderObservationIngestor({
+    stores: providerObservationStores,
+    sink: otlpExporter,
+  })
+  const claudeObservations = createClaudeObservationAdapter({
+    stores: providerObservationStores,
+    sink: otlpExporter,
+    getTelemetryQuery: () => observability.query,
+    getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+    getDetailedContext: conversationId => getDetailedUsage(
+      conversationId,
+      sessionConfig ? loadSecrets(sessionConfig.dirs.secrets) : {},
+    ),
+  })
+  providerRegistry.registerObservations(claudeObservations.adapter)
+  const ccQuotaService = claudeObservations.statusline
   new OTelProcessor(bus, otelStore, otlpExporter)
 
   // Wire SSE
@@ -718,7 +742,8 @@ export function initBackend(): RouteContext {
 
   const telemetryRoutes = createTelemetryRoutes({
     sse,
-    get query() { return observability.query },
+    get query() { return observability.query ? claudeObservations : null },
+    get providerQuery() { return observability.query },
     getState: () => observability.state,
     getProgress: () => observability.progress,
     getLastError: () => observability.lastError,
@@ -845,7 +870,96 @@ export function initBackend(): RouteContext {
       // in-flight work is never duplicated blindly. The persisted recipient
       // incarnation remains the target when a session name has been reused.
       const loggedPendingDeliveries = new Set<string>()
-      deliveryRetryScheduler = new DeliveryRetryScheduler(deliveryLedger, providerRegistry, {
+      const activeConfig = sessionConfig
+      const activeLedger = deliveryLedger
+      const recovery = new DeliveryRecoveryCoordinator({
+        ledger: activeLedger,
+        observeRecipient: async (recipient) => {
+          const session = getSession(activeConfig.dirs.sessions, recipient.sessionId)
+          if (!session) {
+            return {
+              state: 'dead' as const,
+              reason: 'recipient session was deleted while Tinstar was offline',
+            }
+          }
+          if (existsSync(join(
+            activeConfig.dirs.sessions,
+            recipient.sessionId,
+            '.deleting',
+          ))) {
+            return {
+              state: 'dead' as const,
+              reason: 'recipient session deletion was in progress during restart',
+            }
+          }
+          if (session.state !== 'running'
+            && session.state !== 'idle'
+            && session.state !== 'needs_attention') {
+            return {
+              state: 'dead' as const,
+              reason: `recipient session was ${session.state} during restart`,
+            }
+          }
+          try {
+            const incarnation = await tmuxBackend.getTmuxAgentIdentity(
+              activeConfig,
+              recipient.sessionId,
+            )
+            return incarnation === null
+              ? {
+                  state: 'dead' as const,
+                  reason: 'recipient process exited while Tinstar was offline',
+                }
+              : { state: 'alive' as const, incarnation }
+          } catch (error) {
+            return {
+              state: 'inconclusive' as const,
+              reason: `recipient liveness probe failed: ${error instanceof Error ? error.message : String(error)}`,
+            }
+          }
+        },
+        // Until a provider registers exact stamped transcript evidence, an
+        // ambiguous in-flight attempt stays ambiguous instead of substring-
+        // matching an unrelated transcript line and retrying blindly.
+        inspectTranscriptEvidence: async request => ({
+          providerId: request.providerId,
+          messageId: request.messageId,
+          attempt: request.attempt,
+          ...(request.attemptRef !== undefined
+            ? { attemptRef: request.attemptRef }
+            : {}),
+          recipient: {
+            providerId: request.recipient.providerId,
+            sessionId: request.recipient.sessionId,
+            incarnation: request.recipient.incarnation,
+          },
+          state: 'inconclusive' as const,
+          checkedAt: new Date().toISOString(),
+          reason: 'provider transcript recovery evidence is not registered',
+        }),
+      })
+      const recoveryReport = await recovery.recover()
+      const failedRecoveries = recoveryReport.outcomes.filter(
+        entry => entry.disposition === 'failed',
+      ).length
+      const ambiguousRecoveries = recoveryReport.outcomes.filter(
+        entry => entry.disposition === 'ambiguous',
+      ).length
+      if (recoveryReport.status === 'faulted') {
+        log.error('delivery-recovery', 'startup delivery recovery remained fail-closed', {
+          ledgerHealth: recoveryReport.ledgerHealth,
+          scanned: recoveryReport.scanned,
+          outcomes: recoveryReport.outcomes,
+        })
+      } else if (recoveryReport.scanned > 0) {
+        log.info(
+          'delivery-recovery',
+          `reconciled ${recoveryReport.scanned} delivery obligation(s)`,
+          { failed: failedRecoveries, ambiguous: ambiguousRecoveries },
+        )
+      }
+
+      deliveryRetryScheduler = new DeliveryRetryScheduler(activeLedger, providerRegistry, {
         onOutcomes: (outcomes) => {
           for (const outcome of outcomes) {
             if (outcome.state === 'pending') {
@@ -994,7 +1108,6 @@ export function initBackend(): RouteContext {
     otelStore.clear()
   }
 
-  let sessionConfig: TinstarConfig | null = null
   const bootDeletionCleanups: Promise<void>[] = []
 
   // --- Session management ---
@@ -1297,6 +1410,20 @@ export function initBackend(): RouteContext {
             if (session) observeFromRecapEntries(name, entries, session)
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
+          onObservations: (providerId, sessionId, accountRef, source, observations) => {
+            for (const event of observations) {
+              providerObservationIngestor.ingest({
+                providerId,
+                sessionId,
+                accountRef,
+                source,
+                event,
+              })
+            }
+          },
+          onSessionObservationsCleared: (providerId, sessionId) => {
+            providerObservationIngestor.clearSession(providerId, sessionId)
+          },
           resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
           captureBackendGeneration: name =>
             persistedSessionBackendGenerationForConfig(cfg, name),
@@ -1491,7 +1618,9 @@ export function initBackend(): RouteContext {
 
   const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
-    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
+    simulatorTestApiEnabled: fastSim,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    providerObservationStores, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     providerRegistry,
     get natsTraffic() { return natsTraffic },
