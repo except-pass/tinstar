@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
@@ -21,6 +22,7 @@ import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
+import { buildSessionTimeline, findCodexCandidates, pickCodexRollout, resolveTranscriptPath, DEFAULT_WINDOW_SEC, type TimelineInput } from '../sessions/timeline'
 import { buildCoversSummary } from '../sessions/covers-summary'
 import { guestEnv } from '../sessions/guestEnv'
 import { reviveFromTombstone } from '../sessions/necro'
@@ -4054,6 +4056,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return slash === -1 ? rest : rest.slice(0, slash)
     }
 
+    /**
+     * Resolve which transcript file carries a session's history.
+     *
+     * Codex rollouts are matched by working directory and then disambiguated by
+     * start time — a session that spawns sub-agents fills its own directory with
+     * their rollouts, so "newest file" picks a stranger's log (R19). Claude
+     * transcripts are addressed directly by conversation id, with a filesystem
+     * scan as the fallback for sessions that have no recorded workspace path.
+     *
+     * `transcriptPath: null` is a legitimate outcome, not a failure (R18).
+     */
+    function resolveTimelineInput(session: Session): TimelineInput {
+      const adapter = (session as Session & { adapter?: string | null }).adapter ?? 'claude'
+      const workdir = session.workspace?.path ?? null
+      const createdSec = Date.parse(session.created) / 1000
+
+      // Memoised: Codex discovery walks the whole rollout tree, which cost ~0.5-1s
+      // on every poll before the timeline cache was even consulted.
+      const path = resolveTranscriptPath(session.name, () => {
+        if (adapter === 'codex') {
+          // Codex owns this path regardless of TINSTAR_CONFIG_HOME — it is another
+          // tool's state directory, not Tinstar config. Mirrors codex-transcript.ts.
+          const root = join(homedir(), '.codex', 'sessions')
+          return workdir ? pickCodexRollout(createdSec, findCodexCandidates(root, workdir)) : null
+        }
+        const convId = session.conversation?.id ?? null
+        if (!convId) return null
+        const direct = workdir ? getTranscriptPath(workdir, convId) : null
+        return direct && existsSync(direct) ? direct : findTranscriptByConvId(convId)
+      })
+      return { name: session.name, adapter, transcriptPath: path, createdSec }
+    }
+
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
@@ -4221,6 +4256,32 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
             fail(res, 'INTERNAL', (err as Error).message)
           })
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/timeline?windowSec=<n> — where the run's time went
+    if (method === 'GET' && url.startsWith('/api/sessions/') && (url.split('?')[0] ?? '').endsWith('/timeline')) {
+      const name = extractSessionName(url.split('?')[0] ?? '', '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          return true
+        }
+        const params = new URL(url, 'http://localhost').searchParams
+        const requested = Number.parseInt(params.get('windowSec') ?? '', 10)
+        const windowSec = Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_WINDOW_SEC
+        try {
+          const timeline = buildSessionTimeline(resolveTimelineInput(session))
+          // null is a real answer, not an error: a Codex session with no
+          // workspace.path has no working directory to discover a rollout
+          // against, so there is nothing to reconstruct (R18).
+          ok(res, timeline ? { ...timeline, windowSec } : null)
+        } catch (err) {
+          log.error('api', `timeline failed for ${name}: ${(err as Error).message}`)
+          fail(res, 'INTERNAL', (err as Error).message)
+        }
         return true
       }
     }

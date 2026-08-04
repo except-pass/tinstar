@@ -93,6 +93,7 @@ export interface TinstarConfig {
       cacheHit: boolean
       duty: boolean
       turnLength: boolean
+      timeline: boolean
     }
     /** S/M/L quick-resize presets. Shape mirrors widgetSizePresets.ts on the client. */
     widgetSizePresets: {
@@ -356,6 +357,7 @@ export const BASE_CONFIG = {
       cacheHit: false,
       duty: true,
       turnLength: true,
+      timeline: true,
     },
     // Keep in sync with DEFAULT_WIDGET_SIZE_PRESETS in src/widgets/widgetSizePresets.ts
     widgetSizePresets: {
