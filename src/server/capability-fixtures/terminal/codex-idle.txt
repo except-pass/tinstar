@@ -1,0 +1,10 @@
+  - Added the fixture files under src/server/capability-fixtures/.
+
+  Nothing else changed.
+
+─ Worked for 1m 44s ──────────────────────────────────────────────────────────
+
+
+› Summarize recent commits
+
+  gpt-5.6-sol xhigh · ~/repo/demo · Main [default]

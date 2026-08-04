@@ -10,7 +10,7 @@
  * or marshal-specific lifecycle (ensure/restart). Those live in the callers.
  */
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { ComponentPropsWithoutRef } from 'react'
+import type { ComponentPropsWithoutRef, Ref } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -253,7 +253,7 @@ function StatusMessage({ entry, accent }: { entry: RecapEntry; accent: string })
  * its natural size so ttyd maintains a full row/column count. The canvas zoom
  * makes text smaller naturally, which is fine and preserves readability.
  */
-function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }: { src: string; tick: number; focused?: boolean; accent: string; zoom?: number; onPointerFocus?: () => void }) {
+function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus, iframeRef }: { src: string; tick: number; focused?: boolean; accent: string; zoom?: number; onPointerFocus?: () => void; iframeRef?: Ref<HTMLIFrameElement> }) {
   // Only counter-scale when zoomed in; zooming out lets text shrink naturally.
   const needsScale = zoom > 1
   return (
@@ -280,6 +280,7 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
         }}
       >
         <iframe
+          ref={iframeRef}
           key={tick}
           src={src}
           style={{ display: 'block', width: '100%', height: '100%', border: 0, background: 'black' }}
@@ -935,6 +936,7 @@ export interface PromptComposerProps {
   terminalFocused?: boolean
   zoom?: number
   onTerminalPointerFocus?: () => void
+  terminalFrameRef?: Ref<HTMLIFrameElement>
   promptComposerExpanded?: boolean
   onPromptComposerToggle?: () => void
   composerFocusTrigger?: number
@@ -956,6 +958,7 @@ export function PromptComposer({
   terminalFocused,
   zoom,
   onTerminalPointerFocus,
+  terminalFrameRef,
   promptComposerExpanded,
   onPromptComposerToggle,
   composerFocusTrigger,
@@ -1021,6 +1024,7 @@ export function PromptComposer({
           accent={accent}
           zoom={zoom}
           onPointerFocus={onTerminalPointerFocus}
+          iframeRef={terminalFrameRef}
         />
       ) : activeTab === 'recap' ? (
         <div

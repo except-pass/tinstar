@@ -266,6 +266,45 @@ export function deleteSession(sessionsDir: string, name: string): boolean {
   }
 }
 
+export interface SessionIdentityRecord {
+  name: string
+  adapter: string | null
+  cliTemplate: string | null
+  conversation: { id: string | null }
+}
+
+/**
+ * Read only the persisted identity fields needed to join provider observations
+ * to managed sessions. Unlike listSessions(), this path intentionally does not
+ * inspect workspaces or resolve Git branches, so it is safe for frequent UI
+ * polling. The records are read on every call, which keeps conversation and
+ * template changes visible without a separate cache invalidation protocol.
+ */
+export function listSessionIdentityRecords(sessionsDir: string): SessionIdentityRecord[] {
+  let entries: import('node:fs').Dirent<string>[]
+  try {
+    entries = readdirSync(sessionsDir, { withFileTypes: true, encoding: 'utf8' as const })
+  } catch {
+    return []
+  }
+
+  const records: SessionIdentityRecord[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const deletingMarker = join(sessionsDir, entry.name, '.deleting')
+    if (existsSync(deletingMarker)) continue
+    const session = getSession(sessionsDir, entry.name)
+    if (!session || existsSync(deletingMarker)) continue
+    records.push({
+      name: session.name,
+      adapter: session.adapter,
+      cliTemplate: session.cliTemplate,
+      conversation: { id: session.conversation.id },
+    })
+  }
+  return records
+}
+
 export async function listSessions(sessionsDir: string): Promise<Session[]> {
   let entries: import('node:fs').Dirent<string>[]
   try {

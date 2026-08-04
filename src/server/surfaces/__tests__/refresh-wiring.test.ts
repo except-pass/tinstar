@@ -77,6 +77,18 @@ describe('parseStagedResult', () => {
   })
 })
 
+describe('the shipped refresh defaults', () => {
+  it('verifies every six hours by default, not every thirty minutes', () => {
+    // The periodic tick is an AUDIT of whether a declaration is still complete, not
+    // a sampling of the world — triggers and witnesses sample the world. Thirty
+    // minutes is the value the live job table was measured under, and it is why the
+    // periodic tick fired sixty times in a few hours; across a three-hour session
+    // every one of twelve fires returned "no change", against a surface tracking a
+    // number that drifts WEEKLY.
+    expect(BASE_CONFIG.refresh.defaultIntervalMs).toBe(6 * 60 * 60_000)
+  })
+})
+
 describe('isLiveSessionRecord', () => {
   const record = (state: Session['state']): Pick<Session, 'state'> => ({ state })
 
@@ -280,6 +292,27 @@ describe('refreshDispatchPrompt', () => {
   it('tells the worker NOT to write into the watched directory', () => {
     expect(refreshDispatchPrompt(surface, '/p')).toContain('.tinstar/slate')
     expect(refreshDispatchPrompt(surface, '/p')).toMatch(/NOT into \.tinstar\/slate/)
+  })
+
+  it('carries a claim-move reason as one line, values and all (plan U4)', () => {
+    // A claim id comes from an agent-authored file and a claim VALUE comes from a
+    // witness reading the world, and both land in this prompt through
+    // `staleReason.detail`. The mutator that writes that sentence flattens them for
+    // the same reason the recipe is flattened here.
+    const moved = {
+      content: { headline: 'Roadmap' },
+      freshness: {
+        phase: 'possibly-stale' as const, overdue: false,
+        staleReason: {
+          kind: 'git-revision' as const, key: 'claim-moved sf-1 u4=pending',
+          detail: 'a claim it makes no longer holds: u4 was landed, now pending',
+          generation: 2, at: 1,
+        },
+      },
+    } as unknown as Surface
+    const prompt = refreshDispatchPrompt(moved, '/p')
+    expect(prompt).toContain('a claim it makes no longer holds: u4 was landed, now pending')
+    expect(prompt.split('\n').filter(l => l.includes('no longer holds'))).toHaveLength(1)
   })
 })
 

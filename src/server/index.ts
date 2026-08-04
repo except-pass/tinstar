@@ -38,6 +38,7 @@ import {
   listSessions,
   updateSession,
   interactivePortWindow,
+  loadSecrets,
   refreshConfigProblem,
   type TinstarConfig,
   type Session,
@@ -71,7 +72,6 @@ import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
 import { OtlpExporter } from './stores/otlp-exporter'
-import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
@@ -89,6 +89,10 @@ import {
   stopAllMessageRouters,
   type MessageRouterOwnerLease,
 } from './messaging/message-router'
+import { ProviderCurrentObservationStores } from './providers/observation-stores'
+import { ProviderObservationIngestor } from './providers/observation-ingestor'
+import { createClaudeObservationAdapter } from './providers/claude-observation-adapter'
+import { getDetailedUsage } from './sessions/context-usage'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -680,6 +684,7 @@ export function initBackend(): RouteContext {
   const docStore = new DocumentStore()
   const otelStore = new OTelStore()
   const providerRegistry = createDefaultProviderRegistry()
+  let sessionConfig: TinstarConfig | null = null
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
@@ -689,7 +694,23 @@ export function initBackend(): RouteContext {
   const slashUsage = new SlashUsage(resolveSlashUsagePath())
   // Debounced flush every 5s while dirty
   setInterval(() => { void slashUsage.flush() }, 5_000).unref()
-  const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
+  const providerObservationStores = new ProviderCurrentObservationStores()
+  const providerObservationIngestor = new ProviderObservationIngestor({
+    stores: providerObservationStores,
+    sink: otlpExporter,
+  })
+  const claudeObservations = createClaudeObservationAdapter({
+    stores: providerObservationStores,
+    sink: otlpExporter,
+    getTelemetryQuery: () => observability.query,
+    getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+    getDetailedContext: conversationId => getDetailedUsage(
+      conversationId,
+      sessionConfig ? loadSecrets(sessionConfig.dirs.secrets) : {},
+    ),
+  })
+  providerRegistry.registerObservations(claudeObservations.adapter)
+  const ccQuotaService = claudeObservations.statusline
   new OTelProcessor(bus, otelStore, otlpExporter)
 
   // Wire SSE
@@ -704,7 +725,8 @@ export function initBackend(): RouteContext {
 
   const telemetryRoutes = createTelemetryRoutes({
     sse,
-    get query() { return observability.query },
+    get query() { return observability.query ? claudeObservations : null },
+    get providerQuery() { return observability.query },
     getState: () => observability.state,
     getProgress: () => observability.progress,
     getLastError: () => observability.lastError,
@@ -887,7 +909,6 @@ export function initBackend(): RouteContext {
     otelStore.clear()
   }
 
-  let sessionConfig: TinstarConfig | null = null
   const bootDeletionCleanups: Promise<void>[] = []
 
   // --- Session management ---
@@ -1279,6 +1300,20 @@ export function initBackend(): RouteContext {
             if (session) observeFromRecapEntries(name, entries, session)
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
+          onObservations: (providerId, sessionId, accountRef, source, observations) => {
+            for (const event of observations) {
+              providerObservationIngestor.ingest({
+                providerId,
+                sessionId,
+                accountRef,
+                source,
+                event,
+              })
+            }
+          },
+          onSessionObservationsCleared: (providerId, sessionId) => {
+            providerObservationIngestor.clearSession(providerId, sessionId)
+          },
           resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
           captureBackendGeneration: name =>
             persistedSessionBackendGenerationForConfig(cfg, name),
@@ -1473,7 +1508,9 @@ export function initBackend(): RouteContext {
 
   const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
-    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
+    simulatorTestApiEnabled: fastSim,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    providerObservationStores, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     providerRegistry,
     get natsTraffic() { return natsTraffic },
