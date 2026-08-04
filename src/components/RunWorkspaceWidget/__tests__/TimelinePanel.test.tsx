@@ -25,21 +25,21 @@ beforeEach(() => vi.clearAllMocks())
 describe('TimelinePanel', () => {
   it('renders nothing when the config gate is off (R13)', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(false) as never)
-    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false })
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
     const { container } = render(<TimelinePanel sessionId="s" />)
     expect(container).toBeEmptyDOMElement()
   })
 
   it('renders three strips when enabled (R9)', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
-    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false })
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
     render(<TimelinePanel sessionId="s" />)
     expect(screen.getAllByTestId('timeline-strip')).toHaveLength(3)
   })
 
   it('shows an explicit no-transcript state rather than an empty strip (R18, AE6)', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
-    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: null, windowSec: 3600, loading: false })
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: null, windowSec: 3600, loading: false, error: null })
     render(<TimelinePanel sessionId="marshal" />)
     expect(screen.getByText(/no transcript/i)).toBeInTheDocument()
     expect(screen.queryByTestId('timeline-strip')).not.toBeInTheDocument()
@@ -47,16 +47,24 @@ describe('TimelinePanel', () => {
 
   it('prints percentages from durations, not pixels (R17)', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
-    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false })
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
     render(<TimelinePanel sessionId="s" />)
     // 60 of 100 seconds is approval, 40 is tool
     expect(screen.getByText('60%')).toBeInTheDocument()
     expect(screen.getByText('40%')).toBeInTheDocument()
   })
 
+  it('distinguishes a broken route from a session with no transcript (#11)', () => {
+    vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: null, windowSec: 3600, loading: false, error: 'HTTP 500' })
+    render(<TimelinePanel sessionId="s" />)
+    expect(screen.getByText(/timeline unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no transcript/i)).not.toBeInTheDocument()
+  })
+
   it('labels an open turn as current', () => {
     vi.mocked(useConfig).mockReturnValue(cfg(true) as never)
-    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false })
+    vi.mocked(useSessionTimeline).mockReturnValue({ timeline: tl, windowSec: 3600, loading: false, error: null })
     render(<TimelinePanel sessionId="s" />)
     expect(screen.getByText('NOW')).toBeInTheDocument()
   })

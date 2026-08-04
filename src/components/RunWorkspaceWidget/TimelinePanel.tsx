@@ -13,7 +13,8 @@ export const TIMELINE_HELP =
   'nobody answered. Amber is you too: a question awaiting a reply. ' +
   'Grey-blue "thinking" is a residual — in-turn time with no tool outstanding — ' +
   'so read it as an upper bound, not a measurement. ' +
-  'Red ticks in the gutter are tools that exited non-zero.'
+  'In the gutter: a filled red tick is a tool that exited non-zero, a hollow ' +
+  'one is an interrupted sub-agent. Ticks too close together merge.'
 
 /**
  * Strip length tracks real duration on a compressed curve (R10).
@@ -66,15 +67,20 @@ export function TimelinePanel({ sessionId }: { sessionId: string }) {
 }
 
 function TimelinePanelInner({ sessionId }: { sessionId: string }) {
-  const { timeline, windowSec } = useSessionTimeline(sessionId)
+  const { timeline, windowSec, error } = useSessionTimeline(sessionId)
   const [hovered, setHovered] = useState<Band | null>(null)
 
   if (!timeline) {
+    // A failing route and a session that genuinely has no transcript are
+    // different facts and must not render the same line.
     return (
       <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-        <Header windowSec={windowSec} />
-        <div style={{ fontSize: 9, opacity: 0.65, fontFamily: 'JetBrains Mono, monospace' }}>
-          — no transcript —
+        <Header />
+        <div
+          title={error ?? undefined}
+          style={{ fontSize: 9, opacity: 0.65, fontFamily: 'JetBrains Mono, monospace' }}
+        >
+          {error ? '— timeline unavailable —' : '— no transcript —'}
         </div>
       </div>
     )
@@ -85,7 +91,7 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
 
   return (
     <div data-testid="timeline-panel" style={{ padding: '6px 0' }}>
-      <Header windowSec={windowSec} />
+      <Header />
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         {cols.map(c => (
           <div key={c.label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -109,7 +115,7 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
           </div>
         ))}
       </div>
-      <Shares bands={clip(timeline.bands, cols[0]!.a, cols[0]!.b)} />
+      <Shares label={cols[0]!.short} bands={clip(timeline.bands, cols[0]!.a, cols[0]!.b)} />
       <div style={{
         fontSize: 9, opacity: 0.65, marginTop: 4, minHeight: 12,
         fontFamily: 'JetBrains Mono, monospace',
@@ -122,21 +128,24 @@ function TimelinePanelInner({ sessionId }: { sessionId: string }) {
   )
 }
 
-function Header({ windowSec }: { windowSec: number }) {
+function Header() {
   return (
     <div style={{
       fontSize: 9, letterSpacing: 2, opacity: 0.55,
       fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
     }}>
-      TIME · {fmt(windowSec)}
+      TIME
       <span title={TIMELINE_HELP} style={{ marginLeft: 4, opacity: 0.7, cursor: 'help' }}>ⓘ</span>
     </div>
   )
 }
 
-function Shares({ bands }: { bands: Band[] }) {
+function Shares({ bands, label }: { bands: Band[]; label: string }) {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px', marginTop: 5 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px', marginTop: 5, alignItems: 'center' }}>
+      <span style={{
+        fontSize: 8, opacity: 0.5, fontFamily: 'JetBrains Mono, monospace', letterSpacing: 0.5,
+      }}>{label}</span>
       {shares(bands).filter(s => s.pct >= 1).map(s => (
         <span
           key={s.kind}

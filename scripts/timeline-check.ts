@@ -10,9 +10,10 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { getConfigRoot } from '../src/server/configRoot'
 import { buildSessionTimeline, findCodexCandidates, pickCodexRollout, BAND_KINDS } from '../src/server/sessions/timeline/index'
 
-const SESSIONS = join(homedir(), '.config', 'tinstar', 'sessions')
+const SESSIONS = join(getConfigRoot(), 'sessions')
 const CLAUDE_PROJECTS = join(homedir(), '.claude', 'projects')
 const CODEX_ROOT = join(homedir(), '.codex', 'sessions')
 

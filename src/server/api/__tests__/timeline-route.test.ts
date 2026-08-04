@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
@@ -78,19 +78,22 @@ function writeSession(root: string, name: string, workdir: string, convId: strin
 
 let root: string
 let t: TestCtx
-let projectDir: string
+let realHome: string | undefined
 
 beforeEach(() => {
   __resetTimelineCache()
   root = mkdtempSync(join(tmpdir(), 'tlroute-'))
+
+  // The resolver computes the Claude transcript path from homedir(). Point HOME
+  // at the temp tree for the duration so the fixture never lands in — and is
+  // never recursively deleted from — the developer's real ~/.claude/projects.
+  realHome = process.env.HOME
+  process.env.HOME = root
+
   const workdir = join(root, 'work')
   mkdirSync(workdir, { recursive: true })
-
-  // The resolver computes the Claude transcript path from the workspace path, so
-  // the fixture transcript has to live where that computation points. The
-  // directory is derived from a unique temp path and is removed in afterEach.
   const convId = 'tl-fixture-conv'
-  projectDir = join(homedir(), '.claude', 'projects', workdir.replace(/\//g, '-'))
+  const projectDir = join(root, '.claude', 'projects', workdir.replace(/\//g, '-'))
   mkdirSync(projectDir, { recursive: true })
   writeFileSync(join(projectDir, `${convId}.jsonl`), [
     { type: 'user', timestamp: iso(0), message: { content: 'go' } },
@@ -105,8 +108,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   await t.close()
+  if (realHome === undefined) delete process.env.HOME
+  else process.env.HOME = realHome
   rmSync(root, { recursive: true, force: true })
-  rmSync(projectDir, { recursive: true, force: true })
 })
 
 describe('GET /api/sessions/:name/timeline', () => {

@@ -1,4 +1,5 @@
-import { BAND_KINDS, type Band, type BandKind } from '../../server/sessions/timeline/types'
+import { BAND_KINDS, type BandKind } from '../../domain/types'
+import type { Band } from '../../server/sessions/timeline/types'
 
 const KI_APPROVAL = BAND_KINDS.indexOf('approval')
 const KI_QUESTION = BAND_KINDS.indexOf('question')

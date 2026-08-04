@@ -66,18 +66,43 @@ export function TimelineStrip({ bands, marks, t0, t1, heightPx, label, onHover }
       g.fill()
     }
 
-    // Failure markers in the gutter, clustered so overlaps become one tick.
+    // Failure markers in the gutter. Overlapping marks MERGE with a count
+    // rather than being dropped — silently discarding them made a burst of
+    // failures read as a single one (R12).
     const span = Math.max(t1 - t0, 1e-9)
-    const ys = marks
+    const placed = marks
       .filter(m => m.at >= t0 && m.at <= t1)
-      .map(m => ((m.at - t0) / span) * heightPx)
-      .sort((a, b) => a - b)
-    g.fillStyle = MARK_COLOR
-    let lastY = -Infinity
-    for (const y of ys) {
-      if (y - lastY < 4) continue
-      g.fillRect(STRIP_W + 2, Math.min(y, heightPx - 2), GUTTER_W - 3, 2)
-      lastY = y
+      .map(m => ({ y: ((m.at - t0) / span) * heightPx, kind: m.kind }))
+      .sort((a, b) => a.y - b.y)
+
+    const clusters: { y: number; failed: number; interrupted: number }[] = []
+    for (const p of placed) {
+      const last = clusters[clusters.length - 1]
+      if (last && p.y - last.y < 5) {
+        if (p.kind === 'tool-failed') last.failed++
+        else last.interrupted++
+        continue
+      }
+      clusters.push({
+        y: p.y,
+        failed: p.kind === 'tool-failed' ? 1 : 0,
+        interrupted: p.kind === 'tool-failed' ? 0 : 1,
+      })
+    }
+
+    for (const c of clusters) {
+      const y = Math.min(Math.max(c.y, 0), heightPx - 3)
+      const total = c.failed + c.interrupted
+      // Filled for a tool that exited non-zero, hollow for an interrupted
+      // sub-agent — the two were previously indistinguishable.
+      if (c.failed > 0) {
+        g.fillStyle = MARK_COLOR
+        g.fillRect(STRIP_W + 2, y, GUTTER_W - 3, total > 1 ? 3 : 2)
+      } else {
+        g.strokeStyle = MARK_COLOR
+        g.lineWidth = 1
+        g.strokeRect(STRIP_W + 2.5, y + 0.5, GUTTER_W - 4, 2)
+      }
     }
   }, [bands, marks, t0, t1, heightPx])
 

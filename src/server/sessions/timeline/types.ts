@@ -5,22 +5,12 @@
  * comments below refer to that document.
  */
 
-/**
- * Band kinds in paint-priority order — earlier wins when observations overlap
- * (R2). Overlap is real and routine: a Codex `exec` script shells out to
- * `exec_command`, so one tool span sits entirely inside another.
- */
-export const BAND_KINDS = ['approval', 'question', 'subagent', 'compact', 'tool', 'idle', 'think'] as const
-export type BandKind = typeof BAND_KINDS[number]
-
-/**
- * Default trailing window, in seconds.
- *
- * Never inline this number at a use site (R9a). It is threaded as a route query
- * parameter and a hook argument so that surfacing a window selector later is
- * adding a control, not re-plumbing three layers.
- */
-export const DEFAULT_WINDOW_SEC = 3600
+// Shared with the frontend, so these live in src/domain/types.ts — the
+// frontend may not runtime-import from src/server (docs/conventions.md).
+// Re-exported here so server-internal callers keep one import site.
+export { BAND_KINDS, DEFAULT_WINDOW_SEC } from '../../../domain/types'
+export type { BandKind } from '../../../domain/types'
+import type { BandKind } from '../../../domain/types'
 
 /** An observation before flattening. May overlap other intervals. */
 export interface Interval {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useSessionTimeline } from '../useSessionTimeline'
-import { DEFAULT_WINDOW_SEC } from '../../server/sessions/timeline/types'
+import { DEFAULT_WINDOW_SEC } from '../../domain/types'
 
 vi.mock('../../apiClient', () => ({ apiFetch: vi.fn() }))
 import { apiFetch } from '../../apiClient'
@@ -45,12 +45,33 @@ describe('useSessionTimeline', () => {
     expect(result.current.timeline).toBeNull()
   })
 
-  it('keeps the last good reconstruction when a poll throws', async () => {
+  it('keeps the last good reconstruction when a poll throws, but surfaces the error', async () => {
     const { result } = renderHook(() => useSessionTimeline('s', undefined, { intervalMs: 20 }))
     await waitFor(() => expect(result.current.timeline).not.toBeNull())
     vi.mocked(apiFetch).mockRejectedValue(new Error('network'))
-    await new Promise(r => setTimeout(r, 60))
+    await waitFor(() => expect(result.current.error).toBe('network'))
+    // A persistently failing route must not masquerade as an empty state.
     expect(result.current.timeline).not.toBeNull()
+  })
+
+  it('clears the error once a poll succeeds again', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('network'))
+    const { result } = renderHook(() => useSessionTimeline('s', undefined, { intervalMs: 20 }))
+    await waitFor(() => expect(result.current.error).toBe('network'))
+    vi.mocked(apiFetch).mockResolvedValue(respond(payload))
+    await waitFor(() => expect(result.current.error).toBeNull())
+  })
+
+  it('does not queue a second request while one is in flight', async () => {
+    // A cold parse can outlast the poll interval; without a guard every tick
+    // queued another request and the backlog never drained.
+    let release: (v: Response) => void = () => {}
+    vi.mocked(apiFetch).mockImplementation(() => new Promise<Response>(res => { release = res }))
+    renderHook(() => useSessionTimeline('s', undefined, { intervalMs: 10 }))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 60))
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    release(respond(payload))
   })
 
   it('stops polling after unmount', async () => {

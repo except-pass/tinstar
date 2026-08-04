@@ -17,6 +17,24 @@ export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' 
 /** @deprecated Use SessionStatus instead */
 export type RunStatus = SessionStatus
 export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
+
+/**
+ * Session time-usage bands, in paint-priority order — earlier wins when
+ * observations overlap. Lives here rather than under `src/server/` because both
+ * the reconstruction and the rail render from it, and the frontend may not
+ * runtime-import from the server (docs/conventions.md).
+ */
+export const BAND_KINDS = ['approval', 'question', 'subagent', 'compact', 'tool', 'idle', 'think'] as const
+export type BandKind = typeof BAND_KINDS[number]
+
+/**
+ * Default trailing window for the time-usage strips, in seconds.
+ *
+ * Never inline this number at a use site: it is threaded as a route query
+ * parameter and a hook argument so that surfacing a window selector later is
+ * adding a control, not re-plumbing three layers.
+ */
+export const DEFAULT_WINDOW_SEC = 3600
 export type RecapEntryType = 'agent' | 'user' | 'status'
 export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
 
