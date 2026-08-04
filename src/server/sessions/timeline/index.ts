@@ -47,12 +47,22 @@ export function buildSessionTimeline(
   const r = read(input.transcriptPath, now)
   if (r.t0 === null || r.t1 === null) return null
 
+  // The right edge is the last transcript entry — EXCEPT when a call is still in
+  // flight. A session parked on an unanswered approval prompt writes nothing
+  // while it waits, so its last entry is the moment the prompt appeared; without
+  // this, `flatten` clips the pending band to zero width and an 8-hour live
+  // stall renders as an empty strip. `closeUnmatched` only reaches past t1 for a
+  // genuinely-last unmatched call, so this cannot resurrect the R4 phantom.
+  const t1 = r.intervals.reduce((max, i) => (i.end > max ? i.end : max), r.t1)
+  const turns: [number, number, boolean][] =
+    r.turns.map(([a, b, open]) => (open ? [a, Math.max(b, t1), true] : [a, b, open]))
+
   const timeline: SessionTimeline = {
     t0: r.t0,
-    t1: r.t1,
-    bands: flatten(r.intervals, r.t0, r.t1),
+    t1,
+    bands: flatten(r.intervals, r.t0, t1),
     marks: r.marks,
-    turns: r.turns,
+    turns,
     partial: false,
   }
   cache.set(input.name, { size, timeline })

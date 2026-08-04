@@ -148,3 +148,55 @@ describe('closeUnmatched', () => {
     expect(closeUnmatched([], [1, 2, 3], 10)).toEqual([])
   })
 })
+
+describe('command-word matching (regression: substring matching)', () => {
+  const long = (cmd: string) => classifyCodexCall(0, 1200, 'exec', JSON.stringify({ cmd }), 'no wall time').map(i => i.kind)
+
+  it('does not read `docker run --rm` as an approval stall', () => {
+    // `--rm` satisfies a \brm\b word boundary; matching the whole arg blob
+    // painted a 20-minute container run red.
+    expect(long('docker run --rm myimage')).toEqual(['tool'])
+  })
+
+  it('does not read a path containing rm as an approval stall', () => {
+    expect(long('pytest tests/warm-rm-cache')).toEqual(['tool'])
+  })
+
+  it('does not read `git push` as an approval stall', () => {
+    // Pushing a large repo legitimately takes minutes.
+    expect(long('git push origin main')).toEqual(['tool'])
+  })
+
+  it('still catches a real trivial-command stall', () => {
+    expect(long('rm -rf /tmp/ce-code-review/jobs/x')).toEqual(['approval'])
+  })
+
+  it('sees through a shell wrapper and leading env assignments', () => {
+    expect(long('bash -lc "rm -rf /tmp/x"')).toEqual(['approval'])
+    expect(long('FOO=1 BAR=2 rm -rf /tmp/x')).toEqual(['approval'])
+    expect(long('/usr/bin/rm -rf /tmp/x')).toEqual(['approval'])
+  })
+
+  it('under-reports rather than inventing: a long `npm publish` reads as tool time', () => {
+    // Deliberate. A command that CAN run long is indistinguishable from one
+    // that did; claiming a stall would tell the user they are the blocker.
+    expect(long('npm publish')).toEqual(['tool'])
+  })
+})
+
+describe('rejection detection (regression: substring matching)', () => {
+  it('does not treat output that merely QUOTES the marker as a rejection', () => {
+    // A grep over this repo returns this exact string — classify.ts contains it.
+    const grepOutput = "classify.ts:24:  const REJECT_OPENERS = [\"the user doesn't want to proceed\"]"
+    expect(classifyClaudeCall(0, 2, 'Grep', '{}', grepOutput, false).kind).toBe('tool')
+  })
+
+  it('still detects a genuine rejection notice', () => {
+    const real = "The user doesn't want to proceed with this tool use. The tool use was rejected."
+    expect(classifyClaudeCall(0, 90, 'Bash', '{}', real, false).kind).toBe('approval')
+  })
+
+  it('tolerates leading whitespace on a genuine rejection', () => {
+    expect(classifyClaudeCall(0, 90, 'Bash', '{}', '\n  The user rejected this edit.', false).kind).toBe('approval')
+  })
+})

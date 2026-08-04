@@ -25,18 +25,35 @@ export const secOf = (iso: unknown): number | null => {
   return Number.isNaN(ms) ? null : ms / 1000
 }
 
+/** Tolerance for clock skew between whoever wrote the transcript and this process. */
+const FUTURE_TOLERANCE_SEC = 300
+
+/**
+ * Reject a timestamp that cannot belong to this transcript.
+ *
+ * Only the future is rejected. A single future-dated entry stretches the span to
+ * centuries — every real band collapses to a sub-pixel sliver — and the
+ * size-keyed cache then serves that poisoned reconstruction until the file next
+ * grows. An unusually OLD timestamp is left alone deliberately: there is no
+ * honest absolute floor (a resumed or imported transcript can legitimately reach
+ * back a long way), and an arbitrary one would silently discard real history.
+ */
+export function plausibleTime(t: number, now: number): boolean {
+  return t <= now + FUTURE_TOLERANCE_SEC
+}
+
 const snip = (s: string): string => s.replace(/\s+/g, ' ').slice(0, 110)
 
 interface Entry { t: number; o: Record<string, unknown> }
 
-function readEntries(path: string): Entry[] {
+function readEntries(path: string, now: number): Entry[] {
   const entries: Entry[] = []
   for (const line of readFileSync(path, 'utf-8').split('\n')) {
     if (!line.trim()) continue
     let o: Record<string, unknown>
     try { o = JSON.parse(line) as Record<string, unknown> } catch { continue }
     const t = secOf(o.timestamp)
-    if (t === null) continue
+    if (t === null || !plausibleTime(t, now)) continue
     entries.push({ t, o })
   }
   entries.sort((a, b) => a.t - b.t)
@@ -45,7 +62,7 @@ function readEntries(path: string): Entry[] {
 
 /** Codex rollout JSONL → intervals, marks and turn boundaries. */
 export function readCodexTranscript(path: string, now = Date.now() / 1000): ParseResult {
-  const entries = readEntries(path)
+  const entries = readEntries(path, now)
 
   const pending = new Map<string, PendingCall>()
   const intervals: Interval[] = []

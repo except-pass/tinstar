@@ -12,8 +12,44 @@ export const SUBAGENT_TOOLS = new Set(['wait_agent', 'wait', 'Agent', 'Task'])
  */
 const WALL_RE = /Wall time:?\s+([0-9.]+)\s*seconds/
 
-/** Commands that cannot legitimately take minutes — see R6. */
-const TRIVIAL_CMD_RE = /\b(rm|mv|chmod|chown|kill|git push)\b/
+/**
+ * Commands that cannot legitimately take minutes — see R6.
+ *
+ * Matched against the resolved command WORD, never as a substring of the raw
+ * argument blob. Substring matching read `docker run --rm` and
+ * `pytest tests/warm-rm-cache` as approval stalls, because `--rm` and a path
+ * segment both satisfy a `\brm\b` word boundary. `git push` is deliberately
+ * absent: pushing a large repository genuinely takes minutes, so it produced
+ * false stalls without catching real ones.
+ */
+const TRIVIAL_COMMANDS = new Set(['rm', 'rmdir', 'mv', 'chmod', 'chown', 'kill', 'touch', 'ln'])
+
+/** Pull the `cmd` string out of either a JSON argument object or `exec` script source. */
+function extractCommand(args: string): string {
+  const m = /["']?cmd["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/.exec(args)
+  if (!m) return ''
+  const raw = m[1]!
+  try {
+    return JSON.parse(raw.startsWith("'") ? `"${raw.slice(1, -1).replace(/"/g, '\\"')}"` : raw) as string
+  } catch {
+    return raw.slice(1, -1)
+  }
+}
+
+/**
+ * The program a command actually runs: shell wrapper unwrapped, leading
+ * environment assignments skipped, directory prefix stripped.
+ */
+export function commandHead(args: string): string {
+  let cmd = extractCommand(args).trim()
+  if (!cmd) return ''
+  const wrapped = /^(?:\S*\/)?(?:ba|z)?sh\s+-[a-z]*c\s+(["'])([\s\S]*)\1\s*$/.exec(cmd)
+  if (wrapped) cmd = wrapped[2]!.trim()
+  const tokens = cmd.split(/\s+/)
+  let i = 0
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++
+  return (tokens[i] ?? '').replace(/^.*\//, '')
+}
 
 /** Below this, an unexplained gap is scheduling noise rather than a human. */
 const MIN_APPROVAL_GAP_SEC = 45
@@ -21,7 +57,26 @@ const MIN_APPROVAL_GAP_SEC = 45
 /** Beyond this, even an unmeasurable trivial command is assumed parked. */
 const HEURISTIC_MIN_SEC = 300
 
-const REJECT_MARKERS = ["doesn't want to proceed", 'tool use was rejected']
+/**
+ * A rejected permission opens with one of these sentences.
+ *
+ * Anchored at the START of the decoded result text, never matched anywhere
+ * inside it. A substring test turned any tool output that merely *quoted* the
+ * sentence into a red "you blocked this" band — including a grep over this very
+ * file, which contains the strings below.
+ */
+const REJECT_OPENERS = [
+  "the user doesn't want to proceed",
+  'the user doesn’t want to proceed',
+  'the user rejected',
+  'tool use was rejected',
+]
+
+/** True when the result text itself is a rejection notice, not merely quoting one. */
+export function isRejectionText(resultText: string): boolean {
+  const t = resultText.trim().toLowerCase()
+  return REJECT_OPENERS.some(marker => t.startsWith(marker))
+}
 
 const snip = (s: string): string => s.replace(/\s+/g, ' ').slice(0, 160)
 
@@ -73,10 +128,16 @@ export function classifyCodexCall(
   if (
     span > HEURISTIC_MIN_SEC &&
     (name === 'exec' || name === 'exec_command') &&
-    TRIVIAL_CMD_RE.test(detail)
+    TRIVIAL_COMMANDS.has(commandHead(args))
   ) {
     return [{ start, end, kind: 'approval', ...base }]
   }
+
+  // Known blind spot: a genuine stall on a command that CAN legitimately run
+  // long (`npm publish`, a slow build) is indistinguishable from the command
+  // simply taking that long, once the runtime is unusable. It reads as tool
+  // time. Under-reporting is the right failure direction — inventing a stall
+  // tells the user they are the blocker when they are not.
 
   return [{ start, end, kind: 'tool', ...base }]
 }
@@ -100,8 +161,7 @@ export function classifyClaudeCall(
   if (QUESTION_TOOLS.has(name)) return { start, end, kind: 'question', ...base }
   if (SUBAGENT_TOOLS.has(name)) return { start, end, kind: 'subagent', ...base }
 
-  const lower = resultText.toLowerCase()
-  if (REJECT_MARKERS.some(mk => lower.includes(mk))) {
+  if (isRejectionText(resultText)) {
     return { start, end, kind: 'approval', name: `${name} (rejected)`, detail: base.detail }
   }
 

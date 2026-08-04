@@ -68,3 +68,54 @@ describe('buildSessionTimeline cache', () => {
     expect(tb.t1).toBe(0)
   })
 })
+
+describe('live edge (regression: in-flight band clipped to zero)', () => {
+  const nowSec = 1785000000
+
+  it('renders a run parked on an unanswered prompt right now', () => {
+    // The feature's core live case. Last entry is a tool_use issued 30 minutes
+    // ago with no result; without extending the right edge past the last entry,
+    // flatten clipped this to zero width and the stall showed as nothing.
+    const p = join(dir, 'stuck.jsonl')
+    writeFileSync(p, [
+      { type: 'user', timestamp: iso(nowSec - 3600), message: { content: 'go' } },
+      { type: 'assistant', timestamp: iso(nowSec - 1800), message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'rm -rf /tmp/x' } }] } },
+    ].map(o => JSON.stringify(o)).join('\n') + '\n')
+
+    const tl = buildSessionTimeline(
+      { name: 'stuck', adapter: 'claude', transcriptPath: p, createdSec: nowSec - 3600 }, nowSec)!
+
+    expect(tl.t1).toBeCloseTo(nowSec, 0)
+    const pending = tl.bands.find(b => b.name.includes('Bash'))
+    expect(pending).toBeDefined()
+    expect(pending!.end - pending!.start).toBeCloseTo(1800, 0)
+  })
+
+  it('leaves the right edge at the last entry when nothing is in flight', () => {
+    const p = join(dir, 'settled.jsonl')
+    writeFileSync(p, [
+      { type: 'user', timestamp: iso(nowSec - 3600), message: { content: 'go' } },
+      { type: 'assistant', timestamp: iso(nowSec - 3000), message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] } },
+      { type: 'user', timestamp: iso(nowSec - 2990), message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] } },
+    ].map(o => JSON.stringify(o)).join('\n') + '\n')
+
+    const tl = buildSessionTimeline(
+      { name: 'settled', adapter: 'claude', transcriptPath: p, createdSec: nowSec - 3600 }, nowSec)!
+    expect(tl.t1).toBeCloseTo(nowSec - 2990, 0)
+  })
+})
+
+describe('implausible timestamps (regression: 229-year span)', () => {
+  it('drops a future-dated entry instead of stretching the span to centuries', () => {
+    const nowSec = 1785000000
+    const p = join(dir, 'skew.jsonl')
+    writeFileSync(p, [
+      { type: 'user', timestamp: iso(nowSec - 600), message: { content: 'go' } },
+      { type: 'user', timestamp: new Date('2255-01-01T00:00:00Z').toISOString(), message: { content: 'skewed' } },
+    ].map(o => JSON.stringify(o)).join('\n') + '\n')
+
+    const tl = buildSessionTimeline(
+      { name: 'skew', adapter: 'claude', transcriptPath: p, createdSec: nowSec - 600 }, nowSec)!
+    expect(tl.t1 - tl.t0).toBeLessThan(3600)
+  })
+})
