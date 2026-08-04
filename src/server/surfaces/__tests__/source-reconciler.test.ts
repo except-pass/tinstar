@@ -275,6 +275,133 @@ describe('content authority', () => {
   })
 })
 
+// A claim the host would not accept has to REACH the card, or a mistyped witness
+// kind is indistinguishable from a healthy surface (plan U6, R3). The refusal is
+// computed by the watcher, rides the entry, and lands on the record's HOST-OWNED
+// freshness — deliberately not on its content, which is in the watermark basis.
+describe('claim refusals reaching the record', () => {
+  /** An entry whose declaration the host refused, exactly as the watcher builds it:
+   *  the accepted claims are on the content, the refusals ride alongside. */
+  const refused = (localId: string, headline: string, refusals: string[]) =>
+    entry(localId, headline, { claimRefusals: refusals })
+
+  it('records the refusal beside the NEW content, not the surface it came with', async () => {
+    const h = harness()
+    await h.run(epoch([entry('roadmap', 'Roadmap — 2 of 8')]))
+    await h.run(epoch([refused('roadmap', 'Roadmap — 3 of 8', ['claim "u1" (witness unit-lands): no such witness kind'])]), 2_000)
+
+    const after = h.surface('roadmap')!
+    // KTD5: the refused claim costs the claim. The card shows what the author just
+    // wrote — NOT the prior content, which is what the `unreadable` path retains.
+    expect(after.content.headline).toBe('Roadmap — 3 of 8')
+    expect(after.freshness.claimRefusals).toEqual(['claim "u1" (witness unit-lands): no such witness kind'])
+    // And it is host knowledge: nothing about it is in the author's content.
+    expect(after.content).not.toHaveProperty('claimRefusals')
+  })
+
+  it('records a refusal on a surface created by the very epoch that refused it', async () => {
+    const h = harness()
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['claim "u1": params.plan must be a `docs/plans/<file>.md` path'])]))
+
+    expect(h.surface('roadmap')!.freshness.claimRefusals).toHaveLength(1)
+    expect(h.surface('roadmap')!.content.headline).toBe('Roadmap')
+  })
+
+  it('clears the refusal once the entry parses cleanly, without needing new content', async () => {
+    const h = harness()
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['claim "u1" (witness unit-lands): no such witness kind'])]))
+    expect(h.surface('roadmap')!.freshness.claimRefusals).toHaveLength(1)
+
+    // Same headline, same watermark — the ONLY thing that changed is that the bad
+    // claim is gone. Gating the write on `evidenceMoved` would strand the refusal
+    // here forever, since the accepted claims list was empty both times.
+    await h.run(epoch([entry('roadmap', 'Roadmap')]), 2_000)
+
+    expect(h.surface('roadmap')!.freshness.claimRefusals).toBeUndefined()
+  })
+
+  it('replaces a refusal with the next one when the accepted list did not move', async () => {
+    const h = harness()
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['witness "unit-lands" does not exist'])]))
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['witness "unit-landd" does not exist'])]), 2_000)
+
+    // Both versions dropped every claim, so the watermark never moved. A refusal
+    // that only refreshed with the evidence would still be naming the first typo.
+    expect(h.surface('roadmap')!.freshness.claimRefusals).toEqual(['witness "unit-landd" does not exist'])
+  })
+
+  it('marks the surface that declared it and none of its siblings', async () => {
+    const h = harness()
+    await h.run(epoch([
+      refused('bad', 'Bad', ['claim "c" (witness nope): no such witness kind']),
+      entry('good', 'Good'),
+      entry('other', 'Other', { file: 'b.json' }),
+    ]))
+
+    expect(h.surface('bad')!.freshness.claimRefusals).toHaveLength(1)
+    expect(h.surface('good')!.freshness.claimRefusals).toBeUndefined()
+    expect(h.surface('other')!.freshness.claimRefusals).toBeUndefined()
+  })
+
+  it('is a host write: it moves no watermark, no generation, and no verification stamp', async () => {
+    const h = harness()
+    await h.run(epoch([entry('roadmap', 'Roadmap')]))
+    const before = h.surface('roadmap')!
+
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['claim "u1" (witness nope): no such witness kind'])]), 2_000)
+
+    const after = h.surface('roadmap')!
+    // U1's guard, restated where the host write actually happens (KTD2/KTD7). If a
+    // refusal ever reached the watermark basis, every epoch would burn a revision
+    // and queue a rebuild on a surface nobody edited.
+    expect(after.source!.watermark).toBe(before.source!.watermark)
+    expect(after.source!.generation).toBe(before.source!.generation)
+    expect(after.freshness.verifiedAt).toBe(before.freshness.verifiedAt)
+    expect(after.freshness.phase).toBe(before.freshness.phase)
+    // It IS a record change, so it earns exactly one revision — and no more.
+    expect(after.rev).toBe(before.rev + 1)
+  })
+
+  it('burns no revision when the same refusal is re-observed on the poll floor', async () => {
+    const h = harness()
+    const same = () => epoch([refused('roadmap', 'Roadmap', ['claim "u1" (witness nope): no such witness kind'])])
+    await h.run(same())
+    const first = h.surface('roadmap')!.rev
+    const out = await h.run(same(), 2_000)
+
+    // The steady state is "nothing moved". A refusal that re-serialized differently
+    // every epoch would be a persist-and-SSE storm across every refused surface.
+    expect(out).toMatchObject({ observed: 1, created: 0, updated: 0 })
+    expect(h.surface('roadmap')!.rev).toBe(first)
+  })
+
+  it('does not carry a refusal into the epoch outcome, which reports mutation failures only', async () => {
+    const h = harness()
+    const out = await h.run(epoch([refused('roadmap', 'Roadmap', ['claim "u1" (witness nope): no such witness kind'])]))
+
+    // The plan's first sketch routed refusals here. It cannot work: a claim-refused
+    // entry projects SUCCESSFULLY under KTD5, so `observeSource` returns ok and this
+    // array — populated only from `!result.ok` branches — never sees it.
+    expect(out.refusals).toEqual([])
+    expect(out).toMatchObject({ observed: 1, created: 1 })
+  })
+
+  it('drops the refusal when the record takes authority over its own content', async () => {
+    const h = harness()
+    await h.run(epoch([refused('roadmap', 'Roadmap', ['claim "u1" (witness nope): no such witness kind'])]))
+    const id = h.surface('roadmap')!.id
+    await h.svc.transferContentAuthority(id, { to: 'canonical-direct', expectedRev: h.surface('roadmap')!.rev }, ctx(1_500))
+
+    await h.run(epoch([refused('roadmap', 'the file disagrees', ['claim "u1" (witness nope): no such witness kind'])]), 2_000)
+
+    // The file's claims are no longer in force — its content is not even rendered —
+    // so a refusal about them would point at a declaration nobody can see. The API
+    // door cannot store a bad claim in the first place, so there is nothing to say.
+    expect(h.surface('roadmap')!.content.headline).toBe('Roadmap')
+    expect(h.surface('roadmap')!.freshness.claimRefusals).toBeUndefined()
+  })
+})
+
 describe('legacy adapter interop', () => {
   it('upgrades a migrated legacy-slate-point binding to the file reconciler', async () => {
     const h = harness()

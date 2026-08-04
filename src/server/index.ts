@@ -1344,6 +1344,7 @@ export function initBackend(): RouteContext {
 
   const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
+    simulatorTestApiEnabled: fastSim,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
     providerObservationStores, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,

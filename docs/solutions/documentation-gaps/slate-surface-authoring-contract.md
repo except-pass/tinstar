@@ -55,6 +55,9 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
 | `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
+| `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
+| `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
+| `proposal` | `{ state, detail? }` | No | **What you claim about the work** — `working`, `blocked`, `resolved`, or `superseded`, plus one short line. A hint the card renders beside the status; it never *becomes* the status. See "Say what you know about the work" below. |
 | `group` | string (non-empty) | No | **Workbench set id.** Give two or more question entries the *same* `group` and they render side-by-side, one per column, instead of as stacked rows (below). A non-string/empty value is silently dropped (the point renders as an ordinary row) — it never drops the entry. |
 | `createdAt` | finite number (epoch millis) | No | Sort/ordering hint. |
 
@@ -257,6 +260,211 @@ So apply the **vacuum test** to every living surface: *could this recipe produce
 - **Fails** — the only "source" is the main agent's own session (e.g. "summarize the session so far"). This is **session-derived**; it stays with the main agent. Don't give it a self-contained recipe it can't honor.
 
 A self-contained recipe is exactly what lets a surface refresh off the main agent's critical path. `"regenerate this surface"` fails the vacuum test — it assumes context the author won't have.
+
+## Declare what your surface derives from (`refreshPolicy.sources`)
+
+The recipe says *how* to rebuild a surface. `refreshPolicy` says *when*: `triggers` picks which host observations reach it, and `sources` says which upstream things a `source-content` observation must name before it counts.
+
+```jsonc
+{
+  "id": "decision-6",
+  "headline": "DECISION 6 — File a prevention ticket for the reassignment leftovers?",
+  "refresh": "Run scripts/integrity/detect-site-reassignment-leftovers.sh against prod, check whether CMT-510 is still open in Jira, and rewrite this surface with the current leftover count and ticket state.",
+  "refreshPolicy": {
+    "policy": "automatic",
+    "triggers": ["git-revision", "periodic"],
+    "intervalMs": 86400000,
+    "sources": [
+      "scripts/integrity/detect-site-reassignment-leftovers.sh",
+      "external:prod-mysql/ra-physical",
+      "external:jira/CMT-510"
+    ]
+  }
+}
+```
+
+**What `sources` does — and what it deliberately does not.** It is the match list for the `source-content` trigger: when the host observes that some upstream thing changed, this surface is made possibly-stale if the observed identifier is in your list. It is **not** a filter on commits. A `git-revision` observation reaches every surface that declared the `git-revision` trigger, whether or not you wrote `sources` and whether or not the commit touched anything you named. Narrowing which triggers may reach a claim is the job of the claim's declared **locus** (where its truth lives), not of this list — one mechanism, so there is never a question of which one wins.
+
+So `sources` earns its place two ways: it drives `source-content` matching, and it documents, for the next fresh author (yours or someone else's), where the answer actually comes from. It does not quieten a noisy surface — for that, drop the trigger you don't want, or set `policy` to `mark-stale`.
+
+**Two shapes in one list**, told apart by a `scheme:` prefix:
+
+| You write | Shape | Matched by `source-content` |
+|---|---|---|
+| `external:prod-mysql/ra-physical`, `jira:CMT-510`, `mysql://prod/detector` | External id — opaque; the host never resolves it | Exact equality against the observed identifier |
+| `src/api/**`, `docs/decisions/CostCeiling*.md`, `bin/serena` | Repo-relative path shape | As a glob, so an adapter that reports a path is matched without you listing every file |
+
+**Glob syntax** is deliberately tiny: `**` crosses directories, `*` doesn't, `?` is one character. A glob with no wildcard is a **prefix** — `src/server` matches everything beneath it. Prefer a glob over a literal list when files will be added later: `docs/decisions/CostCeiling*.md` picks up the fourth file without you re-editing the recipe.
+
+Writing `"sources": []` is a real statement — "I checked; nothing upstream feeds this" — and the host keeps it verbatim rather than treating it as if you'd left the field off. Nothing branches on the difference today; it is there so the record says what you meant.
+
+**`intervalMs` and the periodic trigger.** `periodic` is the time-safety net for answers that change without anything in the repo moving. It defaults to six hours, which is a floor, not a recommendation — set it to what your answer's real cadence is. A number that drifts weekly wants `86400000` (a day), not the default. A surface whose inputs are *all* in the repo usually needs no `periodic` trigger at all: `git-revision` already fires whenever the worktree moves.
+
+**`policy`** is `automatic` (rebuild it without asking — the default when you carry a recipe), `mark-stale` (badge it and wait for a human), or `manual` (nothing moves it but an explicit ⟳).
+
+## Claims: what would prove this surface wrong
+
+A `refresh` recipe answers *how do I rebuild this card*. A **claim** answers the cheaper question that comes first: *is it still true?* A claim is a falsifiable statement the entry makes about the world, which the host can check on its own — no agent session, no prompt, no worker. Most checks find nothing moved, and a check that finds nothing moved costs one subprocess or one HTTP request.
+
+```json
+"claims": [
+  { "id": "u2", "witness": "unit-landed", "locus": "repo",
+    "params": { "plan": "docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md", "unit": "U2" } },
+  { "id": "api", "witness": "http-status", "locus": "infra",
+    "params": { "url": "http://127.0.0.1:5273/api/state" } }
+]
+```
+
+| Key | Meaning |
+|-----|---------|
+| `id` | Surface-local and author-chosen. Body components reference a claim by this. A repeated id is refused (first wins). |
+| `witness` | Which host-owned check can settle it. Closed set — see below. |
+| `locus` | `'repo'` (the bound worktree and its repository) or `'infra'` (deployed infrastructure over the network). |
+| `params` | **Flat scalars only** — strings, numbers, booleans. No nested objects or arrays. Each kind has its own schema. |
+
+Caps: at most **32 claims** per entry, **16 params** per claim, **1024 characters** per param value. An oversized claims list is **refused whole rather than truncated** — a silently shortened declaration is a surface that says it is witnessed by fewer things than its author wrote.
+
+### The tri-state, and why `[]` is not the same as leaving it out
+
+| `claims` | Means | Card says |
+|----------|-------|-----------|
+| absent | The author never said. The one-claim convention still owes this surface something. | `nothing to check` |
+| `[]` | The author looked and found nothing witnessable here. | `nothing to check` |
+| non-empty | These are the statements the host may check without waking anybody. | `not yet checked`, then `checked 3m ago` |
+
+The two empty states are identical in scheduling and rendering. They are kept apart anyway because the **egress adapter writes this field back into your own file** when a surface's content is edited over the API — collapsing `[]` to absent would have the host quietly delete a declaration you wrote.
+
+**Omission clears, exactly like `headline` and `content`.** A later write of the same entry without a `claims` key clears the declaration; it does not merge with what was there before. The same is true through the API's content-patch path. If you rewrite an entry and want its claims, write them again.
+
+### The two witness kinds
+
+The registry is **closed**. These two, and nothing else.
+
+| `witness` | `locus` | `params` | Returns |
+|-----------|---------|----------|---------|
+| `unit-landed` | `repo` | `plan` (a `docs/plans/<file>.md` path), `unit` (`U3`, `U1e`), optional `ref` (default `origin/main`, must be `<remote>/<branch>`) | `"landed"` or `"pending"` |
+| `http-status` | `infra` | `url` (absolute, `http` or `https` only) | the status code as a number, e.g. `200` |
+
+`unit-landed` **fetches the named remote ref before reading it**, because feature PRs squash-merge remotely and a worktree sitting on a feature branch must never make a unit read as landed. It links a unit to a commit through a `Plan: docs/plans/<file>#U<n>` trailer (see `docs/contributing.md`), falling back to a small backfill map for units that merged before that convention existed. When it can link the unit to neither, it reports **unresolved** — never "pending". A wrong witness is worse than no witness, because it fails without doubt.
+
+`http-status` does **not** follow redirects: a 301 *is* the status code being claimed. Point a recurring unattended witness at something local and stable; a card on somebody's canvas should not become a periodic request against a service that never agreed to it.
+
+**Three outcomes, not two.** A witness returns a value, or reports itself *unresolved* (nobody could look — an unreachable host, an expired credential, a ref that does not exist), or *failed* (the claim itself is broken, or the check ran out of time). Only a value can match what was stored. This is why a witness that has been broken for a week cannot keep agreeing with its own stored absence and keep stamping the card verified.
+
+### A witnessed card takes two runs
+
+The first check on a new claim has nothing to compare against — a value the host invented a moment ago has agreed with nothing — so it records the value and stamps nothing. The **second** check is the first one that can confirm. Between them the card reads `not yet checked`, which is honest rather than broken.
+
+That age is the **witness** age, not the file's. Saving your file does not reset it, and a surface saved thirty seconds ago that nobody has checked still shows no age at all.
+
+### What a refusal looks like
+
+A claim naming a witness kind this host does not implement, or supplying parameters that kind will not accept, is **refused — and refusing costs that claim, never the surface**. The entry still renders, with its *new* content, minus the bad claim, plus a visible line on the card naming the kind:
+
+> ⚠ claim not accepted — `claim "u2" (witness unit-lands): no such witness kind — this host implements unit-landed, http-status`
+
+The refused claim stays in **your** file (the host will not silently edit your declaration out from under you) and the refusal clears the moment the entry parses cleanly. If a card you expected to be checked says `nothing to check`, read the refusal line — a mistyped witness kind is otherwise indistinguishable from a healthy surface.
+
+### Deriving a rail from claim values
+
+A `Stepper` step may name a claim instead of stating its own status:
+
+```json
+{ "label": "U2 · per-source reconciliation", "claim": "u2", "done": "landed" }
+```
+
+`claim` names a claim on the same entry; `done` names the observed value that means finished. The host fills `status` in on the way to the browser: `done` when a completed lookup returned exactly that value, `pending` for everything else. **Any status you write on a claim-bound step is overridden** — that is the point. Nothing about the rail depends on an agent keeping it current, and nothing about it can drift.
+
+There are only four step statuses and none of them means "unknown", so a claim nobody could resolve reads `pending` on the rail and says so separately in the card's "claim not checked" line. A `claim` naming an id that does not exist, or a step with no `done`, is permanently `pending` rather than permanently green — an authoring mistake should look wrong, not finished.
+
+### Locus decides what reaches the card
+
+A claim's locus is what narrows work. A commit on the bound worktree reaches surfaces whose claims are about the `repo` and leaves an `infra`-only card entirely alone — no stale mark, no job. Time reaches both. Declaring claims also *earns* a surface a verification deadline it would otherwise never get: before this, a surface with no rebuild recipe listened for nothing, so nothing could ever doubt it and it stayed `current` forever.
+
+### The convention: declare at least one
+
+Every newly authored surface should declare at least one claim. It is a convention rather than an enforced boundary — nothing refuses a claimless entry — but a claimless card cannot be checked by anything, and it says so on its own face. If you genuinely looked and there is nothing witnessable, write `"claims": []` and mean it.
+
+### Two worked examples
+
+**(a) A roadmap card whose rail is the host's own reading of the repository.** One claim per unit, one step per claim, and not a single status written by hand.
+
+```json
+{
+  "id": "recursive-surfaces-roadmap",
+  "headline": "Recursive collaborative surfaces — what has actually landed",
+  "author": "agent",
+  "claims": [
+    { "id": "u1", "witness": "unit-landed", "locus": "repo",
+      "params": { "plan": "docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md", "unit": "U1" } },
+    { "id": "u4", "witness": "unit-landed", "locus": "repo",
+      "params": { "plan": "docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md", "unit": "U4" } }
+  ],
+  "content": {
+    "root": "root",
+    "components": [
+      { "id": "root", "component": "Column", "children": ["title", "rail"] },
+      { "id": "title", "component": "Text", "variant": "h4", "text": "Recursive collaborative surfaces" },
+      { "id": "rail", "component": "Stepper", "steps": [
+        { "label": "U1 · canonical Surface model", "claim": "u1", "done": "landed" },
+        { "label": "U4 · recursive Canvas workspace", "claim": "u4", "done": "landed" }
+      ] }
+    ]
+  }
+}
+```
+
+Note there is **no `refresh` recipe**. A landing does not make this card false — the rail re-derives itself from the new value — so there is nothing for a rebuild to do. A moved value on a recipe-less surface records the delta and marks it for a human glance, and queues no agent. Give a claim-bearing card a recipe only when a moved value genuinely requires *prose* to be rewritten.
+
+**(b) An infra card with a single claim.**
+
+```json
+{
+  "id": "standalone-api-reachable",
+  "headline": "The standalone backend answers its own API",
+  "author": "agent",
+  "claims": [
+    { "id": "api", "witness": "http-status", "locus": "infra",
+      "params": { "url": "http://127.0.0.1:5273/api/state" } }
+  ],
+  "content": {
+    "root": "root",
+    "components": [
+      { "id": "root", "component": "Text",
+        "text": "A GET of /api/state answers 200. A different status code is a moved value, not an outage report." }
+    ]
+  }
+}
+```
+
+A commit never touches this card. Its own interval does.
+
+## Say what you know about the work (`proposal`)
+
+A point's **status** is derived from who spoke last: no replies → `open`, you replied last → `discussing`, the user replied last → `waiting`. That derivation is deliberate and load-bearing — it is what stops the Slate ever resolving a question the user never ruled on.
+
+But it leaves the card unable to tell two very different situations apart. You answered and are waiting on a ruling: `discussing`. You answered, did the work, and shipped it: also `discussing`. The card looks identical. The observed workaround was rewriting the headline to shout `RESOLVED` — which renders, and is theatre, because nothing downstream knows anything changed.
+
+`proposal` is how you say it properly:
+
+```jsonc
+{ "proposal": { "state": "working", "detail": "not started, half a day, one open judgement call on the alarm window" } }
+```
+
+| `state` | What the card shows | What it does |
+|---|---|---|
+| `working` | `WORKING — <your line>` | Nothing. Someone is on it, and the line says where it stands. |
+| `blocked` | `BLOCKED — <your line>` | Nothing. You cannot proceed, and the line says why. |
+| `resolved` | `AGENT SAYS: DONE ✓` (a button) | Offers the user a one-click resolve. |
+| `superseded` | `AGENT SAYS: MOOT ✓` (a button) | Offers the user a one-click supersede. |
+
+**You propose; the user disposes.** A `resolved` or `superseded` proposal is an *offer*, not a status change. The status only moves when the user clicks. Nothing you can write in a file moves a status — that is the invariant, and this field is designed around it, not through it.
+
+**`superseded` is not `dismissed`.** Dismissal is the user's verdict: *I'm not doing this.* Superseded means the question stopped being the right question — the premise dissolved, the prevention ticket turned out to be already filed and closed. That is a discovery *you* made, and filing it under the user's verdict would misattribute it. Propose `superseded` when the answer is neither yes nor no because the question no longer applies.
+
+**`detail` is one short line and deliberately not an ETA.** Write what you actually know — how far along, what the open judgement call is, what you are waiting on. Do not invent a completion time; you will be wrong, and a wrong ETA on a card is worse than no ETA. Keep it under ~200 characters; the card truncates, and the thread is where prose belongs.
+
+**Restate it whenever you rewrite the file.** `proposal` is file-owned like `refresh` and `group`: a projection that omits it clears it. That is the right default — an agent who rewrites a card and says nothing about progress is no longer claiming progress — but it means a body update that forgets the field silently drops your "shipped" claim.
 
 ## Related
 

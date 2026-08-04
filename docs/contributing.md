@@ -88,6 +88,40 @@ Feature PRs merge with **squash** (`gh pr merge <N> --squash`):
 > accumulating branch's history. That branch no longer exists, so that exception
 > is gone — feature PRs always squash.
 
+### If the PR implements a plan unit, add a `Plan:` trailer
+
+A PR that lands one unit of a document under `docs/plans/` puts this line at the
+bottom of its **body** (which becomes the squashed commit message):
+
+```
+Plan: docs/plans/2026-07-29-001-feat-slate-claims-and-witnesses-plan.md#U2
+```
+
+One line per unit — a PR that lands two units carries two.
+
+**Why this exists.** The subject already carries a unit tag (`… (U2) (#162)`),
+and that tag is not enough to identify anything. Twenty-two plans live under
+`docs/plans/` and sixteen of them number their units `U1..Un`, so a bare `U2`
+names a unit in sixteen different documents. Nothing else in a merged commit
+names the plan document at all. Measured on `origin/main`:
+
+- Matching the **subject** for `(U1)` finds **zero** commits — yet U1 of the
+  recursive-collaborative-surfaces plan did land, in two parts, as
+  `(U1, part 1)` (#158) and `(U1e)` (#159).
+- Matching the **whole message** for `(U4)` finds **five** commits, from five
+  unrelated plans, each listing its own U4 in a squash body.
+
+So the link is declared, not guessed. The `unit-landed` witness
+(`src/server/surfaces/witness-registry.ts`) reads this trailer to answer whether
+a plan unit has landed; without it the witness reports *unresolved* — it will
+never guess "not landed", because a wrong answer here is worse than no answer.
+
+Units that merged before this convention are covered by a small backfill map in
+that file. **The map does not grow** — new units carry the trailer.
+
+Trailers survive GitHub's squash the same way `Co-Authored-By:` does. Keep the
+line in its own paragraph at the end, one `Plan:` per line, no trailing punctuation.
+
 ## Versioning between releases
 
 `main` sits at the **next** version with a `-dev.N` suffix (e.g. `5.3.0-dev.0`)

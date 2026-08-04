@@ -38,9 +38,10 @@ interface Props {
   onRefreshTerminal?: () => void
   activeTab?: 'recap' | 'terminal'
   onActiveTabChange?: (tab: 'recap' | 'terminal') => void
+  focusMode?: boolean
 }
 
-export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal, activeTab, onActiveTabChange }: Props) {
+export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal, activeTab, onActiveTabChange, focusMode = false }: Props) {
   const status = statusUi(run.status)
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
@@ -206,7 +207,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   return (
     <header
-      className="widget-drag-handle flex items-center justify-between bg-surface-panel overflow-hidden cursor-grab active:cursor-grabbing select-none min-h-[44px]"
+      className={`widget-drag-handle flex items-center justify-between bg-surface-panel overflow-hidden select-none min-h-[44px] ${focusMode ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
       style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -215,7 +216,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       onDragStart={e => e.preventDefault()}
     >
       {/* Left: identity */}
-      <div className="flex items-center gap-2 min-w-0 pl-3">
+      <div className={`flex items-center gap-2 min-w-0 ${focusMode ? 'pl-32' : 'pl-3'}`}>
         <div
           className="flex items-center justify-center w-6 h-6 border shrink-0 overflow-hidden"
           style={{ borderColor: hexToRgba(runAccent, 0.6), backgroundColor: hexToRgba(runAccent, 0.1) }}
