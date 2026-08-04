@@ -22,7 +22,7 @@ import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
-import { buildSessionTimeline, findCodexCandidates, pickCodexRollout, DEFAULT_WINDOW_SEC, type TimelineInput } from '../sessions/timeline'
+import { buildSessionTimeline, findCodexCandidates, pickCodexRollout, resolveTranscriptPath, DEFAULT_WINDOW_SEC, type TimelineInput } from '../sessions/timeline'
 import { buildCoversSummary } from '../sessions/covers-summary'
 import { guestEnv } from '../sessions/guestEnv'
 import { reviveFromTombstone } from '../sessions/necro'
@@ -4072,20 +4072,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const workdir = session.workspace?.path ?? null
       const createdSec = Date.parse(session.created) / 1000
 
-      if (adapter === 'codex') {
-        // Codex owns this path regardless of TINSTAR_CONFIG_HOME — it is another
-        // tool's state directory, not Tinstar config. Mirrors codex-transcript.ts.
-        const root = join(homedir(), '.codex', 'sessions')
-        const path = workdir ? pickCodexRollout(createdSec, findCodexCandidates(root, workdir)) : null
-        return { name: session.name, adapter, transcriptPath: path, createdSec }
-      }
-
-      const convId = session.conversation?.id ?? null
-      let path: string | null = null
-      if (convId) {
+      // Memoised: Codex discovery walks the whole rollout tree, which cost ~0.5-1s
+      // on every poll before the timeline cache was even consulted.
+      const path = resolveTranscriptPath(session.name, () => {
+        if (adapter === 'codex') {
+          // Codex owns this path regardless of TINSTAR_CONFIG_HOME — it is another
+          // tool's state directory, not Tinstar config. Mirrors codex-transcript.ts.
+          const root = join(homedir(), '.codex', 'sessions')
+          return workdir ? pickCodexRollout(createdSec, findCodexCandidates(root, workdir)) : null
+        }
+        const convId = session.conversation?.id ?? null
+        if (!convId) return null
         const direct = workdir ? getTranscriptPath(workdir, convId) : null
-        path = direct && existsSync(direct) ? direct : findTranscriptByConvId(convId)
-      }
+        return direct && existsSync(direct) ? direct : findTranscriptByConvId(convId)
+      })
       return { name: session.name, adapter, transcriptPath: path, createdSec }
     }
 

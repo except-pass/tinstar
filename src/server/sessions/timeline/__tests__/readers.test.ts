@@ -154,3 +154,15 @@ describe('readClaudeTranscript', () => {
     expect(readClaudeTranscript(p).turns).toHaveLength(1)
   })
 })
+
+describe('pickCodexRollout tolerance (regression: two sessions, one rollout)', () => {
+  it('returns null rather than a distant stranger', () => {
+    // Two sessions in one worktree both matched the nearest rollout, so the
+    // second card showed the first session's time usage.
+    expect(pickCodexRollout(1_000_000, [{ startedSec: 5_000_000, path: '/stranger.jsonl' }])).toBeNull()
+  })
+
+  it('still accepts a rollout that started close to the session', () => {
+    expect(pickCodexRollout(1_000_000, [{ startedSec: 1_000_030, path: '/mine.jsonl' }])).toBe('/mine.jsonl')
+  })
+})

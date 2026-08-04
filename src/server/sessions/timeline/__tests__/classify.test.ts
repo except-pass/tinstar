@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { classifyCodexCall, classifyClaudeCall, closeUnmatched } from '../classify'
+import { classifyCodexCall, classifyClaudeCall } from '../classify'
+import { newReaderState, noteEntry, finishState } from '../shared'
 
 describe('classifyCodexCall', () => {
   it('splits a parked approval prompt off from the real runtime (R5)', () => {
@@ -122,30 +123,36 @@ describe('classifyClaudeCall', () => {
   })
 })
 
-describe('closeUnmatched', () => {
+describe('unresolved calls (R4)', () => {
+  const feed = (times: number[], callStart: number) => {
+    const st = newReaderState()
+    for (const t of times) {
+      noteEntry(st, t)
+      if (t === callStart) st.pending.set('c1', { start: t, name: 'exec', args: '{}' })
+    }
+    return st
+  }
+
   it('closes a call with no result at the next logged entry, not at now (R4)', () => {
     // Codex drops the output line when a call is interrupted. Stretching such a
-    // call to "now" painted a 34.9-hour phantom band over a day and a half of
-    // genuine work.
-    const out = closeUnmatched(
-      [{ start: 100, name: 'exec', args: '{}' }],
-      [50, 100, 150, 900],
-      100_000,
-    )
-    expect(out).toHaveLength(1)
-    expect(out[0]!.end).toBe(150)
-    expect(out[0]!.kind).toBe('tool')
-    expect(out[0]!.name).toContain('no result')
+    // call to "now" painted a 34.9-hour phantom band over genuine work.
+    const out = finishState(feed([50, 100, 150, 900], 100), 100_000)
+    const band = out.intervals.find(i => i.name.includes('no result'))!
+    expect(band).toBeDefined()
+    expect(band.end).toBe(150)
+    expect(band.kind).toBe('tool')
   })
 
   it('treats a call with nothing after it as still in flight', () => {
-    const out = closeUnmatched([{ start: 900, name: 'exec', args: '{}' }], [50, 900], 1_000)
-    expect(out[0]!.end).toBe(1_000)
-    expect(out[0]!.name).toBe('exec')
+    const out = finishState(feed([50, 900], 900), 1_000)
+    const band = out.intervals.find(i => i.name === 'exec')!
+    expect(band.end).toBe(1_000)
   })
 
-  it('returns nothing when no calls are pending', () => {
-    expect(closeUnmatched([], [1, 2, 3], 10)).toEqual([])
+  it('adds nothing when no calls are pending', () => {
+    const st = newReaderState()
+    for (const t of [1, 2, 3]) noteEntry(st, t)
+    expect(finishState(st, 10).intervals.filter(i => i.kind === 'tool')).toEqual([])
   })
 })
 

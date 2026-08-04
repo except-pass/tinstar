@@ -119,3 +119,80 @@ describe('implausible timestamps (regression: 229-year span)', () => {
     expect(tl.t1 - tl.t0).toBeLessThan(3600)
   })
 })
+
+describe('incremental parsing (R14)', () => {
+  it('an incrementally-grown parse matches a from-scratch parse', () => {
+    // The whole point of R14: reading only appended bytes must produce exactly
+    // what re-reading the file from byte zero would.
+    const p = join(dir, 'grow.jsonl')
+    const rows = [
+      { type: 'user', timestamp: iso(0), message: { content: 'go' } },
+      { type: 'assistant', timestamp: iso(1), message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] } },
+      { type: 'user', timestamp: iso(4), message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] } },
+      { type: 'user', timestamp: iso(400), message: { content: 'again' } },
+      { type: 'assistant', timestamp: iso(402), message: { content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: {} }] } },
+      { type: 'user', timestamp: iso(410), message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'y' }] } },
+    ].map(o => JSON.stringify(o) + '\n')
+
+    // grown one row at a time
+    writeFileSync(p, '')
+    const input = { name: 'grow', adapter: 'claude', transcriptPath: p, createdSec: 0 }
+    for (const row of rows) { appendFileSync(p, row); buildSessionTimeline(input, 1000) }
+    const incremental = buildSessionTimeline(input, 1000)!
+
+    // same bytes, parsed cold
+    const q = join(dir, 'whole.jsonl')
+    writeFileSync(q, rows.join(''))
+    const whole = buildSessionTimeline({ name: 'whole', adapter: 'claude', transcriptPath: q, createdSec: 0 }, 1000)!
+
+    expect(incremental.t0).toBe(whole.t0)
+    expect(incremental.t1).toBe(whole.t1)
+    expect(incremental.turns).toEqual(whole.turns)
+    expect(incremental.bands.map(b => [b.kind, b.start, b.end]))
+      .toEqual(whole.bands.map(b => [b.kind, b.start, b.end]))
+  })
+
+  it('tolerates a half-written trailing line', () => {
+    const p = join(dir, 'partial.jsonl')
+    writeFileSync(p, line(0) + '{"type":"user","timesta')
+    const input = { name: 'partial', adapter: 'claude', transcriptPath: p, createdSec: 0 }
+    expect(buildSessionTimeline(input, 1000)!.t1).toBe(0)
+    // the rest of the line arrives
+    appendFileSync(p, 'mp":"' + iso(120) + '","message":{"content":"go"}}\n')
+    expect(buildSessionTimeline(input, 1000)!.t1).toBe(120)
+  })
+
+  it('re-parses from scratch when the transcript path changes', () => {
+    // A recreated session reusing a name must not inherit its predecessor.
+    const a = join(dir, 'first.jsonl')
+    const b = join(dir, 'second.jsonl')
+    writeFileSync(a, line(0) + line(900))
+    writeFileSync(b, line(0) + line(60))
+    const first = buildSessionTimeline({ name: 'reused', adapter: 'claude', transcriptPath: a, createdSec: 0 }, 1000)!
+    expect(first.t1).toBe(900)
+    const second = buildSessionTimeline({ name: 'reused', adapter: 'claude', transcriptPath: b, createdSec: 0 }, 1000)!
+    expect(second.t1).toBe(60)
+  })
+
+  it('starts over when the file shrinks', () => {
+    const p = join(dir, 'rotate.jsonl')
+    writeFileSync(p, line(0) + line(900))
+    const input = { name: 'rot', adapter: 'claude', transcriptPath: p, createdSec: 0 }
+    expect(buildSessionTimeline(input, 1000)!.t1).toBe(900)
+    writeFileSync(p, line(30))
+    expect(buildSessionTimeline(input, 1000)!.t1).toBe(30)
+  })
+})
+
+describe('cache bounds', () => {
+  it('evicts old sessions rather than growing without limit', () => {
+    const p = join(dir, 'shared.jsonl')
+    writeFileSync(p, line(0))
+    for (let i = 0; i < 40; i++) {
+      buildSessionTimeline({ name: `s${i}`, adapter: 'claude', transcriptPath: p, createdSec: 0 }, 1000)
+    }
+    // Not directly observable, so assert the behaviour that matters: the
+    // earliest session still resolves correctly after eviction.
+    expect(buildSessionTimeline({ name: 's0', adapter: 'claude', transcriptPath: p, createdSec: 0 }, 1000)!.t1).toBe(0)
+  })
+})
