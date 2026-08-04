@@ -26,8 +26,12 @@
 import { createHash } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join, sep } from 'node:path'
-import type { A2uiContent, PointAuthor, SurfaceContent, SurfaceRefreshDeclaration } from '../../domain/types'
-import { parseRefreshDeclaration } from './surface-trigger-matcher'
+import type {
+  A2uiContent, PointAuthor, SurfaceClaim, SurfaceContent, SurfaceProposal, SurfaceRefreshDeclaration,
+} from '../../domain/types'
+import {
+  parseProposal, parseRefreshDeclaration, parseSurfaceClaim, parseSurfaceClaims,
+} from './surface-trigger-matcher'
 import type { SurfaceSourceAdapter } from './surface-service'
 
 /** The adapter name stamped on a Surface reconciled from a Slate source file. */
@@ -53,6 +57,18 @@ export interface SlateSourceEntry {
   createdAt?: number
   /** Content hash of the authored fields. See {@link slateEntryWatermark}. */
   watermark: string
+  /** Claims this entry declared that the host would not accept, one sentence each
+   *  (R3, plan U6). HOST KNOWLEDGE riding alongside the author's content, and
+   *  deliberately NOT part of {@link watermark} — the refusal is the host's verdict
+   *  on the declaration, not part of it, and a verdict inside the watermark basis
+   *  would advance the generation every time the host re-read the same file.
+   *
+   *  Absent when nothing was refused. The entry is present either way: a refused
+   *  claim costs that claim and never the Surface (KTD5), so the card renders its
+   *  NEW content with the bad claim gone — which is a different case from the
+   *  watcher's `unreadable` path, where an entry it could not parse at all keeps
+   *  its LAST-VALID projection. */
+  claimRefusals?: string[]
 }
 
 /** Build a `slate-file` locator. Two halves because a file holds many entries and
@@ -97,6 +113,8 @@ export function slateEntryWatermark(fields: {
   body?: A2uiContent
   recipe?: string
   refreshPolicy?: SurfaceRefreshDeclaration
+  claims?: SurfaceClaim[]
+  proposal?: SurfaceProposal
   author: PointAuthor
 }): string {
   const basis = JSON.stringify({
@@ -108,6 +126,21 @@ export function slateEntryWatermark(fields: {
     // entry. Leaving it out would mean the reconciler saw an unchanged watermark,
     // committed nothing, and quietly kept enforcing the old triggers.
     refreshPolicy: fields.refreshPolicy ?? null,
+    // U1's claims are in the basis for the same reason: a claim DECLARATION is
+    // author meaning — it says what would prove this surface wrong — so editing one
+    // is genuinely editing the entry, and an unchanged watermark would leave the
+    // host checking the old statement forever.
+    //
+    // ONLY THE DECLARATION. What a witness observed is host-owned and lives on
+    // `freshness` (KTD2), deliberately outside this basis: a host-written value in
+    // here would move the watermark every time the host looked, which is a revision
+    // and a rebuild per surface per sweep, forever. `?? null` keeps absent and `[]`
+    // apart — they serialize differently, which is the whole three-state contract.
+    claims: fields.claims ?? null,
+    // The author's CLAIM is part of the basis, but only its meaning — `state` and
+    // `detail`. `at` is host-stamped on every read, so hashing it would move the
+    // watermark on every epoch forever and burn a revision per surface per tick.
+    proposal: fields.proposal ? { state: fields.proposal.state, detail: fields.proposal.detail ?? null } : null,
     author: fields.author,
   })
   return 'sha256:' + createHash('sha256').update(basis).digest('hex').slice(0, 32)
@@ -143,13 +176,23 @@ const DEFAULT_FS: SlateSourceFs = {
  *  the same fields through {@link slateEntryWatermark}. */
 function authoredFieldsOf(raw: unknown): {
   headline: string; body?: A2uiContent; recipe?: string
-  refreshPolicy?: SurfaceRefreshDeclaration; author: PointAuthor
+  refreshPolicy?: SurfaceRefreshDeclaration; claims?: SurfaceClaim[]
+  proposal?: SurfaceProposal; author: PointAuthor
 } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
   if (typeof r.headline !== 'string' || !r.headline) return null
   const author: PointAuthor = r.author === 'user' || r.author === 'process' ? r.author : 'agent'
   const declaration = parseRefreshDeclaration(r.refreshPolicy)
+  // The REFUSALS half is deliberately dropped here. This function exists to
+  // reproduce the watermark of an entry the ingress side already read, and a refusal
+  // is host knowledge that is not in the watermark basis — reading it on this side
+  // would be reading it in the one place that cannot report it.
+  const { claims } = parseSurfaceClaims(r.claims)
+  // Host-stamped `at`, exactly as ingress stamps it. The value never survives into
+  // the watermark (see `slateEntryWatermark`), so a constant here would be equally
+  // correct and a wrong-looking one would be harder to read.
+  const proposal = parseProposal(r.proposal, Date.now())
   return {
     headline: r.headline,
     ...(r.content !== undefined ? { body: r.content as A2uiContent } : {}),
@@ -158,8 +201,29 @@ function authoredFieldsOf(raw: unknown): {
     // one INGRESS computes from the same file. Hashing the raw declaration would let
     // a field the parser drops move the watermark on every epoch, forever.
     ...(declaration ? { refreshPolicy: declaration } : {}),
+    // Parsed for the same reason, and carried with `!== undefined` because `[]` is a
+    // declaration rather than an empty one: collapsing it here would make the
+    // egress side hash something the ingress side does not, and every write-back
+    // would look to the next epoch like an author edit.
+    ...(claims !== undefined ? { claims } : {}),
+    ...(proposal ? { proposal } : {}),
     author,
   }
+}
+
+/** The raw claim entries of one file entry that {@link parseSurfaceClaim} would not
+ *  accept — the author's own words, kept verbatim through a write-back. Read off the
+ *  RAW entry rather than reconstructed, because the whole point is to preserve a
+ *  shape the parser could not turn into a `SurfaceClaim` at all.
+ *
+ *  Only per-claim refusals. A list refused WHOLE (over the cap) leaves every claim
+ *  individually valid, so nothing here matches it and the pre-existing whole-list
+ *  behaviour is unchanged. */
+function refusedRawClaims(rawEntry: unknown): Record<string, unknown>[] {
+  if (!rawEntry || typeof rawEntry !== 'object') return []
+  const claims = (rawEntry as Record<string, unknown>).claims
+  if (!Array.isArray(claims)) return []
+  return claims.filter(c => typeof parseSurfaceClaim(c) === 'string') as Record<string, unknown>[]
 }
 
 /** The adapter registry every `SurfaceService` in the process is built with. One
@@ -246,6 +310,35 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     // describing a surface the host refreshes on different terms.
     if (input.content.refreshPolicy === undefined) delete next.refreshPolicy
     else next.refreshPolicy = input.content.refreshPolicy as unknown as Record<string, unknown>
+    // Claims travel the same way (U1). They are in the entry watermark, so the
+    // set/delete pair has to be here too: an omitted write-back would leave the file
+    // holding a declaration the record no longer has, and the very next epoch would
+    // read the file's version back as an author edit and undo the write.
+    //
+    // A REFUSED CLAIM IS NOT WRITTEN OUT OF THE AUTHOR'S FILE (plan U6, R3). The
+    // record only ever holds the claims the parser accepted, so a plain write-back
+    // deletes the rest — and the moment U6 wired the witness registry into the
+    // parser, "the rest" became every mistyped witness kind. The consequence is worse
+    // than the loss itself: the next epoch would re-read a file with nothing wrong in
+    // it, the refusal would clear, and the card would look healthy having quietly
+    // eaten the author's declaration on a rebuild they never asked for.
+    //
+    // Safe to keep because the watermark hashes PARSED claims: a refused claim is
+    // absent from both sides of that hash, so leaving it in the file moves no
+    // evidence and the round trip still agrees with itself.
+    const refusedInFile = refusedRawClaims(entries[index])
+    if (input.content.claims === undefined) {
+      if (refusedInFile.length > 0) next.claims = refusedInFile
+      else delete next.claims
+    } else {
+      next.claims = [...(input.content.claims as unknown as Record<string, unknown>[]), ...refusedInFile]
+    }
+    // The author's claim travels back too. Written WITHOUT `at`: the host stamps that
+    // on every read, so persisting it into the file would put a host observation
+    // under the author's byline and make the file and the record disagree about a
+    // field neither of them owns.
+    if (input.content.proposal === undefined) delete next.proposal
+    else next.proposal = { state: input.content.proposal.state, ...(input.content.proposal.detail ? { detail: input.content.proposal.detail } : {}) }
     entries[index] = next
 
     const serialized = JSON.stringify(array ? entries : entries[0], null, 2) + '\n'

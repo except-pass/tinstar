@@ -38,6 +38,10 @@ export const colors = {
     discussing: '#ffc266', // amber — agent / in progress / stale
     waiting: '#6fcff6',    // sky — blocked on someone
     resolved: '#4fe0a6',   // emerald — settled
+    // violet — the question stopped being the right question. Its own hue rather
+    // than borrowing `dismissed`'s slate: superseded is a real outcome someone
+    // discovered, and greying it out would read as "ignored".
+    superseded: '#b79bf5',
     dismissed: '#7c8b95',  // slate — off-track, dimmed
     error: '#ff6b8a',      // red — failed action only
   },

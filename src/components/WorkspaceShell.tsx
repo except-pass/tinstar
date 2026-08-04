@@ -35,6 +35,8 @@ import { WidgetsPalette } from './WidgetsPalette/WidgetsPalette'
 import { PaletteDragGhost } from './WidgetsPalette/PaletteDragGhost'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
 import { pluginsReady } from '../widgets'
+import { FocusModeToggle } from './FocusModeToggle'
+import { focusCycleQueue, isBuiltInRunWorkspace, resolveFocusTarget, runsInFocusSpace } from '../focusMode/focusTarget'
 
 
 /** Taxonomy entities each own a name; the endpoint that owns it is keyed by type. */
@@ -118,9 +120,15 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
   return walk(tree, []) ?? []
 }
 
+const FOCUS_STATE_MESSAGES = {
+  resolving: 'Resolving Run Workspaces…',
+  empty: 'No sessions yet.',
+  'no-live': 'No live built-in Run Workspaces.',
+} as const
+
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected, loading } = useBackendState()
 
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
@@ -451,6 +459,11 @@ function WorkspaceShellInner() {
   }, [runMap, editorWidgets, browserWidgets, imageWidgets, pluginWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
+  const [focusMode, setFocusMode] = useState(() => getPref('focusMode') ?? false)
+  const focusModeRef = useRef(focusMode)
+  focusModeRef.current = focusMode
+  const [focusedRunBySpace, setFocusedRunBySpace] = useState<Record<string, string>>({})
+  const [widgetsPaletteExpanded, setWidgetsPaletteExpanded] = useState(true)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -827,9 +840,51 @@ function WorkspaceShellInner() {
   // sees rather than the order sessions happened to become ready.
   const visibleRunOrderRef = useRef<string[]>([])
   const visibleRunOrderReportedRef = useRef(false)
+  const [visibleRunOrder, setVisibleRunOrder] = useState<string[]>([])
   const handleVisibleRunOrder = useCallback((runIds: string[]) => {
     visibleRunOrderRef.current = runIds
     visibleRunOrderReportedRef.current = true
+    setVisibleRunOrder(current => (
+      current.length === runIds.length && current.every((id, index) => id === runIds[index])
+        ? current
+        : runIds
+    ))
+  }, [])
+
+  const spaceRuns = useMemo(
+    () => runsInFocusSpace(allRuns, activeSpaceId),
+    [allRuns, activeSpaceId],
+  )
+  const excludedFocusRunIds = useMemo(() => new Set(spaceRuns
+    .filter(run => isRunHidden(run.id) || isBackgroundHidden(run, showBackgroundSessions))
+    .map(run => run.id)), [spaceRuns, isRunHidden, showBackgroundSessions])
+  const focusEligibleSessionIds = useMemo(() => new Set(spaceRuns
+    .filter(run => isBuiltInRunWorkspace(run) && run.status !== 'stopped' && !excludedFocusRunIds.has(run.id))
+    .map(run => run.sessionId)
+    .filter(Boolean)), [spaceRuns, excludedFocusRunIds])
+  const focusResolution = useMemo(() => resolveFocusTarget({
+    hydrated: !loading,
+    runs: spaceRuns,
+    selectedRunId,
+    currentRunId: activeSpaceId ? focusedRunBySpace[activeSpaceId] : null,
+    orderedCandidateIds: visibleRunOrder,
+    excludedRunIds: excludedFocusRunIds,
+  }), [loading, spaceRuns, selectedRunId, activeSpaceId, focusedRunBySpace, visibleRunOrder, excludedFocusRunIds])
+  const focusedRunId = focusResolution.kind === 'focused' ? focusResolution.runId : null
+  const focusedRunIdRef = useRef(focusedRunId)
+  focusedRunIdRef.current = focusedRunId
+
+  useEffect(() => {
+    if (!focusMode || !activeSpaceId || !focusedRunId || focusedRunBySpace[activeSpaceId] === focusedRunId) return
+    setFocusedRunBySpace(current => ({ ...current, [activeSpaceId]: focusedRunId }))
+  }, [focusMode, activeSpaceId, focusedRunId, focusedRunBySpace])
+
+  const handleFocusModeChange = useCallback((next: boolean) => {
+    // Hotkeys can fire before React commits the state update. Keep their
+    // event-time authority aligned with this tab's controlled mode.
+    focusModeRef.current = next
+    setFocusMode(next)
+    setPref('focusMode', next)
   }, [])
   const cycleOrder = () =>
     visibleRunOrderRef.current
@@ -841,32 +896,73 @@ function WorkspaceShellInner() {
   // the queue entirely — not just reordered — so `[` / `]` can't reach them. Fall
   // back to the candidates only before the sidebar has reported any order yet; once
   // it has, an empty visible view means an empty cycle queue.
-  const visibleQueue = (candidates: string[]) =>
-    visibleCycleQueue(candidates, cycleOrder(), visibleRunOrderReportedRef.current)
+  const visibleQueue = (candidates: string[], inFocus: boolean) =>
+    inFocus
+      ? focusCycleQueue(candidates, cycleOrder())
+      : visibleCycleQueue(candidates, cycleOrder(), visibleRunOrderReportedRef.current)
+  const isFocusModeActive = () => focusModeRef.current
+
+  const cycleReadyNext = () => {
+    const inFocus = isFocusModeActive()
+    const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name) && (!inFocus || focusEligibleSessionIds.has(name))), inFocus)
+    const run = cycleNext(allRuns, queue, inFocus ? focusedRunIdRef.current : selectedRunId)
+    if (run) { handleSelectRun(run.id); setFocusRunId(inFocus ? null : `run-${run.id}`) }
+  }
+  const cycleReadyPrev = () => {
+    const inFocus = isFocusModeActive()
+    const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name) && (!inFocus || focusEligibleSessionIds.has(name))), inFocus)
+    const run = cyclePrev(allRuns, queue, inFocus ? focusedRunIdRef.current : selectedRunId)
+    if (run) { handleSelectRun(run.id); setFocusRunId(inFocus ? null : `run-${run.id}`) }
+  }
+  const cycleAllNext = () => {
+    const inFocus = isFocusModeActive()
+    const cycleRuns = inFocus ? spaceRuns : allRuns
+    const active = cycleRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions) && (!inFocus || isBuiltInRunWorkspace(r))).map(r => r.sessionId).filter(Boolean) as string[]
+    const run = cycleNext(allRuns, visibleQueue(active, inFocus), inFocus ? focusedRunIdRef.current : selectedRunId)
+    if (run) { handleSelectRun(run.id); setFocusRunId(inFocus ? null : `run-${run.id}`) }
+  }
+  const cycleAllPrev = () => {
+    const inFocus = isFocusModeActive()
+    const cycleRuns = inFocus ? spaceRuns : allRuns
+    const active = cycleRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions) && (!inFocus || isBuiltInRunWorkspace(r))).map(r => r.sessionId).filter(Boolean) as string[]
+    const run = cyclePrev(allRuns, visibleQueue(active, inFocus), inFocus ? focusedRunIdRef.current : selectedRunId)
+    if (run) { handleSelectRun(run.id); setFocusRunId(inFocus ? null : `run-${run.id}`) }
+  }
+
+  const terminalCycleHandlersRef = useRef({
+    'ready-next': cycleReadyNext,
+    'ready-prev': cycleReadyPrev,
+    'all-next': cycleAllNext,
+    'all-prev': cycleAllPrev,
+  })
+  terminalCycleHandlersRef.current = {
+    'ready-next': cycleReadyNext,
+    'ready-prev': cycleReadyPrev,
+    'all-next': cycleAllNext,
+    'all-prev': cycleAllPrev,
+  }
+
+  useEffect(() => {
+    const onTerminalCycle = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: string }>).detail?.action
+      if (
+        action === 'ready-next'
+        || action === 'ready-prev'
+        || action === 'all-next'
+        || action === 'all-prev'
+      ) {
+        terminalCycleHandlersRef.current[action]()
+      }
+    }
+    window.addEventListener('tinstar:terminal-session-cycle', onTerminalCycle)
+    return () => window.removeEventListener('tinstar:terminal-session-cycle', onTerminalCycle)
+  }, [])
 
   useGlobalHotkeys({
-    onCycleReadyNext: () => {
-      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name)))
-      const run = cycleNext(allRuns, queue, selectedRunId)
-      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
-    },
-    onCycleReadyPrev: () => {
-      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name)))
-      const run = cyclePrev(allRuns, queue, selectedRunId)
-      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
-    },
-    onCycleAllNext: () => {
-      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions)).map(r => r.sessionId).filter(Boolean) as string[]
-      const activeNames = visibleQueue(active)
-      const run = cycleNext(allRuns, activeNames, selectedRunId)
-      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
-    },
-    onCycleAllPrev: () => {
-      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions)).map(r => r.sessionId).filter(Boolean) as string[]
-      const activeNames = visibleQueue(active)
-      const run = cyclePrev(allRuns, activeNames, selectedRunId)
-      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
-    },
+    onCycleReadyNext: cycleReadyNext,
+    onCycleReadyPrev: cycleReadyPrev,
+    onCycleAllNext: cycleAllNext,
+    onCycleAllPrev: cycleAllPrev,
     onSessionQuick: useCallback(async () => {
       // S opens session dialog — if a task is selected, pre-fill with task settings
       const { selectedType, selectedIds } = selectionState
@@ -943,8 +1039,17 @@ function WorkspaceShellInner() {
 
   // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
   const handleFocusNode = useCallback((nodeId: string) => {
+    if (focusMode && nodeId.startsWith('run-')) {
+      const runId = nodeId.slice(4)
+      const run = runMap.get(runId)
+      if (activeSpaceId && isBuiltInRunWorkspace(run)) {
+        setFocusedRunBySpace(current => ({ ...current, [activeSpaceId]: runId }))
+        select(nodeId, 'run')
+      }
+      return
+    }
     setFocusRunId(nodeId)
-  }, [])
+  }, [focusMode, runMap, activeSpaceId, select])
 
   const handleFocusHandled = useCallback(() => {
     setFocusRunId(null)
@@ -958,23 +1063,30 @@ function WorkspaceShellInner() {
     })
   }, [])
 
-  // Click on canvas widget → select in hierarchy + expand ancestors
+  // Click on canvas widget → select in hierarchy + expand ancestors in Canvas.
   const handleSelectRun = useCallback((runId: string, additive = false) => {
     const nodeId = `run-${runId}`
-    const ancestors = findAncestorIds(sidebarTree, nodeId)
-    if (ancestors.length > 0) expandAll(ancestors)
+    // Focus navigation leaves the hierarchy's collapse state alone. This also
+    // keeps its session order stable across consecutive next/previous chords.
+    if (!focusMode) {
+      const ancestors = findAncestorIds(sidebarTree, nodeId)
+      if (ancestors.length > 0) expandAll(ancestors)
+    }
     if (additive) {
       toggleSelect(nodeId, 'run')
     } else {
       select(nodeId, 'run')
     }
-  }, [sidebarTree, select, toggleSelect, expandAll])
+    if (focusMode && activeSpaceId && isBuiltInRunWorkspace(runMap.get(runId))) {
+      setFocusedRunBySpace(current => ({ ...current, [activeSpaceId]: runId }))
+    }
+  }, [sidebarTree, select, toggleSelect, expandAll, focusMode, activeSpaceId, runMap])
 
   // Double-click on canvas widget → zoom to fit (receives run.id, needs prefixing)
   const handleCanvasFocusRun = useCallback((runId: string) => {
-    setFocusRunId(`run-${runId}`)
+    if (!focusMode) setFocusRunId(`run-${runId}`)
     handleSelectRun(runId)
-  }, [handleSelectRun])
+  }, [focusMode, handleSelectRun])
 
   // Auto-focus a freshly created run when it first appears, panning the canvas
   // to it — UNLESS it was spawned passively (focusOnCreate === false), the
@@ -997,10 +1109,14 @@ function WorkspaceShellInner() {
       if (run.focusOnCreate === false) continue // passive spawn — leave the viewport put
       const createdMs = run.createdAt ? Date.parse(run.createdAt) : NaN
       if (Number.isFinite(createdMs) && now - createdMs < 30_000) {
-        setFocusRunId(`run-${run.id}`)
+        if (focusMode && activeSpaceId && isBuiltInRunWorkspace(run)) {
+          setFocusedRunBySpace(current => ({ ...current, [activeSpaceId]: run.id }))
+        } else {
+          setFocusRunId(`run-${run.id}`)
+        }
       }
     }
-  }, [runMap])
+  }, [runMap, focusMode, activeSpaceId])
 
   return (
     <>
@@ -1104,7 +1220,11 @@ function WorkspaceShellInner() {
                         onVisibleRunOrder={handleVisibleRunOrder}
                       />
                     </div>
-                    <WidgetsPalette />
+                    <WidgetsPalette
+                      expanded={widgetsPaletteExpanded}
+                      onExpandedChange={setWidgetsPaletteExpanded}
+                      forceCollapsed={focusMode}
+                    />
                   </div>
                     <div
                       className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
@@ -1118,6 +1238,9 @@ function WorkspaceShellInner() {
 
                 {/* Canvas */}
                 <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
+                  <div className="absolute left-3 top-3 z-[60]">
+                    <FocusModeToggle focusMode={focusMode} onChange={handleFocusModeChange} />
+                  </div>
                   <InfiniteCanvas
                     tree={visibleCanvasTree}
                     editorWidgetMap={editorWidgetMap}
@@ -1126,6 +1249,8 @@ function WorkspaceShellInner() {
                     pluginWidgetMap={pluginWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
+                    focusMode={focusMode}
+                    focusedRunId={focusedRunId}
                     activeSpaceId={activeSpaceId}
                     onFocusHandled={handleFocusHandled}
                     onSelectRun={handleSelectRun}
@@ -1143,7 +1268,19 @@ function WorkspaceShellInner() {
                     arrangeSwimlanesRef={arrangeSwimlanesRef}
                     forceMarshalOpen={forceMarshalOpen}
                   />
-                  <PaletteDragGhost />
+                  {!focusMode && <PaletteDragGhost />}
+                  {focusMode && focusResolution.kind !== 'focused' && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-surface-base/95" data-testid={`focus-${focusResolution.kind}-state`}>
+                      <div className="max-w-sm text-center text-sm text-slate-400">
+                        {FOCUS_STATE_MESSAGES[focusResolution.kind]}
+                        {focusResolution.kind !== 'resolving' && (
+                          <button className="mt-4 block w-full text-primary underline" onClick={() => handleFocusModeChange(false)}>
+                            Return to Canvas
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
               {createDialog && (
@@ -1166,7 +1303,11 @@ function WorkspaceShellInner() {
               )}
 
               {showSettings && (
-                <SettingsDialog onClose={() => setShowSettings(false)} />
+                <SettingsDialog
+                  onClose={() => setShowSettings(false)}
+                  focusMode={focusMode}
+                  onFocusModeChange={handleFocusModeChange}
+                />
               )}
 
               {entityMenu && (

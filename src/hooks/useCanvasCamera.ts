@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, type SetStateAction } from 'react'
 
 export interface Camera {
   x: number
@@ -97,10 +97,17 @@ export function findWheelYieldTarget(
   return null
 }
 
-export function useCanvasCamera() {
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
+export function useCanvasCamera(enabled = true) {
+  const [camera, setCameraState] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
   const cameraRef = useRef(camera)
   cameraRef.current = camera
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
+
+  const setCamera = useCallback((next: SetStateAction<Camera>) => {
+    if (!enabledRef.current) return
+    setCameraState(next)
+  }, [])
 
   const isPanning = useRef(false)
   const panStart = useRef({ x: 0, y: 0 })
@@ -125,6 +132,7 @@ export function useCanvasCamera() {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!enabledRef.current) return
       if (e.code === 'Space' && !e.repeat && !isEditable(e.target)) {
         e.preventDefault()
         spaceHeld.current = true
@@ -173,7 +181,15 @@ export function useCanvasCamera() {
     }
   }, [])
 
+  useEffect(() => {
+    if (enabled) return
+    spaceHeld.current = false
+    isPanning.current = false
+    setCursorStyle('default')
+  }, [enabled])
+
   const handleWheel = useCallback((e: WheelEvent) => {
+    if (!enabledRef.current) return
     const target = e.target as HTMLElement | null
     const isZoomGesture = e.ctrlKey || e.metaKey
 
@@ -242,6 +258,7 @@ export function useCanvasCamera() {
   }, [])
 
   const startPan = useCallback((e: PointerEvent) => {
+    if (!enabledRef.current) return
     // Middle-click or space+click
     if (e.button === 1 || spaceHeld.current) {
       isPanning.current = true
@@ -251,6 +268,7 @@ export function useCanvasCamera() {
   }, [])
 
   const movePan = useCallback((e: PointerEvent) => {
+    if (!enabledRef.current) return
     if (!isPanning.current) return
     setCamera(prev => ({
       ...prev,
@@ -278,7 +296,7 @@ export function useCanvasCamera() {
         zoom,
       })
     },
-    [],
+    [setCamera],
   )
 
   return {
