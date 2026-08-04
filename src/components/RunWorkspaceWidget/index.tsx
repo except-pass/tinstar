@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useReducer, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useReducer, useEffect, useLayoutEffect, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
@@ -17,6 +17,8 @@ import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
 import { useConfig } from '../../context/ConfigContext'
 import { getPref, setPref } from '../../lib/uiPrefs'
+import { useFocusPresentation } from '../../focusMode/FocusPresentationContext'
+import { resolveFocusWorkspaceLayout } from './focusLayout'
 
 // The Slate column's drag-resize bounds (Slate v2 U1/R1). Two-column reflow
 // kicks in above SLATE_TWO_COL_MIN (see SlatePanel); the max keeps the column
@@ -58,6 +60,9 @@ type FilePanelMode = 'touched' | 'tree'
 
 export function RunWorkspaceWidget({ run, className = '', compact = false, zoom = 1, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown: _onHeaderPointerDown, onHeaderPointerMove: _onHeaderPointerMove, onHeaderPointerUp: _onHeaderPointerUp }: Props) {
 
+  const presentation = useFocusPresentation()
+  const focusMode = presentation === 'focus'
+
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [handsCollapsed, setHandsCollapsed] = useState(false)
@@ -86,6 +91,11 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
+  const [focusWidth, setFocusWidth] = useState<number | null>(null)
+  const [supportDrawer, setSupportDrawer] = useState<'files' | 'telemetry' | null>(null)
+  const filesRailRef = useRef<HTMLButtonElement>(null)
+  const telemetryRailRef = useRef<HTMLButtonElement>(null)
+  const supportDrawerRef = useRef<HTMLDivElement>(null)
   // The Slate's imperative handle (S6 U1). The widget owns the binding registration
   // and the focus-zone gate; the panel owns what each key MEANS.
   const slatePanelRef = useRef<SlatePanelHandle>(null)
@@ -106,6 +116,57 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   // Telemetry can be manually collapsed to give the Slate the right side (a per-browser
   // view pref, mirror of the Files collapse). Not gated on the Slate — an independent hide.
   const [telemetryCollapsed, setTelemetryCollapsed] = useState(() => getPref('telemetryCollapsed') ?? false)
+
+  useLayoutEffect(() => {
+    if (!focusMode) {
+      setFocusWidth(null)
+      return
+    }
+    const el = rootRef.current
+    if (!el) return
+    const measure = () => setFocusWidth(el.getBoundingClientRect().width)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [focusMode])
+
+  const focusLayout = resolveFocusWorkspaceLayout({
+    width: focusWidth ?? Number.POSITIVE_INFINITY,
+    filesCollapsed,
+    filesWidth: filesPanelWidth,
+    slateVisible,
+    slateWidth,
+    telemetryCollapsed,
+  })
+  const focusConstrained = focusMode && focusWidth !== null && focusLayout.constrained
+
+  const closeSupportDrawer = useCallback((restoreFocus = true) => {
+    const rail = supportDrawer === 'files' ? filesRailRef.current : telemetryRailRef.current
+    setSupportDrawer(null)
+    if (restoreFocus) rail?.focus()
+  }, [supportDrawer])
+
+  useEffect(() => {
+    if (!focusMode || !focusConstrained) closeSupportDrawer(false)
+  }, [focusMode, focusConstrained, run.id, closeSupportDrawer])
+
+  useLayoutEffect(() => {
+    if (!supportDrawer) return
+    supportDrawerRef.current?.focus()
+  }, [supportDrawer])
+
+  useEffect(() => {
+    if (!supportDrawer) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeSupportDrawer(true)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [supportDrawer, closeSupportDrawer])
 
   useEffect(() => { setPref('slateOpen', slateOpen) }, [slateOpen])
   useEffect(() => { setPref('telemetryCollapsed', telemetryCollapsed) }, [telemetryCollapsed])
@@ -292,6 +353,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       ref={rootRef}
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
+      data-focus-presentation={focusMode ? 'true' : undefined}
+      data-focus-constrained={focusConstrained ? 'true' : undefined}
       className={`relative flex flex-col overflow-hidden bg-surface-base border ${className}`}
       style={terminalFocused
         ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
@@ -313,13 +376,30 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           onRefreshTerminal={bumpTerm}
           activeTab={sessionTab}
           onActiveTabChange={setSessionTab}
+          focusMode={focusMode}
         />
       )}
 
       {/* Three-panel workspace */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {filesCollapsed ? (
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+        {focusConstrained && (
+          <button
+            key="focus-files-rail"
+            ref={filesRailRef}
+            type="button"
+            data-testid="focus-files-rail"
+            aria-expanded={supportDrawer === 'files'}
+            aria-controls="focus-files-support-panel"
+            onClick={() => setSupportDrawer(current => current === 'files' ? null : 'files')}
+            className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel text-slate-500 hover:bg-surface-hover hover:text-slate-200"
+            style={{ borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
+          >
+            <span className="text-2xs font-mono [writing-mode:vertical-lr] rotate-180">Files</span>
+          </button>
+        )}
+        {filesCollapsed && !focusConstrained ? (
           <div
+            key="collapsed-files"
             data-testid="collapsed-files"
             className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
             style={{ borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
@@ -329,8 +409,20 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           </div>
         ) : (
           <div
-            className="flex flex-col bg-surface-panel relative flex-shrink-0 min-h-0"
-            style={{ width: filesPanelWidth, borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
+            key="files-panel"
+            id="focus-files-support-panel"
+            ref={supportDrawer === 'files' ? supportDrawerRef : undefined}
+            tabIndex={focusConstrained ? -1 : undefined}
+            role={focusConstrained ? 'region' : undefined}
+            aria-label={focusConstrained ? 'Files drawer' : undefined}
+            aria-hidden={focusConstrained && supportDrawer !== 'files' ? true : undefined}
+            data-testid={focusConstrained && supportDrawer === 'files' ? 'focus-files-drawer' : undefined}
+            className={`flex flex-col bg-surface-panel min-h-0 ${focusConstrained ? 'absolute inset-y-0 left-6 z-40 shadow-2xl border-r border-white/10' : 'relative flex-shrink-0'}`}
+            style={{
+              width: focusConstrained ? 'clamp(280px, 32vw, 420px)' : filesPanelWidth,
+              borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}`,
+              display: focusConstrained && supportDrawer !== 'files' ? 'none' : undefined,
+            }}
           >
             {/* Mode toggle tabs */}
             <div
@@ -361,7 +453,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 Explorer
               </button>
               <button
-                onClick={() => setFilesCollapsed(true)}
+                onClick={() => focusConstrained ? closeSupportDrawer(true) : setFilesCollapsed(true)}
+                aria-label={focusConstrained ? 'Close Files drawer' : 'Collapse Files'}
                 className="px-1 text-slate-500"
                 style={{ color: runAccent }}
               >
@@ -410,16 +503,17 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
               </div>
             )}
             {/* Resize handle */}
-            <div
+            {!focusConstrained && <div
               className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
               style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
               onPointerDown={onResizePointerDown}
               onPointerMove={onResizePointerMove}
               onPointerUp={onResizePointerUp}
-            />
+            />}
           </div>
         )}
         <div
+          key="session-panel"
           data-testid="focus-zone-center-tabs"
           className={`flex-1 flex flex-col min-w-0 min-h-0 ${focusZone === 'center-tabs' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
         >
@@ -455,15 +549,16 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         </div>
         {slateVisible ? (
           <div
+            key="slate-panel"
             data-testid="focus-zone-slate"
             className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
           >
             <div
               className="relative h-full flex flex-col overflow-hidden bg-surface-panel border-l border-primary/10 flex-shrink-0"
-              style={{ width: slateWidth }}
+              style={{ width: focusConstrained ? focusLayout.slateWidth ?? slateWidth : slateWidth }}
             >
               {/* Left-border drag handle — widen by dragging left (R1). */}
-              <div
+              {!focusConstrained && <div
                 data-testid="slate-resize-handle"
                 className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
                 style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
@@ -472,7 +567,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 onPointerUp={onSlateResizePointerUp}
                 onPointerCancel={onSlateResizePointerUp}
                 onLostPointerCapture={onSlateResizePointerUp}
-              />
+              />}
               {/* `open` forces the panel to render even with zero surfaces (a blank Slate
                   the user opened on purpose); `onClose` collapses it back to the strip —
                   only meaningful when there are no surfaces holding it open. */}
@@ -480,7 +575,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 ref={slatePanelRef}
                 runId={run.id}
                 surfaces={run.slate}
-                width={slateWidth}
+                width={focusConstrained ? focusLayout.slateWidth ?? slateWidth : slateWidth}
                 open={slateOpen}
                 onClose={() => setSlateOpen(false)}
                 focused={focusZone === 'slate'}
@@ -493,6 +588,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           // present affordance. Once open (or once surfaces arrive) the full column above
           // replaces this strip, and Explain / + Add live in its header to fill it.
           <div
+            key="slate-opener"
             data-testid="slate-open-strip"
             onClick={() => setSlateOpen(true)}
             title="Open the Slate"
@@ -501,11 +597,36 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             <span className="text-2xs font-mono text-slate-400 [writing-mode:vertical-lr] rotate-180">✦ Slate</span>
           </div>
         )}
+        {focusConstrained && (
+          <button
+            key="focus-telemetry-rail"
+            ref={telemetryRailRef}
+            type="button"
+            data-testid="focus-telemetry-rail"
+            aria-expanded={supportDrawer === 'telemetry'}
+            aria-controls="focus-telemetry-support-panel"
+            onClick={() => setSupportDrawer(current => current === 'telemetry' ? null : 'telemetry')}
+            className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel text-slate-500 hover:bg-surface-hover hover:text-slate-200 border-l border-primary/10"
+          >
+            <span className="text-2xs font-mono [writing-mode:vertical-lr] rotate-180">Telemetry</span>
+          </button>
+        )}
         <div
-          data-testid="focus-zone-right-panel"
-          className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+          key="telemetry-panel"
+          id="focus-telemetry-support-panel"
+          ref={supportDrawer === 'telemetry' ? supportDrawerRef : undefined}
+          tabIndex={focusConstrained ? -1 : undefined}
+          role={focusConstrained ? 'region' : undefined}
+          aria-label={focusConstrained ? 'Telemetry drawer' : undefined}
+          aria-hidden={focusConstrained && supportDrawer !== 'telemetry' ? true : undefined}
+          data-testid={focusConstrained && supportDrawer === 'telemetry' ? 'focus-telemetry-drawer' : 'focus-zone-right-panel'}
+          className={`${focusConstrained ? 'absolute inset-y-0 right-6 z-40 shadow-2xl border-l border-white/10' : 'flex'} ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+          style={{
+            width: focusConstrained ? 'clamp(280px, 32vw, 420px)' : undefined,
+            display: focusConstrained && supportDrawer !== 'telemetry' ? 'none' : undefined,
+          }}
         >
-          {telemetryCollapsed ? (
+          {telemetryCollapsed && !focusConstrained ? (
             // Collapsed telemetry: a thin strip (mirrors the collapsed Files strip) that
             // reclaims the right side for the Slate. Click to bring telemetry back.
             <div
@@ -517,13 +638,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
               <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Telemetry</span>
             </div>
           ) : (
-            <div className="relative w-40 h-full flex flex-col bg-surface-panel">
+            <div className={`relative h-full flex flex-col bg-surface-panel ${focusConstrained ? 'w-full' : 'w-40'}`}>
               {/* Manual hide — the toggle the user asked for; pairs with the collapsed
                   strip above. Per-browser pref, so it sticks across reloads. */}
               <button
                 data-testid="telemetry-hide"
-                onClick={() => setTelemetryCollapsed(true)}
-                title="Hide telemetry"
+                onClick={() => focusConstrained ? closeSupportDrawer(true) : setTelemetryCollapsed(true)}
+                title={focusConstrained ? 'Close telemetry drawer' : 'Hide telemetry'}
+                aria-label={focusConstrained ? 'Close Telemetry drawer' : 'Hide telemetry'}
                 className="absolute top-1 right-1 z-10 text-slate-500 hover:text-slate-200 text-xs leading-none"
               >
                 »

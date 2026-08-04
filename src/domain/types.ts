@@ -17,6 +17,24 @@ export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' 
 /** @deprecated Use SessionStatus instead */
 export type RunStatus = SessionStatus
 export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
+
+/**
+ * Session time-usage bands, in paint-priority order — earlier wins when
+ * observations overlap. Lives here rather than under `src/server/` because both
+ * the reconstruction and the rail render from it, and the frontend may not
+ * runtime-import from the server (docs/conventions.md).
+ */
+export const BAND_KINDS = ['approval', 'question', 'subagent', 'compact', 'tool', 'idle', 'think'] as const
+export type BandKind = typeof BAND_KINDS[number]
+
+/**
+ * Default trailing window for the time-usage strips, in seconds.
+ *
+ * Never inline this number at a use site: it is threaded as a route query
+ * parameter and a hook argument so that surfacing a window selector later is
+ * adding a control, not re-plumbing three layers.
+ */
+export const DEFAULT_WINDOW_SEC = 3600
 export type RecapEntryType = 'agent' | 'user' | 'status'
 export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
 
@@ -572,6 +590,10 @@ export interface SlateSurface {
   status?: PointStatus
   thread?: Reply[]
   anchor?: PointAnchor
+  /** File-owned author claim about the work (see {@link SurfaceProposal}), projected
+   *  onto the legacy shape so the Run Workspace Slate can render "shipped — confirm?"
+   *  and "working: <one line>" without waiting for the recursive Canvas. */
+  proposal?: SurfaceProposal
   /** Server-set staleness marker (plan R19): present when a `process`-authored
    *  surface has gone stale (its wrapper stopped updating). The renderer styles it
    *  as "stalled/unknown" instead of a live spinner. */
@@ -581,6 +603,24 @@ export interface SlateSurface {
    *  queued / refreshing / failed / overdue without waiting for the recursive
    *  Canvas. Absent for a surface with no canonical record behind it. */
   freshness?: SurfaceFreshness
+  /**
+   * This surface declares nothing that could prove it wrong (R18, plan U7).
+   *
+   * DERIVED AT PROJECTION, NOT STORED (KTD1). Origin R12 says `unwitnessed` gates no
+   * controls and changes no scheduling, so it is a reading of
+   * {@link SurfaceContent.claims} rather than a sixth {@link SurfaceFreshnessPhase} —
+   * a sixth phase would touch every phase comparison in the freshness service and the
+   * refresh coordinator for a fact nothing there queries.
+   *
+   * BOTH EMPTY STATES PROJECT TRUE (KTD4). Absent claims (the author never said) and
+   * `claims: []` (the author checked and found nothing witnessable) differ only as an
+   * authoring signal; neither gives the host anything to check, so neither may render
+   * as verified.
+   *
+   * Set only when true, and never on the Objective — the user's own prose has no
+   * source to be checked against, exactly as {@link freshness} is withheld from it.
+   */
+  unwitnessed?: boolean
   createdAt: number
   amendedAt: number
 }
@@ -589,10 +629,48 @@ export interface SlateSurface {
 export type PointAuthor = 'agent' | 'user' | 'process'
 
 /** A point's lifecycle status. `open`/`discussing`/`waiting` are DERIVED from the
- *  thread (replies + last-author); `resolved`/`dismissed` are EXPLICIT (set only by
- *  an HTTP resolve/dismiss and survive a subsequent file re-projection). The Slate
- *  never auto-resolves a point — that was the CMT-1302 failure this feature prevents. */
-export type PointStatus = 'open' | 'discussing' | 'waiting' | 'resolved' | 'dismissed'
+ *  thread (replies + last-author); `resolved`/`dismissed`/`superseded` are EXPLICIT
+ *  (set only by an HTTP resolve/dismiss/supersede and survive a subsequent file
+ *  re-projection). The Slate never auto-resolves a point — that was the CMT-1302
+ *  failure this feature prevents.
+ *
+ *  `superseded` is the third exit and it is NOT a synonym for the other two: the
+ *  question stopped being the right question. A decision whose premise dissolved —
+ *  the prevention work turned out to be already filed and closed — was neither
+ *  answered nor waved away, and forcing it into `dismissed` would file the author's
+ *  discovery under the user's verdict. Dismissal stays the user's. */
+export type PointStatus = 'open' | 'discussing' | 'waiting' | 'resolved' | 'dismissed' | 'superseded'
+
+/** What the AUTHOR says about the work behind a surface — a HINT, never authority.
+ *
+ *  THE PROBLEM IT SOLVES. Status derives from who spoke last, deliberately, so the
+ *  Slate can never auto-resolve. But that leaves the card unable to tell
+ *  "awaiting your ruling" from "already shipped": both are `discussing`, because in
+ *  both the agent spoke last. The observed workaround was rewriting the headline to
+ *  shout RESOLVED — which renders, and is theatre. It also leaves no way to say an
+ *  answered surface is being WORKED rather than untouched; one answer sat half a day
+ *  looking identical to one nobody had started.
+ *
+ *  A proposal is the author's claim about the work. It is rendered beside the status
+ *  and it changes nothing about the status — {@link PointStatus} is still derived
+ *  from the thread, and only a user action moves it. A `resolved` or `superseded`
+ *  proposal is an offer the user confirms in one click; it never confirms itself. */
+export interface SurfaceProposal {
+  /** `working` — someone is on it. `blocked` — they cannot proceed. `resolved` and
+   *  `superseded` — the author believes it is finished, and offers the matching
+   *  {@link PointStatus} for the user to accept. */
+  state: 'working' | 'blocked' | 'resolved' | 'superseded'
+  /** ONE short line, rendered on the card.
+   *
+   *  DELIBERATELY FREE TEXT AND DELIBERATELY NOT AN ETA. The case that asked for it
+   *  would have read "not started, half a day, one open judgement call on the alarm
+   *  window" — three facts a structured field would have had to invent, and an ETA
+   *  the author would have had to make up and been wrong about. A Stepper was
+   *  useless for the same case precisely because nothing had started, so there were
+   *  no steps to colour. */
+  detail?: string
+  at: number
+}
 
 /** What a point is attached to. `none` = a free-standing open-points entry;
  *  `decision` / `surface` anchor it to a decision record or a Slate surface by id. */
@@ -634,6 +712,11 @@ export interface Point {
    *  — an omitted `group` is today's behavior exactly. Rides the file→store→bridge
    *  path like `refresh`: overwritten on projection, cleared when omitted. */
   group?: string
+  /** File-owned author claim about the work (see {@link SurfaceProposal}). Rides the
+   *  file→store→bridge path like `refresh`: overwritten on projection, cleared when
+   *  omitted. NEVER feeds {@link derivePointStatus} — it is a hint rendered beside
+   *  the status, and only a user action moves the status itself. */
+  proposal?: SurfaceProposal
   /** STORE-OWNED sort order within the run's points (S6 U2). Absent until the user
    *  reorders, in which case the projection falls back to `createdAt` — so an
    *  un-reordered Slate keeps its creation order exactly as before. A file
@@ -652,6 +735,9 @@ export interface Point {
   resolvedAt?: number
   /** Set only by an explicit dismiss; survives a later file re-projection. */
   dismissedAt?: number
+  /** Set only by an explicit supersede; survives a later file re-projection. The
+   *  question stopped being the right question — neither answered nor waved away. */
+  supersededAt?: number
   /** Server-set backstop marker (plan R19): a `process`-authored point whose
    *  `amendedAt` has gone stale (no file update for N minutes) is marked stalled so
    *  a `kill -9`'d `tinstar-run` wrapper can't leave a permanent fake-live spinner.
@@ -833,8 +919,19 @@ export interface SurfaceRefreshDeclaration {
   /** Verification interval (ms) — what `dueAt` is derived from. Absent falls back
    *  to the host default. */
   intervalMs?: number
-  /** Source identifiers this Surface derives FROM, for `source-content` matching.
-   *  Adapter-scoped strings, compared for equality. */
+  /** What this Surface derives FROM, for `source-content` matching. Two shapes in
+   *  one list, told apart by whether the entry carries a `scheme:` prefix:
+   *
+   *  · An EXTERNAL SOURCE ID (`mysql://prod/detector`, `jira:KC-1302`) — opaque,
+   *    compared for equality against the observed `sourceId`.
+   *  · A REPO PATH SHAPE (`src/server/**`, `docs/*.md`, `bin/serena`) — compared as
+   *    a glob, so an adapter that emits a path-shaped `sourceId` is matched without
+   *    the author having to list every file.
+   *
+   *  This list does NOT narrow which commits reach this Surface. A `git-revision`
+   *  event is gated by the declared trigger kinds and nothing else; narrowing which
+   *  triggers may reach a claim is claim-locus work, and two narrowing mechanisms
+   *  for one decision leaves no rule for which wins. */
   sources?: string[]
   /** Named signals this Surface listens for, for `semantic-signal` matching. */
   signals?: string[]
@@ -911,6 +1008,194 @@ export interface SurfaceFreshness {
    *  the job record is separate bookkeeping and the barrier never trusts it over
    *  the record's own revision and generation. */
   jobId?: string
+  /**
+   * Epoch ms of the last revalidation in which EVERY declared claim was observed
+   * and every one of them matched (R10/R19, plan U3).
+   *
+   * ITS OWN FIELD, not `verifiedAt` (KTD7). `observeSource` writes `verifiedAt` on
+   * creation and on every file save where the watermark moved, so that field already
+   * means "content last arrived or was rebuilt". Reusing it would make an author's
+   * file save reset the host's claim-check deadline, and would make the
+   * never-witnessed state unreachable — every Surface is stamped at birth.
+   *
+   * Absent means NEVER WITNESSED, which is a real and renderable state: a Surface
+   * whose file was saved a moment ago but whose claims nobody has checked shows no
+   * witness age at all (R19).
+   */
+  witnessedAt?: number
+  /**
+   * What the host last observed for each claim, keyed by {@link SurfaceClaim.id}
+   * (R8/R9, plan U3).
+   *
+   * HOST-OWNED AND HERE RATHER THAN ON `SurfaceContent` (KTD2). The declaration is
+   * author meaning and sits in the source watermark basis; the observed value is a
+   * host write, and a host write inside that basis moves the watermark every time
+   * the host looks — a revision and a rebuild per Surface per sweep, forever.
+   * `slate-source.test.ts` pins that property from the authored side.
+   *
+   * An entry exists only once the host has actually looked. A declared claim with no
+   * entry is what "not seeded yet" IS, and it is what makes a claim due immediately
+   * rather than a full interval from now.
+   */
+  claimObservations?: Record<string, SurfaceClaimObservation>
+  /**
+   * A claim value the host watched MOVE, for which no rebuild has landed yet
+   * (R11/R12/R17, plan U4).
+   *
+   * THE DURABLE HALF OF "a moved value queues a rebuild". The delta and this marker
+   * are written by the SAME commit that stores the new observation, and that
+   * atomicity is the whole point: a host that recorded the new value and then died
+   * before queueing the job would, on the next look, compare the world against the
+   * value it had just adopted, find them equal, stamp the Surface witnessed, and lose
+   * the rebuild forever. With the marker on the record, the sweep that follows the
+   * restart still finds a debt to pay.
+   *
+   * Present on a recipe-LESS Surface too, and permanently so, which is deliberate:
+   * R12 says such a Surface records the delta and goes stale without a rebuild being
+   * queued for it, and this is what makes that fact renderable rather than only
+   * implied by a stale badge nobody can explain.
+   *
+   * Cleared by a successful rebuild barrier (`completeRefresh`) and by nothing else.
+   */
+  claimRebuild?: SurfaceClaimRebuild
+  /**
+   * Claims the host READ but would not accept, one sentence each (R3, plan U6).
+   *
+   * THE REFUSAL CHANNEL A FILE OTHERWISE HAS NONE OF. A claim that names a witness
+   * kind this host does not implement, or whose parameters do not fit the kind it
+   * names, is dropped so the Surface still projects (KTD5) — and without this field
+   * that drop is invisible: the card renders its new content and a mistyped claim
+   * looks exactly like a healthy one.
+   *
+   * HOST-OWNED, and here rather than on `SurfaceContent`, for KTD2's reason. The
+   * message is the host's verdict on an author's declaration, not part of the
+   * declaration, so it must sit outside the entry watermark basis — a verdict inside
+   * that basis would move the watermark, burn a revision, and queue a rebuild every
+   * time the host re-read the file.
+   *
+   * Present only while something is refused. Absent means every declared claim was
+   * accepted, which is why the clear path has to be explicit at every merge: an
+   * absent key is `JSON.stringify`'s answer for both "no refusals" and "field never
+   * sent", and a client that spread-merges would keep a fixed refusal on screen
+   * forever (see docs/solutions/integration-issues/sse-delta-drops-undefined-keys-*).
+   */
+  claimRefusals?: string[]
+}
+
+/**
+ * One or more claim values that moved in a single revalidation (R11, plan U4).
+ *
+ * BOTH VALUES ARE CARRIED, not just the new one. `claimObservations` only ever holds
+ * the current observation, so without this the card could say a claim moved and not
+ * what it moved FROM — and "the roadmap said this unit was pending" is the half of
+ * the sentence a reader needs.
+ */
+export interface SurfaceClaimRebuild {
+  /** Every claim whose stored value a completed lookup contradicted, in claim-id
+   *  order. A FIRST observation is not a move: there was no stored value to
+   *  contradict, so nothing is recorded here for it. */
+  moves: {
+    claimId: string
+    from: SurfaceClaimValue
+    to: SurfaceClaimValue
+  }[]
+  /** Epoch ms the move was observed. */
+  at: number
+}
+
+/**
+ * Where a claim's truth lives (R1/R5, plan U1).
+ *
+ * ITS OWN CLOSED UNION, deliberately NOT a member of {@link SurfaceTriggerKind}.
+ * Locus is an orthogonal axis: a trigger kind says what ANNOUNCED a change, a locus
+ * says where the observation that could falsify a claim is MADE — and one locus is
+ * reachable from several trigger kinds (`repo` from both `git-revision` and
+ * `periodic`). Folding it into the trigger vocabulary would put names in that union
+ * nothing can announce and nothing can match, and the closedness of that union is a
+ * stated safety property up there rather than a tidiness one.
+ */
+export type SurfaceClaimLocus =
+  /** The bound worktree and the repository it belongs to. */
+  | 'repo'
+  /** Deployed infrastructure, reached over the network. */
+  | 'infra'
+
+/**
+ * One falsifiable statement a Surface makes about the world (R1, plan U1).
+ *
+ * A claim is a DECLARATION and nothing else: it names a witness kind, the parameters
+ * that kind needs, and the locus it observes. What the witness saw is host-owned
+ * state that lives elsewhere (KTD2/KTD7) — putting an observed value here would put
+ * a host write inside authored content, and therefore inside the source watermark,
+ * which would move the watermark on every epoch forever.
+ *
+ * `witness` is an OPAQUE validated string at this layer. U2 owns the registry that
+ * resolves the name and checks {@link params} against that kind's schema; U1
+ * deliberately knows nothing about which kinds exist, so a claim naming a kind this
+ * host has not shipped yet still round-trips through the file rather than being
+ * silently rewritten.
+ */
+export interface SurfaceClaim {
+  /** Surface-local and author-chosen. A2UI components reference a claim BY THIS, so
+   *  it is part of the authored contract rather than a host-minted handle. Unique
+   *  within one Surface; a repeat is refused rather than allowed to shadow. */
+  id: string
+  /** The witness kind that can check this claim. See the note above on opacity. */
+  witness: string
+  /** What that kind needs to run.
+   *
+   *  FLAT SCALARS ONLY. These arrive from an agent-authored file — the same
+   *  untrusted channel the prompt-delivery guardrail exists for — and reach a
+   *  witness runner. A flat map is bounded by construction (no recursion to depth-
+   *  limit, no nested `{ exec: "..." }` shape to mistake for a parameter), and both
+   *  kinds this slice ships take scalars. Widening it is a one-place parser change
+   *  if a later kind genuinely needs structure. */
+  params?: Record<string, string | number | boolean>
+  /** Which trigger kinds can invalidate it (R5). */
+  locus: SurfaceClaimLocus
+}
+
+/** What a witness may report having seen (plan U2/U3). Narrow on purpose: a claim's
+ *  value is COMPARED FOR EQUALITY against a stored one and rendered on a card, so a
+ *  structured result would need a comparator and a renderer nobody has written.
+ *  `null` is a genuine absence reported by a lookup that COMPLETED (R7) — the only
+ *  absence allowed to match. Structurally identical to `WitnessValue` in
+ *  `src/server/surfaces/witness-registry.ts`, which is the server-side name for the
+ *  same thing; this one exists because the record is domain state and the domain may
+ *  not import the server. */
+export type SurfaceClaimValue = string | number | boolean | null
+
+/**
+ * The host's last observation of ONE claim (R8/R9, plan U3).
+ *
+ * EVERY FIELD HERE IS SEMANTIC, and that is a deliberate design constraint rather
+ * than an accident. Observation state lands inside the projected-slate comparison,
+ * and the store's storm guard is whole-record equality — so a field that moves every
+ * time the host LOOKS (rather than every time something CHANGES) would make each
+ * sweep a persist-and-SSE storm across every Surface. There is therefore no
+ * "when we last looked" field: {@link at} records when this observation last MOVED,
+ * and the fact that the host looked again and saw the same thing is recorded once,
+ * at the Surface level, as {@link SurfaceFreshness.witnessedAt}.
+ */
+export interface SurfaceClaimObservation {
+  /** What a COMPLETED lookup last returned. Absent while the claim has only ever
+   *  been unresolved — and an absent value never matches anything, which is what
+   *  stops a witness that has been broken since birth from agreeing with itself. */
+  value?: SurfaceClaimValue
+  /** Present when the LAST attempt did not produce a value (KTD8). Kept ALONGSIDE
+   *  `value` rather than replacing it: a fetch that failed says nothing about
+   *  whether the world moved, so erasing the last known value would turn a
+   *  transient outage into a fabricated change. */
+  problem?: {
+    /** `unresolved` — nobody could look. `failed` — the claim or the witness is
+     *  broken and somebody has to edit it. Neither ever counts as a match. */
+    status: 'unresolved' | 'failed'
+    /** One sentence, safe to render. */
+    detail: string
+  }
+  /** Epoch ms this observation last MOVED. See the note above on why this is not
+   *  "when the host last looked". */
+  at: number
 }
 
 /** A Surface's authored content — the part an authority may replace (KTD4). */
@@ -928,6 +1213,32 @@ export interface SurfaceContent {
    *  applies its defaults — see `effectiveDeclaration` in
    *  `src/server/surfaces/surface-trigger-matcher.ts`. */
   refreshPolicy?: SurfaceRefreshDeclaration
+  /** The author's claim about the work behind this surface — see
+   *  {@link SurfaceProposal}.
+   *
+   *  AUTHORED CONTENT, not thread state, and the placement is the argument: a
+   *  proposal is something the author SAYS, so it belongs to the part an authority
+   *  may replace (KTD4). It therefore travels the same path as the headline — the
+   *  file owns it, a re-projection replaces it, omitting it clears it, and the
+   *  watermark covers it so an author who changes only their claim has genuinely
+   *  changed the entry. Putting it on the thread would have made it survive
+   *  re-authoring, which is wrong: an agent who rewrites a card and says nothing
+   *  about progress is no longer claiming progress. */
+  proposal?: SurfaceProposal
+  /** What this Surface says would prove it wrong (R1, plan U1).
+   *
+   *  THREE-STATE, and the two empty states are not the same thing:
+   *    · absent — the author never said. The R23 authoring convention still owes
+   *      this Surface a claim.
+   *    · `[]` — the author checked and found nothing witnessable here.
+   *    · non-empty — these are the statements the host may check without waking an
+   *      agent.
+   *
+   *  The two empty states are identical in scheduling and rendering (both project
+   *  `unwitnessed` under U7). They are kept apart anyway because the EGRESS adapter
+   *  writes this field back into the author's own file, and collapsing `[]` to
+   *  absent would have the host quietly delete a declaration the author wrote. */
+  claims?: SurfaceClaim[]
 }
 
 /** View-independent discussion state (R5/R8). Shared, never per-user: a thread is
@@ -945,6 +1256,8 @@ export interface SurfaceThread {
   resolvedAt?: number
   /** Set only by an explicit dismiss; survives a source re-projection. */
   dismissedAt?: number
+  /** Set only by an explicit supersede; survives a source re-projection. */
+  supersededAt?: number
 }
 
 /** A legacy presentation of a canonical Surface (plan KTD3). NOT a home: the

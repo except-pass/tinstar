@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { RunSessionPanel } from '../RunSessionPanel'
 import type { RecapEntry } from '../../../types'
 
@@ -81,5 +81,35 @@ describe('<RunSessionPanel> composer placement', () => {
       />,
     )
     expect(container.querySelector('[data-testid="prompt-composer"]')).toBeFalsy()
+  })
+})
+
+describe('<RunSessionPanel> terminal wrapper bridge', () => {
+  it('forwards only messages from the owned, same-origin terminal wrapper', () => {
+    const cycles: string[] = []
+    const boundaries: string[] = []
+    window.addEventListener('tinstar:terminal-session-cycle', (event) => {
+      cycles.push((event as CustomEvent<{ action: string }>).detail.action)
+    }, { once: true })
+    window.addEventListener('tinstar:terminal-scroll-boundary', (event) => {
+      boundaries.push((event as CustomEvent<{ direction: string }>).detail.direction)
+    }, { once: true })
+    const { container, unmount } = render(
+      <RunSessionPanel sessionId="run-1" status="idle" port={19999} controlledTab="terminal" />,
+    )
+    const frame = container.querySelector('iframe') as HTMLIFrameElement
+    const source = frame.contentWindow!
+    const origin = new URL(frame.src).origin
+
+    fireEvent(window, new MessageEvent('message', { source: window, origin, data: { type: 'terminal-session-cycle', sessionName: 'run-1', action: 'ready-next' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin: 'https://forged.invalid', data: { type: 'terminal-session-cycle', sessionName: 'run-1', action: 'ready-next' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-session-cycle', sessionName: 'other', action: 'ready-next' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-session-cycle', sessionName: 'run-1', action: 'bogus' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-session-cycle', sessionName: 'run-1', action: 'all-prev' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-scroll-boundary', sessionName: 'run-1', direction: 'next' } }))
+
+    expect(cycles).toEqual(['all-prev'])
+    expect(boundaries).toEqual(['next'])
+    unmount()
   })
 })

@@ -10,6 +10,7 @@ import { computeDeltaChip } from './computeDeltaChip'
 import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { TurnLengthPanel } from './TurnLengthPanel'
+import { TimelinePanel } from './TimelinePanel'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -105,7 +106,7 @@ function labelColor(opacity: number): string {
 
 function SessionSection({ sessionId }: { sessionId: string }) {
   const config = useConfig()
-  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
+  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true, timeline: true }
   const snap = useTelemetrySession(sessionId)
   const series = useTelemetrySeries(sessionId)
   if (!snap || snap.state !== 'ready') return null
@@ -157,6 +158,7 @@ function SessionSection({ sessionId }: { sessionId: string }) {
         {panels.cacheHit  && <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />}
         {panels.duty      && <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />}
         {panels.turnLength && <TurnLengthPanel sessionId={sessionId} />}
+        {panels.timeline && <TimelinePanel sessionId={sessionId} />}
       </div>
     </div>
   )
