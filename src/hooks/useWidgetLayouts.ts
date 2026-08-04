@@ -349,16 +349,70 @@ export function arrangeLayouts(
 
 // --- Smart placement for new nodes ---
 
+function rectsOverlap(a: WidgetLayout, b: WidgetLayout): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width
+    && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/**
+ * Find the top-left-most free spot for a `w`×`h` box in a `cols`-wide grid
+ * rooted at (originX, originY), avoiding every rect in `occupied`.
+ *
+ * Candidate positions are the origin plus the far edge (+ gap) of each occupied
+ * rect, scanned row-major. That does two things a "past the right edge of
+ * everything" rule can't:
+ *   - it reuses the holes left behind by closed sessions, and
+ *   - it wraps to a new row after `cols` columns instead of marching right
+ *     forever, so the N-th spawn is never N widget-widths from the first.
+ * The bottom-most candidate row sits below all content and is always free, so
+ * this only returns null if the column bound leaves no candidate x at all.
+ */
+function firstFreeCell(
+  occupied: WidgetLayout[],
+  originX: number,
+  originY: number,
+  w: number,
+  h: number,
+  cols: number,
+): { x: number; y: number } | null {
+  // A box at column index c starts at originX + c*(w + RUN_GAP); allowing
+  // exactly `cols` of them puts the right edge of the last one at this bound.
+  const maxX = originX + cols * (w + RUN_GAP)
+  const xs = new Set<number>([originX])
+  const ys = new Set<number>([originY])
+  for (const r of occupied) {
+    xs.add(r.x + r.width + RUN_GAP)
+    ys.add(r.y + r.height + RUN_GAP)
+  }
+  const xsSorted = [...xs].filter(x => x >= originX && x + w <= maxX).sort((a, b) => a - b)
+  const ysSorted = [...ys].filter(y => y >= originY).sort((a, b) => a - b)
+
+  for (const y of ysSorted) {
+    for (const x of xsSorted) {
+      const candidate = { x, y, width: w, height: h }
+      if (!occupied.some(r => rectsOverlap(candidate, r))) return { x, y }
+    }
+  }
+  return null
+}
+
 /**
  * Place new run nodes near their existing siblings rather than using the
  * full grid-from-scratch position. For each missing run:
- *   1. Find the rightmost sibling that already has a position → place to its right.
+ *   1. Positioned siblings → pack it into the first free cell of the parent's
+ *      interior grid (reusing gaps, wrapping to a new row instead of extending
+ *      one ever-wider strip).
  *   2. No siblings yet → place inside the parent container (top-left corner).
  *   3. No positioned parent (a root-level / standalone run — e.g. a passively
- *      spawned session with no task or worktree) → place it in guaranteed-empty
- *      space to the right of ALL existing content, so a fresh session never
- *      lands on top of another session's constellation or a widget. Falls back
- *      to defaults only when the canvas is empty (nothing to sit beside).
+ *      spawned session with no task or worktree) → pack it into the first free
+ *      cell of the root grid, so a fresh session never lands on top of an
+ *      existing constellation or widget but also stays near the rest of the
+ *      content. Falls back to defaults only when the canvas is empty.
+ *
+ * Only nodes present in `tree` count as occupied space. `existing` also carries
+ * persisted layouts for nodes that have left the tree (closed sessions), and
+ * treating those ghosts as occupied is what used to push every new session
+ * further and further out with nothing visible to explain the gap.
  *
  * Container nodes are not handled here; callers should cascadeExpansion after
  * placing runs so parent containers expand to contain them.
@@ -377,6 +431,12 @@ function placeNewRuns(
 
   const placed = new Map<string, WidgetLayout>()
 
+  // Live occupancy: only nodes still in the tree. Layouts left over from closed
+  // sessions stay in `existing` (they're re-persisted so a widget arriving late
+  // over SSE keeps its spot) but must not reserve canvas space forever.
+  const liveExisting: WidgetLayout[] = []
+  for (const [nodeId, layout] of existing) if (nodeMap.has(nodeId)) liveExisting.push(layout)
+
   for (const id of missingIds) {
     const node = nodeMap.get(id)
     const nodeReg = getWidgetComponent(toWidgetType(node?.type ?? ''))
@@ -388,46 +448,61 @@ function placeNewRuns(
     const parentId = treeMaps.parentMap.get(id)
     const parent = parentId ? nodeMap.get(parentId) : null
     if (!parent) {
-      // Root-level / standalone run. Drop it into open canvas to the right of
-      // everything already placed (existing persisted layouts + anything placed
-      // earlier in this pass) so it can't overlap an existing constellation or
-      // widget. Top-align to the highest existing node for a tidy row.
-      let contentRight = -Infinity
-      let contentTop = Infinity
-      const consider = (l: WidgetLayout) => {
-        if (l.x + l.width > contentRight) contentRight = l.x + l.width
-        if (l.y < contentTop) contentTop = l.y
+      // Root-level / standalone run. Pack it into the first free cell of the
+      // root grid (existing live layouts + anything placed earlier in this
+      // pass), so it can't overlap an existing constellation or widget and
+      // still lands next to the rest of the content.
+      const occupied = [...liveExisting, ...placed.values()]
+      if (!occupied.length) continue // empty canvas — caller falls back to defaults
+      let originX = Infinity
+      let originY = Infinity
+      let contentBottom = -Infinity
+      for (const l of occupied) {
+        if (l.x < originX) originX = l.x
+        if (l.y < originY) originY = l.y
+        if (l.y + l.height > contentBottom) contentBottom = l.y + l.height
       }
-      for (const l of existing.values()) consider(l)
-      for (const l of placed.values()) consider(l)
-      if (contentRight > -Infinity) {
-        placed.set(id, snap({ x: contentRight + RUN_GAP, y: contentTop, width: w, height: h }))
-      }
-      // else: empty canvas — let the caller fall back to generateDefaultLayouts.
+      // Same column count Arrange packs the root grid with, so spawn placement
+      // converges on the shape a manual Arrange would produce.
+      const cols = Math.max(1, Math.ceil(Math.sqrt(tree.length)))
+      const spot = firstFreeCell(occupied, originX, originY, w, h, cols)
+        ?? { x: originX, y: contentBottom + RUN_GAP }
+      placed.set(id, snap({ ...spot, width: w, height: h }))
       continue
     }
 
-    // Find rightmost positioned sibling
-    let maxRight = -Infinity
-    let refY: number | null = null
+    // Positioned siblings → pack into the parent's interior grid.
+    const siblings: WidgetLayout[] = []
     for (const sib of parent.children) {
       if (sib.id === id) continue
       const sl = existing.get(sib.id) ?? placed.get(sib.id)
-      if (!sl) continue
-      if (sl.x + sl.width > maxRight) { maxRight = sl.x + sl.width; refY = sl.y }
+      if (sl) siblings.push(sl)
     }
+    const positionedParent = existing.get(parentId!) ?? placed.get(parentId!)
 
-    if (refY !== null) {
-      placed.set(id, snap({ x: maxRight + RUN_GAP, y: refY, width: w, height: h }))
+    if (siblings.length) {
+      const depth = treeMaps.depthMap.get(parentId!) ?? 0
+      const { padX, padTop } = getPadding(depth)
+      // Anchor to the parent's interior when it's positioned; otherwise to the
+      // top-left of the siblings themselves.
+      const originX = positionedParent
+        ? positionedParent.x + padX
+        : Math.min(...siblings.map(s => s.x))
+      const originY = positionedParent
+        ? positionedParent.y + padTop
+        : Math.min(...siblings.map(s => s.y))
+      const cols = Math.max(1, Math.ceil(Math.sqrt(parent.children.length)))
+      const spot = firstFreeCell(siblings, originX, originY, w, h, cols)
+        ?? { x: originX, y: Math.max(...siblings.map(s => s.y + s.height)) + RUN_GAP }
+      placed.set(id, snap({ ...spot, width: w, height: h }))
       continue
     }
 
     // No siblings — place inside parent container if parent is positioned
-    const parentLayout = existing.get(parentId!) ?? placed.get(parentId!)
-    if (parentLayout) {
+    if (positionedParent) {
       const depth = treeMaps.depthMap.get(parentId!) ?? 0
       const { padX, padTop } = getPadding(depth)
-      placed.set(id, snap({ x: parentLayout.x + padX, y: parentLayout.y + padTop, width: w, height: h }))
+      placed.set(id, snap({ x: positionedParent.x + padX, y: positionedParent.y + padTop, width: w, height: h }))
     }
     // else: no reference found — caller will fall back to generateDefaultLayouts
   }
@@ -488,12 +563,18 @@ export function hydrateLayouts(
         map.set(id, snap(layout as WidgetLayout))
       }
     }
+    // Coverage is measured over tree ids only — `map` also holds layouts for
+    // ids that aren't in the tree (the out-of-tree entries loaded just above),
+    // and counting those made a tree node with no persisted layout look covered,
+    // so it fell through both branches below and got no layout at all.
+    let covered = 0
+    for (const id of allIds) if (map.has(id)) covered++
     // If >20% missing, regenerate from scratch
-    if (map.size < allIds.size * 0.8) return withSeed(generateDefaultLayouts(tree))
+    if (covered < allIds.size * 0.8) return withSeed(generateDefaultLayouts(tree))
     // Fill any remaining missing with the host-provided placement seed (e.g. a
     // browser widget opened at a chosen spot), then smart placement (near
     // siblings), then defaults.
-    if (map.size < allIds.size) {
+    if (covered < allIds.size) {
       const missing = new Set([...allIds].filter(id => !map.has(id)))
       const treeMaps = buildTreeMaps(tree)
       const smart = placeNewRuns(missing, tree, map, treeMaps)
