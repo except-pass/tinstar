@@ -323,14 +323,18 @@ function parseSessionContext(
     : Math.max(0, latestTurnTokens.total - (latestTurnTokens.reasoning ?? 0))
   if (windowTokens === undefined && usedTokens === undefined) return undefined
 
-  const context: ProviderSessionContext = {
-    ...(usedTokens !== undefined ? { usedTokens } : {}),
-    ...(windowTokens !== undefined ? { windowTokens } : {}),
-  }
   if (usedTokens !== undefined && windowTokens !== undefined && windowTokens > 0) {
-    context.usedPercent = Math.min(100, usedTokens / windowTokens * 100)
+    return {
+      usedTokens,
+      windowTokens,
+      usedPercent: Math.min(100, usedTokens / windowTokens * 100),
+    }
   }
-  return context
+  if (usedTokens !== undefined && windowTokens !== undefined) {
+    return { usedTokens, windowTokens }
+  }
+  if (usedTokens !== undefined) return { usedTokens }
+  return { windowTokens: windowTokens! }
 }
 
 function parseResetAt(
