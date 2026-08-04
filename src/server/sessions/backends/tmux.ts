@@ -27,8 +27,10 @@ import {
   defaultProviderRegistry,
   providerTelemetryEnabled,
   requireProviderCapability,
+  type ProviderTelemetryLaunchContext,
   type TerminalProviderAdapter,
 } from '../../providers/lifecycle'
+import { CODEX_OTEL_LOGS_PORT } from '../../observability/ports'
 import { natsBrokerUrl } from '../../nats/url'
 import {
   messageRouterSubject,
@@ -556,6 +558,8 @@ export function buildAgentCommand(opts: {
    * nats-mcp.json to load via `--mcp-config`; when disabled, the dev-channels
    * flag is stripped from the resolved command (see coupling note below). */
   nats?: { enabled: boolean; mcpConfigPath?: string | null } | null
+  /** Provider-owned OTel flags, kept out of user config and injected before the prompt. */
+  telemetry?: ProviderTelemetryLaunchContext | null
   appendSystemPrompt?: string | null
   agent?: AgentDef | null
   /** Per-session model override (Switchboard). Appends `--model <modelOverride>`
@@ -622,6 +626,12 @@ export function buildAgentCommand(opts: {
         '',
       )
     }
+    if (opts.telemetry) {
+      const telemetry = requireProviderCapability(provider, 'telemetry')
+      if (telemetry.launchFlags) {
+        preFlags.push(...telemetry.launchFlags(opts.telemetry))
+      }
+    }
     // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
@@ -641,6 +651,12 @@ export function buildAgentCommand(opts: {
     if (opts.nats?.enabled) {
       const nats = requireProviderCapability(provider, 'nats')
       preFlags.push(...nats.command.launchFlags(opts.nats.mcpConfigPath))
+    }
+    if (opts.telemetry) {
+      const telemetry = requireProviderCapability(provider, 'telemetry')
+      if (telemetry.launchFlags) {
+        preFlags.push(...telemetry.launchFlags(opts.telemetry))
+      }
     }
     if (opts.appendSystemPrompt) {
       preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
@@ -906,6 +922,7 @@ export async function createTmuxSession(
     resume: opts.resume,
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
     nats: natsOpts,
+    telemetry: providerTelemetryCommandOptions(opts.session.name, provider, opts.template),
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
     modelOverride: opts.session.modelOverride,
@@ -1047,6 +1064,7 @@ export async function startTmuxSession(
     sessionId: opts.session.conversation?.id,
     resume: true,
     nats: natsOpts,
+    telemetry: providerTelemetryCommandOptions(opts.session.name, provider, opts.template),
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
     modelOverride: opts.session.modelOverride,
@@ -1129,8 +1147,9 @@ export function providerTelemetryEnvironmentCommands(
     return []
   }
   const enabled = providerTelemetryEnabled(provider, template)
-
-  const telemetryVars = support.detail.environment({
+  const buildEnvironment = support.detail.environment
+  if (!buildEnvironment) return []
+  const telemetryVars = buildEnvironment({
     sessionName,
     endpoint,
   })
@@ -1139,6 +1158,27 @@ export function providerTelemetryEnvironmentCommands(
       ? ['set-environment', '-t', tmuxTarget, key, value]
       : ['set-environment', '-t', tmuxTarget, '-r', key],
   )
+}
+
+/** Pure provider OTel command plan shared by create and restart. */
+export function providerTelemetryCommandOptions(
+  sessionName: string,
+  provider: TerminalProviderAdapter,
+  template: CliTemplate | null | undefined,
+  metricsBaseEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+): ProviderTelemetryLaunchContext | null {
+  const support = provider.terminal.capabilities.telemetry
+  if (support.state === 'unsupported') {
+    if (template?.telemetry === true) requireProviderCapability(provider, 'telemetry')
+    return null
+  }
+  if (!providerTelemetryEnabled(provider, template) || !support.detail.launchFlags) return null
+  const base = metricsBaseEndpoint.replace(/\/$/u, '')
+  return {
+    sessionName,
+    logsEndpoint: `http://127.0.0.1:${CODEX_OTEL_LOGS_PORT}/v1/logs/${encodeURIComponent(sessionName)}`,
+    metricsEndpoint: base.endsWith('/v1/metrics') ? base : `${base}/v1/metrics`,
+  }
 }
 
 export async function stopTmuxSession(

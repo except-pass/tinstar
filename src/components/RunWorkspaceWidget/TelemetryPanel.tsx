@@ -5,7 +5,7 @@ import { fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 import { apiFetch } from '../../apiClient'
 import { StatSpark } from './StatSpark'
-import { computeDeltaChip, type DeltaChip } from './computeDeltaChip'
+import { computeDeltaChip } from './computeDeltaChip'
 import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { TurnLengthPanel } from './TurnLengthPanel'
@@ -13,8 +13,6 @@ import {
   useProviderSessionObservationState,
   type ProviderSessionObservations,
 } from '../../hooks/providerObservationsStore'
-import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
-import { providerTokenTotal } from '../../domain/provider-capabilities'
 import { TimelinePanel } from './TimelinePanel'
 
 /* ------------------------------------------------------------------ */
@@ -105,43 +103,22 @@ function labelColor(opacity: number): string {
     : 'rgba(255,255,255,0.4)'
 }
 
-function latestNonNull(values: Array<number | null>): number | null {
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    const value = values[index]
-    if (value !== null && value !== undefined) return value
-  }
-  return null
-}
-
 /* ------------------------------------------------------------------ */
 /*  SessionSection                                                     */
 /* ------------------------------------------------------------------ */
 
-function SessionSection({
-  sessionId,
-  providerSessions,
-  providerRefreshError,
-}: {
-  sessionId: string
-  providerSessions: ProviderSessionObservations[]
-  providerRefreshError: string | null
-}) {
+function SessionSection({ sessionId }: { sessionId: string }) {
   const config = useConfig()
   const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true, timeline: true }
   const snap = useTelemetrySession(sessionId)
   const series = useTelemetrySeries(sessionId)
-  const hasLegacyTelemetry = snap?.state === 'ready'
-  if (!hasLegacyTelemetry && providerSessions.length === 0) return null
-  const visibleProviderSessions = providerSessions.filter(provider => (
-    (panels.tokens && provider.usage !== undefined)
-    || provider.context !== undefined
-  ))
+  const readySnap = snap?.state === 'ready' ? snap : null
 
-  const costTotal  = hasLegacyTelemetry ? snap.cost.total : null
-  const tokenTotal = hasLegacyTelemetry ? snap.tokens.total : null
-  const tokenRate  = hasLegacyTelemetry ? snap.rate.perMin : null
-  const cacheHit   = hasLegacyTelemetry ? snap.cacheHitPct : null
-  const duty       = hasLegacyTelemetry ? snap.dutyCycle.value : null
+  const costTotal  = readySnap?.cost.total ?? null
+  const tokenTotal = readySnap?.tokens.total ?? null
+  const tokenRate  = readySnap?.rate.perMin ?? null
+  const cacheHit   = readySnap?.cacheHitPct ?? null
+  const duty       = readySnap?.dutyCycle.value ?? null
 
   const costValue   = costTotal  == null ? '--' : fmtDollar(costTotal)
   const tokensValue = tokenTotal == null ? '--' : fmtRate(tokenTotal)
@@ -179,183 +156,23 @@ function SessionSection({
         }}>THIS RUN</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
-        {visibleProviderSessions.map(provider => (
-          <ProviderSessionSignal
-            key={provider.providerId}
-            provider={provider}
-            showTokens={panels.tokens}
-            refreshError={providerRefreshError}
-            legacyTokens={hasLegacyTelemetry ? {
-              value: tokensValue,
-              series: tokenSeries,
-              delta: tokensDelta,
-            } : null}
-          />
-        ))}
-        {hasLegacyTelemetry && panels.cost && (
-          <StatSpark accent="gold" label="COST · PROMETHEUS" value={costValue} series={costSeries} delta={costDelta} />
+        {panels.cost && (
+          <StatSpark accent="gold" label="COST" value={costValue} series={costSeries} delta={costDelta} />
         )}
-        {hasLegacyTelemetry && visibleProviderSessions.length === 0 && panels.tokens && (
-          <StatSpark accent="blue" label="TOKENS · PROMETHEUS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
+        {panels.tokens && (
+          <StatSpark accent="blue" label="TOKENS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
         )}
-        {hasLegacyTelemetry && panels.cacheHit && (
-          <StatSpark accent="green" label="CACHE HIT · PROMETHEUS" value={cacheValue} series={cacheSeries} delta={cacheDelta} />
+        {panels.cacheHit && (
+          <StatSpark accent="green" label="CACHE HIT" value={cacheValue} series={cacheSeries} delta={cacheDelta} />
         )}
-        {hasLegacyTelemetry && panels.duty && (
-          <StatSpark accent="violet" label="DUTY · PROMETHEUS" value={dutyValue} series={dutySeries} delta={dutyDelta} />
+        {panels.duty && (
+          <StatSpark accent="violet" label="DUTY" value={dutyValue} series={dutySeries} delta={dutyDelta} />
         )}
         {panels.turnLength && <TurnLengthPanel sessionId={sessionId} />}
         {panels.timeline && <TimelinePanel sessionId={sessionId} />}
       </div>
     </div>
   )
-}
-
-function ProviderSessionSignal({
-  provider,
-  showTokens,
-  refreshError,
-  legacyTokens,
-}: {
-  provider: ProviderSessionObservations
-  showTokens: boolean
-  refreshError: string | null
-  legacyTokens: {
-    value: string
-    series: Array<number | null>
-    delta: DeltaChip
-  } | null
-}) {
-  const usage = provider.usage
-  const context = provider.context
-  const availableUsage = usage?.availability.state === 'available'
-    ? usage.availability.value
-    : null
-  const availableContext = context?.availability.state === 'available'
-    ? context.availability.value
-    : null
-  const liveCumulativeTotal = providerTokenTotal(availableUsage?.cumulativeTokens)
-  const latestTurnTotal = providerTokenTotal(availableUsage?.latestTurnTokens)
-  const usedPercent = providerContextPercent(availableContext)
-  const sessionId = showTokens
-    ? usage?.scope.sessionId ?? context?.scope.sessionId ?? null
-    : null
-  const history = useProviderTelemetrySeries(provider.providerId, sessionId)
-  const tokenSeries = history?.tokens ?? []
-  const historyTotal = history?.error === null ? latestNonNull(tokenSeries) : null
-  const hasNativeTokenHistory = historyTotal !== null
-  const displayedTotal = liveCumulativeTotal ?? historyTotal ?? latestTurnTotal
-  const historyDelta = history?.error
-    ? { text: 'history unavailable', tone: 'flat' as const }
-    : computeDeltaChip(
-        'tokens',
-        tokenSeries.map((value, index) => [history?.tsSec[index] ?? index, value]),
-      )
-
-  return (
-    <div
-      data-testid={`provider-session-signal-${provider.providerId}`}
-      style={{
-        padding: '5px 7px', borderRadius: 4,
-        background: 'rgba(34,211,238,0.055)',
-        borderLeft: '2px solid rgba(34,211,238,0.55)',
-        fontFamily: 'JetBrains Mono, monospace',
-      }}
-    >
-      {showTokens && (usage || hasNativeTokenHistory) && (
-        <>
-          <StatSpark
-            accent="blue"
-            label={`${formatProviderLabel(provider.providerId)} TOKENS`}
-            value={displayedTotal === null ? '--' : fmtRate(displayedTotal)}
-            series={tokenSeries}
-            delta={historyDelta}
-          />
-          {usage && (
-            <ObservationProvenance
-              kind="usage"
-              source={usage.source?.label ?? null}
-              freshness={usage.freshness.state}
-              detail={availableUsage?.model}
-              refreshError={refreshError}
-            />
-          )}
-        </>
-      )}
-      {showTokens && legacyTokens && !hasNativeTokenHistory && (
-        <StatSpark
-          accent="blue"
-          label="TOKENS · PROMETHEUS"
-          value={legacyTokens.value}
-          series={legacyTokens.series}
-          delta={legacyTokens.delta}
-        />
-      )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-        <span style={{ color: '#cbd5e1', fontSize: 9, fontWeight: 700 }}>
-          {formatProviderLabel(provider.providerId)}
-        </span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginTop: 2 }}>
-        <span style={{ color: 'rgba(255,255,255,0.48)', fontSize: 8 }}>
-          CONTEXT
-        </span>
-        <span style={{ color: '#e2e8f0', fontSize: 9 }}>
-          {usedPercent === null ? 'context unavailable' : `${usedPercent.toFixed(0)}% context`}
-        </span>
-      </div>
-      {context && (
-        <ObservationProvenance
-          kind="context"
-          source={context.source?.label ?? null}
-          freshness={context.freshness.state}
-          refreshError={refreshError}
-        />
-      )}
-    </div>
-  )
-}
-
-function ObservationProvenance({
-  kind,
-  source,
-  freshness,
-  detail,
-  refreshError,
-}: {
-  kind: 'usage' | 'context'
-  source: string | null
-  freshness: 'fresh' | 'stale' | 'unknown'
-  detail?: string
-  refreshError: string | null
-}) {
-  const status = refreshError ? 'refresh failed' : freshness
-  const label = [kind, detail, source].filter(Boolean).join(' · ')
-  return (
-    <div
-      data-testid={`provider-${kind}-provenance`}
-      title={refreshError ?? (source ? `Source: ${source}` : undefined)}
-      style={{
-        display: 'flex', justifyContent: 'space-between', gap: 6, marginTop: 2,
-        color: 'rgba(255,255,255,0.42)', fontSize: 7.5,
-      }}
-    >
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {label || kind}
-      </span>
-      <span style={{ color: providerFreshnessColor(status), flexShrink: 0 }}>
-        {status}
-      </span>
-    </div>
-  )
-}
-
-function providerFreshnessColor(
-  freshness: 'fresh' | 'stale' | 'unknown' | 'refresh failed',
-): string {
-  if (freshness === 'fresh') return '#67e8f9'
-  if (freshness === 'refresh failed' || freshness === 'unknown') return '#f87171'
-  return '#fbbf24'
 }
 
 /* ------------------------------------------------------------------ */
@@ -699,8 +516,6 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
       <SessionSection
         key={sessionId}
         sessionId={sessionId}
-        providerSessions={providerSessions}
-        providerRefreshError={providerState.error}
       />
       {meterButton}
       {detail}
@@ -737,12 +552,4 @@ function providerContextPercent(value: {
   if (value.usedPercent !== undefined) return value.usedPercent
   if (value.usedTokens === undefined || !value.windowTokens) return null
   return value.usedTokens / value.windowTokens * 100
-}
-
-function formatProviderLabel(providerId: string): string {
-  return providerId
-    .split(/[._-]+/u)
-    .filter(Boolean)
-    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(' ')
 }

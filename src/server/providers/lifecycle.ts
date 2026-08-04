@@ -95,13 +95,22 @@ interface ProviderNatsLaunchCapability {
   }
 }
 
+export interface ProviderTelemetryLaunchContext {
+  sessionName: string
+  logsEndpoint: string
+  metricsEndpoint: string
+}
+
 interface ProviderTelemetryLaunchCapability {
   /** Provider-defined diagnostic label; shared lifecycle code never branches on it. */
   transport: string
-  environment(context: {
+  /** Environment-based exporters such as Claude Code. */
+  environment?: (context: {
     sessionName: string
     endpoint: string
-  }): Record<string, string>
+  }) => Record<string, string>
+  /** Command-based exporters such as Codex's one-off TOML overrides. */
+  launchFlags?: (context: ProviderTelemetryLaunchContext) => readonly string[]
 }
 
 export interface TerminalProviderCapabilities {
@@ -111,7 +120,8 @@ export interface TerminalProviderCapabilities {
   }>
   telemetry: CapabilitySupport<{
     transport: ProviderTelemetryLaunchCapability['transport']
-    environment: ProviderTelemetryLaunchCapability['environment']
+    environment?: ProviderTelemetryLaunchCapability['environment']
+    launchFlags?: ProviderTelemetryLaunchCapability['launchFlags']
   }>
 }
 
@@ -440,9 +450,21 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
           },
         },
       },
-      telemetry: unsupportedTelemetry('Codex'),
+      telemetry: {
+        state: 'supported',
+        detail: {
+          transport: 'codex-otlp-http',
+          launchFlags: ({ logsEndpoint, metricsEndpoint }) => [
+            `--config ${shellQuote('otel.environment="tinstar"')}`,
+            `--config ${shellQuote(`otel.exporter={ otlp-http = { endpoint = "${logsEndpoint}", protocol = "json" } }`)}`,
+            `--config ${shellQuote(`otel.metrics_exporter={ otlp-http = { endpoint = "${metricsEndpoint}", protocol = "json" } }`)}`,
+            `--config ${shellQuote('otel.trace_exporter="none"')}`,
+            `--config ${shellQuote('otel.log_user_prompt=false')}`,
+          ],
+        },
+      },
     },
-    defaultTelemetry: false,
+    defaultTelemetry: true,
     transcript: codexTranscript,
     managedEnvironment: {
       names: ['CODEX_HOME'],

@@ -65,16 +65,47 @@ async function backfill(name: string) {
     const data = (await r.json()) as HudSeries
     const entry = store.get(name)
     if (!entry) return
-    entry.snap = {
-      tsSec:  data.series.cost.map(p => p[0]),
-      cost:   data.series.cost.map(p => p[1]),
-      tokens: data.series.tokens.map(p => p[1]),
-      cache:  data.series.cache.map(p => p[1]),
-      duty:   data.series.duty.map(p => p[1]),
-    }
+    entry.snap = mergeSeriesSnapshots(seriesSnapshotFromHudSeries(data), entry.snap)
     emit(name)
   } catch {
     // Backfill is best-effort. If it fails, the tail will still accrue from snapshot ticks.
+  }
+}
+
+export function seriesSnapshotFromHudSeries(data: HudSeries): SeriesSnapshot {
+  const timestamps = [...new Set(
+    Object.values(data.series).flatMap(points => points.map(([timestamp]) => timestamp)),
+  )].sort((left, right) => left - right).slice(-MAX_SAMPLES)
+  const values = Object.fromEntries(
+    Object.entries(data.series).map(([metric, points]) => [metric, new Map(points)]),
+  ) as Record<keyof HudSeries['series'], Map<number, number | null>>
+  return {
+    tsSec: timestamps,
+    cost: timestamps.map(timestamp => values.cost.get(timestamp) ?? null),
+    tokens: timestamps.map(timestamp => values.tokens.get(timestamp) ?? null),
+    cache: timestamps.map(timestamp => values.cache.get(timestamp) ?? null),
+    duty: timestamps.map(timestamp => values.duty.get(timestamp) ?? null),
+  }
+}
+
+export function mergeSeriesSnapshots(
+  base: SeriesSnapshot,
+  overlay: SeriesSnapshot,
+): SeriesSnapshot {
+  const timestamps = [...new Set([...base.tsSec, ...overlay.tsSec])]
+    .sort((left, right) => left - right)
+    .slice(-MAX_SAMPLES)
+  const mergeMetric = (metric: Exclude<keyof SeriesSnapshot, 'tsSec'>): (number | null)[] => {
+    const merged = new Map(base.tsSec.map((timestamp, index) => [timestamp, base[metric][index] ?? null]))
+    overlay.tsSec.forEach((timestamp, index) => merged.set(timestamp, overlay[metric][index] ?? null))
+    return timestamps.map(timestamp => merged.get(timestamp) ?? null)
+  }
+  return {
+    tsSec: timestamps,
+    cost: mergeMetric('cost'),
+    tokens: mergeMetric('tokens'),
+    cache: mergeMetric('cache'),
+    duty: mergeMetric('duty'),
   }
 }
 

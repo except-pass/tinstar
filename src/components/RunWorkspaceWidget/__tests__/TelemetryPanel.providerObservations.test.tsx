@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, waitFor } from '@testing-library/react'
 import { Profiler } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TelemetryPanel } from '../TelemetryPanel'
@@ -119,15 +119,18 @@ describe('<TelemetryPanel> provider observations', () => {
     }
   })
 
-  it('renders Codex native token history and live context without Claude telemetry', () => {
+  it('renders one provider-neutral chart set alongside live context', () => {
+    testState.legacySnapshot = legacySnapshot(1_200)
     const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
 
-    expect(view.getByTestId('provider-session-signal-codex')).toBeTruthy()
-    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
+    expect(view.getAllByText('COST')).toHaveLength(1)
+    expect(view.getAllByText('TOKENS')).toHaveLength(1)
+    expect(view.getAllByText('DUTY')).toHaveLength(1)
     expect(view.getByText('1.2k')).toBeTruthy()
-    expect(view.getByText('37% context')).toBeTruthy()
     expect(view.getByTitle(/Context window: 37.0% of 200,000 tokens/)).toBeTruthy()
-    expect(view.queryByText(/COST · PROMETHEUS/)).toBeNull()
+    expect(view.queryByText(/Codex TOKENS/i)).toBeNull()
+    expect(view.queryByText(/PROMETHEUS/i)).toBeNull()
+    expect(view.queryByText(/provider signals/i)).toBeNull()
   })
 
   it('does not render a detailed treemap when the provider reports it unsupported', async () => {
@@ -225,181 +228,14 @@ describe('<TelemetryPanel> provider observations', () => {
     expect(view.getByText('900')).toBeTruthy()
   })
 
-  it('retains legacy tokens when provider usage is unavailable instead of replacing it with zero-like data', () => {
-    testState.providerSessions = [{
-      ...codexProviderSession(),
-      usage: {
-        ...codexProviderSession().usage,
-        availability: { state: 'unavailable', reason: 'not-observed' },
-      },
-    }]
-    testState.legacySnapshot = {
-      state: 'ready',
-      cost: { total: null, byModel: {} },
-      tokens: { total: 4_200 },
-      rate: { perMin: 12, perHour: 720 },
-      cacheHitPct: null,
-      dutyCycle: { value: null, windowMinutes: 5 },
-      burningRunIds: [],
-      window: 'today',
-    }
-    testState.providerHistory = {
-      tsSec: [],
-      tokens: [],
-      source: 'Tinstar provider observation history',
-      freshness: 'unknown',
-      error: 'not observed',
-    }
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(view.getByText('TOKENS · PROMETHEUS')).toBeTruthy()
-    expect(view.getByText('4.2k')).toBeTruthy()
-    expect(view.getByText('37% context')).toBeTruthy()
-  })
-
-  it('retains legacy cumulative history for latest-turn-only provider usage', () => {
-    const provider = codexProviderSession()
-    testState.providerSessions = [{
-      ...provider,
-      usage: {
-        ...provider.usage,
-        availability: {
-          state: 'available',
-          value: { model: 'gpt-5.4', latestTurnTokens: { input: 7, output: 3 } },
-        },
-      },
-    }]
-    testState.providerHistory = {
-      tsSec: [],
-      tokens: [],
-      source: 'Tinstar provider observation history',
-      freshness: 'unknown',
-      error: 'not observed',
-    }
-    testState.legacySnapshot = {
-      state: 'ready',
-      cost: { total: null, byModel: {} },
-      tokens: { total: 4_200 },
-      rate: { perMin: 12, perHour: 720 },
-      cacheHitPct: null,
-      dutyCycle: { value: null, windowMinutes: 5 },
-      burningRunIds: [],
-      window: 'today',
-    }
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(view.getByText('TOKENS · PROMETHEUS')).toBeTruthy()
-    expect(view.getByText('4.2k')).toBeTruthy()
-    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
-    expect(view.getByText('10')).toBeTruthy()
-  })
-
-  it('prefers cumulative provider history over a latest-turn-only live total', () => {
-    const provider = codexProviderSession()
-    testState.providerSessions = [{
-      ...provider,
-      usage: {
-        ...provider.usage,
-        availability: {
-          state: 'available',
-          value: { model: 'gpt-5.4', latestTurnTokens: { input: 7, output: 3 } },
-        },
-      },
-    }]
+  it('respects the token panel preference while retaining the context meter', () => {
     testState.legacySnapshot = legacySnapshot(4_200)
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-    const providerSignal = within(view.getByTestId('provider-session-signal-codex'))
-
-    expect(providerSignal.getByText('1.2k')).toBeTruthy()
-    expect(providerSignal.queryByText('10')).toBeNull()
-    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
-  })
-
-  it('falls back to legacy tokens when a failed history refresh retains stale points', () => {
-    testState.legacySnapshot = legacySnapshot(4_200)
-    testState.providerHistory = {
-      tsSec: [1, 2],
-      tokens: [1_000, 1_200],
-      source: 'Tinstar provider observation history',
-      freshness: 'stale',
-      error: 'HTTP 503',
-    }
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(view.getByText('TOKENS · PROMETHEUS')).toBeTruthy()
-    expect(view.getByText('4.2k')).toBeTruthy()
-    expect(view.getByText('history unavailable')).toBeTruthy()
-  })
-
-  it('suppresses legacy tokens when cumulative provider history is usable', () => {
-    testState.legacySnapshot = legacySnapshot(4_200)
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
-    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
-    expect(view.queryByText('4.2k')).toBeNull()
-  })
-
-  it('renders native token history for a context-only observation without legacy duplication', () => {
-    const provider = codexProviderSession()
-    testState.providerSessions = [{
-      providerId: provider.providerId,
-      context: provider.context,
-    }]
-    testState.legacySnapshot = legacySnapshot(4_200)
-
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(view.getByText(/Codex TOKENS/i)).toBeTruthy()
-    expect(view.getByText('1.2k')).toBeTruthy()
-    expect(view.getByText('37% context')).toBeTruthy()
-    expect(view.queryByText('TOKENS · PROMETHEUS')).toBeNull()
-    expect(view.queryByText('4.2k')).toBeNull()
-    expect(testState.providerHistoryRequests).toContainEqual(['codex', 'run-1'])
-  })
-
-  it('respects the token panel preference while retaining provider context', () => {
     testState.tokensEnabled = false
 
     const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
 
-    expect(view.queryByText(/Codex TOKENS/i)).toBeNull()
-    expect(view.getByText('37% context')).toBeTruthy()
-  })
-
-  it('labels usage and context provenance independently and exposes refresh failure', () => {
-    const provider = codexProviderSession()
-    testState.providerSessions = [{
-      ...provider,
-      context: {
-        ...provider.context,
-        source: { id: 'context', label: 'Context source' },
-        freshness: {
-          state: 'stale',
-          observedAt: '2026-08-01T11:59:00.000Z',
-          checkedAt: '2026-08-01T12:00:00.000Z',
-        },
-      },
-    }]
-    const view = render(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    const usage = within(view.getByTestId('provider-usage-provenance'))
-    const context = within(view.getByTestId('provider-context-provenance'))
-    expect(usage.getByText('fresh')).toBeTruthy()
-    expect(usage.getByText(/Codex rollout events/)).toBeTruthy()
-    expect(context.getByText('stale')).toBeTruthy()
-    expect(context.getByText(/Context source/)).toBeTruthy()
-
-    testState.providerError = 'HTTP 503'
-    view.rerender(<TelemetryPanel sessionId="run-1" runAccent="#22d3ee" />)
-
-    expect(within(view.getByTestId('provider-usage-provenance')).getByText('refresh failed')).toBeTruthy()
-    expect(within(view.getByTestId('provider-context-provenance')).getByText('refresh failed')).toBeTruthy()
+    expect(view.queryByText('TOKENS')).toBeNull()
+    expect(view.getByTitle(/Context window: 37.0% of 200,000 tokens/)).toBeTruthy()
   })
 })
 

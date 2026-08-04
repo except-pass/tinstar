@@ -1,0 +1,1 @@
+export const CODEX_OTEL_LOGS_PORT = 4319

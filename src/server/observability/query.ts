@@ -33,6 +33,11 @@ export interface HudQueryOpts {
   sessionId?: string
 }
 
+export interface UnifiedSessionTelemetryIdentity {
+  providerId: string
+  sessionIds: string[]
+}
+
 export class TelemetryQuery {
   private lastSnapshot: HudSnapshot | null = null
   private lastSnapshotAt = 0
@@ -49,6 +54,122 @@ export class TelemetryQuery {
         return { ...this.lastSnapshot, staleSeconds: Math.round((Date.now() - this.lastSnapshotAt) / 1000) }
       }
       throw err
+    }
+  }
+
+  /** One provider-neutral fleet snapshot; provider-specific names stop here. */
+  async unifiedTodayHud(opts: HudQueryOpts): Promise<HudSnapshot> {
+    const windowSec = this.secondsSinceLocalMidnight(opts.tzOffsetMinutes)
+    const [claude, native] = await Promise.all([
+      this.todayHud(opts),
+      this.queryCanonicalProviderHud({ windowSec }),
+    ])
+    return combineHudSnapshots(claude, native)
+  }
+
+  /** One provider-neutral session snapshot selected by the managed session identity. */
+  async unifiedSessionHud(
+    identity: UnifiedSessionTelemetryIdentity,
+    opts: HudQueryOpts,
+  ): Promise<HudSnapshot> {
+    if (identity.providerId === 'claude') {
+      const conversationId = identity.sessionIds.find(id => id !== identity.sessionIds[0])
+        ?? identity.sessionIds.at(-1)
+      if (!conversationId) return emptyReadyHud()
+      return this.todayHud({ ...opts, sessionId: conversationId })
+    }
+    return this.queryCanonicalProviderHud({
+      providerId: identity.providerId,
+      sessionIds: identity.sessionIds,
+      windowSec: this.secondsSinceLocalMidnight(opts.tzOffsetMinutes),
+    })
+  }
+
+  /** Provider-neutral session history used by the one shared chart set. */
+  async unifiedSessionSeries(opts: {
+    identity: UnifiedSessionTelemetryIdentity
+    userEmail: string
+    endSec: number
+    windowSec: number
+    stepSec: number
+  }): Promise<import('./types.js').HudSeries> {
+    if (opts.identity.providerId === 'claude') {
+      const conversationId = opts.identity.sessionIds.find(id => id !== opts.identity.sessionIds[0])
+        ?? opts.identity.sessionIds.at(-1)
+      if (!conversationId) return emptyHudSeries(opts)
+      return this.sessionSeries({
+        sessionId: conversationId,
+        userEmail: opts.userEmail,
+        endSec: opts.endSec,
+        windowSec: opts.windowSec,
+        stepSec: opts.stepSec,
+      })
+    }
+    const startSec = opts.endSec - opts.windowSec
+    const identity = canonicalIdentityFilter(opts.identity)
+    const tokens = `max(tinstar_provider_session_token_usage_total{${identity},token="total"})`
+    const duty = `sum(rate(tinstar_provider_session_active_time_seconds_total{${identity}}[1m]))`
+    const [tokenSeries, dutySeries] = await Promise.all([
+      this.queryRange(tokens, startSec, opts.endSec, opts.stepSec),
+      this.queryRange(duty, startSec, opts.endSec, opts.stepSec),
+    ])
+    const firstTs = tokenSeries[0]?.[0] ?? dutySeries[0]?.[0] ?? startSec
+    const lastTs = tokenSeries.at(-1)?.[0] ?? dutySeries.at(-1)?.[0] ?? opts.endSec
+    return {
+      startedAt: new Date(firstTs * 1_000).toISOString(),
+      endedAt: new Date(lastTs * 1_000).toISOString(),
+      stepSec: opts.stepSec,
+      series: { cost: [], tokens: tokenSeries, cache: [], duty: dutySeries },
+    }
+  }
+
+  /** Provider-neutral fleet history used to restore charts after a page reload. */
+  async unifiedFleetSeries(opts: {
+    userEmail: string
+    endSec: number
+    windowSec: number
+    stepSec: number
+  }): Promise<import('./types.js').HudSeries> {
+    const { userEmail, endSec, windowSec, stepSec } = opts
+    const startSec = endSec - windowSec
+    const filter = this.buildLabelFilter({ userEmail })
+    const tokenMetric = 'claude_code_token_usage_tokens_total'
+    const ioFilter = this.mergeFilter(filter, 'type=~"input|output"')
+    const cacheReadFilter = this.mergeFilter(filter, 'type="cacheRead"')
+    const inputFilter = this.mergeFilter(filter, 'type="input"')
+    const cliActiveFilter = this.mergeFilter(filter, 'type="cli"')
+
+    const cacheReadRate = `sum(rate(${tokenMetric}${cacheReadFilter}[1m]))`
+    const inputRate = `sum(rate(${tokenMetric}${inputFilter}[1m]))`
+    const queries = {
+      cost: `sum(claude_code_cost_usage_USD_total${filter})`,
+      claudeTokens: `sum(${tokenMetric}${ioFilter})`,
+      nativeTokens: 'sum(tinstar_provider_session_token_usage_total{token="total"})',
+      cache: `${cacheReadRate} / (${cacheReadRate} + ${inputRate})`,
+      claudeDuty: `sum(rate(claude_code_active_time_seconds_total${cliActiveFilter}[1m]))`,
+      nativeDuty: 'sum(rate(tinstar_provider_session_active_time_seconds_total[1m]))',
+    }
+    const [cost, claudeTokens, nativeTokens, cache, claudeDuty, nativeDuty] = await Promise.all([
+      this.queryRange(queries.cost, startSec, endSec, stepSec),
+      this.queryRange(queries.claudeTokens, startSec, endSec, stepSec),
+      this.queryRange(queries.nativeTokens, startSec, endSec, stepSec),
+      this.queryRange(queries.cache, startSec, endSec, stepSec),
+      this.queryRange(queries.claudeDuty, startSec, endSec, stepSec),
+      this.queryRange(queries.nativeDuty, startSec, endSec, stepSec),
+    ])
+    const tokens = addSeries(claudeTokens, nativeTokens)
+    const duty = addSeries(claudeDuty, nativeDuty)
+    const hasNativeTelemetry = seriesHasKnownValue(nativeTokens)
+      || seriesHasKnownValue(nativeDuty)
+    const unifiedCost = hasNativeTelemetry ? [] : cost
+    const unifiedCache = hasNativeTelemetry ? [] : cache
+    const firstTs = firstSeriesTimestamp([unifiedCost, tokens, unifiedCache, duty]) ?? startSec
+    const lastTs = lastSeriesTimestamp([unifiedCost, tokens, unifiedCache, duty]) ?? endSec
+    return {
+      startedAt: new Date(firstTs * 1_000).toISOString(),
+      endedAt: new Date(lastTs * 1_000).toISOString(),
+      stepSec,
+      series: { cost: unifiedCost, tokens, cache: unifiedCache, duty },
     }
   }
 
@@ -153,6 +274,35 @@ export class TelemetryQuery {
       rate: { perMin: rateMin, perHour: rateHour },
       cacheHitPct,
       dutyCycle: { value: dutyValue, windowMinutes: DUTY_CYCLE_WINDOW_MINUTES },
+    }
+  }
+
+  private async queryCanonicalProviderHud(opts: {
+    providerId?: string
+    sessionIds?: string[]
+    windowSec: number
+  }): Promise<HudSnapshot> {
+    const identity = canonicalIdentityFilter({
+      providerId: opts.providerId,
+      sessionIds: opts.sessionIds ?? [],
+    })
+    const suffix = identity ? `{${identity},token="total"}` : '{token="total"}'
+    const activeSuffix = identity ? `{${identity}}` : ''
+    const sessionScoped = (opts.sessionIds?.length ?? 0) > 0
+    const tokenQuery = sessionScoped
+      ? `max(tinstar_provider_session_token_usage_total${suffix})`
+      : `sum(increase(tinstar_provider_session_token_usage_total${suffix}[${opts.windowSec}s]))`
+    const [tokens, perMin, perHour, duty] = await Promise.all([
+      this.instant(tokenQuery),
+      this.instant(`sum(rate(tinstar_provider_session_token_usage_total${suffix}[1m])) * 60`),
+      this.instant(`sum(rate(tinstar_provider_session_token_usage_total${suffix}[1h])) * 3600`),
+      this.instant(`sum(rate(tinstar_provider_session_active_time_seconds_total${activeSuffix}[${DUTY_CYCLE_WINDOW_MINUTES}m]))`),
+    ])
+    return {
+      ...emptyReadyHud(),
+      tokens: { total: tokens === null ? null : Math.floor(tokens) },
+      rate: { perMin, perHour },
+      dutyCycle: { value: finiteOrNull(duty), windowMinutes: DUTY_CYCLE_WINDOW_MINUTES },
     }
   }
 
@@ -360,6 +510,124 @@ function providerTelemetrySeries(
       at: new Date(timestamp * 1_000).toISOString(),
       value,
     })),
+  }
+}
+
+function canonicalIdentityFilter(identity: {
+  providerId?: string
+  sessionIds: string[]
+}): string {
+  const labels: string[] = []
+  if (identity.providerId) labels.push(`provider="${promLabelValue(identity.providerId)}"`)
+  const ids = [...new Set(identity.sessionIds.filter(Boolean))]
+  if (ids.length === 1) {
+    labels.push(`session="${promLabelValue(ids[0]!)}"`)
+  } else if (ids.length > 1) {
+    labels.push(`session=~"${ids.map(promRegexValue).join('|')}"`)
+  }
+  return labels.join(',')
+}
+
+function promRegexValue(value: string): string {
+  return promLabelValue(value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+}
+
+function addSeries(
+  left: [number, number | null][],
+  right: [number, number | null][],
+): [number, number | null][] {
+  const values = new Map<number, [number | null, number | null]>()
+  for (const [timestamp, value] of left) {
+    values.set(timestamp, [value, values.get(timestamp)?.[1] ?? null])
+  }
+  for (const [timestamp, value] of right) {
+    values.set(timestamp, [values.get(timestamp)?.[0] ?? null, value])
+  }
+  return [...values.entries()]
+    .sort(([leftTimestamp], [rightTimestamp]) => leftTimestamp - rightTimestamp)
+    .map(([timestamp, [leftValue, rightValue]]) => [
+      timestamp,
+      addKnown(leftValue, rightValue),
+    ])
+}
+
+function firstSeriesTimestamp(series: [number, number | null][][]): number | null {
+  let first: number | null = null
+  for (const values of series) {
+    const timestamp = values[0]?.[0]
+    if (timestamp !== undefined && (first === null || timestamp < first)) first = timestamp
+  }
+  return first
+}
+
+function lastSeriesTimestamp(series: [number, number | null][][]): number | null {
+  let last: number | null = null
+  for (const values of series) {
+    const timestamp = values.at(-1)?.[0]
+    if (timestamp !== undefined && (last === null || timestamp > last)) last = timestamp
+  }
+  return last
+}
+
+function seriesHasKnownValue(series: [number, number | null][]): boolean {
+  return series.some(([, value]) => value !== null)
+}
+
+function finiteOrNull(value: number | null): number | null {
+  return value !== null && Number.isFinite(value) ? value : null
+}
+
+function addKnown(left: number | null, right: number | null): number | null {
+  if (left === null) return right
+  if (right === null) return left
+  return left + right
+}
+
+function combineHudSnapshots(claude: HudSnapshot, native: HudSnapshot): HudSnapshot {
+  const hasNativeTelemetry = native.tokens.total !== null
+    || native.rate.perMin !== null
+    || native.rate.perHour !== null
+    || native.dutyCycle.value !== null
+  return {
+    ...claude,
+    // Codex subscription sessions expose usage but not billable USD. A partial
+    // Claude-only sum would look like a complete fleet total, so keep it unknown.
+    cost: hasNativeTelemetry ? { total: null, byModel: {} } : claude.cost,
+    tokens: { total: addKnown(claude.tokens.total, native.tokens.total) },
+    rate: {
+      perMin: addKnown(claude.rate.perMin, native.rate.perMin),
+      perHour: addKnown(claude.rate.perHour, native.rate.perHour),
+    },
+    dutyCycle: {
+      value: addKnown(claude.dutyCycle.value, native.dutyCycle.value),
+      windowMinutes: DUTY_CYCLE_WINDOW_MINUTES,
+    },
+    cacheHitPct: hasNativeTelemetry ? null : claude.cacheHitPct,
+  }
+}
+
+function emptyReadyHud(): HudSnapshot {
+  return {
+    window: 'today',
+    state: 'ready',
+    cost: { total: null, byModel: {} },
+    tokens: { total: null },
+    rate: { perMin: null, perHour: null },
+    cacheHitPct: null,
+    dutyCycle: { value: null, windowMinutes: DUTY_CYCLE_WINDOW_MINUTES },
+  }
+}
+
+function emptyHudSeries(opts: {
+  endSec: number
+  windowSec: number
+  stepSec: number
+}): import('./types.js').HudSeries {
+  return {
+    startedAt: new Date((opts.endSec - opts.windowSec) * 1_000).toISOString(),
+    endedAt: new Date(opts.endSec * 1_000).toISOString(),
+    stepSec: opts.stepSec,
+    series: { cost: [], tokens: [], cache: [], duty: [] },
   }
 }
 

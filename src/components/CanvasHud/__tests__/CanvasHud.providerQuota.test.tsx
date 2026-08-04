@@ -42,7 +42,6 @@ vi.mock('../../../hooks/useCcQuota', () => ({
 vi.mock('../../../context/ConfigContext', () => ({ useConfig: () => null }))
 vi.mock('../../../lib/uiPrefs', () => ({ getPref: () => true, setPref: () => undefined }))
 vi.mock('../TurnLengthFleet', () => ({ TurnLengthFleet: () => null }))
-vi.mock('../ProviderFleetObservations', () => ({ ProviderFleetObservations: () => null }))
 
 describe('<CanvasHud> provider quota integration', () => {
   beforeEach(() => {
