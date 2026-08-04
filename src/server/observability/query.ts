@@ -1,4 +1,5 @@
 import type { HudSnapshot, ModelBreakdown } from './types.js'
+import type { ProviderHistoricalTelemetry } from '../../domain/provider-capabilities.js'
 
 /** Trailing window for the duty-cycle gauge. Read as "how many of the last N minutes was the agent busy". */
 const DUTY_CYCLE_WINDOW_MINUTES = 5
@@ -273,4 +274,98 @@ export class TelemetryQuery {
       series: { cost, tokens, cache, duty },
     }
   }
+
+  /**
+   * Provider-neutral history emitted by native provider observation adapters.
+   * Missing metrics stay absent/empty; consumers must render them unavailable,
+   * never coerce them to zero or borrow another provider's vocabulary.
+   */
+  async providerSessionSeries(opts: {
+    providerId: string
+    sessionId: string
+    endSec: number
+    windowSec: number
+    stepSec: number
+  }): Promise<ProviderHistoricalTelemetry> {
+    const { providerId, sessionId, endSec, windowSec, stepSec } = opts
+    const startSec = endSec - windowSec
+    const identity = `provider="${promLabelValue(providerId)}",session="${promLabelValue(sessionId)}"`
+    const tokens = 'tinstar_provider_session_tokens'
+    // The same cumulative session total can be re-emitted under a new model
+    // label after a model switch. max() selects the monotonic session total;
+    // sum() would double-count the duplicated cumulative value across models.
+    const tokenQuery = (token: 'total' | 'input' | 'output') => (
+      `max(${tokens}{${identity},aggregation="cumulative",token="${token}"})`
+    )
+    const [total, input, output] = await Promise.all([
+      this.queryRange(tokenQuery('total'), startSec, endSec, stepSec),
+      this.queryRange(tokenQuery('input'), startSec, endSec, stepSec),
+      this.queryRange(tokenQuery('output'), startSec, endSec, stepSec),
+    ])
+    const cumulativeTotal = combineProviderTokenSeries(total, input, output)
+
+    return {
+      series: [
+        providerTelemetrySeries('tokens', 'tokens', cumulativeTotal),
+      ],
+    }
+  }
+}
+
+/**
+ * Prefer a provider's explicit cumulative total. When its native event only
+ * carries input and/or output counters, derive the shared total pointwise.
+ * Missing counters remain missing; they are never mistaken for observed zero.
+ */
+function combineProviderTokenSeries(
+  total: [number, number | null][],
+  input: [number, number | null][],
+  output: [number, number | null][],
+): [number, number | null][] {
+  const byTimestamp = new Map<number, {
+    total?: number | null
+    input?: number | null
+    output?: number | null
+  }>()
+  for (const [timestamp, value] of total) {
+    byTimestamp.set(timestamp, { ...byTimestamp.get(timestamp), total: value })
+  }
+  for (const [timestamp, value] of input) {
+    byTimestamp.set(timestamp, { ...byTimestamp.get(timestamp), input: value })
+  }
+  for (const [timestamp, value] of output) {
+    byTimestamp.set(timestamp, { ...byTimestamp.get(timestamp), output: value })
+  }
+  return [...byTimestamp.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([timestamp, values]) => {
+      if (values.total != null) return [timestamp, values.total]
+      const hasComponent = values.input != null || values.output != null
+      return [
+        timestamp,
+        hasComponent ? (values.input ?? 0) + (values.output ?? 0) : null,
+      ]
+    })
+}
+
+function providerTelemetrySeries(
+  metric: string,
+  unit: string,
+  values: [number, number | null][],
+): ProviderHistoricalTelemetry['series'][number] {
+  return {
+    metric,
+    unit,
+    points: values.map(([timestamp, value]) => ({
+      at: new Date(timestamp * 1_000).toISOString(),
+      value,
+    })),
+  }
+}
+
+function promLabelValue(value: string): string {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('\n', '\\n')
+    .replaceAll('"', '\\"')
 }

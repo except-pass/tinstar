@@ -3,13 +3,18 @@ import squarify from 'squarify'
 import { hexToRgba } from '../runAccent'
 import { fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
-import { useSessionContextWindow } from '../../hooks/useSessionContextWindow'
 import { apiFetch } from '../../apiClient'
 import { StatSpark } from './StatSpark'
-import { computeDeltaChip } from './computeDeltaChip'
+import { computeDeltaChip, type DeltaChip } from './computeDeltaChip'
 import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { TurnLengthPanel } from './TurnLengthPanel'
+import {
+  useProviderSessionObservationState,
+  type ProviderSessionObservations,
+} from '../../hooks/providerObservationsStore'
+import { useProviderTelemetrySeries } from '../../hooks/useProviderTelemetrySeries'
+import { providerTokenTotal } from '../../domain/provider-capabilities'
 import { TimelinePanel } from './TimelinePanel'
 
 /* ------------------------------------------------------------------ */
@@ -100,22 +105,43 @@ function labelColor(opacity: number): string {
     : 'rgba(255,255,255,0.4)'
 }
 
+function latestNonNull(values: Array<number | null>): number | null {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index]
+    if (value !== null && value !== undefined) return value
+  }
+  return null
+}
+
 /* ------------------------------------------------------------------ */
 /*  SessionSection                                                     */
 /* ------------------------------------------------------------------ */
 
-function SessionSection({ sessionId }: { sessionId: string }) {
+function SessionSection({
+  sessionId,
+  providerSessions,
+  providerRefreshError,
+}: {
+  sessionId: string
+  providerSessions: ProviderSessionObservations[]
+  providerRefreshError: string | null
+}) {
   const config = useConfig()
   const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true, timeline: true }
   const snap = useTelemetrySession(sessionId)
   const series = useTelemetrySeries(sessionId)
-  if (!snap || snap.state !== 'ready') return null
+  const hasLegacyTelemetry = snap?.state === 'ready'
+  if (!hasLegacyTelemetry && providerSessions.length === 0) return null
+  const visibleProviderSessions = providerSessions.filter(provider => (
+    (panels.tokens && provider.usage !== undefined)
+    || provider.context !== undefined
+  ))
 
-  const costTotal  = snap.cost.total
-  const tokenTotal = snap.tokens.total
-  const tokenRate  = snap.rate.perMin
-  const cacheHit   = snap.cacheHitPct
-  const duty       = snap.dutyCycle.value
+  const costTotal  = hasLegacyTelemetry ? snap.cost.total : null
+  const tokenTotal = hasLegacyTelemetry ? snap.tokens.total : null
+  const tokenRate  = hasLegacyTelemetry ? snap.rate.perMin : null
+  const cacheHit   = hasLegacyTelemetry ? snap.cacheHitPct : null
+  const duty       = hasLegacyTelemetry ? snap.dutyCycle.value : null
 
   const costValue   = costTotal  == null ? '--' : fmtDollar(costTotal)
   const tokensValue = tokenTotal == null ? '--' : fmtRate(tokenTotal)
@@ -153,15 +179,183 @@ function SessionSection({ sessionId }: { sessionId: string }) {
         }}>THIS RUN</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
-        {panels.cost      && <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />}
-        {panels.tokens    && <StatSpark accent="blue"   label="TOKENS"      value={tokensValue} series={tokenSeries} delta={tokensDelta} />}
-        {panels.cacheHit  && <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />}
-        {panels.duty      && <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />}
+        {visibleProviderSessions.map(provider => (
+          <ProviderSessionSignal
+            key={provider.providerId}
+            provider={provider}
+            showTokens={panels.tokens}
+            refreshError={providerRefreshError}
+            legacyTokens={hasLegacyTelemetry ? {
+              value: tokensValue,
+              series: tokenSeries,
+              delta: tokensDelta,
+            } : null}
+          />
+        ))}
+        {hasLegacyTelemetry && panels.cost && (
+          <StatSpark accent="gold" label="COST · PROMETHEUS" value={costValue} series={costSeries} delta={costDelta} />
+        )}
+        {hasLegacyTelemetry && visibleProviderSessions.length === 0 && panels.tokens && (
+          <StatSpark accent="blue" label="TOKENS · PROMETHEUS" value={tokensValue} series={tokenSeries} delta={tokensDelta} />
+        )}
+        {hasLegacyTelemetry && panels.cacheHit && (
+          <StatSpark accent="green" label="CACHE HIT · PROMETHEUS" value={cacheValue} series={cacheSeries} delta={cacheDelta} />
+        )}
+        {hasLegacyTelemetry && panels.duty && (
+          <StatSpark accent="violet" label="DUTY · PROMETHEUS" value={dutyValue} series={dutySeries} delta={dutyDelta} />
+        )}
         {panels.turnLength && <TurnLengthPanel sessionId={sessionId} />}
         {panels.timeline && <TimelinePanel sessionId={sessionId} />}
       </div>
     </div>
   )
+}
+
+function ProviderSessionSignal({
+  provider,
+  showTokens,
+  refreshError,
+  legacyTokens,
+}: {
+  provider: ProviderSessionObservations
+  showTokens: boolean
+  refreshError: string | null
+  legacyTokens: {
+    value: string
+    series: Array<number | null>
+    delta: DeltaChip
+  } | null
+}) {
+  const usage = provider.usage
+  const context = provider.context
+  const availableUsage = usage?.availability.state === 'available'
+    ? usage.availability.value
+    : null
+  const availableContext = context?.availability.state === 'available'
+    ? context.availability.value
+    : null
+  const liveCumulativeTotal = providerTokenTotal(availableUsage?.cumulativeTokens)
+  const latestTurnTotal = providerTokenTotal(availableUsage?.latestTurnTokens)
+  const usedPercent = providerContextPercent(availableContext)
+  const sessionId = showTokens
+    ? usage?.scope.sessionId ?? context?.scope.sessionId ?? null
+    : null
+  const history = useProviderTelemetrySeries(provider.providerId, sessionId)
+  const tokenSeries = history?.tokens ?? []
+  const historyTotal = history?.error === null ? latestNonNull(tokenSeries) : null
+  const hasNativeTokenHistory = historyTotal !== null
+  const displayedTotal = liveCumulativeTotal ?? historyTotal ?? latestTurnTotal
+  const historyDelta = history?.error
+    ? { text: 'history unavailable', tone: 'flat' as const }
+    : computeDeltaChip(
+        'tokens',
+        tokenSeries.map((value, index) => [history?.tsSec[index] ?? index, value]),
+      )
+
+  return (
+    <div
+      data-testid={`provider-session-signal-${provider.providerId}`}
+      style={{
+        padding: '5px 7px', borderRadius: 4,
+        background: 'rgba(34,211,238,0.055)',
+        borderLeft: '2px solid rgba(34,211,238,0.55)',
+        fontFamily: 'JetBrains Mono, monospace',
+      }}
+    >
+      {showTokens && (usage || hasNativeTokenHistory) && (
+        <>
+          <StatSpark
+            accent="blue"
+            label={`${formatProviderLabel(provider.providerId)} TOKENS`}
+            value={displayedTotal === null ? '--' : fmtRate(displayedTotal)}
+            series={tokenSeries}
+            delta={historyDelta}
+          />
+          {usage && (
+            <ObservationProvenance
+              kind="usage"
+              source={usage.source?.label ?? null}
+              freshness={usage.freshness.state}
+              detail={availableUsage?.model}
+              refreshError={refreshError}
+            />
+          )}
+        </>
+      )}
+      {showTokens && legacyTokens && !hasNativeTokenHistory && (
+        <StatSpark
+          accent="blue"
+          label="TOKENS · PROMETHEUS"
+          value={legacyTokens.value}
+          series={legacyTokens.series}
+          delta={legacyTokens.delta}
+        />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+        <span style={{ color: '#cbd5e1', fontSize: 9, fontWeight: 700 }}>
+          {formatProviderLabel(provider.providerId)}
+        </span>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginTop: 2 }}>
+        <span style={{ color: 'rgba(255,255,255,0.48)', fontSize: 8 }}>
+          CONTEXT
+        </span>
+        <span style={{ color: '#e2e8f0', fontSize: 9 }}>
+          {usedPercent === null ? 'context unavailable' : `${usedPercent.toFixed(0)}% context`}
+        </span>
+      </div>
+      {context && (
+        <ObservationProvenance
+          kind="context"
+          source={context.source?.label ?? null}
+          freshness={context.freshness.state}
+          refreshError={refreshError}
+        />
+      )}
+    </div>
+  )
+}
+
+function ObservationProvenance({
+  kind,
+  source,
+  freshness,
+  detail,
+  refreshError,
+}: {
+  kind: 'usage' | 'context'
+  source: string | null
+  freshness: 'fresh' | 'stale' | 'unknown'
+  detail?: string
+  refreshError: string | null
+}) {
+  const status = refreshError ? 'refresh failed' : freshness
+  const label = [kind, detail, source].filter(Boolean).join(' · ')
+  return (
+    <div
+      data-testid={`provider-${kind}-provenance`}
+      title={refreshError ?? (source ? `Source: ${source}` : undefined)}
+      style={{
+        display: 'flex', justifyContent: 'space-between', gap: 6, marginTop: 2,
+        color: 'rgba(255,255,255,0.42)', fontSize: 7.5,
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label || kind}
+      </span>
+      <span style={{ color: providerFreshnessColor(status), flexShrink: 0 }}>
+        {status}
+      </span>
+    </div>
+  )
+}
+
+function providerFreshnessColor(
+  freshness: 'fresh' | 'stale' | 'unknown' | 'refresh failed',
+): string {
+  if (freshness === 'fresh') return '#67e8f9'
+  if (freshness === 'refresh failed' || freshness === 'unknown') return '#f87171'
+  return '#fbbf24'
 }
 
 /* ------------------------------------------------------------------ */
@@ -334,34 +528,85 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
+  const [detailIdentity, setDetailIdentity] = useState<string | null>(null)
   const [ageLabel, setAgeLabel] = useState('')
-  const liveCtx = useSessionContextWindow(sessionId)
+  const providerState = useProviderSessionObservationState(sessionId)
+  const providerSessions = providerState.observations
+  const liveCtx = providerLiveContext(providerSessions)
+  const providerIdentity = providerSessions.map(provider => JSON.stringify([
+    provider.providerId,
+    provider.usage?.scope.sessionId ?? null,
+    provider.context?.scope.sessionId ?? null,
+  ])).join('|')
+  const contextIdentity = JSON.stringify([sessionId, providerIdentity])
+  const contextIdentityRef = useRef(contextIdentity)
+  contextIdentityRef.current = contextIdentity
+  const contextRequestGeneration = useRef(0)
+  const identityMatches = detailIdentity === contextIdentity
+  const visibleData = identityMatches ? data : null
+  const visibleLoading = identityMatches ? loading : false
+  const visibleError = identityMatches ? error : null
+  const visibleLoadedAt = identityMatches ? loadedAt : null
+
+  useEffect(() => {
+    contextRequestGeneration.current += 1
+    setData(null)
+    setError(null)
+    setLoadedAt(null)
+    setDetailIdentity(null)
+    setAgeLabel('')
+    setLoading(false)
+  }, [contextIdentity])
 
   // Update humanized age every 30s
   useEffect(() => {
-    if (!loadedAt) return
-    const update = () => setAgeLabel(humanizeAge(Date.now() - loadedAt))
+    if (!visibleLoadedAt) return
+    const update = () => setAgeLabel(humanizeAge(Date.now() - visibleLoadedAt))
     update()
     const id = setInterval(update, 30_000)
     return () => clearInterval(id)
-  }, [loadedAt])
+  }, [visibleLoadedAt])
 
   const fetchContext = useCallback(async () => {
+    const requestIdentity = contextIdentity
+    const requestGeneration = contextRequestGeneration.current + 1
+    contextRequestGeneration.current = requestGeneration
+    if (!identityMatches) {
+      setData(null)
+      setLoadedAt(null)
+      setAgeLabel('')
+    }
+    setDetailIdentity(requestIdentity)
     setLoading(true)
     setError(null)
     try {
       const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
+      if (res.status === 409) throw new DetailedContextUnavailableError()
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (!json.ok) throw new Error(json.error?.message ?? 'Unknown error')
+      if (contextRequestGeneration.current !== requestGeneration
+        || contextIdentityRef.current !== requestIdentity) return
       setData(json.data as ContextData)
       setLoadedAt(Date.now())
     } catch (err) {
-      setError((err as Error).message)
+      if (contextRequestGeneration.current !== requestGeneration
+        || contextIdentityRef.current !== requestIdentity) return
+      if (err instanceof DetailedContextUnavailableError) {
+        setData(null)
+        setLoadedAt(null)
+        setAgeLabel('')
+      }
+      setError(err instanceof DetailedContextUnavailableError
+        ? 'Detailed context breakdown unavailable for this provider'
+        : (err as Error).message)
     } finally {
-      setLoading(false)
+      if (contextRequestGeneration.current === requestGeneration
+        && contextIdentityRef.current === requestIdentity) {
+        setLoading(false)
+      }
     }
-  }, [sessionId])
+  }, [contextIdentity, identityMatches, sessionId])
 
   const pct = liveCtx?.usedPercentage ?? null
   const pctLabel = pct == null ? '--' : `${pct.toFixed(0)}%`
@@ -376,19 +621,19 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const meterColor = isDanger ? '#ff3366' : isWarn ? '#ffaa00' : runAccent
   const fillBg = hexToRgba(meterColor, isDanger || isWarn ? 0.45 : 0.35)
 
-  const meterTitle = loading
+  const meterTitle = visibleLoading
     ? 'Loading detailed context breakdown…'
-    : data
-      ? `Context window: ${pct != null ? pct.toFixed(1) + '%' : '--'} — click to refresh breakdown${loadedAt ? ` (loaded ${ageLabel})` : ''}`
+    : visibleData
+      ? `Context window: ${pct != null ? pct.toFixed(1) + '%' : '--'} — click to refresh breakdown${visibleLoadedAt ? ` (loaded ${ageLabel})` : ''}`
       : liveCtx
-        ? `Context window: ${liveCtx.usedPercentage.toFixed(1)}% of ${liveCtx.windowSize.toLocaleString()} tokens — click for detailed breakdown`
+        ? `Context window: ${liveCtx.usedPercentage.toFixed(1)}%${liveCtx.windowSize ? ` of ${liveCtx.windowSize.toLocaleString()} tokens` : ''} — click for detailed breakdown`
         : 'Load detailed context breakdown'
 
   const meterButton = (
     <div className="p-2">
       <button
         onClick={fetchContext}
-        disabled={loading}
+        disabled={visibleLoading}
         title={meterTitle}
         className={`group relative w-full max-w-[240px] mx-auto block overflow-hidden border rounded transition-colors disabled:opacity-70 ${
           isDanger
@@ -404,8 +649,8 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
         />
         <div className="relative flex items-center justify-between px-3 py-1.5 text-2xs font-mono">
           <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-slate-100">
-            <span className={`material-symbols-outlined text-sm ${loading ? 'animate-spin' : ''}`}>
-              {loading ? 'progress_activity' : 'query_stats'}
+            <span className={`material-symbols-outlined text-sm ${visibleLoading ? 'animate-spin' : ''}`}>
+              {visibleLoading ? 'progress_activity' : 'query_stats'}
             </span>
             Context
           </span>
@@ -421,20 +666,20 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   )
 
   let detail: React.ReactNode = null
-  if (loading && !data) {
+  if (visibleLoading && !visibleData) {
     detail = (
       <div className="flex-1 flex items-center justify-center">
         <span className="text-2xs font-mono text-slate-500 animate-pulse">Loading...</span>
       </div>
     )
-  } else if (error && !data) {
+  } else if (visibleError && !visibleData) {
     detail = (
       <div className="flex-1 flex items-center justify-center p-2">
-        <span className="text-2xs text-red-400 text-center">{error}</span>
+        <span className="text-2xs text-red-400 text-center">{visibleError}</span>
       </div>
     )
-  } else if (data) {
-    const tm = treemapInputs(data, liveCtx?.windowSize)
+  } else if (visibleData) {
+    const tm = treemapInputs(visibleData, liveCtx?.windowSize)
     detail = (
       <div className="flex-1 min-h-0 flex flex-col px-1 pb-1">
         <Treemap
@@ -451,9 +696,53 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
       <div className="panel-header">
         <h3 className="panel-label">Telemetry</h3>
       </div>
-      <SessionSection sessionId={sessionId} />
+      <SessionSection
+        key={sessionId}
+        sessionId={sessionId}
+        providerSessions={providerSessions}
+        providerRefreshError={providerState.error}
+      />
       {meterButton}
       {detail}
     </section>
   )
+}
+
+class DetailedContextUnavailableError extends Error {}
+
+function providerLiveContext(providers: ProviderSessionObservations[]): {
+  usedPercentage: number
+  windowSize?: number
+} | null {
+  for (const provider of providers) {
+    const context = provider.context
+    if (context?.availability.state !== 'available') continue
+    const value = context.availability.value
+    const usedPercentage = providerContextPercent(value)
+    if (usedPercentage === null) continue
+    return {
+      usedPercentage,
+      ...(value.windowTokens === undefined ? {} : { windowSize: value.windowTokens }),
+    }
+  }
+  return null
+}
+
+function providerContextPercent(value: {
+  usedPercent?: number
+  usedTokens?: number
+  windowTokens?: number
+} | null | undefined): number | null {
+  if (!value) return null
+  if (value.usedPercent !== undefined) return value.usedPercent
+  if (value.usedTokens === undefined || !value.windowTokens) return null
+  return value.usedTokens / value.windowTokens * 100
+}
+
+function formatProviderLabel(providerId: string): string {
+  return providerId
+    .split(/[._-]+/u)
+    .filter(Boolean)
+    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
 }

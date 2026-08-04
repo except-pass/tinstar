@@ -5,7 +5,8 @@ import type { ProviderCurrentObservationsWire } from '../../../domain/provider-o
 import { CcQuotaService } from '../../cc-quota/service'
 import { ProviderObservationIngestor } from '../../providers/observation-ingestor'
 import { ProviderCurrentObservationStores } from '../../providers/observation-stores'
-import { handleRequest, type RouteContext } from '../routes'
+import { buildManagedProviderSessionView, handleRequest, type RouteContext } from '../routes'
+import { createDefaultProviderRegistry } from '../../providers/lifecycle'
 
 describe('GET /api/provider-observations', () => {
   let server: ReturnType<typeof createServer>
@@ -87,5 +88,94 @@ describe('GET /api/provider-observations', () => {
         availability: expect.objectContaining({ state: 'available' }),
       }),
     ]))
+  })
+})
+
+describe('managed provider observation aliases', () => {
+  it('maps native conversation IDs to host sessions without provider-specific branches', () => {
+    const view = buildManagedProviderSessionView([
+      {
+        name: 'claude-run',
+        adapter: 'claude',
+        cliTemplate: null,
+        conversation: { id: 'claude-conversation-uuid' },
+      },
+      {
+        name: 'codex-run',
+        adapter: 'codex',
+        cliTemplate: null,
+        conversation: { id: null },
+      },
+    ], createDefaultProviderRegistry())
+
+    expect(view).toEqual([
+      {
+        hostSessionId: 'claude-run',
+        providerId: 'claude',
+        providerSessionIds: ['claude-run', 'claude-conversation-uuid'],
+      },
+      {
+        hostSessionId: 'codex-run',
+        providerId: 'codex',
+        providerSessionIds: ['codex-run'],
+      },
+    ])
+  })
+
+  it('resolves a legacy session through its configured template', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'legacy-codex-run',
+      adapter: null,
+      cliTemplate: 'codex-custom',
+      conversation: { id: 'thread-1' },
+    }], createDefaultProviderRegistry(), [{
+      id: 'codex-custom',
+      name: 'Codex custom',
+      adapter: 'codex',
+      startCmd: 'codex',
+      resumeCmd: 'codex resume',
+    }])
+
+    expect(view).toEqual([{
+      hostSessionId: 'legacy-codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['legacy-codex-run', 'thread-1'],
+    }])
+  })
+
+  it('keeps a modern session mapped when its saved template no longer exists', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'codex-run',
+      adapter: 'codex',
+      cliTemplate: 'renamed-template',
+      conversation: { id: 'thread-2' },
+    }], createDefaultProviderRegistry(), [])
+
+    expect(view).toEqual([{
+      hostSessionId: 'codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['codex-run', 'thread-2'],
+    }])
+  })
+
+  it('keeps a modern persisted adapter authoritative after its template changes provider', () => {
+    const view = buildManagedProviderSessionView([{
+      name: 'codex-run',
+      adapter: 'codex',
+      cliTemplate: 'edited-template',
+      conversation: { id: 'thread-3' },
+    }], createDefaultProviderRegistry(), [{
+      id: 'edited-template',
+      name: 'Edited template',
+      adapter: 'claude',
+      startCmd: 'claude',
+      resumeCmd: 'claude --resume',
+    }])
+
+    expect(view).toEqual([{
+      hostSessionId: 'codex-run',
+      providerId: 'codex',
+      providerSessionIds: ['codex-run', 'thread-3'],
+    }])
   })
 })

@@ -207,6 +207,24 @@ export interface ProviderCurrentObservationsWire {
   providerQuota: ProviderAccountQuotaObservationWire[]
 }
 
+/**
+ * Provider-fenced aliases that connect Tinstar's stable session name to the
+ * native session identity used by an observation source (for example a
+ * Claude conversation UUID). Shared clients use this mapping without knowing
+ * which providers use which native identity scheme.
+ */
+export interface ManagedProviderSessionWire {
+  hostSessionId: string
+  providerId: string
+  providerSessionIds: string[]
+}
+
+export interface ProviderObservationViewWire {
+  version: 1
+  observations: ProviderCurrentObservationsWire
+  managedSessions: ManagedProviderSessionWire[]
+}
+
 export const providerCurrentObservationsWireSchema: z.ZodType<
   ProviderCurrentObservationsWire
 > = z.object({
@@ -244,11 +262,41 @@ export const providerCurrentObservationsWireSchema: z.ZodType<
   )
 })
 
+const managedProviderSessionWireSchema: z.ZodType<ManagedProviderSessionWire> = z.object({
+  hostSessionId: nonEmptyString,
+  providerId: nonEmptyString,
+  providerSessionIds: z.array(nonEmptyString).min(1).superRefine((ids, ctx) => {
+    reportDuplicateIdentities(ids, value => value, 'provider session alias', ctx)
+  }),
+}).strict()
+
+export const providerObservationViewWireSchema: z.ZodType<
+  ProviderObservationViewWire
+> = z.object({
+  version: z.literal(1),
+  observations: providerCurrentObservationsWireSchema,
+  managedSessions: z.array(managedProviderSessionWireSchema),
+}).strict().superRefine((wire, ctx) => {
+  reportDuplicateIdentities(
+    wire.managedSessions,
+    session => session.hostSessionId,
+    'managed host session',
+    ctx,
+  )
+})
+
 /** Validate and clone an untrusted JSON-compatible observation bundle. */
 export function parseProviderCurrentObservationsWire(
   input: unknown,
 ): ProviderCurrentObservationsWire {
   return providerCurrentObservationsWireSchema.parse(input)
+}
+
+/** Validate and clone the managed-session observation view. */
+export function parseProviderObservationViewWire(
+  input: unknown,
+): ProviderObservationViewWire {
+  return providerObservationViewWireSchema.parse(input)
 }
 
 function reportDuplicateIdentities<T>(

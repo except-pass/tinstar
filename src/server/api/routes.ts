@@ -45,6 +45,7 @@ import {
   deleteWorktree,
   WorktreeBranchConflictError,
   listWorktrees,
+  listSessionIdentityRecords,
   listSessions,
   reconcileSessionStates,
   loadSecrets,
@@ -138,6 +139,40 @@ function validateCliTemplateProvider(
 }
 
 type CliTemplateTelemetryState = 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
+
+export function buildManagedProviderSessionView(
+  sessions: Array<Pick<Session, 'name' | 'adapter' | 'cliTemplate' | 'conversation'>>,
+  registry: ProviderAdapterRegistry,
+  templates: readonly CliTemplate[] = [],
+): Array<{
+  hostSessionId: string
+  providerId: string
+  providerSessionIds: string[]
+}> {
+  return sessions.flatMap(session => {
+    try {
+      const template = session.cliTemplate
+        ? templates.find(candidate => candidate.id === session.cliTemplate) ?? null
+        : null
+      // Modern sessions persist their provider adapter, so a renamed or
+      // deleted template must not make their provider identity disappear.
+      // Legacy adapter-less sessions still require the template to resolve.
+      if (!session.adapter && session.cliTemplate && !template) return []
+      const providerId = session.adapter
+        ? registry.resolveSession(session).provider.id
+        : registry.resolveSession(session, template).provider.id
+      const providerSessionIds = [...new Set([
+        session.name,
+        session.conversation?.id,
+      ].filter((value): value is string => Boolean(value?.trim())))]
+      return [{ hostSessionId: session.name, providerId, providerSessionIds }]
+    } catch {
+      // Unresolved/missing templates cannot be safely attributed. Exact
+      // observation IDs remain available as a client-side fallback.
+      return []
+    }
+  })
+}
 
 function discoverCliTemplate(
   registry: ProviderAdapterRegistry,
@@ -2454,6 +2489,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // native provider readers and legacy sources such as Claude's statusline.
   if (method === 'GET' && ctx.providerObservationStores && url === '/api/provider-observations') {
     json(res, ctx.providerObservationStores.toWire())
+    return true
+  }
+
+  // GET /api/provider-observation-view — current observations plus the
+  // provider-fenced aliases needed to join native conversation identities to
+  // stable Tinstar session names. The shared UI remains provider-neutral.
+  if (method === 'GET' && ctx.providerObservationStores && url === '/api/provider-observation-view') {
+    const managedSessions = ctx.sessionConfig
+      ? buildManagedProviderSessionView(
+          listSessionIdentityRecords(ctx.sessionConfig.dirs.sessions),
+          ctx.providerRegistry ?? defaultProviderRegistry,
+          ctx.sessionConfig.cliTemplates,
+        )
+      : []
+    json(res, {
+      version: 1,
+      observations: ctx.providerObservationStores.toWire(),
+      managedSessions,
+    })
     return true
   }
 

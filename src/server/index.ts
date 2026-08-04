@@ -712,6 +712,7 @@ export function initBackend(): RouteContext {
   const telemetryRoutes = createTelemetryRoutes({
     sse,
     get query() { return observability.query ? claudeObservations : null },
+    get providerQuery() { return observability.query },
     getState: () => observability.state,
     getProgress: () => observability.progress,
     getLastError: () => observability.lastError,
