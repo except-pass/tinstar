@@ -445,6 +445,16 @@ describe('live delivery recipient resolution', () => {
 describe('managed-session to durable-ledger integration', () => {
   const roots: string[] = []
 
+  function createManagedSender(sessionsDir: string): void {
+    createSession(sessionsDir, {
+      name: 'sender',
+      backend: 'tmux',
+      adapter: 'codex',
+      nats: { enabled: true, subscriptions: [`${TASK}.sender`] },
+    })
+    setState(sessionsDir, 'sender', 'running')
+  }
+
   afterEach(() => {
     resetSessionBackendOwnersForTests()
     for (const root of roots.splice(0)) {
@@ -468,6 +478,7 @@ describe('managed-session to durable-ledger integration', () => {
         secrets: join(root, 'secrets.json'),
       },
     } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
     createSession(sessionsDir, {
       name: 'codex-live',
       backend: 'tmux',
@@ -482,21 +493,41 @@ describe('managed-session to durable-ledger integration', () => {
       now: () => 1_000,
     })
     const registry = createDefaultProviderRegistry()
+    const context = {
+      sessionConfig: cfg,
+      providerRegistry: registry,
+      docStore: { getAllTombstones: () => [] },
+    } as unknown as RouteContext
+    const observations = {
+      observeSender: async () => ({ state: 'alive' as const, incarnation: 'sender-v1' }),
+      observeProcess: async () => ({
+        state: 'alive' as const,
+        incarnation: 'codex-live-process',
+      }),
+    }
+
+    await expect(acceptForManagedSessionRecipients(
+      context,
+      ledger,
+      {
+        ...request(`${TASK}.codex-live`, 'req-forged-sender'),
+        sender: { sessionId: 'sender', incarnation: 'forged-token' },
+      },
+      observations,
+    )).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'sender-unavailable',
+        sessionId: 'sender',
+        reason: 'incarnation-mismatch',
+      },
+    })
 
     const result = await acceptForManagedSessionRecipients(
-      {
-        sessionConfig: cfg,
-        providerRegistry: registry,
-        docStore: { getAllTombstones: () => [] },
-      } as unknown as RouteContext,
+      context,
       ledger,
       request(`${TASK}.codex-live`, 'req-integrated'),
-      {
-        observeProcess: async () => ({
-          state: 'alive',
-          incarnation: 'codex-live-process',
-        }),
-      },
+      observations,
     )
 
     expect(result).toMatchObject({
@@ -536,7 +567,10 @@ describe('managed-session to durable-ledger integration', () => {
       } as unknown as RouteContext,
       reloadedLedger,
       request(`${TASK}.codex-live`, 'req-integrated'),
-      { observeProcess },
+      {
+        observeProcess,
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
+      },
     )
     expect(replayed).toMatchObject({
       ok: true,
@@ -547,6 +581,80 @@ describe('managed-session to durable-ledger integration', () => {
           recipient: { incarnation: 'codex-live-process' },
         }],
       },
+    })
+    expect(observeProcess).not.toHaveBeenCalled()
+  })
+
+  it('replays the same persisted exclusions for a partial live-set acceptance', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'live-recipient-partial-replay-'))
+    roots.push(root)
+    const sessionsDir = join(root, 'sessions')
+    const lockPath = join(root, 'server.lock')
+    expect(acquireBackendSingleton(lockPath).acquired).toBe(true)
+    const cfg = {
+      sessions: { prefix: 'tinstar-' },
+      cliTemplates: [],
+      dirs: {
+        root,
+        sessions: sessionsDir,
+        secrets: join(root, 'secrets.json'),
+      },
+    } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
+    for (const name of ['live-agent', 'stopped-agent']) {
+      createSession(sessionsDir, {
+        name,
+        backend: 'tmux',
+        adapter: 'codex',
+        nats: { enabled: true, subscriptions: [TASK, `${TASK}.${name}`] },
+      })
+    }
+    setState(sessionsDir, 'live-agent', 'running')
+    setState(sessionsDir, 'stopped-agent', 'stopped')
+    const context = {
+      sessionConfig: cfg,
+      providerRegistry: createDefaultProviderRegistry(),
+      docStore: { getAllTombstones: () => [] },
+    } as unknown as RouteContext
+    const intent = request(TASK, 'req-partial-replay')
+    const ledger = DeliveryLedger.open({
+      dir: root,
+      lockPath,
+      createMessageId: () => 'msg-partial-replay',
+      now: () => 1_000,
+    })
+
+    const first = await acceptForManagedSessionRecipients(context, ledger, intent, {
+      observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
+      observeProcess: async () => ({
+        state: 'alive',
+        incarnation: 'live-agent-process',
+      }),
+    })
+    expect(first).toMatchObject({
+      ok: true,
+      exclusions: [{ sessionId: 'stopped-agent', reason: 'stopped' }],
+    })
+
+    resetSessionBackendOwnersForTests()
+    const reloaded = DeliveryLedger.open({ dir: root, lockPath })
+    const observeProcess = vi.fn(async () => {
+      throw new Error('a durable partial retry must not re-resolve liveness')
+    })
+    const replay = await acceptForManagedSessionRecipients(
+      context,
+      reloaded,
+      intent,
+      {
+        observeProcess,
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
+      },
+    )
+
+    expect(replay).toMatchObject({
+      ok: true,
+      exclusions: [{ sessionId: 'stopped-agent', reason: 'stopped' }],
+      acceptance: { accepted: true, replayed: true },
     })
     expect(observeProcess).not.toHaveBeenCalled()
   })
@@ -582,6 +690,7 @@ describe('managed-session to durable-ledger integration', () => {
         secrets: join(root, 'secrets.json'),
       },
     } as unknown as TinstarConfig
+    createManagedSender(sessionsDir)
     createSession(sessionsDir, {
       name: 'generation-race',
       backend: 'tmux',
@@ -608,6 +717,7 @@ describe('managed-session to durable-ledger integration', () => {
       { accept, replayAcceptance: async () => null },
       request(`${TASK}.generation-race`, 'req-generation-race'),
       {
+        observeSender: async () => ({ state: 'alive', incarnation: 'sender-v1' }),
         observeProcess: async () => ({
           state: 'alive',
           incarnation: 'generation-race-process',

@@ -127,6 +127,7 @@ import {
   acceptForLiveRecipients,
   type LiveDeliveryRequest,
   type LiveDeliveryResult,
+  type RecipientExclusionReason,
 } from '../messaging/live-recipient-resolution'
 import { projectLegacySessionContextWindow } from '../providers/legacy-observation-projections'
 
@@ -2162,6 +2163,11 @@ export function acceptForManagedSessionRecipients(
       | { state: 'alive'; incarnation: string }
       | { state: 'dead' }
     >
+    observeSender?: (sessionId: string) => Promise<
+      | { state: 'alive'; incarnation: string }
+      | { state: 'dead' }
+      | { state: 'identity-unavailable' }
+    >
   } = {},
 ): Promise<LiveDeliveryResult> {
   const requestProblem = validateDeliveryAcceptIntent(request)
@@ -2182,33 +2188,100 @@ export function acceptForManagedSessionRecipients(
     })
   }
   const registry = ctx.providerRegistry ?? defaultProviderRegistry
-  return acceptForLiveRecipients(request, {
-    coordinationKey: ledger,
-    listSessions: () => listAllSessions(ctx),
-    readSession: sessionId => getSession(cfg.dirs.sessions, sessionId),
-    isDeleting: sessionId =>
-      existsSync(join(cfg.dirs.sessions, sessionId, '.deleting')),
-    graveyardSessionNames: () =>
-      ctx.docStore.getAllTombstones().map(tombstone => tombstone.sessionName),
-    acquireLease: sessionId =>
-      acquirePersistedSessionBackendLeaseForConfig(cfg, sessionId),
-    leaseIsCurrent: (sessionId, token) =>
-      persistedSessionBackendGenerationForConfig(cfg, sessionId) === token,
-    observeProcess: options.observeProcess ?? (async sessionId => {
-      const incarnation = await tmuxBackend.getTmuxAgentIdentity(cfg, sessionId)
-      return incarnation === null
-        ? { state: 'dead' }
-        : { state: 'alive', incarnation }
-    }),
-    providerIdFor: session => {
-      const template = session.cliTemplate
-        ? cfg.cliTemplates.find(candidate => candidate.id === session.cliTemplate)
-        : undefined
-      return registry.resolveSession(session, template).provider.id
-    },
-    replayAcceptance: input => ledger.replayAcceptance(input),
-    accept: input => ledger.accept(input),
+  const observeProcess = options.observeProcess ?? (async (sessionId: string) => {
+    const incarnation = await tmuxBackend.getTmuxAgentIdentity(cfg, sessionId)
+    return incarnation === null
+      ? { state: 'dead' as const }
+      : { state: 'alive' as const, incarnation }
   })
+  const observeSender = options.observeSender ?? (async (sessionId: string) => {
+    const processIdentity = await tmuxBackend.getTmuxAgentIdentity(cfg, sessionId)
+    if (processIdentity === null) return { state: 'dead' as const }
+    const incarnation = await tmuxBackend.getTmuxAgentLaunchToken(cfg, sessionId)
+    return incarnation === null
+      ? { state: 'identity-unavailable' as const }
+      : { state: 'alive' as const, incarnation }
+  })
+  const unavailable = (
+    reason: RecipientExclusionReason | 'incarnation-mismatch',
+  ): LiveDeliveryResult => ({
+    ok: false,
+    error: {
+      code: 'sender-unavailable',
+      subject: request.destination.subject,
+      sessionId: request.sender.sessionId,
+      reason,
+    },
+  })
+  const senderSession = getSession(cfg.dirs.sessions, request.sender.sessionId)
+  if (!senderSession) {
+    const graveyarded = ctx.docStore.getAllTombstones().some(
+      tombstone => tombstone.sessionName === request.sender.sessionId,
+    )
+    return Promise.resolve(unavailable(graveyarded ? 'graveyarded' : 'missing'))
+  }
+  if (existsSync(join(cfg.dirs.sessions, request.sender.sessionId, '.deleting'))) {
+    return Promise.resolve(unavailable('deleting'))
+  }
+  if (senderSession.state === 'creating') return Promise.resolve(unavailable('not-started'))
+  if (!(['running', 'idle', 'needs_attention'] as Session['state'][]).includes(senderSession.state)) {
+    return Promise.resolve(unavailable('stopped'))
+  }
+  const senderLease = acquirePersistedSessionBackendLeaseForConfig(
+    cfg,
+    request.sender.sessionId,
+  )
+  if (!senderLease) return Promise.resolve(unavailable('lifecycle-conflict'))
+
+  const routeAfterSenderValidation = async (): Promise<LiveDeliveryResult> => {
+    try {
+      if (!getSession(cfg.dirs.sessions, request.sender.sessionId)) {
+        return unavailable('missing')
+      }
+      const observation = await observeSender(request.sender.sessionId)
+      if (persistedSessionBackendGenerationForConfig(
+        cfg,
+        request.sender.sessionId,
+      ) !== senderLease.token) {
+        return unavailable('lifecycle-conflict')
+      }
+      if (observation.state === 'dead') return unavailable('process-dead')
+      if (observation.state === 'identity-unavailable') {
+        return unavailable('identity-unavailable')
+      }
+      if (observation.incarnation !== request.sender.incarnation) {
+        return unavailable('incarnation-mismatch')
+      }
+    } catch {
+      return unavailable('liveness-check-failed')
+    } finally {
+      senderLease.release()
+    }
+
+    return acceptForLiveRecipients(request, {
+      coordinationKey: ledger,
+      listSessions: () => listAllSessions(ctx),
+      readSession: sessionId => getSession(cfg.dirs.sessions, sessionId),
+      isDeleting: sessionId =>
+        existsSync(join(cfg.dirs.sessions, sessionId, '.deleting')),
+      graveyardSessionNames: () =>
+        ctx.docStore.getAllTombstones().map(tombstone => tombstone.sessionName),
+      acquireLease: sessionId =>
+        acquirePersistedSessionBackendLeaseForConfig(cfg, sessionId),
+      leaseIsCurrent: (sessionId, token) =>
+        persistedSessionBackendGenerationForConfig(cfg, sessionId) === token,
+      observeProcess,
+      providerIdFor: session => {
+        const template = session.cliTemplate
+          ? cfg.cliTemplates.find(candidate => candidate.id === session.cliTemplate)
+          : undefined
+        return registry.resolveSession(session, template).provider.id
+      },
+      replayAcceptance: input => ledger.replayAcceptance(input),
+      accept: input => ledger.accept(input),
+    })
+  }
+  return routeAfterSenderValidation()
 }
 
 /**

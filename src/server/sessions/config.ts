@@ -364,9 +364,10 @@ export const BASE_CONFIG = {
     reconciliationBranchScope: '*',
   },
   nats: {
-    // Default: install from GitHub on first use via `bun x`
+    // Pin the managed reply protocol peer so Tinstar and the external MCP
+    // server cannot silently drift to incompatible wire contracts.
     // Override in ~/.config/tinstar/config.json for local dev
-    channelServerPackage: 'github:except-pass/nats-channel-mcp',
+    channelServerPackage: 'github:except-pass/nats-channel-mcp#6812698c9da3f0a3887c57465d758d0fcfb9a945',
     bunPath: join(homedir(), '.bun/bin/bun'),
     // Off by default; requires nats-server -js
     jetstream: false,

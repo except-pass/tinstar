@@ -13,6 +13,9 @@ function nats(subs: string[]): SessionNats {
 const COMMON = {
   channelServerPackage: 'github:except-pass/nats-channel-mcp',
   bunPath: '/home/ubuntu/.bun/bin/bun',
+  natsUrl: 'nats://127.0.0.1:4666',
+  routerSubject: '_TINSTAR.delivery.route.v1.instance',
+  routerAuth: 'a'.repeat(64),
 }
 
 describe('generateNatsMcpConfig', () => {
@@ -35,6 +38,9 @@ describe('generateNatsMcpConfig', () => {
   it('bakes literal per-session values (no ${VAR} tokens, no repo dependence)', () => {
     const p = generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['tinstar.s._._.alpha']), ...COMMON })
     const text = readFileSync(p, 'utf-8')
+    const parsed = JSON.parse(text) as {
+      mcpServers: { nats: { args: string[]; env: Record<string, string> } }
+    }
     // Literal name + literal per-session paths, not env tokens.
     expect(text).toContain('"--name"')
     expect(text).toContain('alpha')
@@ -46,6 +52,16 @@ describe('generateNatsMcpConfig', () => {
     // The variable-length subscription list is NOT inlined as --subscribe args.
     expect(text).not.toContain('--subscribe')
     expect(text).toContain('--topics-file')
+    const natsArg = parsed.mcpServers.nats.args.indexOf('--nats')
+    expect(natsArg).toBeGreaterThanOrEqual(0)
+    expect(parsed.mcpServers.nats.args[natsArg + 1]).toBe(COMMON.natsUrl)
+    expect(parsed.mcpServers.nats.env).toEqual({
+      TINSTAR_NATS_URL: COMMON.natsUrl,
+      TINSTAR_MESSAGE_ROUTER_SUBJECT: COMMON.routerSubject,
+      TINSTAR_MESSAGE_ROUTER_AUTH: COMMON.routerAuth,
+    })
+    expect(statSync(p).mode & 0o777).toBe(0o600)
+    expect(statSync(natsTopicsFilePath(sessionsDir, 'alpha')).mode & 0o777).toBe(0o600)
   })
 
   it('produces different bytes per session (per-session file, no cross-session churn concern)', () => {

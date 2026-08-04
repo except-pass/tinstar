@@ -86,28 +86,23 @@ export class NatsTrafficBridge {
   }
 
   /**
-   * Publish a message to a NATS subject.
+   * Project a router-accepted message into Saloon without publishing it.
+   *
+   * Final-mile delivery belongs to provider adapters. Keeping this method
+   * observation-only prevents host code from treating a fire-and-forget NATS
+   * publish as durable acceptance while preserving subject-centric traffic in
+   * the UI.
    */
-  publish(subject: string, message: string, sender?: string): void {
-    if (!this.nc) {
-      log.warn('nats-traffic', 'cannot publish: not connected')
-      return
+  recordAcceptedOutbound(subject: string, message: string, sender?: string): void {
+    const event: NatsTrafficEvent = {
+      timestamp: new Date().toISOString(),
+      subject,
+      data: message,
+      direction: 'outbound',
+      sender: sender ?? 'tinstar',
     }
-    try {
-      this.nc.publish(subject, this.sc.encode(message))
-      // Broadcast the publish event to UI (marked as outbound)
-      const event: NatsTrafficEvent = {
-        timestamp: new Date().toISOString(),
-        subject,
-        data: message,
-        direction: 'outbound',
-        sender: sender ?? 'tinstar',
-      }
-      this.sse.broadcastEvent('nats_traffic', event)
-      log.info('nats-traffic', `published to ${subject}`)
-    } catch (err) {
-      log.warn('nats-traffic', `failed to publish: ${(err as Error).message}`)
-    }
+    this.sse.broadcastEvent('nats_traffic', event)
+    log.info('nats-traffic', `accepted outbound message for ${subject}`)
   }
 
   /**

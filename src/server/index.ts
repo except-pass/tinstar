@@ -8,6 +8,7 @@ import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
 import {
   acquirePersistedSessionBackendLeaseForConfig,
+  acceptForManagedSessionRecipients,
   clearStoppedSessionPort,
   ensureMarshalSession,
   finishBootSessionDeletion,
@@ -75,6 +76,15 @@ import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
+import { DeliveryLedger } from './messaging/delivery-ledger'
+import {
+  NatsMessageRouterService,
+  messageRouterMasterKey,
+  messageRouterSubject,
+  reserveMessageRouterOwner,
+  stopAllMessageRouters,
+  type MessageRouterOwnerLease,
+} from './messaging/message-router'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
 import { ProviderObservationIngestor } from './providers/observation-ingestor'
 import { createClaudeObservationAdapter } from './providers/claude-observation-adapter'
@@ -741,6 +751,13 @@ export function initBackend(): RouteContext {
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
+  let messageRouterOwner: MessageRouterOwnerLease | undefined
+  let deliveryLedger: DeliveryLedger | undefined
+  let backendContext: RouteContext | null = null
+  let markBackendContextReady!: () => void
+  const backendContextReady = new Promise<void>(resolve => {
+    markBackendContextReady = resolve
+  })
   let slateWatcher: SlateWatcher | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
 
@@ -748,6 +765,7 @@ export function initBackend(): RouteContext {
     shutdownRegistered = true
     const shutdown = async () => {
       try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
+      try { await stopAllMessageRouters() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
       try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
@@ -761,10 +779,9 @@ export function initBackend(): RouteContext {
     process.once('SIGTERM', shutdown)
   }
 
-  // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
-  // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
-  // remote on subsequent `bun x` calls — without this, hands can run stale
-  // channel-server code (e.g. missing upstream fixes like self-echo suppression).
+  // Clear bun's cached nats-channel-mcp so freshly spawned hands resolve the
+  // configured package spec. Bun caches git specs by commit hash and can leave
+  // a prior configured revision in the bunx resolution cache.
   // We clear BOTH the install cache AND the bunx tmp resolutions — the latter
   // is what `bun x` actually serves from, and the former alone wasn't enough.
   try {
@@ -785,10 +802,41 @@ export function initBackend(): RouteContext {
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
   natsManager = new NatsManager()
-  void natsManager.start().then(() => {
+  void natsManager.start().then(async () => {
     // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
     natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
     natsTraffic.start()
+
+    // External NATS and fast-sim can become ready in one microtask. Make the
+    // dependency on session/ledger/context boot explicit instead of relying on
+    // the rest of this function remaining synchronous forever.
+    await backendContextReady
+
+    // The control-plane responder is separate from Saloon's observer
+    // connection. Requests are scoped to this data root, resolved against the
+    // managed live set, and durably accepted before a response says success.
+    if (backendContext && deliveryLedger && sessionConfig) {
+      const messageRouter = new NatsMessageRouterService({
+        subject: messageRouterSubject(sessionConfig.dirs.root),
+        authMasterKey: messageRouterMasterKey(sessionConfig.dirs.root),
+        natsUrl: natsManager!.url,
+        route: request => acceptForManagedSessionRecipients(
+          backendContext!,
+          deliveryLedger!,
+          request,
+        ),
+        observeAccepted: (request) => {
+          natsTraffic?.recordAcceptedOutbound(
+            request.destination.subject,
+            request.text,
+            request.sender.sessionId,
+          )
+        },
+      })
+      void messageRouterOwner?.start(messageRouter).catch(error => {
+        log.warn('message-router', `failed to start: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
 
     // Re-register every persisted session's subs with the bridge. Saloon entries
     // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs.
@@ -865,6 +913,11 @@ export function initBackend(): RouteContext {
       // TINSTAR_CONFIG_HOME (preferred) and TINSTAR_DATA_DIR (legacy alias).
       sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
+      // The ledger shares the backend singleton and config root. Opening it at
+      // boot makes accepted-but-not-yet-final deliveries survive Tinstar
+      // rebuilds and restarts before any NATS responder can claim success.
+      deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
+      messageRouterOwner = reserveMessageRouterOwner(sessionConfig.dirs.root)
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
@@ -1363,6 +1416,8 @@ export function initBackend(): RouteContext {
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
   }
+  backendContext = ctx
+  markBackendContextReady()
 
   // Auto-start the marshal so it's always available without a UI nudge.
   // Deferred so it doesn't block server startup. Await any durable deletion

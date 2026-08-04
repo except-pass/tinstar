@@ -29,12 +29,40 @@ const STATE_EVENT_KEYS = new Set([
 ])
 const MESSAGE_KEYS = new Set([
   'id', 'requestId', 'requestFingerprint', 'acceptedAt',
-  'sender', 'destination', 'text', 'deliveryIds',
+  'sender', 'destination', 'text', 'deliveryIds', 'exclusions',
 ])
 const DESTINATION_KEYS = new Set(['subject'])
+const EXCLUSION_KEYS = new Set(['sessionId', 'reason'])
 const DELIVERY_KEYS = new Set([
   'id', 'messageId', 'recipient', 'state', 'attempt', 'acceptedAt',
   'updatedAt', 'history', 'historyTruncated',
+])
+
+export type DeliveryRecipientExclusionReason =
+  | 'missing'
+  | 'graveyarded'
+  | 'not-started'
+  | 'stopped'
+  | 'deleting'
+  | 'not-subscribed'
+  | 'lifecycle-conflict'
+  | 'process-dead'
+  | 'liveness-check-failed'
+  | 'provider-unavailable'
+  | 'identity-unavailable'
+
+const RECIPIENT_EXCLUSION_REASONS = new Set<DeliveryRecipientExclusionReason>([
+  'missing',
+  'graveyarded',
+  'not-started',
+  'stopped',
+  'deleting',
+  'not-subscribed',
+  'lifecycle-conflict',
+  'process-dead',
+  'liveness-check-failed',
+  'provider-unavailable',
+  'identity-unavailable',
 ])
 
 export interface DeliveryLedgerPaths {
@@ -73,6 +101,11 @@ export interface DeliveryDestination {
   subject: string
 }
 
+export interface DeliveryRecipientExclusion {
+  sessionId: string
+  reason: DeliveryRecipientExclusionReason
+}
+
 export interface DeliveryAcceptInput {
   /** Stable caller identity. Replays return the original durable acceptance. */
   requestId: string
@@ -80,9 +113,14 @@ export interface DeliveryAcceptInput {
   destination: DeliveryDestination
   text: string
   recipients: readonly DeliveryLedgerRecipient[]
+  /** Durable live-set exclusions make an accepted partial receipt replay-stable. */
+  exclusions?: readonly DeliveryRecipientExclusion[]
 }
 
-export type DeliveryAcceptIntent = Omit<DeliveryAcceptInput, 'recipients'>
+export type DeliveryAcceptIntent = Omit<
+  DeliveryAcceptInput,
+  'recipients' | 'exclusions'
+>
 
 export type DeliveryState =
   | 'accepted'
@@ -117,6 +155,8 @@ export interface DeliveryMessage {
   destination: DeliveryDestination
   text: string
   deliveryIds: string[]
+  /** Optional for backwards compatibility with schema-v1 snapshots. */
+  exclusions?: DeliveryRecipientExclusion[]
 }
 
 export interface DeliveryRecord {
@@ -395,6 +435,18 @@ function isMessage(value: unknown): value is DeliveryMessage {
     && message.deliveryIds.length > 0
     && message.deliveryIds.every(nonEmpty)
     && new Set(message.deliveryIds).size === message.deliveryIds.length
+    && (message.exclusions === undefined
+      || (Array.isArray(message.exclusions)
+        && message.exclusions.every(isRecipientExclusion)))
+}
+
+function isRecipientExclusion(value: unknown): value is DeliveryRecipientExclusion {
+  if (!value || typeof value !== 'object' || !hasOnlyKeys(value, EXCLUSION_KEYS)) {
+    return false
+  }
+  const exclusion = value as Partial<DeliveryRecipientExclusion>
+  return nonEmpty(exclusion.sessionId)
+    && RECIPIENT_EXCLUSION_REASONS.has(exclusion.reason as DeliveryRecipientExclusionReason)
 }
 
 function isDelivery(value: unknown): value is DeliveryRecord {
@@ -668,8 +720,20 @@ function normalizeRecipients(
       || compareCodeUnits(a.incarnation, b.incarnation))
 }
 
+function normalizeExclusions(
+  exclusions: readonly DeliveryRecipientExclusion[],
+): DeliveryRecipientExclusion[] {
+  return exclusions
+    .map(exclusion => ({
+      sessionId: exclusion.sessionId,
+      reason: exclusion.reason,
+    }))
+    .sort((a, b) => compareCodeUnits(a.sessionId, b.sessionId)
+      || compareCodeUnits(a.reason, b.reason))
+}
+
 function requestFingerprint(
-  input: Omit<DeliveryAcceptInput, 'recipients'> & {
+  input: DeliveryAcceptIntent & {
     recipients: DeliveryLedgerRecipient[]
   },
 ): string {
@@ -717,6 +781,16 @@ function validateAcceptInput(input: DeliveryAcceptInput): string | null {
   const keys = input.recipients.map(recipientKey)
   if (new Set(keys).size !== keys.length) {
     return 'recipient provider/session pairs must be unique'
+  }
+  if (input.exclusions !== undefined) {
+    if (!Array.isArray(input.exclusions)
+      || !input.exclusions.every(isRecipientExclusion)) {
+      return 'every recipient exclusion must be complete'
+    }
+    const excludedSessions = input.exclusions.map(exclusion => exclusion.sessionId)
+    if (new Set(excludedSessions).size !== excludedSessions.length) {
+      return 'excluded session IDs must be unique'
+    }
   }
   return null
 }
@@ -877,6 +951,10 @@ function copyAcceptInput(input: DeliveryAcceptInput): DeliveryAcceptInput {
       providerId: recipient.providerId,
       sessionId: recipient.sessionId,
       incarnation: recipient.incarnation,
+    })),
+    exclusions: (input.exclusions ?? []).map(exclusion => ({
+      sessionId: exclusion.sessionId,
+      reason: exclusion.reason,
     })),
   }
 }
@@ -1152,6 +1230,7 @@ export class DeliveryLedger {
     if (invalid) return { accepted: false, reason: 'invalid-request', detail: invalid }
 
     const recipients = normalizeRecipients(input.recipients)
+    const exclusions = normalizeExclusions(input.exclusions ?? [])
     const normalized = {
       requestId: input.requestId,
       sender: {
@@ -1237,6 +1316,7 @@ export class DeliveryLedger {
       destination: normalized.destination,
       text: normalized.text,
       deliveryIds: deliveryRecords.map(delivery => delivery.id),
+      exclusions,
     }
     const nextMessages = new Map(this.messages)
     const nextDeliveries = new Map(this.deliveries)
