@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ProviderAccountQuotaObservationWire } from '../../domain/provider-observation-wire'
+import { Cc7dBar } from './Cc7dBar'
+import { CcQuotaClock } from './CcQuotaClock'
 import './hud.css'
 
 const TICK_MS = 60_000
@@ -75,10 +77,13 @@ function ProviderQuotaCard({
             const remainingPercent = 100 - usedPercent
             return (
               <div className="provider-quota-row" key={window.id}>
-                <QuotaGauge
+                <QuotaVisualization
+                  windowMinutes={window.windowMinutes}
+                  resetsAt={window.resetsAt}
                   label={window.label}
                   usedPercent={usedPercent}
                   remainingPercent={remainingPercent}
+                  nowMs={nowMs}
                 />
                 <div className="provider-quota-text">
                   <div className="provider-quota-big">
@@ -105,18 +110,35 @@ function ProviderQuotaCard({
   )
 }
 
-function QuotaGauge({
+function QuotaVisualization({
+  windowMinutes,
+  resetsAt,
   label,
   usedPercent,
   remainingPercent,
+  nowMs,
 }: {
+  windowMinutes: number
+  resetsAt?: string
   label: string
   usedPercent: number
   remainingPercent: number
+  nowMs: number
 }) {
+  const bucket = resetsAt
+    ? { utilization: usedPercent, resets_at: resetsAt }
+    : null
+
+  if (bucket && windowMinutes === 300) {
+    return <CcQuotaClock bucket={bucket} nowMs={nowMs} />
+  }
+  if (bucket && windowMinutes === 10_080) {
+    return <Cc7dBar bucket={bucket} nowMs={nowMs} />
+  }
   return (
     <div
       className="provider-quota-gauge"
+      data-testid="provider-quota-gauge"
       role="img"
       aria-label={`${label}: ${usedPercent}% used, ${remainingPercent}% remaining`}
       style={{ '--quota-remaining': `${remainingPercent * 3.6}deg` } as React.CSSProperties}
