@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AgentQuadrant } from './AgentQuadrant'
-import { CcQuotaCard } from './CcQuotaCard'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
 import { TurnLengthFleet } from './TurnLengthFleet'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
-import { useCcQuota } from '../../hooks/useCcQuota'
 import { fmtDollar, fmtRate } from './fmt'
 import type { Run } from '../../domain/types'
 import { apiFetch } from '../../apiClient'
@@ -13,8 +11,12 @@ import { computeDeltaChip } from '../RunWorkspaceWidget/computeDeltaChip'
 import { useFleetTelemetrySeries } from '../../hooks/useFleetTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
 import { getPref, setPref } from '../../lib/uiPrefs'
-import { useProviderObservations } from '../../hooks/providerObservationsStore'
+import {
+  useProviderObservations,
+  useProviderQuotaObservations,
+} from '../../hooks/providerObservationsStore'
 import { ProviderFleetObservations } from './ProviderFleetObservations'
+import { ProviderQuotaCards } from './ProviderQuotaCards'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
@@ -28,8 +30,8 @@ interface Props {
 export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embedded = false }: Props) {
   const { snapshot } = useTelemetryHud()
   const providerObservations = useProviderObservations()
+  const providerQuota = useProviderQuotaObservations()
   const fleetSeries = useFleetTelemetrySeries(snapshot)
-  const { snapshot: ccQuota } = useCcQuota()
   const config = useConfig()
   const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
   const [visible, setVisible] = useState(() => getPref('hudVisible') ?? true)
@@ -74,6 +76,8 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
   }
   const hasProviderData = providerObservations.observations.sessionUsage.length > 0
     || providerObservations.observations.sessionContext.length > 0
+    || providerQuota.observations.length > 0
+    || providerQuota.error !== null
   if ((!snapshot || snapshot.state === 'disabled') && !hasProviderData) return null
 
   const wrapStyle: React.CSSProperties = embedded
@@ -96,18 +100,13 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
         zIndex: 30,
       }
 
-  if (snapshot?.state !== 'ready' && !hasProviderData) {
-    return (
-      <HudShell wrapStyle={wrapStyle} onClose={toggle}>
-        <TelemetryBootstrap snap={snapshot!} onRetry={handleRetry} />
-      </HudShell>
-    )
-  }
-
   const modelChips = Object.entries(snapshot?.cost.byModel ?? {}).slice(0, 2)
 
   return (
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
+      {snapshot && snapshot.state !== 'ready' && (
+        <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
+      )}
       <ProviderFleetObservations
         observations={providerObservations.observations}
         managedSessions={providerObservations.managedSessions}
@@ -156,7 +155,10 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
           </div>
         )
       })()}
-      <CcQuotaCard snapshot={ccQuota}/>
+      <ProviderQuotaCards
+        observations={providerQuota.observations}
+        error={providerQuota.error}
+      />
       {onFocusRun && (
         <AgentQuadrant
           runMap={runMap}
