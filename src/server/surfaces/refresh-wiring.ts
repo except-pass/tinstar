@@ -31,8 +31,20 @@ import {
   type RefreshCoordinatorDeps,
   type StagedRefreshResult,
 } from './surface-refresh-coordinator'
+import { runWitness, witnessTimeoutMs } from './witness-registry'
+import { defaultWitnessDeps } from './witness-runtime'
 
 const execFileAsync = promisify(execFile)
+
+/** The host's own ceiling on ONE witness, applied on top of the kind's budget.
+ *
+ *  A BACKSTOP, NOT A SECOND OPINION: it sits at the slowest budget the registry ships
+ *  (`unit-landed`'s 30s for a `git fetch` on a link the host does not control), so it
+ *  changes nothing for either kind today and bounds a future kind that declares
+ *  something unreasonable. Cutting it tighter would be worse than useless — a witness
+ *  stopped by its budget reports `failed`, which means "this claim is broken and
+ *  somebody has to edit it", and a slow network is not that. */
+const WITNESS_TIMEOUT_MS = 30_000
 
 /** The current HEAD of a worktree, or null when it is not a repo (or git failed).
  *  Returned as opaque EVIDENCE — the coordinator compares it for equality and never
@@ -186,6 +198,9 @@ export function buildRefreshCoordinatorDeps(
   const { cfg, docStore, service, reobserveRun } = input
   const jobs = SurfaceRefreshJobStore.open(cfg.dirs.root)
   const terminalStops = buildRefreshWorkerTerminalStops()
+  // Built once. The registry's runners take their effects at CALL time, so this is a
+  // plain record of two functions and holds nothing open between passes.
+  const witnessDeps = defaultWitnessDeps()
   // A broken port/cap config degrades the engine to owner delivery rather than
   // stopping it: freshness still tracks, jobs still queue, and a live owner still
   // gets the work — only the background fleet is withheld, which is the part the
@@ -316,6 +331,23 @@ export function buildRefreshCoordinatorDeps(
     },
 
     buildPrompt: ({ surface, stagingPath }) => refreshDispatchPrompt(surface, stagingPath),
+
+    runWitness: ({ surface, claim }) => runWitness({
+      claim,
+      // The BOUND worktree first, then provenance — the same order
+      // `authorizationProblem` reads them in, so a repo witness can never read a
+      // repository a rebuild of the same Surface would refuse to run in. Absent is
+      // not an error to pre-empt: the repo kind answers `unresolved`, and the infra
+      // kind does not want a worktree at all.
+      ...(surface.source?.worktree ?? surface.provenance?.worktreeId
+        ? { worktree: (surface.source?.worktree ?? surface.provenance!.worktreeId)! }
+        : {}),
+      deps: witnessDeps,
+      // The kind's own budget, under the host ceiling. A whole pass is that times the
+      // number of batches — a minute at worst — and none of it is spent holding the
+      // coordinator's serialization key, which is what makes a minute affordable.
+      timeoutMs: Math.min(witnessTimeoutMs(claim.witness) ?? WITNESS_TIMEOUT_MS, WITNESS_TIMEOUT_MS),
+    }),
   }
 
   try { mkdirSync(jobs.stagingDir, { recursive: true }) } catch { /* reported by the store */ }

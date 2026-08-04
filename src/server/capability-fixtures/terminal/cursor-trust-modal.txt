@@ -1,0 +1,8 @@
+  ⚠ Workspace Trust Required
+
+  /home/fixture/repo/demo
+
+  Do you trust the authors of the files in this folder?
+  Agent may read and execute files in this workspace.
+
+  [a] Trust this workspace    [q] Quit

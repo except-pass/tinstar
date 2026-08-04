@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-30T10:00:00.000Z","type":"session_meta","payload":{"session_id":"019f0000-0001-7000-8000-000000000004","id":"019f0000-0001-7000-8000-000000000004","timestamp":"2026-07-30T10:00:00.000Z","cwd":"/home/fixture/repo/demo","originator":"codex-tui","cli_version":"0.146.0","source":"cli","thread_source":"user","model_provider":"openai"}}
+{"timestamp":"2026-07-30T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt"}}
+
+not json at all
+{"timestamp":"2026-07-30T10:00:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"019f0000-0010-7000-8000-000000000040","last_agent_message":"First answer."}}
+{"timestamp":"2026-07-30T10:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"inp

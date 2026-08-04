@@ -1,0 +1,64 @@
+{
+  "session_id": "00000000-0000-4000-8000-00000000c1a0",
+  "transcript_path": "/home/fixture/.claude/projects/-home-fixture-repo-demo/00000000-0000-4000-8000-00000000c1a0.jsonl",
+  "cwd": "/home/fixture/repo/demo",
+  "prompt_id": "00000000-0000-4000-8000-0000000000f1",
+  "effort": {
+    "level": "high"
+  },
+  "session_name": "fixture session",
+  "model": {
+    "id": "claude-opus-5[1m]",
+    "display_name": "Opus 5 (1M context)"
+  },
+  "workspace": {
+    "current_dir": "/home/fixture/repo/demo",
+    "project_dir": "/home/fixture/repo/demo",
+    "added_dirs": [],
+    "git_worktree": "demo",
+    "repo": {
+      "host": "github.com",
+      "owner": "fixture-org",
+      "name": "demo"
+    }
+  },
+  "version": "2.1.220",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 1.25,
+    "total_duration_ms": 152000,
+    "total_api_duration_ms": 114000,
+    "total_lines_added": 12,
+    "total_lines_removed": 3
+  },
+  "context_window": {
+    "total_input_tokens": 124000,
+    "total_output_tokens": 380,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 1,
+      "output_tokens": 380,
+      "cache_creation_input_tokens": 2200,
+      "cache_read_input_tokens": 121500
+    },
+    "used_percentage": 12,
+    "remaining_percentage": 88
+  },
+  "exceeds_200k_tokens": false,
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 40,
+      "resets_at": 1785450000
+    },
+    "seven_day": {
+      "used_percentage": 12,
+      "resets_at": 1785636000
+    }
+  }
+}

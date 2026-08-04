@@ -175,7 +175,27 @@
       window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
     }
 
+    var handledCycleEvents = new WeakSet()
+    function cycleAction(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return null
+      if (e.code === 'BracketRight') return e.shiftKey ? 'all-next' : 'ready-next'
+      if (e.code === 'BracketLeft') return e.shiftKey ? 'all-prev' : 'ready-prev'
+      return null
+    }
+
+    function notifyCycle(e) {
+      var action = cycleAction(e)
+      if (!action) return false
+      e.preventDefault()
+      e.stopPropagation && e.stopPropagation()
+      if (handledCycleEvents.has(e)) return true
+      handledCycleEvents.add(e)
+      window.parent.postMessage({ type: 'terminal-session-cycle', sessionName: session, action: action }, '*')
+      return true
+    }
+
     window.addEventListener('keydown', function(e) {
+      if (notifyCycle(e)) return
       if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
         e.preventDefault()
         notifyEscape()
@@ -189,6 +209,7 @@
         if (!win || !win.term || !win.term.attachCustomKeyEventHandler) return false
         win.term.attachCustomKeyEventHandler(function(e) {
           if (e.type !== 'keydown') return true
+          if (notifyCycle(e)) return false
           if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
             notifyEscape()
             return false
@@ -207,6 +228,7 @@
     function tryAttachKeydown() {
       try {
         termEl.contentWindow.addEventListener('keydown', function(e) {
+          if (notifyCycle(e)) return
           if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
             e.preventDefault()
             e.stopPropagation()
@@ -228,6 +250,22 @@
             }).catch(function() {})
           }
         }, true)
+        termEl.contentWindow.addEventListener('wheel', function(e) {
+          if (!e.deltaY) return
+          var doc = termEl.contentDocument
+          var viewport = doc && doc.querySelector('.xterm-viewport')
+          if (!viewport) return
+          var atStart = viewport.scrollTop <= 0
+          var atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1
+          if ((e.deltaY < 0 && atStart) || (e.deltaY > 0 && atEnd)) {
+            window.parent.postMessage({
+              type: 'terminal-scroll-boundary',
+              sessionName: session,
+              direction: e.deltaY < 0 ? 'previous' : 'next'
+            }, '*')
+          }
+        }, true)
+        termEl.dataset.bridgeReady = 'true'
         return true
       } catch (_) { return false }
     }

@@ -1334,6 +1334,14 @@ export class SurfaceStore {
           ? { observedGeneration: init.freshness.observedGeneration }
           : {}),
         ...(init.freshness?.verifiedAt != null ? { verifiedAt: init.freshness.verifiedAt } : {}),
+        // A refusal can exist at BIRTH, which is why this one field of the host's
+        // claim bookkeeping is on the create path at all (plan U6, R3): the very
+        // first read of a source file can hold a mistyped witness kind, and a
+        // create that dropped the refusal would leave that surface indistinguishable
+        // from a healthy one until its author happened to edit it again. The
+        // observation fields around it genuinely cannot exist yet — nothing has
+        // looked — and stay off this whitelist deliberately.
+        ...(init.freshness?.claimRefusals?.length ? { claimRefusals: init.freshness.claimRefusals } : {}),
       },
       ...(init.aliases ? { aliases: init.aliases } : {}),
       ...(init.compatibilityOnly ? { compatibilityOnly: true } : {}),

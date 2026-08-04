@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
@@ -21,6 +22,7 @@ import type { CliTemplate, TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
+import { buildSessionTimeline, findCodexCandidates, pickCodexRollout, resolveTranscriptPath, DEFAULT_WINDOW_SEC, type TimelineInput } from '../sessions/timeline'
 import { buildCoversSummary } from '../sessions/covers-summary'
 import { guestEnv } from '../sessions/guestEnv'
 import { reviveFromTombstone } from '../sessions/necro'
@@ -43,6 +45,7 @@ import {
   deleteWorktree,
   WorktreeBranchConflictError,
   listWorktrees,
+  listSessionIdentityRecords,
   listSessions,
   reconcileSessionStates,
   loadSecrets,
@@ -96,7 +99,6 @@ import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessio
 import { probeNatsLiveStatus } from '../nats-health'
 import { reconnectSessionNats } from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
-import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
 import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
@@ -126,6 +128,7 @@ import {
   type LiveDeliveryRequest,
   type LiveDeliveryResult,
 } from '../messaging/live-recipient-resolution'
+import { projectLegacySessionContextWindow } from '../providers/legacy-observation-projections'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -145,6 +148,40 @@ function validateCliTemplateProvider(
 }
 
 type CliTemplateTelemetryState = 'enabled' | 'disabled' | 'unsupported' | 'unavailable'
+
+export function buildManagedProviderSessionView(
+  sessions: Array<Pick<Session, 'name' | 'adapter' | 'cliTemplate' | 'conversation'>>,
+  registry: ProviderAdapterRegistry,
+  templates: readonly CliTemplate[] = [],
+): Array<{
+  hostSessionId: string
+  providerId: string
+  providerSessionIds: string[]
+}> {
+  return sessions.flatMap(session => {
+    try {
+      const template = session.cliTemplate
+        ? templates.find(candidate => candidate.id === session.cliTemplate) ?? null
+        : null
+      // Modern sessions persist their provider adapter, so a renamed or
+      // deleted template must not make their provider identity disappear.
+      // Legacy adapter-less sessions still require the template to resolve.
+      if (!session.adapter && session.cliTemplate && !template) return []
+      const providerId = session.adapter
+        ? registry.resolveSession(session).provider.id
+        : registry.resolveSession(session, template).provider.id
+      const providerSessionIds = [...new Set([
+        session.name,
+        session.conversation?.id,
+      ].filter((value): value is string => Boolean(value?.trim())))]
+      return [{ hostSessionId: session.name, providerId, providerSessionIds }]
+    } catch {
+      // Unresolved/missing templates cannot be safely attributed. Exact
+      // observation IDs remain available as a client-side fallback.
+      return []
+    }
+  })
+}
 
 function discoverCliTemplate(
   registry: ProviderAdapterRegistry,
@@ -1720,6 +1757,8 @@ export interface RouteContext {
   bus: EventBus
   startSimulator: () => void
   resetSimulator: () => void
+  /** Enables mutation-only simulator routes used by browser tests. */
+  simulatorTestApiEnabled: boolean
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
@@ -1727,6 +1766,7 @@ export interface RouteContext {
   providerRegistry?: ProviderAdapterRegistry
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
+  providerObservationStores?: import('../providers/observation-stores').ProviderCurrentObservationStores
   slashRegistry?: SlashCommandRegistry
   slashUsage?: SlashUsage
   otlpExporter?: OtlpExporter
@@ -2519,6 +2559,32 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/provider-observations — one provider-neutral view shared by
+  // native provider readers and legacy sources such as Claude's statusline.
+  if (method === 'GET' && ctx.providerObservationStores && url === '/api/provider-observations') {
+    json(res, ctx.providerObservationStores.toWire())
+    return true
+  }
+
+  // GET /api/provider-observation-view — current observations plus the
+  // provider-fenced aliases needed to join native conversation identities to
+  // stable Tinstar session names. The shared UI remains provider-neutral.
+  if (method === 'GET' && ctx.providerObservationStores && url === '/api/provider-observation-view') {
+    const managedSessions = ctx.sessionConfig
+      ? buildManagedProviderSessionView(
+          listSessionIdentityRecords(ctx.sessionConfig.dirs.sessions),
+          ctx.providerRegistry ?? defaultProviderRegistry,
+          ctx.sessionConfig.cliTemplates,
+        )
+      : []
+    json(res, {
+      version: 1,
+      observations: ctx.providerObservationStores.toWire(),
+      managedSessions,
+    })
+    return true
+  }
+
   // GET /api/slash-commands — returns registered slash commands merged with usage stats
   if (method === 'GET' && url === '/api/slash-commands') {
     if (!ctx.slashRegistry) return ok(res, { commands: [] })
@@ -2568,12 +2634,52 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // POST /api/simulator/patch-run — test-only: set any field on a run and broadcast delta
   if (method === 'POST' && url === '/api/simulator/patch-run') {
+    if (!ctx.simulatorTestApiEnabled) { fail(res, 'NOT_FOUND', 'not found'); return true }
     const body = await readBody(req)
-    const { id, ...patch } = JSON.parse(body) as { id: string } & Record<string, unknown>
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      fail(res, 'BAD_REQUEST', 'malformed_json')
+      return true
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+      return true
+    }
+    const { id, ...patch } = parsed as { id?: unknown } & Record<string, unknown>
+    if (typeof id !== 'string' || id.length === 0) { fail(res, 'INVALID_PARAMS', 'id must be a non-empty string'); return true }
     const run = ctx.docStore.getRun(id)
-    if (!run) { fail(res, 'NOT_FOUND', 'run not found'); return true }
+    const runSpace = run?.spaceId ? ctx.docStore.getSpace(run.spaceId) : undefined
+    if (!run || runSpace?.name !== '_simulator') { fail(res, 'NOT_FOUND', 'run not found'); return true }
     const updated = { ...run, ...patch }
     ctx.docStore.upsertRun(id, updated)
+    ok(res, null)
+    return true
+  }
+
+  // POST /api/simulator/remove-run — test-only: exercise the real SSE removal
+  // path without requiring a managed tmux session on disk.
+  if (method === 'POST' && url === '/api/simulator/remove-run') {
+    if (!ctx.simulatorTestApiEnabled) { fail(res, 'NOT_FOUND', 'not found'); return true }
+    const body = await readBody(req)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      fail(res, 'BAD_REQUEST', 'malformed_json')
+      return true
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+      return true
+    }
+    const { id } = parsed as { id?: unknown }
+    if (typeof id !== 'string' || id.length === 0) { fail(res, 'INVALID_PARAMS', 'id must be a non-empty string'); return true }
+    const run = ctx.docStore.getRun(id)
+    const runSpace = run?.spaceId ? ctx.docStore.getSpace(run.spaceId) : undefined
+    if (!run || runSpace?.name !== '_simulator') { fail(res, 'NOT_FOUND', 'run not found'); return true }
+    ctx.docStore.deleteRun(id)
     ok(res, null)
     return true
   }
@@ -4843,16 +4949,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // POST /api/runs/:id/slate/points/:pid/resolve|reopen|dismiss — explicit lifecycle.
+  // POST /api/runs/:id/slate/points/:pid/resolve|reopen|dismiss|supersede — explicit
+  // lifecycle. `supersede` is the third exit: the question stopped being the right
+  // question, which is neither an answer nor the user waving it away.
   // Sticky status the store owns; no delivery (a lifecycle flip is not an injection,
   // mirroring the notices dismiss route). Matched BEFORE the greedy PATCH handler.
-  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/(resolve|reopen|dismiss)$/.test(url.split('?')[0] ?? '')) {
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/(resolve|reopen|dismiss|supersede)$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const rest = path.slice('/api/runs/'.length)
     const segs = rest.split('/') // [runId, 'slate', 'points', pid, action]
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
-    const action = segs[4] as 'resolve' | 'reopen' | 'dismiss'
+    const action = segs[4] as 'resolve' | 'reopen' | 'dismiss' | 'supersede'
     const existing = ctx.docStore.getSlatePoint(runId, pid)
     if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
     void slateBridge().setDisposition(runId, pid, action, slateActor('user')).then(result => {
@@ -5245,6 +5353,65 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return slash === -1 ? rest : rest.slice(0, slash)
     }
 
+    function resolveObservationProvider(
+      session: Session,
+    ): { ok: true; providerId: string } | { ok: false; message: string } {
+      const template = session.cliTemplate
+        ? cfg.cliTemplates.find(candidate => candidate.id === session.cliTemplate) ?? null
+        : null
+      if (session.cliTemplate && !template) {
+        return {
+          ok: false,
+          message: `CLI template "${session.cliTemplate}" is not configured`,
+        }
+      }
+      try {
+        return {
+          ok: true,
+          providerId: (ctx.providerRegistry ?? defaultProviderRegistry)
+            .resolveSession(session, template).provider.id,
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+
+    /**
+     * Resolve which transcript file carries a session's history.
+     *
+     * Codex rollouts are matched by working directory and then disambiguated by
+     * start time — a session that spawns sub-agents fills its own directory with
+     * their rollouts, so "newest file" picks a stranger's log (R19). Claude
+     * transcripts are addressed directly by conversation id, with a filesystem
+     * scan as the fallback for sessions that have no recorded workspace path.
+     *
+     * `transcriptPath: null` is a legitimate outcome, not a failure (R18).
+     */
+    function resolveTimelineInput(session: Session): TimelineInput {
+      const adapter = (session as Session & { adapter?: string | null }).adapter ?? 'claude'
+      const workdir = session.workspace?.path ?? null
+      const createdSec = Date.parse(session.created) / 1000
+
+      // Memoised: Codex discovery walks the whole rollout tree, which cost ~0.5-1s
+      // on every poll before the timeline cache was even consulted.
+      const path = resolveTranscriptPath(session.name, () => {
+        if (adapter === 'codex') {
+          // Codex owns this path regardless of TINSTAR_CONFIG_HOME — it is another
+          // tool's state directory, not Tinstar config. Mirrors codex-transcript.ts.
+          const root = join(homedir(), '.codex', 'sessions')
+          return workdir ? pickCodexRollout(createdSec, findCodexCandidates(root, workdir)) : null
+        }
+        const convId = session.conversation?.id ?? null
+        if (!convId) return null
+        const direct = workdir ? getTranscriptPath(workdir, convId) : null
+        return direct && existsSync(direct) ? direct : findTranscriptByConvId(convId)
+      })
+      return { name: session.name, adapter, transcriptPath: path, createdSec }
+    }
+
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
@@ -5404,8 +5571,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           return true
         }
+        const provider = resolveObservationProvider(session)
+        if (!provider.ok) {
+          fail(res, 'CONFLICT', provider.message)
+          return true
+        }
         const convId = session.conversation?.id
-        const snap = convId && ctx.ccQuotaService ? ctx.ccQuotaService.getSessionContext(convId) : null
+        const observation = convId
+          ? ctx.providerObservationStores?.sessions.getContext(provider.providerId, convId)
+          : undefined
+        const snap = projectLegacySessionContextWindow(observation)
         ok(res, snap)
         return true
       }
@@ -5424,14 +5599,75 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'CONFLICT', 'Session has no active conversation')
           return true
         }
-        // Credentials injected explicitly — the sidecar gets a scoped env and no
-        // login shell, so nothing would re-export them. Same source as sessions.
-        getDetailedUsage(session.conversation.id, loadSecrets(cfg.dirs.secrets))
-          .then(data => ok(res, data))
+        const provider = resolveObservationProvider(session)
+        if (!provider.ok) {
+          fail(res, 'CONFLICT', provider.message)
+          return true
+        }
+        const providerId = provider.providerId
+        const observationAdapter = ctx.providerRegistry?.getObservations(providerId)
+        if (!observationAdapter) {
+          fail(res, 'CONFLICT', `Provider '${providerId}' does not expose detailed context`)
+          return true
+        }
+        observationAdapter.observe['context-breakdown']({
+          kind: 'context-breakdown',
+          scope: { kind: 'session', sessionId: session.conversation.id },
+        })
+          .then((snapshot) => {
+            if (snapshot.availability.state !== 'available') {
+              const capabilityUnavailable = snapshot.availability.state === 'unsupported'
+                || snapshot.availability.reason === 'not-applicable'
+              fail(
+                res,
+                capabilityUnavailable ? 'CONFLICT' : 'INTERNAL',
+                (
+                  snapshot.availability.state === 'unavailable'
+                    ? snapshot.availability.message
+                    : undefined
+                ) ?? snapshot.availability.reason,
+              )
+              return
+            }
+            const legacyContext = (
+              snapshot.detail as { legacyContext?: unknown } | undefined
+            )?.legacyContext
+            if (!legacyContext) {
+              fail(res, 'CONFLICT', `Provider '${providerId}' has no legacy context projection`)
+              return
+            }
+            ok(res, legacyContext)
+          })
           .catch(err => {
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
             fail(res, 'INTERNAL', (err as Error).message)
           })
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/timeline?windowSec=<n> — where the run's time went
+    if (method === 'GET' && url.startsWith('/api/sessions/') && (url.split('?')[0] ?? '').endsWith('/timeline')) {
+      const name = extractSessionName(url.split('?')[0] ?? '', '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          return true
+        }
+        const params = new URL(url, 'http://localhost').searchParams
+        const requested = Number.parseInt(params.get('windowSec') ?? '', 10)
+        const windowSec = Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_WINDOW_SEC
+        try {
+          const timeline = buildSessionTimeline(resolveTimelineInput(session))
+          // null is a real answer, not an error: a Codex session with no
+          // workspace.path has no working directory to discover a rollout
+          // against, so there is nothing to reconstruct (R18).
+          ok(res, timeline ? { ...timeline, windowSec } : null)
+        } catch (err) {
+          log.error('api', `timeline failed for ${name}: ${(err as Error).message}`)
+          fail(res, 'INTERNAL', (err as Error).message)
+        }
         return true
       }
     }
