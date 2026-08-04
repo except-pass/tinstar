@@ -1499,6 +1499,7 @@ let ttydIdentityInspectionState: 'unknown' | 'available' | 'unavailable' = 'unkn
 let ttydIdentityInspectionWarned = false
 let ttydIdentityInspectionRetryAt = 0
 let ttydIdentityInspectionFailureEpoch = 0
+let ttydIdentityInspectionLastFailure = 'process inspection failed'
 const TTYD_IDENTITY_INSPECTION_RETRY_MS = 30_000
 
 export class TtydIdentityInspectionError extends Error {
@@ -1638,14 +1639,37 @@ function markTtydIdentityInspectionAvailable(
   if (ttydIdentityInspectionFailureEpoch !== probeFailureEpoch) return
   ttydIdentityInspectionState = 'available'
   ttydIdentityInspectionRetryAt = 0
+  ttydIdentityInspectionLastFailure = 'process inspection failed'
   ttydIdentityInspectionWarned = false
 }
 
-function markTtydIdentityInspectionUnavailable(): void {
+function markTtydIdentityInspectionUnavailable(err: unknown): void {
   ttydIdentityInspectionFailureEpoch += 1
   ttydIdentityInspectionState = 'unavailable'
+  ttydIdentityInspectionLastFailure = describeIdentityInspectionFailure(err)
   ttydIdentityInspectionRetryAt = Date.now()
     + TTYD_IDENTITY_INSPECTION_RETRY_MS
+}
+
+function ttydIdentityInspectionCooldownError(): TtydIdentityInspectionError {
+  const retrySeconds = Math.max(
+    1,
+    Math.ceil((ttydIdentityInspectionRetryAt - Date.now()) / 1_000),
+  )
+  return new TtydIdentityInspectionError(
+    `Terminal safety check temporarily unavailable; retry in ${retrySeconds}s. `
+      + `The last check failed because ${ttydIdentityInspectionLastFailure}. `
+      + 'Session start is paused to protect existing terminals.',
+  )
+}
+
+function ttydIdentityInspectionFailedError(err: unknown): TtydIdentityInspectionError {
+  markTtydIdentityInspectionUnavailable(err)
+  return new TtydIdentityInspectionError(
+    `Terminal safety check failed: ${ttydIdentityInspectionLastFailure}. `
+      + 'No terminal was started to protect existing sessions.',
+    { cause: err },
+  )
 }
 
 /** Whether strict identity inspection is in a non-destructive retry cooldown. */
@@ -1658,6 +1682,7 @@ export function ttydIdentityInspectionUnavailable(): boolean {
 
 interface IdentityExecFailure {
   code?: string | number
+  cmd?: string
   stdout?: string | Buffer
   stderr?: string | Buffer
   killed?: boolean
@@ -1674,6 +1699,27 @@ function inspectionOutput(value: string | Buffer | undefined): string {
   return typeof value === 'string'
     ? value.trim()
     : value?.toString('utf8').trim() ?? ''
+}
+
+function describeIdentityInspectionFailure(err: unknown): string {
+  const failure = (
+    err !== null && typeof err === 'object' ? err : {}
+  ) as IdentityExecFailure
+  const command = failure.cmd?.trim().split(/\s+/u)[0] || 'process inspection'
+  if (failure.killed === true || failure.signal != null) {
+    return `${command} timed out or was interrupted`
+  }
+  if (failure.code === 'ENOENT') {
+    return `${command} is not installed or is not on PATH`
+  }
+  const diagnostics = inspectionOutput(failure.stderr)
+    || inspectionOutput(failure.stdout)
+  if (diagnostics) return `${command} failed: ${diagnostics}`
+  if (failure.code !== undefined) {
+    return `${command} exited with code ${failure.code}`
+  }
+  if (err instanceof Error && err.message) return err.message
+  return String(err || `${command} failed`)
 }
 
 /**
@@ -1748,7 +1794,18 @@ export async function inspectTtydIncumbentsOnPort(
 }
 
 /**
- * Async, strict counterpart used by periodic readiness verification.
+ * Periodic readiness verification is observational: a timeout makes that
+ * sample inconclusive, but must not stop a later user-initiated session start.
+ */
+export function inspectTtydIncumbentsForReadiness(
+  port: number,
+  run: IdentityExec = execFileAsync,
+): Promise<TtydIncumbent[]> {
+  return inspectTtydIncumbentsOnPort(port, run)
+}
+
+/**
+ * Strict inventory used before a start may reclaim terminal processes.
  * Exit 1 with no output means the port has no listeners; every other lsof
  * or ps failure is inconclusive. Failures enter a cooldown so a misconfigured
  * service cannot thrash, while later boundaries can recover from a transient.
@@ -1758,9 +1815,7 @@ export async function ttydIncumbentsOnPortStrict(
   run: IdentityExec = execFileAsync,
 ): Promise<TtydIncumbent[]> {
   if (ttydIdentityInspectionUnavailable()) {
-    throw new TtydIdentityInspectionError(
-      'terminal identity inspection is in retry cooldown',
-    )
+    throw ttydIdentityInspectionCooldownError()
   }
   const probeFailureEpoch = ttydIdentityInspectionFailureEpoch
   try {
@@ -1768,11 +1823,7 @@ export async function ttydIncumbentsOnPortStrict(
     markTtydIdentityInspectionAvailable(probeFailureEpoch)
     return incumbents
   } catch (err) {
-    markTtydIdentityInspectionUnavailable()
-    throw new TtydIdentityInspectionError(
-      `terminal identity inspection failed: ${(err as Error).message}`,
-      { cause: err },
-    )
+    throw ttydIdentityInspectionFailedError(err)
   }
 }
 
@@ -1821,9 +1872,7 @@ export async function allTtydIncumbentsStrict(
   run: IdentityExec = execFileAsync,
 ): Promise<TtydIncumbent[]> {
   if (ttydIdentityInspectionUnavailable()) {
-    throw new TtydIdentityInspectionError(
-      'terminal identity inspection is in retry cooldown',
-    )
+    throw ttydIdentityInspectionCooldownError()
   }
   const probeFailureEpoch = ttydIdentityInspectionFailureEpoch
   try {
@@ -1831,11 +1880,7 @@ export async function allTtydIncumbentsStrict(
     markTtydIdentityInspectionAvailable(probeFailureEpoch)
     return incumbents
   } catch (err) {
-    markTtydIdentityInspectionUnavailable()
-    throw new TtydIdentityInspectionError(
-      `terminal process inspection failed: ${(err as Error).message}`,
-      { cause: err },
-    )
+    throw ttydIdentityInspectionFailedError(err)
   }
 }
 
@@ -2646,7 +2691,7 @@ export async function verifyTtydSessionSurface(
     interval?: number
   },
   deps: TtydSurfaceVerificationDeps = {
-    incumbentsOnPort: ttydIncumbentsOnPortStrict,
+    incumbentsOnPort: inspectTtydIncumbentsForReadiness,
     healthCheck,
   },
 ): Promise<'verified' | 'unhealthy' | 'inconclusive'> {
