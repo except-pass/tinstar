@@ -24,7 +24,11 @@ import { handleFilePush } from './api/filePushRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
-import { acquireBackendSingleton } from './infra/lock'
+import {
+  acquireBackendSingleton,
+  describeSingletonFailure,
+  formatSingletonFailureForConsole,
+} from './infra/lock'
 import { decideStaticServe } from './staticServe'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -76,13 +80,9 @@ export function startServer(opts: ServerOptions) {
   const lockPath = join(configDir, 'server.lock')
   const lockResult = acquireBackendSingleton(lockPath, { force: opts.force })
   if (!lockResult.acquired) {
-    const who = lockResult.ownerPid ? ` (pid ${lockResult.ownerPid})` : ''
-    log.error('server', `another tinstar backend is already running on ${configDir}${who}`)
-    console.error(
-      `\n✗ tinstar is already running on ${configDir}${who}.\n` +
-      `  Stop it first, run a second instance under a different TINSTAR_CONFIG_HOME,\n` +
-      `  or pass --force to take over.\n`,
-    )
+    const description = describeSingletonFailure(lockResult, configDir)
+    log.error('server', description.logMessage)
+    console.error(formatSingletonFailureForConsole(description))
     process.exit(1)
   }
   // The lock marker outlives only this process; drop it on exit so the next

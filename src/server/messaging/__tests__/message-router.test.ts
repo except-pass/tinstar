@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { log } from '../../logger'
 import { acquireBackendSingleton } from '../../infra/lock'
 import { DeliveryLedger } from '../delivery-ledger'
 import type {
@@ -18,12 +19,14 @@ import {
   deliveryAuthKeyFromEnvironment,
   deliverySenderFromEnvironment,
   messageRouterMasterKey,
+  messageRouterActivationDecision,
   messageRouterSubject,
   reserveMessageRouterOwner,
   resetMessageRouterOwnersForTests,
   requestMessageRoute,
   routeResponse,
   signMessageRoutePayload,
+  stopAllMessageRouters,
   verifyMessageRouteEnvelope,
   type MessageRouteRequest,
   type NatsRouteConnection,
@@ -33,6 +36,7 @@ import {
 
 afterEach(async () => {
   await resetMessageRouterOwnersForTests()
+  vi.restoreAllMocks()
 })
 
 const REQUEST: MessageRouteRequest = {
@@ -308,30 +312,326 @@ describe('provider-neutral reply MCP handler', () => {
 })
 
 describe('NATS request/reply boundary', () => {
+  it.each([
+    [undefined, { continueStartup: true, warnFailure: false }],
+    ['activated', { continueStartup: true, warnFailure: false }],
+    ['superseded', { continueStartup: false, warnFailure: false }],
+    ['failed', { continueStartup: false, warnFailure: true }],
+  ] as const)('makes the backend cleanup decision explicit for %s', (result, expected) => {
+    expect(messageRouterActivationDecision(result)).toEqual(expected)
+  })
+
   it('serially replaces the process responder when backend initialization repeats', async () => {
+    const calls: string[] = []
+    let releaseFirstStop!: () => void
+    const firstStopGate = new Promise<void>(resolve => { releaseFirstStop = resolve })
+    const service = (name: string) => ({
+      start: vi.fn(async () => { calls.push(`${name}:start`) }),
+      stop: vi.fn(async () => {
+        calls.push(`${name}:stop`)
+        if (name === 'first') await firstStopGate
+      }),
+    }) as unknown as NatsMessageRouterService
+    const first = service('first')
+    const second = service('second')
+    const firstLease = reserveMessageRouterOwner('/cfg/hmr')
+    await expect(firstLease.start(first)).resolves.toBe('activated')
+
+    const secondLease = reserveMessageRouterOwner('/cfg/hmr')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(calls).toEqual(['first:start'])
+
+    const secondActivation = secondLease.activate(async () => {
+      calls.push('second:prepare')
+      return { service: second }
+    })
+    await vi.waitFor(() => expect(calls).toEqual(['first:start', 'first:stop']))
+
+    releaseFirstStop()
+    await expect(secondActivation).resolves.toBe('activated')
+
+    expect(calls).toEqual([
+      'first:start',
+      'first:stop',
+      'second:prepare',
+      'second:start',
+    ])
+    await firstLease.stop()
+    expect(calls).toEqual([
+      'first:start',
+      'first:stop',
+      'second:prepare',
+      'second:start',
+    ])
+    await secondLease.stop()
+    expect(calls).toEqual([
+      'first:start',
+      'first:stop',
+      'second:prepare',
+      'second:start',
+      'second:stop',
+    ])
+  })
+
+  it('skips an older activation when the newer backend becomes ready first', async () => {
     const calls: string[] = []
     const service = (name: string) => ({
       start: vi.fn(async () => { calls.push(`${name}:start`) }),
       stop: vi.fn(async () => { calls.push(`${name}:stop`) }),
     }) as unknown as NatsMessageRouterService
     const first = service('first')
-    const second = service('second')
-    const firstLease = reserveMessageRouterOwner('/cfg/hmr')
-    await expect(firstLease.start(first)).resolves.toBe(true)
+    const stale = service('stale')
+    const current = service('current')
+    const firstLease = reserveMessageRouterOwner('/cfg/ready-order')
+    await firstLease.start(first)
 
-    const secondLease = reserveMessageRouterOwner('/cfg/hmr')
-    await expect(secondLease.start(second)).resolves.toBe(true)
+    const staleLease = reserveMessageRouterOwner('/cfg/ready-order')
+    const currentLease = reserveMessageRouterOwner('/cfg/ready-order')
+    const currentPrepare = vi.fn(async () => {
+      calls.push('current:prepare')
+      return { service: current }
+    })
+    const stalePrepare = vi.fn(async () => {
+      calls.push('stale:prepare')
+      return { service: stale }
+    })
 
-    expect(calls).toEqual(['first:start', 'first:stop', 'second:start'])
-    await firstLease.stop()
-    expect(calls).toEqual(['first:start', 'first:stop', 'second:start'])
-    await secondLease.stop()
+    await expect(currentLease.activate(currentPrepare)).resolves.toBe('activated')
+    await expect(staleLease.activate(stalePrepare)).resolves.toBe('superseded')
+
+    expect(currentPrepare).toHaveBeenCalledOnce()
+    expect(stalePrepare).not.toHaveBeenCalled()
     expect(calls).toEqual([
       'first:start',
       'first:stop',
-      'second:start',
-      'second:stop',
+      'current:prepare',
+      'current:start',
     ])
+  })
+
+  it('cleans prepared resources when a newer generation supersedes preparation', async () => {
+    let prepared!: () => void
+    let releasePrepare!: () => void
+    const preparedGate = new Promise<void>(resolve => { prepared = resolve })
+    const prepareGate = new Promise<void>(resolve => { releasePrepare = resolve })
+    const cleanup = vi.fn(async () => {})
+    const service = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsMessageRouterService
+    const staleLease = reserveMessageRouterOwner('/cfg/prepared-supersession')
+    const activation = staleLease.activate(async () => {
+      prepared()
+      await prepareGate
+      return { service, cleanup }
+    })
+
+    await preparedGate
+    const currentLease = reserveMessageRouterOwner('/cfg/prepared-supersession')
+    releasePrepare()
+
+    await expect(activation).resolves.toBe('superseded')
+    expect(service.start).not.toHaveBeenCalled()
+    expect(service.stop).not.toHaveBeenCalled()
+    expect(cleanup).toHaveBeenCalledOnce()
+    await currentLease.stop()
+  })
+
+  it('keeps the prior generation alive until replacement activation begins', async () => {
+    const order: string[] = []
+    const priorCleanup = vi.fn(async () => { order.push('prior:cleanup') })
+    const prior = {
+      start: vi.fn(async () => { order.push('prior:start') }),
+      stop: vi.fn(async () => { order.push('prior:stop') }),
+    } as unknown as NatsMessageRouterService
+    const replacement = {
+      start: vi.fn(async () => { order.push('replacement:start') }),
+      stop: vi.fn(async () => { order.push('replacement:stop') }),
+    } as unknown as NatsMessageRouterService
+    const priorLease = reserveMessageRouterOwner('/cfg/non-destructive-reserve')
+    await priorLease.activate(async () => ({ service: prior, cleanup: priorCleanup }))
+
+    const replacementLease = reserveMessageRouterOwner('/cfg/non-destructive-reserve')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual(['prior:start'])
+
+    await expect(replacementLease.activate(async () => {
+      order.push('replacement:prepare')
+      return { service: replacement }
+    })).resolves.toBe('activated')
+
+    expect(order).toEqual([
+      'prior:start',
+      'prior:stop',
+      'prior:cleanup',
+      'replacement:prepare',
+      'replacement:start',
+    ])
+    expect(priorCleanup).toHaveBeenCalledOnce()
+  })
+
+  it('runs activation cleanup when its owning lease stops', async () => {
+    const order: string[] = []
+    const cleanup = vi.fn(async () => { order.push('cleanup') })
+    const service = {
+      start: vi.fn(async () => { order.push('start') }),
+      stop: vi.fn(async () => { order.push('stop') }),
+    } as unknown as NatsMessageRouterService
+    const lease = reserveMessageRouterOwner('/cfg/lease-cleanup')
+
+    await expect(lease.activate(async () => ({ service, cleanup }))).resolves.toBe('activated')
+    await lease.stop()
+
+    expect(order).toEqual(['start', 'stop', 'cleanup'])
+    expect(cleanup).toHaveBeenCalledOnce()
+  })
+
+  it('contains start and rollback failures while still attempting every cleanup', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const cleanup = vi.fn(async () => { throw new Error('cleanup rejected') })
+    const service = {
+      start: vi.fn(async () => { throw new Error('start rejected') }),
+      stop: vi.fn(async () => { throw new Error('rollback stop rejected') }),
+    } as unknown as NatsMessageRouterService
+    const lease = reserveMessageRouterOwner('/cfg/start-rollback')
+
+    await expect(lease.activate(async () => ({ service, cleanup }))).resolves.toBe('failed')
+
+    expect(service.stop).toHaveBeenCalledOnce()
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith('message-router', 'failed to start responder: start rejected')
+    expect(warn).toHaveBeenCalledWith('message-router', 'failed to stop rolled-back responder: rollback stop rejected')
+    expect(warn).toHaveBeenCalledWith('message-router', 'failed to cleanup rolled-back responder: cleanup rejected')
+  })
+
+  it('contains prepare failures without leaking an unhandled rejection', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const lease = reserveMessageRouterOwner('/cfg/prepare-failure')
+
+    await expect(lease.activate(async () => {
+      throw new Error('prepare rejected')
+    })).resolves.toBe('failed')
+
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      'failed to prepare responder: prepare rejected',
+    )
+  })
+
+  it.each([
+    ['lease stop', async (lease: ReturnType<typeof reserveMessageRouterOwner>) => lease.stop()],
+    ['test reset', async () => resetMessageRouterOwnersForTests()],
+    ['process shutdown', async () => stopAllMessageRouters()],
+  ])('runs cleanup despite active.stop rejection during %s', async (_name, stopOwners) => {
+    const cleanup = vi.fn(async () => {})
+    const service = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('active stop rejected') }),
+    } as unknown as NatsMessageRouterService
+    const root = `/cfg/rejecting-stop-${_name}`
+    const lease = reserveMessageRouterOwner(root)
+    await lease.activate(async () => ({ service, cleanup }))
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+
+    await expect(stopOwners(lease)).resolves.toBeUndefined()
+
+    expect(service.stop).toHaveBeenCalledOnce()
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      expect.stringContaining('active stop rejected'),
+    )
+  })
+
+  it('starts the replacement after a prior drain fails only once handlers settle', async () => {
+    const order: string[] = []
+    let releaseRoute!: () => void
+    const routeGate = new Promise<void>(resolve => { releaseRoute = resolve })
+    const subscription: NatsRouteSubscription = {
+      unsubscribe: vi.fn(() => { order.push('unsubscribe') }),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: encodedRequest(),
+          reply: '_INBOX.drain-failure',
+          respond: () => true,
+        }
+        await new Promise(() => {})
+      },
+    }
+    const connection: NatsRouteConnection = {
+      subscribe: () => subscription,
+      closed: () => new Promise(() => {}),
+      flush: async () => {},
+      drain: vi.fn(async () => {
+        order.push('drain')
+        throw new Error('broker disappeared during drain')
+      }),
+    }
+    const route = vi.fn(async () => {
+      order.push('route:start')
+      await routeGate
+      order.push('route:settled')
+      return accepted()
+    })
+    const prior = new NatsMessageRouterService({
+      subject: '_route',
+      authMasterKey: MASTER_KEY,
+      connect: async () => connection,
+      route,
+    })
+    const priorLease = reserveMessageRouterOwner('/cfg/drain-failure')
+    await priorLease.start(prior)
+    await vi.waitFor(() => expect(route).toHaveBeenCalledOnce())
+
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const replacement = {
+      start: vi.fn(async () => { order.push('replacement:start') }),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsMessageRouterService
+    const replacementLease = reserveMessageRouterOwner('/cfg/drain-failure')
+    const activation = replacementLease.start(replacement)
+
+    await vi.waitFor(() => expect(subscription.unsubscribe).toHaveBeenCalledOnce())
+    expect(replacement.start).not.toHaveBeenCalled()
+    releaseRoute()
+    await expect(activation).resolves.toBe('activated')
+
+    expect(order).toEqual([
+      'route:start',
+      'unsubscribe',
+      'route:settled',
+      'drain',
+      'replacement:start',
+    ])
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      'failed to drain stopped responder: broker disappeared during drain',
+    )
+  })
+
+  it('continues replacement when a prior HMR module propagates its drain failure', async () => {
+    const prior = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => { throw new Error('legacy drain rejection') }),
+    } as unknown as NatsMessageRouterService
+    const firstLease = reserveMessageRouterOwner('/cfg/legacy-drain')
+    await firstLease.start(prior)
+
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const replacement = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    } as unknown as NatsMessageRouterService
+    const replacementLease = reserveMessageRouterOwner('/cfg/legacy-drain')
+
+    await expect(replacementLease.start(replacement)).resolves.toBe('activated')
+    expect(replacement.start).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      'message-router',
+      'previous responder drain failed: legacy drain rejection',
+    )
   })
 
   it('drains an old acceptance before replacement state opens and preserves both writes', async () => {
@@ -342,14 +642,14 @@ describe('NATS request/reply boundary', () => {
     const calls: string[] = []
     let releaseWrite!: () => void
     const writeFinished = new Promise<void>(resolve => { releaseWrite = resolve })
-    const ids = ['msg-before-handoff', 'msg-after-handoff']
+    const ids = ['msg-before-activation', 'msg-after-activation']
     const openLedger = () => DeliveryLedger.open({
       dir,
       lockPath,
       createMessageId: () => ids.shift() ?? 'msg-unused',
     })
     const oldLedger = openLedger()
-    const accept = (requestId: string) => oldLedger.accept({
+    const accept = (ledger: DeliveryLedger, requestId: string) => ledger.accept({
       requestId,
       sender: { sessionId: 'sender', incarnation: 'sender-v1' },
       destination: { subject: 'tinstar.agent.receiver' },
@@ -365,97 +665,42 @@ describe('NATS request/reply boundary', () => {
       stop: vi.fn(async () => {
         calls.push('first:draining')
         await writeFinished
-        await accept('req-before-handoff')
+        await accept(oldLedger, 'req-before-activation')
         calls.push('first:stopped')
       }),
+    } as unknown as NatsMessageRouterService
+    const second = {
+      start: vi.fn(async () => { calls.push('second:start') }),
+      stop: vi.fn(async () => { calls.push('second:stop') }),
     } as unknown as NatsMessageRouterService
     const firstLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
     await firstLease.start(first)
 
     const secondLease = reserveMessageRouterOwner('/cfg/hmr-held-write')
     let replacement: DeliveryLedger | null = null
-    const replacementOpen = secondLease.handoff(async () => {
+    const replacementActivation = secondLease.activate(async () => {
       calls.push('replacement:open')
       replacement = openLedger()
-      await replacement.accept({
-        requestId: 'req-after-handoff',
-        sender: { sessionId: 'sender', incarnation: 'sender-v1' },
-        destination: { subject: 'tinstar.agent.receiver' },
-        text: 'req-after-handoff',
-        recipients: [{
-          providerId: 'codex',
-          sessionId: 'receiver',
-          incarnation: 'receiver-v1',
-        }],
-      })
+      await accept(replacement, 'req-after-activation')
+      return { service: second }
     })
     await Promise.resolve()
     expect(calls).toEqual(['first:start', 'first:draining'])
 
     releaseWrite()
-    await expect(replacementOpen).resolves.toBe(true)
+    await expect(replacementActivation).resolves.toBe('activated')
     expect(calls).toEqual([
       'first:start',
       'first:draining',
       'first:stopped',
       'replacement:open',
+      'second:start',
     ])
-    expect(replacement!.getMessage('msg-before-handoff')).toBeDefined()
-    expect(replacement!.getMessage('msg-after-handoff')).toBeDefined()
+    expect(replacement!.getMessage('msg-before-activation')).toBeDefined()
+    expect(replacement!.getMessage('msg-after-activation')).toBeDefined()
     await secondLease.stop()
     rmSync(`${lockPath}.mark`, { recursive: true, force: true })
     rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('skips a queued handoff that a rapid replacement supersedes', async () => {
-    let releaseDrain!: () => void
-    const drainHeld = new Promise<void>(resolve => { releaseDrain = resolve })
-    const first = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => { await drainHeld }),
-    } as unknown as NatsMessageRouterService
-    const firstLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
-    await firstLease.start(first)
-
-    const secondLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
-    const secondPrepare = vi.fn(async () => {})
-    const secondHandoff = secondLease.handoff(secondPrepare)
-    const thirdLease = reserveMessageRouterOwner('/cfg/hmr-skip-stale')
-    const thirdPrepare = vi.fn(async () => {})
-    const thirdHandoff = thirdLease.handoff(thirdPrepare)
-
-    releaseDrain()
-    await expect(secondHandoff).resolves.toBe(false)
-    await expect(thirdHandoff).resolves.toBe(true)
-    expect(secondPrepare).not.toHaveBeenCalled()
-    expect(thirdPrepare).toHaveBeenCalledOnce()
-    await thirdLease.stop()
-  })
-
-  it('holds the owner transition through recovery before a newer handoff begins', async () => {
-    const calls: string[] = []
-    let releaseRecovery!: () => void
-    const recoveryHeld = new Promise<void>(resolve => { releaseRecovery = resolve })
-    const secondLease = reserveMessageRouterOwner('/cfg/hmr-serialized-recovery')
-    const secondHandoff = secondLease.handoff(async () => {
-      calls.push('second:open')
-      await recoveryHeld
-      calls.push('second:recovered')
-    })
-    await vi.waitFor(() => expect(calls).toEqual(['second:open']))
-
-    const thirdLease = reserveMessageRouterOwner('/cfg/hmr-serialized-recovery')
-    const thirdHandoff = thirdLease.handoff(async () => {
-      calls.push('third:open')
-    })
-    await Promise.resolve()
-    expect(calls).toEqual(['second:open'])
-
-    releaseRecovery()
-    await expect(secondHandoff).resolves.toBe(false)
-    await expect(thirdHandoff).resolves.toBe(true)
-    expect(calls).toEqual(['second:open', 'second:recovered', 'third:open'])
-    await thirdLease.stop()
   })
 
   it('makes no-responder and timeout failures visible to the sender', async () => {
@@ -507,6 +752,7 @@ describe('NATS request/reply boundary', () => {
 
   it('rejects raw publications before acceptance and responds to valid requests', async () => {
     const responses: Uint8Array[] = []
+    const boundaryOrder: string[] = []
     const raw: NatsRouteMessage = {
       data: encodedRequest(),
       respond: vi.fn(() => false),
@@ -516,6 +762,7 @@ describe('NATS request/reply boundary', () => {
       reply: '_INBOX.reply',
       respond: vi.fn(data => {
         responses.push(data)
+        boundaryOrder.push('receipt')
         return true
       }),
     }
@@ -537,12 +784,17 @@ describe('NATS request/reply boundary', () => {
     }
     const route = vi.fn(async () => accepted())
     const observeAccepted = vi.fn()
+    const dispatchAccepted = vi.fn(async () => {
+      expect(responses).toHaveLength(1)
+      boundaryOrder.push('dispatch')
+    })
     const service = new NatsMessageRouterService({
       subject: '_route',
       authMasterKey: MASTER_KEY,
       connect: async () => connection,
       route,
       observeAccepted,
+      dispatchAccepted,
       reconnectDelayMs: 1,
     })
 
@@ -555,9 +807,64 @@ describe('NATS request/reply boundary', () => {
       REQUEST,
       expect.objectContaining({ status: 'accepted' }),
     )
+    expect(dispatchAccepted).toHaveBeenCalledWith(
+      REQUEST,
+      expect.objectContaining({ status: 'accepted' }),
+    )
+    expect(boundaryOrder).toEqual(['receipt', 'dispatch'])
     const response = JSON.parse(textDecoder.decode(responses[0]))
     expect(response).toMatchObject({
       payload: { status: 'accepted', requestId: 'req-7' },
+    })
+    expect(verifyMessageRouteEnvelope(response, AUTH_KEY)).toBe(true)
+  })
+
+  it('rejects whitespace-only text at the router boundary before durable routing', async () => {
+    const responses: Uint8Array[] = []
+    const whitespaceRequest = { ...REQUEST, text: ' \n\t ' }
+    const subscription: NatsRouteSubscription = {
+      unsubscribe: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: encodedRequest(whitespaceRequest),
+          reply: '_INBOX.blank',
+          respond: (data: Uint8Array) => {
+            responses.push(data)
+            return true
+          },
+        }
+        await new Promise(() => {})
+      },
+    }
+    let closeConnection!: () => void
+    const closed = new Promise<void>(resolve => { closeConnection = resolve })
+    const connection: NatsRouteConnection = {
+      subscribe: () => subscription,
+      closed: () => closed,
+      flush: vi.fn(async () => {}),
+      drain: vi.fn(async () => { closeConnection() }),
+    }
+    const route = vi.fn(async () => accepted())
+    const service = new NatsMessageRouterService({
+      subject: '_route',
+      authMasterKey: MASTER_KEY,
+      connect: async () => connection,
+      route,
+      reconnectDelayMs: 1,
+    })
+
+    await service.start()
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    await service.stop()
+
+    expect(route).not.toHaveBeenCalled()
+    const response = JSON.parse(textDecoder.decode(responses[0]))
+    expect(response).toMatchObject({
+      payload: {
+        status: 'error',
+        requestId: REQUEST.requestId,
+        error: { code: 'invalid-request', message: 'text must not be empty' },
+      },
     })
     expect(verifyMessageRouteEnvelope(response, AUTH_KEY)).toBe(true)
   })

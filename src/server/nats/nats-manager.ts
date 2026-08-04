@@ -8,12 +8,14 @@ import { log } from '../logger.js'
 import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
 import { DEFAULT_NATS_PORT, natsBrokerUrl } from './url.js'
+import { probeProcessLiveness } from '../infra/process-liveness.js'
 
 export class NatsManager {
   state: ServiceState = 'idle'
   url: string
 
   private supervisor: Supervisor | null = null
+  private supervisorStarted = false
   private readonly port: number
   private readonly configRoot: string
   private readonly external: boolean
@@ -29,35 +31,53 @@ export class NatsManager {
   }
 
   async start(): Promise<void> {
-    if (this.external) {
-      this.state = 'ready'
-      log.info('nats', `using external NATS server at ${this.url}`)
-      return
-    }
-
-    if (process.env.TINSTAR_FAST_SIM === '1') {
-      this.state = 'ready'
-      log.info('nats', 'fast-sim mode: skipping real NATS server')
-      return
-    }
-
-    if (process.platform !== 'darwin' && process.platform !== 'linux') {
-      this.state = 'disabled'
-      log.info('nats', `disabled: unsupported platform ${process.platform}`)
-      return
-    }
-
-    const binRoot = join(this.configRoot, 'bin')
-    const stateDir = join(this.configRoot, 'nats')
-    // JetStream needs its own dir for stream storage; keep it under the
-    // existing nats state dir but separate from the supervisor's state files.
-    // Always-on so channel-servers passing --jetstream just work; clients
-    // that don't pass it use core pub/sub unchanged.
-    const jetstreamDir = join(stateDir, 'jetstream')
-    mkdirSync(stateDir, { recursive: true })
-    mkdirSync(jetstreamDir, { recursive: true })
-
+    let createdSupervisor: Supervisor | null = null
     try {
+      if (this.supervisor && !this.supervisorStarted) {
+        const staleSupervisor = this.supervisor
+        this.supervisor = null
+        this.supervisorStarted = false
+        try {
+          await staleSupervisor.stop()
+        } catch (error) {
+          // Keep retrying retirement of a supervisor that may still own a
+          // process. Dropping the reference here would let the next start()
+          // create a competing broker after an unconfirmed stop.
+          if (staleSupervisor.pid !== 0
+            && probeProcessLiveness(staleSupervisor.pid).state !== 'gone') {
+            this.supervisor = staleSupervisor
+          }
+          throw error
+        }
+      }
+      if (this.external) {
+        this.state = 'ready'
+        log.info('nats', `using external NATS server at ${this.url}`)
+        return
+      }
+
+      if (process.env.TINSTAR_FAST_SIM === '1') {
+        this.state = 'ready'
+        log.info('nats', 'fast-sim mode: skipping real NATS server')
+        return
+      }
+
+      if (process.platform !== 'darwin' && process.platform !== 'linux') {
+        this.state = 'disabled'
+        log.info('nats', `disabled: unsupported platform ${process.platform}`)
+        return
+      }
+
+      const binRoot = join(this.configRoot, 'bin')
+      const stateDir = join(this.configRoot, 'nats')
+      // JetStream needs its own dir for stream storage; keep it under the
+      // existing nats state dir but separate from the supervisor's state files.
+      // Always-on so channel-servers passing --jetstream just work; clients
+      // that don't pass it use core pub/sub unchanged.
+      const jetstreamDir = join(stateDir, 'jetstream')
+      mkdirSync(stateDir, { recursive: true })
+      mkdirSync(jetstreamDir, { recursive: true })
+
       this.state = 'downloading'
       const target = resolveNatsTarget(process.platform, process.arch)
       log.info('nats', `installing nats-server@${target.version}`)
@@ -65,7 +85,7 @@ export class NatsManager {
       log.info('nats', 'nats-server installed', { binaryPath: install.binaryPath })
 
       this.state = 'starting'
-      this.supervisor = new Supervisor({
+      createdSupervisor = new Supervisor({
         name: 'nats-server',
         binaryPath: install.binaryPath,
         args: ['-a', '127.0.0.1', '-p', String(this.port), '-js', '-sd', jetstreamDir],
@@ -74,9 +94,12 @@ export class NatsManager {
         probe: () => this.probe(),
         expectedBinaryName: 'nats-server',
         onStateChange: (_name, s) => { this.state = s },
+        onWarning: (name, message) => { log.warn('nats', `${name}: ${message}`) },
       })
+      this.supervisor = createdSupervisor
 
       await this.supervisor.start()
+      this.supervisorStarted = true
       this.state = this.supervisor.state
       if (this.state === 'ready') {
         log.info('nats', `nats-server ready on ${this.url}`, { pid: this.supervisor.pid })
@@ -84,6 +107,17 @@ export class NatsManager {
         log.warn('nats', `nats-server degraded after start: ${this.state}`)
       }
     } catch (err) {
+      const failedSupervisor = this.supervisor
+      if (failedSupervisor && failedSupervisor === createdSupervisor && !this.supervisorStarted) {
+        try {
+          await failedSupervisor.stop()
+          if (this.supervisor === failedSupervisor) this.supervisor = null
+        } catch (cleanupError) {
+          log.warn('nats', 'cleanup after failed start was incomplete', {
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          })
+        }
+      }
       this.state = 'degraded'
       log.error('nats', `failed to start nats-server: ${(err as Error).message}`)
     }
@@ -94,8 +128,14 @@ export class NatsManager {
       await this.supervisor.stop()
       this.supervisor = null
     }
+    this.supervisorStarted = false
     if (!this.external) this.state = 'idle'
     log.info('nats', 'nats-server stopped')
+  }
+
+  /** A started degraded supervisor owns its health/restart loop and is reused. */
+  hasSelfHealingSupervisor(): boolean {
+    return this.supervisor !== null && this.supervisorStarted
   }
 
   private async probe(): Promise<boolean> {
@@ -107,4 +147,141 @@ export class NatsManager {
       return false
     }
   }
+}
+
+interface ProcessNatsManagerOwner {
+  manager: NatsManager
+  startPromise: Promise<void> | null
+}
+
+export const PROCESS_NATS_MANAGER_KEY = Symbol.for('tinstar.nats-manager-owner.v1')
+
+function processNatsManagerOwner(): ProcessNatsManagerOwner {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  let owner = processGlobal[PROCESS_NATS_MANAGER_KEY] as ProcessNatsManagerOwner | undefined
+  if (!owner) {
+    owner = {
+      manager: new NatsManager(),
+      startPromise: null,
+    }
+    processGlobal[PROCESS_NATS_MANAGER_KEY] = owner
+  }
+  // The owner survives module reloads; normalize instances created before the
+  // start-promise field existed.
+  owner.startPromise ??= null
+  return owner
+}
+
+/**
+ * Compatibility probe for a NatsManager instance created by an older HMR
+ * module generation. Those instances predate hasSelfHealingSupervisor(), so
+ * the only durable signal that Supervisor.start() reached its recovery loop is
+ * the runtime healthTimer field. Keep the coupling named and covered by a real
+ * Supervisor lifecycle test; changing Supervisor's runtime representation must
+ * update this cross-generation probe deliberately.
+ */
+export function legacyNatsManagerHasRunningHealthLoop(manager: NatsManager): boolean {
+  const legacySupervisor = (manager as unknown as {
+    supervisor?: { healthTimer?: unknown } | null
+  }).supervisor
+  return legacySupervisor?.healthTimer != null
+}
+
+/**
+ * A failed legacy stop is safe to abandon only when its runtime Supervisor
+ * proves it no longer owns recovery state or a live process. Missing runtime
+ * fields are treated as unknown, not inactive, so HMR cannot create two broker
+ * owners merely to recover availability. A missing Supervisor is the one safe
+ * exception: initialization can fail before one is installed, leaving no
+ * recovery loop or broker process for that manager to own.
+ */
+function legacyNatsManagerOwnershipBlocker(manager: NatsManager): string | null {
+  const legacySupervisor = (manager as unknown as {
+    supervisor?: { healthTimer?: unknown; pid?: unknown } | null
+  }).supervisor
+  if (legacySupervisor == null) return null
+  if (legacyNatsManagerHasRunningHealthLoop(manager)) return 'the legacy health loop is still running'
+  if (typeof legacySupervisor.pid !== 'number') return 'the legacy supervisor process identity is unknown'
+  if (legacySupervisor.pid === 0) return null
+  const liveness = probeProcessLiveness(legacySupervisor.pid)
+  if (liveness.state === 'gone') return null
+  if (liveness.state === 'alive') return `broker process ${legacySupervisor.pid} is still alive`
+  if (liveness.state === 'invalid') {
+    return `broker process identity is invalid: ${liveness.reason}`
+  }
+  return `broker process ${legacySupervisor.pid} liveness is unknown: ${liveness.reason}`
+}
+
+/**
+ * Start or reuse the one broker supervisor owned by this process.
+ *
+ * HMR backends share it deliberately: two independent Supervisors can adopt
+ * the same persisted PID, after which retiring the older backend would kill
+ * the broker beneath the newer one.
+ */
+export async function startProcessNatsManager(): Promise<NatsManager> {
+  const owner = processNatsManagerOwner()
+  const canInspectSupervisor = typeof owner.manager.hasSelfHealingSupervisor === 'function'
+  const replaceLegacyManager = owner.manager.state === 'degraded'
+    && !canInspectSupervisor
+    && !legacyNatsManagerHasRunningHealthLoop(owner.manager)
+  const retryableFailedInitialization = replaceLegacyManager
+    || (owner.manager.state === 'degraded'
+      && canInspectSupervisor
+      && !owner.manager.hasSelfHealingSupervisor())
+  if (
+    owner.manager.state !== 'idle'
+    && !retryableFailedInitialization
+    && !owner.startPromise
+  ) return owner.manager
+  if (!owner.startPromise) {
+    let settled!: Promise<void>
+    settled = (async () => {
+      if (replaceLegacyManager) {
+        const legacyManager = owner.manager
+        try {
+          await legacyManager.stop()
+        } catch (error) {
+          const stopMessage = error instanceof Error ? error.message : String(error)
+          const ownershipBlocker = legacyNatsManagerOwnershipBlocker(legacyManager)
+          log.error(
+            'nats',
+            `failed to retire legacy nats manager before retry: ${stopMessage}`
+              + (ownershipBlocker ? `; ${ownershipBlocker}` : ''),
+          )
+          if (ownershipBlocker) {
+            throw new Error(
+              'legacy nats manager retirement was not confirmed; refusing duplicate broker ownership: '
+                + ownershipBlocker,
+              { cause: error },
+            )
+          }
+        }
+        if (owner.manager === legacyManager) owner.manager = new NatsManager()
+      }
+      await owner.manager.start()
+    })().finally(() => {
+      if (owner.startPromise === settled) owner.startPromise = null
+    })
+    owner.startPromise = settled
+  }
+  await owner.startPromise
+  return owner.manager
+}
+
+/** Stop the shared broker only at process shutdown, never during HMR cleanup. */
+export async function stopProcessNatsManager(): Promise<void> {
+  const processGlobal = globalThis as typeof globalThis & { [key: symbol]: unknown }
+  const owner = processGlobal[PROCESS_NATS_MANAGER_KEY] as ProcessNatsManagerOwner | undefined
+  if (!owner) return
+  await owner.startPromise
+  await owner.manager.stop()
+  if (processGlobal[PROCESS_NATS_MANAGER_KEY] === owner) {
+    delete processGlobal[PROCESS_NATS_MANAGER_KEY]
+  }
+}
+
+/** Test-only reset for process-global ownership left by lifecycle tests. */
+export async function resetProcessNatsManagerForTests(): Promise<void> {
+  await stopProcessNatsManager()
 }

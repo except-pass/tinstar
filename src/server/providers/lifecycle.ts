@@ -21,6 +21,10 @@ import {
   readCodexStatus,
   resetCodexOffset,
 } from '../sessions/codex-transcript'
+import {
+  defineProviderDeliveryAdapter,
+  type ProviderDeliveryAdapter,
+} from './contract'
 import type { ProviderTranscriptObservationEvent } from './observation-ingestor'
 import type { ProviderAdapter as ObservationProviderAdapter } from './contract'
 
@@ -119,6 +123,8 @@ export interface TerminalProviderAdapter {
     defaultTelemetry: boolean
     transcript: ProviderTranscriptAdapter | null
   }
+  /** Provider-owned final mile; configured by the host when it needs runtime dependencies. */
+  delivery?: ProviderDeliveryAdapter | null
 }
 
 export class ProviderAdapterResolutionError extends Error {
@@ -146,6 +152,7 @@ export class ProviderCapabilityError extends Error {
  */
 export class ProviderAdapterRegistry {
   private readonly adapters = new Map<string, TerminalProviderAdapter>()
+  private readonly deliveries = new Map<string, ProviderDeliveryAdapter>()
   private readonly observationAdapters = new Map<string, ObservationProviderAdapter>()
 
   constructor(adapters: readonly TerminalProviderAdapter[] = []) {
@@ -164,7 +171,25 @@ export class ProviderAdapterRegistry {
       throw new ProviderAdapterResolutionError(`Provider adapter "${id}" is already registered`)
     }
     this.adapters.set(id, adapter)
+    if (adapter.delivery) {
+      this.deliveries.set(id, defineProviderDeliveryAdapter(id, adapter.delivery))
+    }
     return adapter
+  }
+
+  registerDelivery(providerId: string, delivery: ProviderDeliveryAdapter): void {
+    this.require(providerId)
+    if (this.deliveries.has(providerId)) {
+      throw new ProviderAdapterResolutionError(
+        `Provider adapter "${providerId}" already has delivery configured`,
+      )
+    }
+    this.deliveries.set(providerId, defineProviderDeliveryAdapter(providerId, delivery))
+  }
+
+  deliveryFor(providerId: string): ProviderDeliveryAdapter | null {
+    this.require(providerId)
+    return this.deliveries.get(providerId) ?? null
   }
 
   get(providerId: string): TerminalProviderAdapter | undefined {

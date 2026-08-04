@@ -15,6 +15,8 @@ export interface DownloadProgress {
 
 export interface SupervisorState {
   pid: number
+  /** Stable token for this OS process lifetime; absent in legacy state files. */
+  processIdentity?: string
   binaryPath: string
   binaryHash: string
   port: number

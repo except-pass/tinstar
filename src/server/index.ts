@@ -25,7 +25,11 @@ import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import { getConfigRoot } from './configRoot'
-import { acquireBackendSingleton } from './infra/lock'
+import {
+  acquireBackendSingleton,
+  describeSingletonFailure,
+  formatSingletonFailureForError,
+} from './infra/lock'
 import {
   loadConfig,
   ensureDirs,
@@ -67,7 +71,11 @@ import {
   describeTtydFailure,
 } from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
-import { NatsManager } from './nats/nats-manager.js'
+import {
+  startProcessNatsManager,
+  stopProcessNatsManager,
+  type NatsManager,
+} from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
@@ -76,13 +84,21 @@ import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
 import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 import { createDefaultProviderRegistry } from './providers/lifecycle'
+import { createClaudeDeliveryAdapter } from './providers/claude-delivery'
 import { DeliveryLedger } from './messaging/delivery-ledger'
 import {
+  DeliveryRetryScheduler,
+  replaceDeliveryRetryScheduler,
+  runDeliveryRetrySchedulerNow,
+  stopDeliveryRetryScheduler,
+} from './messaging/delivery-dispatch'
+import { deriveMessageRouterSessionKey } from './messaging/message-router-auth'
+import {
   DeliveryRecoveryCoordinator,
-  settleDeliveryRecoveryBarrier,
 } from './messaging/delivery-recovery'
 import {
   NatsMessageRouterService,
+  messageRouterActivationDecision,
   messageRouterMasterKey,
   messageRouterSubject,
   reserveMessageRouterOwner,
@@ -757,7 +773,7 @@ export function initBackend(): RouteContext {
   let natsHealth: NatsHealthMonitor | undefined
   let messageRouterOwner: MessageRouterOwnerLease | undefined
   let deliveryLedger: DeliveryLedger | undefined
-  let deliveryRecoveryReady: Promise<void> = Promise.resolve()
+  let deliveryRetryScheduler: DeliveryRetryScheduler | undefined
   let backendContext: RouteContext | null = null
   let markBackendContextReady!: () => void
   const backendContextReady = new Promise<void>(resolve => {
@@ -765,15 +781,30 @@ export function initBackend(): RouteContext {
   })
   let slateWatcher: SlateWatcher | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
+  let natsBackendCleanup: Promise<void> | null = null
+  const stopNatsBackendResources = (): Promise<void> => {
+    if (natsBackendCleanup) return natsBackendCleanup
+    natsBackendCleanup = (async () => {
+      try { natsHealth?.stop() } catch (e) { log.debug('nats-backend', `health stop: ${(e as Error).message}`) }
+      try {
+        if (deliveryRetryScheduler) {
+          await stopDeliveryRetryScheduler(deliveryRetryScheduler)
+        }
+      } catch (e) { log.debug('nats-backend', `delivery retry stop: ${(e as Error).message}`) }
+      try { await natsTraffic?.stop() } catch (e) { log.debug('nats-backend', `traffic stop: ${(e as Error).message}`) }
+    })()
+    return natsBackendCleanup
+  }
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
       try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
       try { await stopAllMessageRouters() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
+      try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('shutdown', `deliveryRetry: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
-      try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
+      try { await stopProcessNatsManager() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
       try { await observability.stop() } catch (e) { log.debug('shutdown', `observability: ${(e as Error).message}`) }
       try { telemetryRoutes.stopPolling() } catch (e) { log.debug('shutdown', `telemetry: ${(e as Error).message}`) }
       try { docStore.flush() } catch (e) { log.debug('shutdown', `docStore: ${(e as Error).message}`) }
@@ -806,21 +837,135 @@ export function initBackend(): RouteContext {
   } catch (e) { log.debug('init', `bunx tmp cleanup: ${(e as Error).message}`) }
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
-  natsManager = new NatsManager()
-  void natsManager.start().then(async () => {
+  void startProcessNatsManager().then(async (manager) => {
+    natsManager = manager
     // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
     natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
-    natsTraffic.start()
+    // Await the initial attempt so a superseded backend cannot call stop()
+    // while start() is still about to install a connection or reconnect timer.
+    await natsTraffic.start()
 
     // External NATS and fast-sim can become ready in one microtask. Make the
     // dependency on session/ledger/context boot explicit instead of relying on
     // the rest of this function remaining synchronous forever.
     await backendContextReady
 
-    // The control-plane responder is separate from Saloon's observer
-    // connection. Requests are scoped to this data root, resolved against the
-    // managed live set, and durably accepted before a response says success.
-    if (backendContext && deliveryLedger && sessionConfig) {
+    // One owner-generation transaction drains the prior responder and retry
+    // sweep, opens the shared ledger, recovers due work, and starts the new
+    // responder. A newer HMR backend can supersede this lease before NATS is
+    // ready; in that case none of this stale backend's setup runs.
+    const activated = await messageRouterOwner?.activate(async () => {
+      if (sessionConfig) {
+        deliveryLedger = DeliveryLedger.open({ dir: sessionConfig.dirs.root })
+      }
+
+      // The control-plane responder is separate from Saloon's observer
+      // connection. Requests are scoped to this data root, resolved against the
+      // managed live set, and durably accepted before a response says success.
+      if (!backendContext || !deliveryLedger || !sessionConfig) return null
+      // Finish the first crash-recovery sweep before accepting new route
+      // requests, then keep one retry loop alive. Only accepted/0 and due,
+      // explicitly retry-safe failures/deferrals are attempted; ambiguous
+      // in-flight work is never duplicated blindly. The persisted recipient
+      // incarnation remains the target when a session name has been reused.
+      const activeConfig = sessionConfig
+      const activeLedger = deliveryLedger
+      const recovery = new DeliveryRecoveryCoordinator({
+        ledger: activeLedger,
+        observeRecipient: async (recipient) => {
+          const session = getSession(activeConfig.dirs.sessions, recipient.sessionId)
+          if (!session) {
+            return {
+              state: 'dead' as const,
+              reason: 'recipient session was deleted while Tinstar was offline',
+            }
+          }
+          if (existsSync(join(
+            activeConfig.dirs.sessions,
+            recipient.sessionId,
+            '.deleting',
+          ))) {
+            return {
+              state: 'dead' as const,
+              reason: 'recipient session deletion was in progress during restart',
+            }
+          }
+          if (session.state !== 'running'
+            && session.state !== 'idle'
+            && session.state !== 'needs_attention') {
+            return {
+              state: 'dead' as const,
+              reason: `recipient session was ${session.state} during restart`,
+            }
+          }
+          try {
+            const incarnation = await tmuxBackend.getTmuxAgentIdentity(
+              activeConfig,
+              recipient.sessionId,
+            )
+            return incarnation === null
+              ? {
+                  state: 'dead' as const,
+                  reason: 'recipient process exited while Tinstar was offline',
+                }
+              : { state: 'alive' as const, incarnation }
+          } catch (error) {
+            return {
+              state: 'inconclusive' as const,
+              reason: `recipient liveness probe failed: ${error instanceof Error ? error.message : String(error)}`,
+            }
+          }
+        },
+        // Until a provider registers exact stamped transcript evidence, an
+        // ambiguous in-flight attempt stays ambiguous instead of substring-
+        // matching an unrelated transcript line and retrying blindly.
+        inspectTranscriptEvidence: async request => ({
+          providerId: request.providerId,
+          messageId: request.messageId,
+          attempt: request.attempt,
+          ...(request.attemptRef !== undefined
+            ? { attemptRef: request.attemptRef }
+            : {}),
+          recipient: {
+            providerId: request.recipient.providerId,
+            sessionId: request.recipient.sessionId,
+            incarnation: request.recipient.incarnation,
+          },
+          state: 'inconclusive' as const,
+          checkedAt: new Date().toISOString(),
+          reason: 'provider transcript recovery evidence is not registered',
+        }),
+      })
+      const recoveryReport = await recovery.recover()
+      const failedRecoveries = recoveryReport.outcomes.filter(
+        entry => entry.disposition === 'failed',
+      ).length
+      const ambiguousRecoveries = recoveryReport.outcomes.filter(
+        entry => entry.disposition === 'ambiguous',
+      ).length
+      if (recoveryReport.status === 'faulted') {
+        log.error('delivery-recovery', 'startup delivery recovery remained fail-closed', {
+          ledgerHealth: recoveryReport.ledgerHealth,
+          scanned: recoveryReport.scanned,
+          outcomes: recoveryReport.outcomes,
+        })
+      } else if (recoveryReport.scanned > 0) {
+        log.info(
+          'delivery-recovery',
+          `reconciled ${recoveryReport.scanned} delivery obligation(s)`,
+          { failed: failedRecoveries, ambiguous: ambiguousRecoveries },
+        )
+      }
+
+      deliveryRetryScheduler = new DeliveryRetryScheduler(activeLedger, providerRegistry)
+      const recovered = await replaceDeliveryRetryScheduler(deliveryRetryScheduler)
+      for (const outcome of recovered) {
+        if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+          log.warn('message-router', `recovered delivery ${outcome.deliveryId} ${outcome.state}`, {
+            reason: outcome.reason,
+          })
+        }
+      }
       const messageRouter = new NatsMessageRouterService({
         subject: messageRouterSubject(sessionConfig.dirs.root),
         authMasterKey: messageRouterMasterKey(sessionConfig.dirs.root),
@@ -837,10 +982,36 @@ export function initBackend(): RouteContext {
             request.sender.sessionId,
           )
         },
+        dispatchAccepted: async () => {
+          // New acceptance and older due retries enter one ledger-ordered sweep,
+          // preserving the process-wide FIFO and concurrency cap.
+          const outcomes = await runDeliveryRetrySchedulerNow()
+          for (const outcome of outcomes) {
+            if (outcome.state === 'failed' || outcome.state === 'ambiguous') {
+              log.warn('message-router', `delivery ${outcome.deliveryId} ${outcome.state}`, {
+                reason: outcome.reason,
+              })
+            }
+          }
+        },
       })
-      void messageRouterOwner?.start(messageRouter).catch(error => {
-        log.warn('message-router', `failed to start: ${error instanceof Error ? error.message : String(error)}`)
-      })
+      return {
+        service: messageRouter,
+        // The owner generation covers every NATS-side resource created by this
+        // backend, not only the responder. A later HMR activation therefore
+        // cannot leave an observer connection, retry loop, or health timer
+        // from this generation running in the background. The broker manager
+        // itself is process-shared and stops only at process shutdown.
+        cleanup: stopNatsBackendResources,
+      }
+    })
+    const activationDecision = messageRouterActivationDecision(activated)
+    if (!activationDecision.continueStartup) {
+      await stopNatsBackendResources()
+      if (activationDecision.warnFailure) {
+        log.warn('message-router', 'backend NATS activation failed; Saloon rehydration and health monitoring were skipped')
+      }
+      return
     }
 
     // Re-register every persisted session's subs with the bridge. Saloon entries
@@ -883,6 +1054,12 @@ export function initBackend(): RouteContext {
       }
       natsHealth.start()
     }
+  }).catch(async (error) => {
+    log.warn(
+      'nats-backend',
+      `startup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    await stopNatsBackendResources()
   })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
@@ -919,105 +1096,15 @@ export function initBackend(): RouteContext {
       sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
       messageRouterOwner = reserveMessageRouterOwner(sessionConfig.dirs.root)
-      deliveryRecoveryReady = settleDeliveryRecoveryBarrier({
-        recover: async () => {
-          // HMR may initialize a replacement backend in the same process. The
-          // old responder, ledger open, and recovery must be one owner-held
-          // transition. That prevents rapid replacement generations from
-          // opening or mutating the same ledger concurrently.
-          await messageRouterOwner!.handoff(async () => {
-            deliveryLedger = DeliveryLedger.open({ dir: sessionConfig!.dirs.root })
-            const recovery = new DeliveryRecoveryCoordinator({
-              ledger: deliveryLedger,
-              observeRecipient: async (recipient) => {
-                const session = getSession(sessionConfig!.dirs.sessions, recipient.sessionId)
-                if (!session) {
-                  return {
-                    state: 'dead' as const,
-                    reason: 'recipient session was deleted while Tinstar was offline',
-                  }
-                }
-                if (existsSync(join(
-                  sessionConfig!.dirs.sessions,
-                  recipient.sessionId,
-                  '.deleting',
-                ))) {
-                  return {
-                    state: 'dead' as const,
-                    reason: 'recipient session deletion was in progress during restart',
-                  }
-                }
-                if (session.state !== 'running'
-                  && session.state !== 'idle'
-                  && session.state !== 'needs_attention') {
-                  return {
-                    state: 'dead' as const,
-                    reason: `recipient session was ${session.state} during restart`,
-                  }
-                }
-                try {
-                  const incarnation = await tmuxBackend.getTmuxAgentIdentity(
-                    sessionConfig!,
-                    recipient.sessionId,
-                  )
-                  return incarnation === null
-                    ? {
-                        state: 'dead' as const,
-                        reason: 'recipient process exited while Tinstar was offline',
-                      }
-                    : { state: 'alive' as const, incarnation }
-                } catch (error) {
-                  return {
-                    state: 'inconclusive' as const,
-                    reason: `recipient liveness probe failed: ${error instanceof Error ? error.message : String(error)}`,
-                  }
-                }
-              },
-              // M4 defines and enforces the provider-neutral evidence boundary. Until
-              // M5/M6 register provider-specific stamped transcript readers, an
-              // ambiguous in-flight attempt stays ambiguous instead of substring-
-              // matching an unrelated transcript line and retrying blindly.
-              inspectTranscriptEvidence: async request => ({
-                providerId: request.providerId,
-                messageId: request.messageId,
-                attempt: request.attempt,
-                ...(request.attemptRef !== undefined
-                  ? { attemptRef: request.attemptRef }
-                  : {}),
-                recipient: {
-                  providerId: request.recipient.providerId,
-                  sessionId: request.recipient.sessionId,
-                  incarnation: request.recipient.incarnation,
-                },
-                state: 'inconclusive' as const,
-                checkedAt: new Date().toISOString(),
-                reason: 'provider transcript recovery evidence is not registered',
-              }),
-            })
-            const report = await recovery.recover()
-            const failed = report.outcomes.filter(entry => entry.disposition === 'failed').length
-            const ambiguous = report.outcomes.filter(entry => entry.disposition === 'ambiguous').length
-            if (report.status === 'faulted') {
-              log.error('delivery-recovery', 'startup delivery recovery remained fail-closed', {
-                ledgerHealth: report.ledgerHealth,
-                scanned: report.scanned,
-                outcomes: report.outcomes,
-              })
-            } else if (report.scanned > 0) {
-              log.info(
-                'delivery-recovery',
-                `reconciled ${report.scanned} delivery obligation(s)`,
-                { failed, ambiguous },
-              )
-            }
-          })
-        },
-        onError: error => {
-          log.error('delivery-recovery', 'startup delivery recovery failed closed', {
-            error: error instanceof Error ? error.message : String(error),
-          })
-        },
-      })
+      providerRegistry.registerDelivery('claude', createClaudeDeliveryAdapter({
+        authKeyFor: request => deriveMessageRouterSessionKey(
+          messageRouterMasterKey(sessionConfig!.dirs.root),
+          {
+            sessionId: request.recipient.sessionId,
+            incarnation: request.recipient.incarnation,
+          },
+        ),
+      }))
 
       // Port safety (plan U6). Registering the interactive window is what arms
       // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
@@ -1517,10 +1604,7 @@ export function initBackend(): RouteContext {
     get natsHealth() { return natsHealth },
   }
   backendContext = ctx
-  // The NATS responder awaits this same barrier, so no new acceptance can race
-  // startup reconciliation. Recovery failures remain visible and fail-closed,
-  // but settleDeliveryRecoveryBarrier always lets the rest of backend boot run.
-  void deliveryRecoveryReady.then(markBackendContextReady)
+  markBackendContextReady()
 
   // Auto-start the marshal so it's always available without a UI nudge.
   // Deferred so it doesn't block server startup. Await any durable deletion
@@ -1556,15 +1640,15 @@ export function initBackend(): RouteContext {
  * down a dev server the user may be running for unrelated reasons — Vite surfaces
  * the throw as a startup failure, which is the same outcome with a readable cause.
  */
-export function acquireBackendSingletonForPlugin(configDir = getConfigRoot()): () => void {
+export function acquireBackendSingletonForPlugin(
+  configDir = getConfigRoot(),
+  deps: { acquire?: typeof acquireBackendSingleton } = {},
+): () => void {
   const lockPath = join(configDir, 'server.lock')
-  const result = acquireBackendSingleton(lockPath)
+  const result = (deps.acquire ?? acquireBackendSingleton)(lockPath)
   if (!result.acquired) {
-    const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
-    throw new Error(
-      `another tinstar backend is already running on ${configDir}${who}. ` +
-      `Stop it first, or run this one under a different TINSTAR_CONFIG_HOME.`,
-    )
+    const description = describeSingletonFailure(result, configDir, { allowForce: false })
+    throw new Error(formatSingletonFailureForError(description))
   }
   // The marker outlives only this process; drop it on exit exactly as
   // standalone.ts does, so the next start sees a clean (or stealable) lock.

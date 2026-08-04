@@ -47,9 +47,16 @@ describe('acquireBackendSingletonForPlugin', () => {
       const bytes = readFileSync(paths.primary, 'utf-8')
       const owner = fakeLiveOwner(lockPath)
 
-      expect(() => acquireBackendSingletonForPlugin(dir)).toThrow(
-        new RegExp(`another tinstar backend is already running on ${dir} \\(pid ${owner}\\)`),
+      let refusal: Error | null = null
+      try {
+        acquireBackendSingletonForPlugin(dir)
+      } catch (error) {
+        refusal = error as Error
+      }
+      expect(refusal?.message).toMatch(
+        new RegExp(`Tinstar is already running on ${dir} \\(pid ${owner}\\)`),
       )
+      expect(refusal?.message).not.toContain('--force')
       // The live owner's snapshot was never read, rotated, or truncated, and no
       // temp file was left behind.
       expect(readFileSync(paths.primary, 'utf-8')).toBe(bytes)
@@ -80,6 +87,21 @@ describe('acquireBackendSingletonForPlugin', () => {
       } finally {
         release()
       }
+    })
+  })
+
+  it('reports an unresolved marker instead of claiming a backend is running', () => {
+    withRoot(dir => {
+      expect(() => acquireBackendSingletonForPlugin(dir, {
+        acquire: () => ({
+          acquired: false,
+          action: 'steal',
+          failure: 'marker-recreation-failed',
+          detail: 'EACCES: permission denied, mkdir server.lock.mark',
+        }),
+      })).toThrow(
+        /Could not claim the tinstar backend marker.*EACCES: permission denied.*marker may be unremovable/,
+      )
     })
   })
 })
