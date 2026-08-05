@@ -30,6 +30,12 @@ import {
   formatSingletonFailureForConsole,
 } from './infra/lock'
 import { decideStaticServe } from './staticServe'
+import {
+  createSessionUpgradeHandler,
+  handleSessionProxyError,
+  loopbackOriginsForPort,
+  resolveSessionProxyTarget,
+} from './sessionProxy'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -99,12 +105,12 @@ export function startServer(opts: ServerOptions) {
   }
 
   proxy.on('error', (err, _req, res) => {
-    log.warn('proxy', `proxy error: ${err.message}`)
-    if (res && 'writeHead' in res) {
-      const sRes = res as import('node:http').ServerResponse
-      if (safeWriteHead(sRes, 502, { 'Content-Type': 'text/plain' })) sRes.end('Session proxy error')
-    }
+    handleSessionProxyError(err, res, message => log.warn('proxy', message))
   })
+
+  // The port the server actually bound (listenAll may bump it), read fresh on
+  // every upgrade so the allowed-origin list matches the live URL.
+  let boundPort = opts.port
 
   const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? '/'
@@ -113,8 +119,8 @@ export function startServer(opts: ServerOptions) {
     const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
     if (sessionMatch) {
       const sessionName = sessionMatch[1]!
-      const run = ctx.docStore.getRun(sessionName)
-      if (!run?.port) {
+      const target = resolveSessionProxyTarget(ctx.docStore.getRun(sessionName))
+      if (!target) {
         if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
           res.end(`Session "${sessionName}" not found or has no port`)
         }
@@ -122,7 +128,7 @@ export function startServer(opts: ServerOptions) {
       }
       // Strip the /s/{name} prefix before proxying
       req.url = sessionMatch[2] || '/'
-      proxy.web(req, res, { target: `http://localhost:${run.port}` })
+      proxy.web(req, res, { target: target.url })
       return
     }
 
@@ -180,22 +186,13 @@ export function startServer(opts: ServerOptions) {
     if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
   }
 
-  const upgradeHandler = (req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
-    const url = req.url ?? '/'
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
-    if (!sessionMatch) {
-      socket.destroy()
-      return
-    }
-    const sessionName = sessionMatch[1]!
-    const run = ctx.docStore.getRun(sessionName)
-    if (!run?.port) {
-      socket.destroy()
-      return
-    }
-    req.url = sessionMatch[2] || '/'
-    proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
-  }
+  const upgradeHandler = createSessionUpgradeHandler({
+    getRun: name => ctx.docStore.getRun(name),
+    allowedOrigins: () => loopbackOriginsForPort(boundPort),
+    proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
+    onRefused: detail => log.warn('proxy', `upgrade refused (${detail.reason})`, detail),
+    onClientSocketError: detail => log.warn('proxy', `upgrade client socket error: ${detail.error}`, detail),
+  })
 
   function makeServer(): Server {
     const s = createServer(requestHandler)
@@ -293,6 +290,7 @@ export function startServer(opts: ServerOptions) {
   }
 
   function onAllListening(port: number) {
+    boundPort = port
     const preferredHost = hosts[0] ?? 'localhost'
     const url = `http://${preferredHost}:${port}`
     writePortFile(port)
