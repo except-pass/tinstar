@@ -71,6 +71,26 @@ export interface SurfaceRefreshJob {
   runId?: string
   worktree?: string
   state: SurfaceRefreshJobState
+  /**
+   * WHICH EXECUTOR owns this attempt (KTD8, R6/R7).
+   *
+   * Decided once, at creation, from the parsed recipe kind — never re-derived, so a
+   * Surface whose author edits the recipe mid-flight cannot change what the attempt
+   * in progress is allowed to do. `host` is machine work under the broker's budgets
+   * and may resume after a restart; `owner` is a prompt to a live foreground agent
+   * and may not (a delivered prompt that outlived the server is not something the
+   * host can tell "still working" from "moved on").
+   */
+  execution: 'host' | 'owner'
+  /**
+   * When a HUMAN authorized this attempt (R11/R14, KTD4).
+   *
+   * Required in practice on an `owner` job and absent on a `host` one, and the
+   * dispatcher refuses to deliver a prompt without it. That is the structural half of
+   * "no timer, event, or sweep may produce a prompt": a job with no intent stamp has
+   * nobody's permission, whatever created it.
+   */
+  intentAt?: number
   /** Why the Surface was scheduled. Carried on the job so a completed job still
    *  explains itself after the Surface's own reason has been cleared. */
   reason: SurfaceStaleReason

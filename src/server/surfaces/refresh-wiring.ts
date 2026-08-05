@@ -40,6 +40,7 @@ import { agentRecipePrompt } from './surface-trigger-matcher'
 import { runWitness, witnessLookupIdentity, witnessTimeoutMs, type WitnessOutcome } from './witness-registry'
 import { defaultWitnessDeps } from './witness-runtime'
 import { resolveLookupBudget, SurfaceLookupBroker } from './surface-lookup-broker'
+import { runHostRecipe } from './host-refresh-registry'
 
 const execFileAsync = promisify(execFile)
 
@@ -211,6 +212,24 @@ export function buildRefreshCoordinatorDeps(
     },
 
     buildPrompt: ({ surface, stagingPath }) => refreshDispatchPrompt(surface, stagingPath),
+
+    // MACHINE WORK, AND ONLY MACHINE WORK. The deps object handed to the registry is
+    // the handler's entire world: a broker, a clock, and the two narrowed witness
+    // seams. There is nothing here that could invoke a model, create a session,
+    // allocate a terminal, or delegate to an agent (R7), and that is structural — a
+    // handler cannot reach a capability nothing gives it.
+    runHostRecipe: ({ surface, recipe }) => runHostRecipe({
+      recipe,
+      prior: surface.content,
+      deps: {
+        broker,
+        witness: witnessDeps,
+        ...(surface.source?.worktree ?? surface.provenance?.worktreeId
+          ? { worktree: (surface.source?.worktree ?? surface.provenance!.worktreeId)! }
+          : {}),
+        now: () => Date.now(),
+      },
+    }),
 
     runWitness: async ({ surface, claim }) => {
       // The BOUND worktree first, then provenance — the same order

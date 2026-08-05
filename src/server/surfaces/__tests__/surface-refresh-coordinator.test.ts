@@ -24,6 +24,8 @@ import {
   type DeferredLookup,
   type RefreshCoordinatorDeps,
 } from '../surface-refresh-coordinator'
+import type { HostRefreshOutcome } from '../host-refresh-registry'
+import { agentRecipePrompt } from '../surface-trigger-matcher'
 import { parseStagedResult } from '../refresh-wiring'
 import type {
   Surface, SurfaceClaim, SurfaceClaimValue, SurfaceFreshness, SurfaceRefreshDeclaration,
@@ -68,6 +70,11 @@ interface Harness {
   staged: Map<string, string>
   hidden: Set<string>
   delivered: { sessionName: string; prompt: string }[]
+  /** Every Surface whose HOST recipe the coordinator actually ran, in order. The
+   *  machine half of the split: it must move without any prompt being delivered. */
+  hostRuns: string[]
+  /** What a host recipe reports. Stubbed because it is what LEAVES THE PROCESS. */
+  hostOutcome: (surface: Surface) => HostRefreshOutcome
   observe: (surface: Surface) => Promise<void>
   /** What a claim's witness reports. Stubbed because it is what LEAVES THE PROCESS —
    *  a `git fetch` and an HTTP request — exactly like `readStaged` beside it. The
@@ -104,6 +111,10 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}, sharedIo?: JobSto
     staged: new Map<string, string>(),
     hidden: new Set<string>(),
     delivered: [],
+    hostRuns: [],
+    // Unchanged by default — the honest common answer, and the one that must advance
+    // `lastCheck` without touching `lastKnownAt`.
+    hostOutcome: () => ({ status: 'unchanged' }),
     observe: async () => { /* the default barrier finds nothing new */ },
     witnessRuns: [],
     // Unresolved by default, which is the safe default for the same reason KTD8 makes
@@ -141,7 +152,11 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}, sharedIo?: JobSto
       return h.witness!({ surface, claim })
     },
     buildPrompt: ({ surface, stagingPath }) =>
-      `${surface.content.recipe ?? 'regenerate'}\nWrite the result to ${stagingPath}`,
+      `${agentRecipePrompt(surface.content.recipe) ?? 'regenerate'}\nWrite the result to ${stagingPath}`,
+    runHostRecipe: async ({ surface }) => {
+      h.hostRuns!.push(surface.id)
+      return h.hostOutcome!(surface)
+    },
   }
   h.coord = new SurfaceRefreshCoordinator(deps)
   h.seed = async (surfaceOver: Partial<Surface> = {}) => {
@@ -155,7 +170,13 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}, sharedIo?: JobSto
       provenance: { runId: RUN, worktreeId: WORKTREE },
       source: { adapter: 'slate-file', locator: 'file:cov.json#cov', worktree: WORKTREE, generation: 1 },
       thread: { replies: [], status: 'open' },
-      freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 5_000 },
+      // The evidence pair is on EVERY production record — stamped at creation,
+      // backfilled on the load path — so a fixture without it would be testing a
+      // shape the store cannot actually hand out.
+      freshness: {
+        phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 5_000,
+        lastKnownAt: 5_000, lastCheck: null,
+      },
       rev: 1,
       homeRev: 1,
       createdAt: 1_000,
@@ -226,9 +247,13 @@ function claiming(over: {
   stored?: Record<string, SurfaceClaimValue>
   freshness?: Partial<SurfaceFreshness>
 } = {}): Partial<Surface> {
+  // HOST BY DEFAULT (KTD7). A card whose rail derives from claim values is one the
+  // host maintains outright — that is exactly what licenses the host to write it —
+  // so a moved value on one is machine work, not a prompt. Pass an explicit agent
+  // recipe to test the interaction side.
   const recipe = over.recipe === null
     ? undefined
-    : over.recipe ?? { kind: 'agent' as const, prompt: 'Re-derive the roadmap.' }
+    : over.recipe ?? { kind: 'host' as const, handler: 'unit-landed' as const }
   const observations = over.stored
     ? Object.fromEntries(Object.entries(over.stored).map(([id, value]) => [id, { value, at: 5_000 }]))
     : undefined
@@ -250,6 +275,34 @@ function claiming(over: {
   }
 }
 
+/** A Surface whose recipe is a registered HOST check — machine work the coordinator
+ *  may run without anybody asking (R6/R7). Everything else in this file is an agent
+ *  Surface, which is the interaction-triggered default. */
+const HOST_RECIPE = { kind: 'host' as const, handler: 'unit-landed' as const }
+
+function withHostRecipe(): Partial<Surface> {
+  return {
+    content: {
+      headline: 'Coverage',
+      recipe: HOST_RECIPE,
+      refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] },
+    },
+  }
+}
+
+/**
+ * Dirty a Surface with a commit and then have a human navigate to it.
+ *
+ * TWO STEPS, AND THAT IS THE POINT OF THE UNIT. The commit marks it dirty and
+ * schedules NOTHING for an agent recipe; the navigation is what authorizes the one
+ * attempt. Every test below that needs an agent Surface in flight goes through here,
+ * so a change that let a trigger schedule agent work on its own breaks all of them.
+ */
+async function dirtyThenAsk(h: Harness, id = 'sf-1', event = gitEvent()): Promise<void> {
+  await h.coord.note(event)
+  await h.coord.humanIntent(id)
+}
+
 describe('triggers → possibly stale', () => {
   it('records the reason, its evidence, and the advanced host generation', async () => {
     // MARK_STALE, so the assertion is about MARKING and not about the scheduling
@@ -267,9 +320,28 @@ describe('triggers → possibly stale', () => {
     expect(s.freshness.observedGeneration).toBe(1)
   })
 
-  it('repeated equivalent events create ONE queued job and commit nothing after the first', async () => {
+  it('a commit MARKS an agent Surface and schedules nothing (R9/R11/R12)', async () => {
+    // THE CENTRAL BEHAVIOUR CHANGE. A commit used to queue a job for every Surface
+    // bound to that worktree, and every one of those became a prompt in somebody's
+    // conversation on the next sweep. It now does exactly what R9 permits: it marks
+    // the Surface dirty. Who may then run it is the recipe's business, and an agent
+    // recipe's answer is "a human, when they come looking".
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
+    const report = await h.coord.note(gitEvent())
+    expect(report.marked).toEqual(['sf-1'])
+    expect(report.queued).toEqual([])
+    expect(h.jobs.list()).toEqual([])
+    expect(h.get('sf-1').freshness.phase).toBe('possibly-stale')
+
+    // …and a sweep over it delivers nothing either. Time is not permission (R12).
+    await h.coord.sweep()
+    expect(h.delivered).toEqual([])
+  })
+
+  it('repeated equivalent events create ONE queued host job and commit nothing after the first', async () => {
+    const h = harness()
+    await h.seed(withHostRecipe())
     const first = await h.coord.note(gitEvent())
     const revAfterFirst = h.get('sf-1').rev
     const second = await h.coord.note(gitEvent())
@@ -278,13 +350,14 @@ describe('triggers → possibly stale', () => {
     expect(second.queued).toEqual([])
     expect(third.queued).toEqual([])
     expect(h.jobs.list()).toHaveLength(1)
+    expect(h.jobFor('sf-1')!.execution).toBe('host')
     // No SSE / persistence storm: the repeats did not bump the revision.
     expect(h.get('sf-1').rev).toBe(revAfterFirst)
   })
 
   it('a NEW event coalesces onto the existing job by generation, never a second job', async () => {
     const h = harness()
-    await h.seed(withPolicy(AUTOMATIC))
+    await h.seed(withHostRecipe())
     await h.coord.note(gitEvent({ evidence: 'sha-1' }))
     const report = await h.coord.note(gitEvent({ evidence: 'sha-2' }))
     expect(report.queued).toEqual([])
@@ -342,6 +415,7 @@ describe('triggers → possibly stale', () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
     await h.coord.note(gitEvent({ evidence: 'sha-1' }))
+    await h.coord.humanIntent('sf-1')
     await h.coord.sweep()
     const job = h.jobFor('sf-1')!
     h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
@@ -366,24 +440,22 @@ describe('triggers → possibly stale', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+        headline: 'Coverage', recipe: HOST_RECIPE,
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
+    h.hostOutcome = () => ({ status: 'failed', detail: 'the coverage tool is not installed' })
     h.clock.now = 70_000
     await h.coord.sweep()
-    const first = h.jobFor('sf-1')!
-    h.staged.set(first.stagingPath, workerJson({ error: 'the coverage tool is not installed' }))
-    await h.coord.sweep()
     expect(h.get('sf-1').freshness.phase).toBe('failed')
-    const deliveriesAfterFailure = h.delivered.length
+    const runsAfterFailure = h.hostRuns.length
 
-    // Six more sweeps inside the interval dispatch nothing.
+    // Six more sweeps inside the interval run nothing.
     for (let i = 0; i < 6; i++) {
       h.clock.now += 5_000
       await h.coord.sweep()
     }
-    expect(h.delivered.length).toBe(deliveriesAfterFailure)
+    expect(h.hostRuns.length).toBe(runsAfterFailure)
     // The badge is untouched — the Surface is still visibly failed and overdue.
     expect(h.get('sf-1').freshness.phase).toBe('failed')
     expect(h.get('sf-1').freshness.overdue).toBe(true)
@@ -391,21 +463,37 @@ describe('triggers → possibly stale', () => {
     // Past the interval, it tries again.
     h.clock.now += 60_000
     await h.coord.sweep()
-    expect(h.delivered.length).toBe(deliveriesAfterFailure + 1)
+    expect(h.hostRuns.length).toBe(runsAfterFailure + 1)
   })
 
-  it('the three policies produce distinct visible outcomes', async () => {
+  it('the three policies still differ in what a TRIGGER does — and none of them execute', async () => {
+    // The policies govern INVALIDATION, which is all they ever governed once
+    // execution moved to the recipe kind (KTD2). `automatic` and `mark-stale` both
+    // mark; `manual` does not even do that. What none of them does any more is
+    // schedule an agent rebuild off a commit.
     for (const [decl, expected] of [
-      [AUTOMATIC, { phase: 'queued', jobs: 1 }],
-      [MARK_STALE, { phase: 'possibly-stale', jobs: 0 }],
-      [MANUAL, { phase: 'current', jobs: 0 }],
+      [AUTOMATIC, 'possibly-stale'],
+      [MARK_STALE, 'possibly-stale'],
+      [MANUAL, 'current'],
     ] as const) {
       const h = harness()
       await h.seed(withPolicy(decl))
       await h.coord.note(gitEvent())
-      expect(h.get('sf-1').freshness.phase).toBe(expected.phase)
-      expect(h.jobs.list()).toHaveLength(expected.jobs)
+      expect(h.get('sf-1').freshness.phase).toBe(expected)
+      expect(h.jobs.list()).toEqual([])
     }
+  })
+
+  it('the SAME triggers schedule a host recipe, because the host may run it itself', async () => {
+    // The other half of KTD2, so the policy tests above cannot be read as "triggers
+    // do nothing". A trigger still produces work — for the executor that needs no
+    // permission.
+    const h = harness()
+    await h.seed(withHostRecipe())
+    const report = await h.coord.note(gitEvent())
+    expect(report.queued).toHaveLength(1)
+    expect(h.jobFor('sf-1')!.execution).toBe('host')
+    expect(h.jobFor('sf-1')!.intentAt).toBeUndefined()
   })
 })
 
@@ -413,7 +501,7 @@ describe('dispatch', () => {
   it('takes the Surface to refreshing and delivers ONE prompt to its live foreground agent', async () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const report = await h.coord.sweep()
     expect(report.dispatched).toHaveLength(1)
     expect(h.delivered.map(d => d.sessionName)).toEqual([RUN])
@@ -436,7 +524,10 @@ describe('dispatch', () => {
     for (let i = 1; i <= OWNER_DELIVERIES_PER_PASS + 2; i++) {
       await h.seed({ id: `sf-${i}`, ...withPolicy(AUTOMATIC) })
     }
+    // Each one dirtied by the same commit, and each one asked for by a human — which
+    // is the only way five agent attempts can exist at once now.
     await h.coord.note(gitEvent())
+    for (let i = 1; i <= OWNER_DELIVERIES_PER_PASS + 2; i++) await h.coord.humanIntent(`sf-${i}`)
     const report = await h.coord.sweep()
     expect(report.dispatched).toHaveLength(OWNER_DELIVERIES_PER_PASS)
     expect(report.heldByCap).toHaveLength(2)
@@ -455,7 +546,7 @@ describe('dispatch', () => {
     const h = harness()
     await h.seed({ ...withPolicy(AUTOMATIC), owner: { kind: 'session', id: 'sess-owner' } })
     h.live.add('sess-owner')
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const report = await h.coord.sweep()
     expect(report.dispatched).toHaveLength(1)
     expect(h.delivered.map(d => d.sessionName)).toEqual(['sess-owner'])
@@ -470,12 +561,19 @@ describe('dispatch', () => {
     await h.seed(withPolicy(AUTOMATIC))
     h.live.clear()
     await h.coord.note(gitEvent())
+    // IN THE SAME CYCLE (AE5). The human gets the answer now rather than discovering
+    // it a sweep later, and no job is created to keep looking for an executor that
+    // does not exist.
+    const intent = await h.coord.humanIntent('sf-1')
+    expect(intent.status).toBe('unavailable')
+    expect(h.jobs.list()).toEqual([])
     const report = await h.coord.sweep()
     expect(report.dispatched).toEqual([])
     expect(h.delivered).toEqual([])
-    expect(report.failed[0]?.reason).toMatch(/is not running, so nobody could rebuild it/)
     const s = h.get('sf-1')
     expect(s.freshness.phase).toBe('failed')
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'unavailable' })
+    expect(s.freshness.failure?.message).toMatch(/is not running, so nobody could rebuild it/)
     // LAST-KNOWN CONTENT IS UNTOUCHED (R17). The card still says what it said.
     expect(s.content.headline).toBe('Coverage')
     expect(s.content.recipe).toEqual({ kind: 'agent', prompt: 'Re-run coverage.' })
@@ -487,7 +585,7 @@ describe('dispatch', () => {
     const h = harness()
     await h.seed(withPolicy({ policy: 'automatic', triggers: ['git-revision', 'periodic'], intervalMs: 60_000 }))
     h.live.clear()
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     const jobsAfterFirst = h.jobs.list().length
     for (let i = 0; i < 6; i++) {
@@ -505,6 +603,7 @@ describe('dispatch', () => {
       provenance: { runId: RUN, worktreeId: '/tmp/wt/beta' },
     })
     await h.coord.note(gitEvent({ worktree: undefined }))
+    await h.coord.humanIntent('sf-1')
     const report = await h.coord.sweep()
     expect(report.blocked).toHaveLength(1)
     expect(report.blocked[0]?.reason).toMatch(/two worktrees/)
@@ -515,12 +614,35 @@ describe('dispatch', () => {
     expect(h.jobFor('sf-1')!.authorization.blocked).toMatch(/two worktrees/)
   })
 
-  it('a recipe-LESS Surface is blocked rather than dispatched to nothing', async () => {
+  it('a recipe-LESS Surface says so rather than being dispatched to nothing', async () => {
     const h = harness()
     await h.seed({ content: { headline: 'Notes', refreshPolicy: AUTOMATIC } })
     await h.coord.note(gitEvent())
-    const report = await h.coord.sweep()
-    expect(report.blocked[0]?.reason).toMatch(/no refresh recipe/)
+    const intent = await h.coord.humanIntent('sf-1')
+    expect(intent.status).toBe('not-executable')
+    expect(h.jobs.list()).toEqual([])
+    // The reason is on the RECORD, where a reader can see it — a button that appears
+    // to do nothing is worse than one that says why.
+    expect(h.get('sf-1').freshness.failure?.message).toMatch(/no refresh recipe/)
+    expect(h.get('sf-1').freshness.lastCheck?.outcome).toBe('unavailable')
+    expect((await h.coord.sweep()).dispatched).toEqual([])
+    expect(h.delivered).toEqual([])
+  })
+
+  it('an UNREADABLE recipe is refused and quoted back, never guessed at (KTD1)', async () => {
+    const h = harness()
+    await h.seed({
+      content: {
+        headline: 'Notes',
+        recipe: { kind: 'unreadable', detail: '"http-satus" is not a host check this Tinstar knows how to run' },
+        refreshPolicy: AUTOMATIC,
+      },
+    })
+    await h.coord.note(gitEvent())
+    expect((await h.coord.humanIntent('sf-1')).status).toBe('not-executable')
+    expect(h.jobs.list()).toEqual([])
+    expect(h.get('sf-1').freshness.failure?.message).toMatch(/http-satus/)
+    expect(h.delivered).toEqual([])
   })
 
   it('a live owner that REFUSES the delivery fails the job and leaves the Surface visibly failed', async () => {
@@ -529,7 +651,7 @@ describe('dispatch', () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
     h.refusesDelivery.add(RUN)
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const report = await h.coord.sweep()
     expect(report.failed[0]?.reason).toMatch(/did not accept the work/)
     expect(h.get('sf-1').freshness.phase).toBe('failed')
@@ -542,8 +664,11 @@ describe('dispatch', () => {
    *  `periodic`. Both are live, which is what lets the sweep and the git poll each
    *  schedule for the same Surface. */
   async function overdueOnDefaults(h: Harness): Promise<void> {
+    // HOST work, because the race under test is in `scheduleFor` and only host
+    // recipes are scheduled by a deadline or a commit now. The interleaving hazard
+    // is identical either way — two callers inside one read-modify-write.
     await h.seed({
-      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' } },
+      content: { headline: 'Coverage', recipe: HOST_RECIPE },
       freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 1_000 },
     })
     h.clock.now = 2_000_000 // long past verifiedAt + defaultIntervalMs
@@ -561,13 +686,16 @@ describe('dispatch', () => {
       h.coord.sweep(),
       h.coord.note(gitEvent({ evidence: 'sha-1', at: h.clock.now })),
     ])
-    // ONE job was ever CREATED — not "one survived". The ownership guard in
-    // `dispatch` cancels a duplicate on the next pass, which repairs the damage but
-    // does not prevent it: the second job still claimed a table slot, and the
-    // Surface still spent a window owned by a job that could never run. The
+    // ONE job was ever CREATED for that window — not "one survived". The ownership
+    // guard in `dispatch` cancels a duplicate on the next pass, which repairs the
+    // damage but does not prevent it: the second job still claimed a table slot, and
+    // the Surface still spent a window owned by a job that could never run. The
     // serializer is what stops it existing.
-    expect(h.jobs.list()).toHaveLength(1)
-    expect(h.jobs.active('sf-1')).toBeDefined()
+    //
+    // Filtered by generation because a host attempt completes inside the sweep that
+    // dispatches it, so a LATER, legitimate job for a newer generation is not a
+    // duplicate — and asserting on the raw table length would call it one.
+    expect(h.jobs.list().filter(j => j.startGeneration === 2)).toHaveLength(1)
   })
 
   it('a Surface does not become un-refreshable after a racing schedule', async () => {
@@ -582,23 +710,15 @@ describe('dispatch', () => {
       h.coord.sweep(),
       h.coord.note(gitEvent({ evidence: 'sha-1', at: h.clock.now })),
     ])
-    // Let whatever is in flight finish.
-    for (let i = 0; i < 2; i++) {
-      const running = h.jobs.list().find(j => j.state === 'running')
-      if (running) h.staged.set(running.stagingPath, workerJson({ note: 'no change' }))
-      h.clock.now += 5_000
-      await h.coord.sweep()
-    }
+    // Let whatever is in flight finish. A host attempt runs to completion inside the
+    // sweep that dispatches it — there is no external executor to wait on.
+    h.clock.now += 5_000
+    await h.coord.sweep()
 
-    // Now four more commits land. Each must schedule, dispatch, and complete.
+    // Now four more commits land. Each must schedule, run, and complete.
     for (let i = 2; i < 6; i++) {
       h.clock.now += 15_000
       await h.coord.note(gitEvent({ evidence: `sha-${i}`, at: h.clock.now }))
-      await h.coord.sweep()
-      const job = h.jobs.active('sf-1')
-      expect(job?.state).toBe('running')
-      h.staged.set(job!.stagingPath, workerJson({ note: 'no change' }))
-      h.clock.now += 5_000
       await h.coord.sweep()
       expect(h.get('sf-1').freshness.phase).toBe('current')
     }
@@ -610,9 +730,10 @@ describe('dispatch', () => {
     // a second backend, or a hand-edited sidecar, can still hand a queued job a
     // Surface it no longer owns.
     const h = harness()
-    h.live.clear() // keep the job QUEUED: nothing may dispatch it this pass
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    // `humanIntent` creates the job QUEUED and leaves dispatch to the next sweep, so
+    // there is a window to take the Surface over in.
+    await dirtyThenAsk(h)
     const job = h.jobFor('sf-1')!
     expect(job.state).toBe('queued')
 
@@ -631,7 +752,7 @@ describe('dispatch', () => {
   it('two sweeps cannot both take one queued job', async () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const [a, b] = await Promise.all([h.coord.sweep(), h.coord.sweep()])
     expect(a.dispatched.length + b.dispatched.length).toBe(1)
     expect(h.delivered).toHaveLength(1)
@@ -645,7 +766,7 @@ describe('dispatch', () => {
     // completing work another worker already owns. So it is asserted directly.
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const queued = h.get(seeded.id)
     expect(queued.freshness.phase).toBe('queued')
 
@@ -676,7 +797,7 @@ describe('dispatch', () => {
     // guaranteeing a supersession, and a wasted managed session with it.
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const asRead = h.get(seeded.id)
     expect(asRead.freshness.phase).toBe('queued')
 
@@ -701,7 +822,7 @@ describe('the observation barrier', () => {
   async function dispatched(over: Partial<RefreshCoordinatorConfig> = {}): Promise<Harness> {
     const h = harness(over)
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     return h
   }
@@ -744,10 +865,11 @@ describe('the observation barrier', () => {
     expect(h.get('sf-1').freshness.phase).toBe('current')
 
     h.clock.now = 40_000
-    const report = await h.coord.note(gitEvent({ evidence: 'sha-2', at: 40_000 }))
-    // Not blocked for want of a recipe, which is what `authorizationProblem` would
-    // have said — and the dispatch prompt still carries one to run.
-    expect(report.queued).toHaveLength(1)
+    await h.coord.note(gitEvent({ evidence: 'sha-2', at: 40_000 }))
+    const intent = await h.coord.humanIntent('sf-1')
+    // Not blocked for want of a recipe, which is what a barrier that overwrote the
+    // recipe would have caused — and the dispatch prompt still carries one to run.
+    expect(intent.status).toBe('started')
     const second = await h.coord.sweep()
     expect(second.blocked).toEqual([])
     expect(second.dispatched).toHaveLength(1)
@@ -772,13 +894,16 @@ describe('the observation barrier', () => {
     expect(s.content.headline).toBe('Coverage')
     expect(s.freshness.phase).not.toBe('current')
     expect(s.freshness.staleReason?.evidence).toBe('sha-2')
-    // Exactly ONE successor, for the newest generation. It is already running:
-    // `sweep` harvests before it dispatches, so a slot freed this pass is reused
-    // this pass rather than one sweep later.
-    const successors = h.jobs.list().filter(j => j.id !== job.id)
-    expect(successors).toHaveLength(1)
-    expect(successors[0]!.startGeneration).toBe(3)
-    expect(successors[0]!.targetGeneration).toBe(3)
+    // NO SUCCESSOR (R11/R18). The Surface is dirty and visibly so; scheduling another
+    // attempt here would put a second prompt in somebody's conversation that nobody
+    // asked for. It waits for the next discrete human action — which is available
+    // immediately, and produces exactly one attempt.
+    expect(h.jobs.list().filter(j => j.id !== job.id)).toEqual([])
+    expect(h.delivered).toHaveLength(1)
+
+    const retry = await h.coord.humanIntent('sf-1')
+    expect(retry.status).toBe('started')
+    expect(retry.status === 'started' && retry.job.targetGeneration).toBe(3)
   })
 
   it('a source change whose watcher event is DELAYED is caught by the barrier', async () => {
@@ -829,10 +954,11 @@ describe('the observation barrier', () => {
     expect(report.completed).toEqual([])
     expect(report.superseded).toEqual([job.id])
     expect(h.get('sf-1').content.headline).toBe('Coverage — DO NOT TOUCH, I am mid-triage')
-    // And the edit did not merely survive by luck — the Surface did not claim it
-    // had been verified, and one successor was scheduled to redo the work.
+    // And the edit did not merely survive by luck — the Surface did not claim it had
+    // been verified. No successor is scheduled: re-running an agent over an edit the
+    // user just made, unasked, is the behaviour this plan removed.
     expect(h.get('sf-1').freshness.phase).not.toBe('current')
-    expect(h.jobs.list().filter(j => j.id !== job.id)).toHaveLength(1)
+    expect(h.jobs.list().filter(j => j.id !== job.id)).toEqual([])
   })
 
   it('a thread reply during a refresh does NOT supersede the result', async () => {
@@ -866,7 +992,7 @@ describe('the observation barrier', () => {
     // Both the state and the message were wrong.
     const h = harness()
     await h.seed({ ...withPolicy(AUTOMATIC), contentAuthority: 'source-binding' })
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     const job = h.jobFor('sf-1')!
     expect(h.get('sf-1').freshness.phase).toBe('refreshing')
@@ -896,8 +1022,10 @@ describe('the observation barrier', () => {
     expect(report.failed).toEqual([])
     expect(h.get('sf-1').freshness.phase).not.toBe('failed')
     expect(h.get('sf-1').freshness.failure).toBeUndefined()
-    // Exactly one successor, for the generation the observation moved to.
-    expect(h.jobs.list().filter(j => j.id !== job.id)).toHaveLength(1)
+    // And no successor prompt: an agent write that superseded a refresh has already
+    // produced newer content, so re-running the agent over it would be work nobody
+    // asked for on a card that just moved.
+    expect(h.jobs.list().filter(j => j.id !== job.id)).toEqual([])
   })
 
   it('a byte-identical regeneration completes explicitly rather than spinning forever', async () => {
@@ -950,11 +1078,11 @@ describe('the observation barrier', () => {
     const h = harness()
     await h.seed({ ...withPolicy(AUTOMATIC), owner: { kind: 'session', id: 'sess-owner' } })
     await h.coord.note(gitEvent())
-    const first = await h.coord.sweep()
-    expect(first.dispatched).toEqual([])
+    const intent = await h.coord.humanIntent('sf-1')
+    expect(intent.status).toBe('unavailable')
     expect(h.delivered).toEqual([])
-    expect(first.failed[0]?.reason).toMatch(/sess-owner.*is not running/)
-    // No successor job was minted to keep trying.
+    expect(h.get('sf-1').freshness.failure?.message).toMatch(/sess-owner.*is not running/)
+    // No job was minted to keep trying, and no sweep invents one.
     const second = await h.coord.sweep()
     expect(second.dispatched).toEqual([])
     expect(h.jobs.active('sf-1')).toBeUndefined()
@@ -990,7 +1118,7 @@ describe('the observation barrier', () => {
     // repairs rather than the invariant that a retry may not look attended-to.
     const h = harness()
     await h.seed(withPolicy({ policy: 'automatic', triggers: ['git-revision', 'periodic'], intervalMs: 60_000 }))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     const job = h.jobFor('sf-1')!
     h.clock.now = 10 * 60_000 // well past the declared interval
@@ -1025,7 +1153,7 @@ describe('freshness transitions the coordinator relies on', () => {
   it('refuses to queue a Surface that is already refreshing', async () => {
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.svc.beginRefresh(seeded.id, { jobId: 'job-a', expectedRev: h.get(seeded.id).rev }, ctx(21_000))
     expect(h.get(seeded.id).freshness.phase).toBe('refreshing')
 
@@ -1041,7 +1169,7 @@ describe('freshness transitions the coordinator relies on', () => {
   it('refuses to complete a Surface that is not refreshing', async () => {
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const queued = h.get(seeded.id)
     expect(queued.freshness.phase).toBe('queued')
 
@@ -1066,7 +1194,7 @@ describe('freshness transitions the coordinator relies on', () => {
     // before the user's edit would silently overwrite it.
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const queued = h.get(seeded.id)
     await h.svc.beginRefresh(seeded.id, { jobId: 'job-a', expectedRev: queued.rev }, ctx(21_000))
     const dispatchedAt = h.get(seeded.id)
@@ -1097,7 +1225,7 @@ describe('freshness transitions the coordinator relies on', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+        headline: 'Coverage', recipe: HOST_RECIPE,
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
       // Exactly what the sweep will derive: verifiedAt 5,000 + 60,000 = 65,000.
@@ -1106,6 +1234,10 @@ describe('freshness transitions the coordinator relies on', () => {
     const unchanged = await h.svc.setSchedule('sf-1', { dueAt: 65_000, overdue: true }, ctx(70_000))
     expect(unchanged.ok).toBe(true)
 
+    // A check that could not answer, so the overdue badge is not cleared by the very
+    // pass under test — the claim is that the Surface is PICKED UP, not that it
+    // succeeds.
+    h.hostOutcome = () => ({ status: 'unavailable', detail: 'nobody could look' })
     h.clock.now = 70_000
     const report = await h.coord.sweep()
     expect(report.queued).toHaveLength(1)
@@ -1147,7 +1279,7 @@ describe('a source that is GONE', () => {
     await h.seed({
       ...MISSING,
       content: {
-        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+        headline: 'Coverage', recipe: HOST_RECIPE,
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
@@ -1168,7 +1300,7 @@ describe('a source that is GONE', () => {
   it('refuses a HUMAN refresh too, because being asked does not conjure a file back', async () => {
     const h = harness()
     await h.seed(MISSING)
-    expect(await h.coord.requestFor('sf-1')).toBeUndefined()
+    expect((await h.coord.humanIntent('sf-1')).status).toBe('not-executable')
     expect(h.jobFor('sf-1')).toBeUndefined()
     expect(h.get('sf-1').freshness.failure?.message).toMatch(/is gone/)
   })
@@ -1176,7 +1308,7 @@ describe('a source that is GONE', () => {
   it('ends a job whose source vanishes MID-FLIGHT instead of waiting out the timeout', async () => {
     const h = harness()
     const seeded = await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     expect(h.get('sf-1').freshness.phase).toBe('refreshing')
     const job = h.jobFor('sf-1')!
@@ -1195,7 +1327,9 @@ describe('a source that is GONE', () => {
 
   it('resumes normally once the source comes back', async () => {
     const h = harness()
-    const seeded = await h.seed(MISSING)
+    // HOST work, so "resumes" means the host schedules it again by itself — the
+    // strongest form of the claim, and the one a deleted-then-restored file needs.
+    const seeded = await h.seed({ ...MISSING, ...withHostRecipe(), source: MISSING.source })
     await h.coord.note(gitEvent())
     expect(h.jobFor('sf-1')).toBeUndefined()
 
@@ -1208,7 +1342,7 @@ describe('a source that is GONE', () => {
       worktree: WORKTREE,
       alias: { bucket: { kind: 'run', runId: RUN }, localId: 'cov', visible: true },
       author: 'agent',
-      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: AUTOMATIC },
+      content: { headline: 'Coverage', recipe: HOST_RECIPE, refreshPolicy: AUTOMATIC },
       watermark: 'sha256:back',
     }, ctx(40_000))
     expect(h.get('sf-1').source?.state).not.toBe('missing')
@@ -1224,11 +1358,13 @@ describe('deadlines', () => {
       const h = harness()
       await h.seed({
         content: {
-          headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+          headline: 'Coverage', recipe: HOST_RECIPE,
           refreshPolicy: { ...decl, triggers: [...decl.triggers, 'periodic'], intervalMs: 60_000 },
         },
       })
-      // verifiedAt 5,000 + 60,000 = due at 65,000.
+      // verifiedAt 5,000 + 60,000 = due at 65,000. The check cannot answer, so a
+      // successful barrier cannot be what clears the badge in this pass.
+      h.hostOutcome = () => ({ status: 'unavailable', detail: 'nobody could look' })
       h.clock.now = 70_000
       await h.coord.sweep()
       const s = h.get('sf-1')
@@ -1243,7 +1379,7 @@ describe('deadlines', () => {
       const h = harness()
       await h.seed({
         content: {
-          headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+          headline: 'Coverage', recipe: HOST_RECIPE,
           refreshPolicy: { ...decl, triggers: [...decl.triggers, 'periodic'], intervalMs: 60_000 },
         },
       })
@@ -1274,20 +1410,21 @@ describe('deadlines', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+        headline: 'Coverage', recipe: HOST_RECIPE,
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
+    // A check that RAN and could not answer. Overdue survives it — which is the
+    // point: a retry loop may not make an overdue Surface look attended to.
+    h.hostOutcome = () => ({ status: 'failed', detail: 'the coverage tool is not installed' })
     h.clock.now = 70_000
     await h.coord.sweep()
-    expect(h.get('sf-1').freshness.overdue).toBe(true)
-    // Queued and then refreshing — still overdue.
-    expect(h.get('sf-1').freshness.phase).toBe('refreshing')
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
     expect(h.get('sf-1').freshness.overdue).toBe(true)
 
-    const job = h.jobFor('sf-1')!
-    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
-    h.clock.now = 80_000
+    // Only a SUCCESSFUL barrier clears it.
+    h.hostOutcome = () => ({ status: 'replaced', content: { headline: 'Coverage 92%' } })
+    h.clock.now = 70_000 + 60_000 + 1
     await h.coord.sweep()
     expect(h.get('sf-1').freshness.overdue).toBe(false)
   })
@@ -1305,10 +1442,9 @@ describe('deadlines', () => {
 describe('restart', () => {
   it('reconstructs queued work untouched and never claims current', async () => {
     const h = harness()
-    h.live.clear()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
-    // Dispatch is not run, so the job is still exactly as `note` left it.
+    await dirtyThenAsk(h)
+    // Dispatch is not run, so the job is still exactly as the human's intent left it.
     const report = await h.coord.recover()
     expect(report.failed).toEqual([])
     expect(h.jobFor('sf-1')!.state).toBe('queued')
@@ -1318,7 +1454,7 @@ describe('restart', () => {
   it('fails a delivered attempt that did not survive the restart, rather than claiming current', async () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     const job = h.jobFor('sf-1')!
     h.live.clear() // the restart took the tmux server with it
@@ -1338,7 +1474,7 @@ describe('restart', () => {
     // the attempt is failed and waits for a NEW discrete human action (R14/R18).
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     const job = h.jobFor('sf-1')!
     expect(job.dispatch?.target).toBe(RUN)
@@ -1399,7 +1535,7 @@ describe('restart', () => {
   it('cancels a job whose Surface is gone', async () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     await h.coord.sweep()
     h.hidden.add('sf-1')
     const report = await h.coord.recover()
@@ -1412,7 +1548,7 @@ describe('the job table', () => {
     const io = memoryIo()
     const a = SurfaceRefreshJobStore.open('/cfg', io)
     a.put({
-      id: 'job-1', surfaceId: 'sf-1', spaceId: SPACE, state: 'running',
+      id: 'job-1', surfaceId: 'sf-1', spaceId: SPACE, state: 'running', execution: 'owner',
       reason: { kind: 'git-revision', key: 'k', detail: 'd', generation: 2, at: 1 },
       baseRev: 1, startGeneration: 1, targetGeneration: 2, attempts: 1,
       authorization: { principal: { kind: 'job', id: 'refresh-coordinator' } },
@@ -1432,7 +1568,7 @@ describe('the job table', () => {
   it('stages each job in its own file, outside any worktree', async () => {
     const h = harness()
     await h.seed(withPolicy(AUTOMATIC))
-    await h.coord.note(gitEvent())
+    await dirtyThenAsk(h)
     const job = h.jobFor('sf-1')!
     expect(job.stagingPath).toBe('/cfg/refresh-staging/job-1.json')
     // The property that matters: nothing a worker writes lands where the Slate
@@ -1485,9 +1621,9 @@ describe('a trigger reaches the cheap check first', () => {
     await h.seed(withPolicy(AUTOMATIC))
     const report = await h.coord.note(gitEvent())
     await h.coord.witnessPass()
-    // No claims, no narrowing, no witness — a commit still queues the rebuild it
-    // always did. This is the regression guard for every Surface that exists today.
-    expect(report.queued).toHaveLength(1)
+    // No claims, no narrowing, no witness — a commit MARKS it and looks at nothing.
+    // This is the regression guard for every Surface that exists today.
+    expect(report.marked).toEqual(['sf-1'])
     expect(h.witnessRuns).toEqual([])
   })
 
@@ -1613,7 +1749,9 @@ describe('witnesses run outside the lock', () => {
     // If it were awaited inside the coordinator's serialization key, neither of the
     // calls below could resolve — so the failure mode of this test is a TIMEOUT, not
     // an assertion, and that is the strongest form the guarantee has.
-    const job = await h.coord.requestFor('sf-plain')
+    const intent = await h.coord.humanIntent('sf-plain')
+    expect(intent.status).toBe('started')
+    const job = intent.status === 'started' ? intent.job : undefined
     expect(job).toBeDefined()
     const second = await h.coord.sweep()
     expect(second.dispatched).toEqual([job!.id])
@@ -1798,7 +1936,10 @@ describe('a moved value', () => {
     await h.coord.recover()
     const report = await h.coord.sweep()
     expect(report.queued).toHaveLength(1)
-    expect(h.jobFor('sf-1')!.state).toBe('running')
+    // A HOST attempt runs to completion inside the sweep that scheduled it: there is
+    // no external executor to wait on, which is the whole reason machine work can be
+    // proactive at all.
+    expect(h.jobFor('sf-1')!.state).toBe('completed')
   })
 
   it('holds a debt whose last rebuild FAILED for one verification interval', async () => {
@@ -1839,11 +1980,9 @@ describe('a moved value', () => {
       },
     }))
     h.witness = () => sawValue('pending')
-    await h.coord.sweep()
-    const job = h.jobFor('sf-1')!
-    h.staged.set(job.stagingPath, workerJson({ headline: 'Roadmap', note: 'unit U4 is pending' }))
-    h.clock.now += 5_000
+    h.hostOutcome = () => ({ status: 'replaced', content: { headline: 'Roadmap' }, detail: 'unit U4 is pending' })
     const done = await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
 
     expect(done.completed).toEqual([job.id])
     const s = h.get('sf-1')
@@ -1861,24 +2000,15 @@ describe('a moved value', () => {
 describe('the owner-delivery budget (KTD9)', () => {
   it('bounds one pass, and drains the rest on the next', async () => {
     const h = harness()
-    h.live.add(RUN)
-    for (let i = 0; i < 10; i++) {
-      await h.seed(claiming({
-        id: `sf-${i}`,
-        stored: { u4: 'pending' },
-        freshness: {
-          phase: 'possibly-stale',
-          witnessedAt: 5_000,
-          claimRebuild: { moves: [{ claimId: 'u4', from: 'landed', to: 'pending' }], at: 6_000 },
-        },
-      }))
-    }
-    h.witness = () => sawValue('pending')
+    for (let i = 0; i < 10; i++) await h.seed({ id: `sf-${i}`, ...withPolicy(AUTOMATIC) })
+    await h.coord.note(gitEvent())
+    // TEN DELIBERATE ASKS. Reaching this state used to take one commit; it now takes
+    // ten separate human actions, which is the actual fix. The budget is what is left
+    // standing behind it — a backstop against a burst nobody should be able to cause.
+    for (let i = 0; i < 10; i++) await h.coord.humanIntent(`sf-${i}`)
 
     const first = await h.coord.sweep()
-    expect(first.queued).toHaveLength(10)
-    // Ten Surfaces bound to one worktree became ten prompts into one working session
-    // on a single commit; this is the bound that stops that.
+    expect(h.jobs.list()).toHaveLength(10)
     expect(first.dispatched).toHaveLength(OWNER_DELIVERIES_PER_PASS)
     expect(h.delivered).toHaveLength(OWNER_DELIVERIES_PER_PASS)
     expect(first.heldByCap).toHaveLength(10 - OWNER_DELIVERIES_PER_PASS)
@@ -1949,5 +2079,216 @@ describe('a deferred lookup is not an observation (R8, KTD6)', () => {
     await h.coord.sweep()
     await h.coord.witnessPass()
     expect(h.get('sf-1').freshness.witnessedAt).toBe(h.clock.now)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The execution split (R6-R14, KTD2/KTD4/KTD8).
+//
+// THE PROMISE THIS FILE HAS TO KEEP is the one a user can check without reading
+// code: leave Tinstar open overnight on a dirty agent Surface and nothing happens.
+// Every ambient input the host has — a timer, a commit, an HTTP event, a restart —
+// gets its own negative here, because "no prompt was delivered" is only convincing
+// when the thing that used to deliver one is exercised.
+// ---------------------------------------------------------------------------
+
+describe('nothing ambient may execute an agent recipe (R11/R12, AE3)', () => {
+  /** Every ambient input the host has, run against a dirty agent Surface. */
+  async function overnight(h: Harness): Promise<void> {
+    for (let i = 0; i < 12; i++) {
+      h.clock.now += 5 * 60_000
+      await h.coord.sweep()                                    // the deadline sweep
+      await h.coord.note(gitEvent({ evidence: `sha-${i}`, at: h.clock.now }))  // a commit
+      await h.coord.note({ kind: 'periodic', sourceId: 'clock', at: h.clock.now })
+      await h.coord.witnessPass()
+    }
+  }
+
+  it('twelve hours of timers, commits, and sweeps deliver ZERO prompts', async () => {
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await overnight(h)
+
+    expect(h.delivered).toEqual([])
+    expect(h.jobs.list()).toEqual([])
+    // …and the card is honestly dirty the whole time, which is the other half of the
+    // deal: nothing ran, and nothing pretended otherwise.
+    expect(h.get('sf-1').freshness.phase).toBe('possibly-stale')
+    expect(h.get('sf-1').content.headline).toBe('Coverage')
+  })
+
+  it('a restart in the middle of that delivers none either', async () => {
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await overnight(h)
+    const recovered = await h.coord.recover()
+    expect(recovered.failed).toEqual([])
+    expect(h.delivered).toEqual([])
+  })
+
+  it('the human waking up gets exactly ONE prompt, for the one Surface they opened', async () => {
+    // The positive that makes the negatives mean something. If nothing could ever
+    // deliver, all of the above would pass vacuously.
+    const h = harness()
+    await h.seed({ id: 'sf-opened', ...withPolicy(AUTOMATIC) })
+    await h.seed({ id: 'sf-ignored', ...withPolicy(AUTOMATIC) })
+    await overnight(h)
+
+    await h.coord.humanIntent('sf-opened')
+    await h.coord.sweep()
+    expect(h.delivered).toHaveLength(1)
+    expect(h.get('sf-ignored').freshness.phase).toBe('possibly-stale')
+  })
+})
+
+describe('one human intent, one attempt (R14, KTD4)', () => {
+  it('repeated intent JOINS the same attempt rather than creating a second', async () => {
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+
+    const first = await h.coord.humanIntent('sf-1')
+    expect(first.status).toBe('started')
+    const id = first.status === 'started' ? first.job.id : ''
+
+    for (let i = 0; i < 5; i++) {
+      const again = await h.coord.humanIntent('sf-1')
+      expect(again.status).toBe('joined')
+      expect(again.status === 'joined' && again.job.id).toBe(id)
+    }
+    expect(h.jobs.list()).toHaveLength(1)
+
+    // And the joins produced no extra prompts once it actually dispatches.
+    await h.coord.sweep()
+    expect(h.delivered).toHaveLength(1)
+    for (let i = 0; i < 3; i++) await h.coord.humanIntent('sf-1')
+    await h.coord.sweep()
+    expect(h.delivered).toHaveLength(1)
+  })
+
+  it('an owner job carries the human stamp and a host job does not', async () => {
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const owner = await h.coord.humanIntent('sf-1')
+    expect(owner.status === 'started' && owner.job.execution).toBe('owner')
+    expect(owner.status === 'started' && typeof owner.job.intentAt).toBe('number')
+
+    const g = harness()
+    await g.seed(withHostRecipe())
+    await g.coord.note(gitEvent())
+    expect(g.jobFor('sf-1')!.execution).toBe('host')
+    expect(g.jobFor('sf-1')!.intentAt).toBeUndefined()
+  })
+
+  it('a job with NO human stamp is refused at dispatch rather than delivered', async () => {
+    // Defence in depth for R12. Only `humanIntent` mints a stamp, so a stamped-less
+    // owner job means something scheduled agent work with nobody's permission — and
+    // it must fail loudly rather than sit active and wedge the Surface.
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    await h.coord.humanIntent('sf-1')
+    const job = h.jobFor('sf-1')!
+    h.jobs.update(job.id, { intentAt: undefined }, h.clock.now)
+
+    const report = await h.coord.sweep()
+    expect(h.delivered).toEqual([])
+    expect(report.failed[0]?.reason).toMatch(/without a human asking/)
+    expect(h.jobs.active('sf-1')).toBeUndefined()
+  })
+})
+
+describe('host execution (R7/R8, KTD6)', () => {
+  it('runs machine work with no prompt, no session, and no human', async () => {
+    const h = harness()
+    await h.seed(withHostRecipe())
+    h.hostOutcome = () => ({ status: 'replaced', content: { headline: 'U6 — landed' } })
+    await h.coord.note(gitEvent())
+    const report = await h.coord.sweep()
+
+    expect(report.completed).toHaveLength(1)
+    expect(h.hostRuns).toEqual(['sf-1'])
+    expect(h.delivered).toEqual([])
+    const s = h.get('sf-1')
+    expect(s.content.headline).toBe('U6 — landed')
+    expect(s.freshness.phase).toBe('current')
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'succeeded', execution: 'host' })
+    expect(s.freshness.lastKnownAt).toBe(h.clock.now)
+  })
+
+  it('an UNCHANGED host check advances lastCheck and leaves lastKnownAt alone (KTD5)', async () => {
+    const h = harness()
+    await h.seed(withHostRecipe())
+    const before = h.get('sf-1').freshness.lastKnownAt
+    await h.coord.note(gitEvent())
+    h.clock.now = 40_000
+    await h.coord.sweep()
+
+    const s = h.get('sf-1')
+    expect(s.freshness.lastKnownAt).toBe(before)
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'succeeded', finishedAt: 40_000 })
+    expect(s.content.headline).toBe('Coverage')
+  })
+
+  it('a DEFERRED host check writes nothing and leaves the job queued for the next pass', async () => {
+    // R8. The broker declined a slot; nothing ran, so nothing is recorded — and the
+    // work is not lost either. Recording a check here would advance the deadline past
+    // the backlog it exists to expose.
+    const h = harness()
+    await h.seed(withHostRecipe())
+    h.hostOutcome = () => ({ status: 'deferred', detail: 'git is already being asked 1 question' })
+    await h.coord.note(gitEvent())
+    const rev = h.get('sf-1').rev
+
+    const report = await h.coord.sweep()
+    expect(report.heldByCap).toHaveLength(1)
+    expect(h.get('sf-1').rev).toBe(rev)
+    expect(h.get('sf-1').freshness.lastCheck).toBeNull()
+    expect(h.jobFor('sf-1')!.state).toBe('queued')
+
+    // The budget frees up, and the same job runs.
+    h.hostOutcome = () => ({ status: 'unchanged' })
+    h.clock.now += 5_000
+    expect((await h.coord.sweep()).completed).toHaveLength(1)
+  })
+
+  it('a failed host check preserves the content and creates no successor', async () => {
+    const h = harness()
+    await h.seed(withHostRecipe())
+    h.hostOutcome = () => ({ status: 'failed', detail: 'the endpoint refused the connection' })
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+
+    const s = h.get('sf-1')
+    expect(s.content.headline).toBe('Coverage')
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'failed', execution: 'host' })
+    expect(h.jobs.active('sf-1')).toBeUndefined()
+  })
+
+  it('a HOST attempt resumes after a restart; an OWNER attempt does not (KTD8)', async () => {
+    // The two halves of the recovery table. A machine lookup can simply be asked
+    // again; a delivered prompt cannot, because the host cannot tell "still working"
+    // from "moved on".
+    const host = harness()
+    await host.seed(withHostRecipe())
+    host.hostOutcome = () => ({ status: 'deferred', detail: 'no slot' })
+    await host.coord.note(gitEvent())
+    await host.coord.sweep()
+    // Force it to look interrupted rather than merely queued.
+    host.jobs.update(host.jobFor('sf-1')!.id, { state: 'running' }, host.clock.now)
+    await host.coord.recover()
+    expect(host.jobFor('sf-1')!.state).toBe('queued')
+    expect(host.get('sf-1').freshness.lastCheck).toBeNull()
+
+    const owner = harness()
+    await owner.seed(withPolicy(AUTOMATIC))
+    await owner.coord.note(gitEvent())
+    await owner.coord.humanIntent('sf-1')
+    await owner.coord.sweep()
+    await owner.coord.recover()
+    expect(owner.jobs.active('sf-1')).toBeUndefined()
+    expect(owner.get('sf-1').freshness.lastCheck).toMatchObject({ outcome: 'unavailable' })
+    expect(owner.get('sf-1').content.headline).toBe('Coverage')
   })
 })

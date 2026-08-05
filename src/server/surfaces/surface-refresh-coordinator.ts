@@ -34,8 +34,10 @@
 // Server-only and React-free.
 
 import type {
-  Surface, SurfaceClaim, SurfaceContent, SurfacePrincipalRef, SurfaceRefreshDeclaration, SurfaceStaleReason,
+  Surface, SurfaceClaim, SurfaceContent, SurfacePrincipalRef,
+  SurfaceRefreshDeclaration, SurfaceRefreshRecipe, SurfaceStaleReason,
 } from '../../domain/types'
+import type { HostRefreshOutcome } from './host-refresh-registry'
 import { log } from '../logger'
 import { serializeByKey } from '../sessions/backends/serializeByKey'
 import {
@@ -51,6 +53,7 @@ import {
   type SurfaceRefreshJobStore,
 } from './surface-refresh-jobs'
 import {
+  agentRecipePrompt,
   claimsObserveTriggerKind,
   coalesceGeneration,
   deriveDueAt,
@@ -108,6 +111,18 @@ export interface RefreshCoordinatorDeps {
   observeSources: (surface: Surface) => Promise<void>
   /** Build the self-contained instruction the foreground owner receives. */
   buildPrompt: (input: { surface: Surface; job: SurfaceRefreshJob; stagingPath: string }) => string
+  /** Run one machine-only host recipe, under the shared lookup broker (R7/R8).
+   *
+   *  Injected for the same reason everything else here is: it reaches `git` and the
+   *  network. What it deliberately CANNOT reach — a model, a session, a terminal, an
+   *  agent — is enforced at the registry, whose deps object is its entire world.
+   *
+   *  Must never reject. A `deferred` result means the broker had no slot: nothing
+   *  ran, so nothing is recorded and the job stays queued for a later pass. */
+  runHostRecipe: (input: {
+    surface: Surface
+    recipe: Extract<SurfaceRefreshRecipe, { kind: 'host' }>
+  }) => Promise<HostRefreshOutcome>
   /** Run ONE claim's witness and report what it saw, or that the broker had no slot
    *  for it (R8/R9, KTD6).
    *
@@ -200,6 +215,17 @@ export interface RefreshPassReport {
    *  is a Surface nothing is actually checking. */
   unresolved: { surfaceId: string; claimId: string }[]
 }
+
+/** What one human intent did (R11/R14). `joined` is the answer R14 asks for: the
+ *  attempt already running IS the answer, and a second one was not created. */
+export type HumanIntentResult =
+  | { status: 'started'; job: SurfaceRefreshJob }
+  | { status: 'joined'; job: SurfaceRefreshJob }
+  /** No live foreground agent. The Surface keeps its content and records the check. */
+  | { status: 'unavailable' }
+  /** Nothing here can be executed — no recipe, or one the host cannot read. */
+  | { status: 'not-executable' }
+  | { status: 'unknown-surface' }
 
 function emptyReport(): RefreshPassReport {
   return {
@@ -379,24 +405,71 @@ export class SurfaceRefreshCoordinator {
   }
 
   /**
-   * Schedule a job for a Surface a human explicitly asked for.
+   * THE ONE OPERATION THAT AUTHORIZES AGENT WORK (R11/R14, KTD4).
    *
-   * Separate from `note` because the route has already moved the Surface to
-   * `queued` through `SurfaceService.refreshRequest` — U3 owns that transition and
-   * re-deriving it here would double-commit it. This only creates the durable job
-   * that services it, and it works for `manual` and `mark-stale` Surfaces too:
-   * being asked is the one thing every policy honours (R18's "manual recovery
-   * available whenever automatic refresh cannot complete").
+   * A human deliberately navigated to, interacted with, or explicitly refreshed a
+   * dirty Surface. That — and nothing else in this file — is what may put a prompt in
+   * somebody's conversation. No timer, no commit, no deadline, no browser lifecycle
+   * event reaches this method, which is why "leaving Tinstar open overnight costs
+   * nothing" is a property of the code rather than a hope about its callers.
+   *
+   * IDEMPOTENT, and that is R14 in one word. Repeated navigation while a refresh is
+   * running JOINS the attempt already in flight — it does not create a second agent,
+   * a second job, or a second execution. The join is decided on the durable record
+   * rather than in React state, because a user action can race an SSE frame and the
+   * client's idea of "already refreshing" is exactly the thing that would be stale.
+   *
+   * Works for `manual` and `mark-stale` Surfaces too: being asked is the one thing
+   * every policy honours (R18's manual recovery).
    */
-  async requestFor(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
-    return this.entry(() => this.requestForNow(surfaceId))
+  async humanIntent(surfaceId: string): Promise<HumanIntentResult> {
+    return this.entry(() => this.humanIntentNow(surfaceId))
   }
 
-  private async requestForNow(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
+  private async humanIntentNow(surfaceId: string): Promise<HumanIntentResult> {
     const surface = this.surface(surfaceId)
-    if (!surface) return undefined
-    const report = emptyReport()
+    if (!surface) return { status: 'unknown-surface' }
     const at = this.deps.now()
+
+    // ALREADY IN FLIGHT ⇒ JOIN IT. Checked first, before any state transition, so a
+    // second click cannot even briefly look like a second attempt.
+    const existing = this.deps.jobs.active(surfaceId)
+    if (existing) return { status: 'joined', job: existing }
+
+    // A HOST SURFACE IS NOT AGENT WORK. Asking for it by hand is legitimate — it
+    // brings the next check forward — but it is the broker's business, not a prompt.
+    if (surface.content.recipe?.kind === 'host') {
+      const report = emptyReport()
+      const job = await this.scheduleFor(surface, surface.freshness.staleReason, report)
+      return job ? { status: 'started', job } : { status: 'not-executable' }
+    }
+
+    const prompt = agentRecipePrompt(surface.content.recipe)
+    if (!prompt) {
+      // No agent recipe to run. Recorded as an honest unavailable check rather than
+      // silently doing nothing, because a button that appears to do nothing is worse
+      // than one that says why.
+      await this.recordUnavailable(surface, this.refreshBlocker(surface)?.reason
+        ?? 'this Surface declares no refresh recipe, so nothing can rebuild it', at)
+      return { status: 'not-executable' }
+    }
+
+    // NO LIVE OWNER ⇒ AN HONEST UNAVAILABLE CHECK, IN THIS CYCLE (R13, AE5). The
+    // caller gets its answer now rather than discovering it a sweep later, and there
+    // is nothing to promote it to: a background executor is what this plan removed.
+    const owner = this.ownerFor(surface)
+    if (!owner || !this.deps.isLiveSession(owner)) {
+      await this.recordUnavailable(
+        surface,
+        owner
+          ? `its foreground agent (${owner}) is not running, so nobody could rebuild it`
+          : 'no foreground agent owns this Surface, so nobody could rebuild it',
+        at,
+      )
+      return { status: 'unavailable' }
+    }
+
+    const report = emptyReport()
     const reason: SurfaceStaleReason = surface.freshness.staleReason ?? {
       kind: 'human-intent',
       key: `human-intent ${surfaceId} ${at}`,
@@ -404,7 +477,30 @@ export class SurfaceRefreshCoordinator {
       generation: surface.source?.generation ?? 0,
       at,
     }
-    return this.scheduleFor(surface, reason, report)
+    const job = await this.scheduleFor(surface, reason, report, { intentAt: at })
+    return job ? { status: 'started', job } : { status: 'not-executable' }
+  }
+
+  /** The session that would receive this Surface's agent work, if any. Bound owner
+   *  first, then the run — the same order the rest of the file reads them in. */
+  private ownerFor(surface: Surface): string | undefined {
+    return surface.owner?.kind === 'session' ? surface.owner.id : surface.provenance?.runId
+  }
+
+  /**
+   * Record that there was no authorized way to refresh this Surface (R13/R17).
+   *
+   * CONTENT UNTOUCHED, and the mutator is the one that guarantees it. The Surface
+   * keeps its last-known result, gains a completed `unavailable` check saying why,
+   * and waits — for its next allowed opportunity, or for the next human action.
+   */
+  private async recordUnavailable(surface: Surface, message: string, at: number): Promise<void> {
+    if (surface.freshness.lastCheck?.outcome === 'unavailable'
+      && surface.freshness.failure?.message === message) return
+    await this.deps.service.failRefresh(surface.id, {
+      jobId: '', message, outcome: 'unavailable',
+      check: { startedAt: at, execution: 'owner', reason: 'you asked for it' },
+    }, this.ctx(at))
   }
 
   /**
@@ -415,7 +511,10 @@ export class SurfaceRefreshCoordinator {
    * triggers during a refresh produces one successor, not one per trigger.
    */
   private async scheduleFor(
-    surface: Surface, reason: SurfaceStaleReason | undefined, report: RefreshPassReport,
+    surface: Surface,
+    reason: SurfaceStaleReason | undefined,
+    report: RefreshPassReport,
+    opts: { intentAt?: number } = {},
   ): Promise<SurfaceRefreshJob | undefined> {
     const at = this.deps.now()
     // A PERMANENTLY BLOCKED SURFACE GETS NO JOB AT ALL. Creating one and failing it
@@ -431,18 +530,17 @@ export class SurfaceRefreshCoordinator {
       report.blocked.push({ jobId: '', reason: permanent.reason })
       return undefined
     }
-    // A HOST RECIPE IS NOT THIS EXECUTOR'S WORK (R6/R9, KTD2). It is machine work
-    // with its own executor and its own budgets; queueing it here would hand it to
-    // the one dispatcher there is, which delivers prompts to a live foreground agent
-    // — the exact opposite of "machine-only". Left DIRTY instead, which is what R9
-    // asks for: a trigger may mark anything dirty, and only the parsed recipe kind
-    // decides what may then execute.
-    //
-    // A recipe-LESS or UNREADABLE Surface deliberately does NOT return here: it falls
-    // through to the blocker path below, which records WHY on the Surface where a
-    // reader can see it. "Nothing happened and nobody said why" is the state this
-    // whole plan exists to end.
-    if (surface.content.recipe?.kind === 'host') return undefined
+    // WHICH EXECUTOR THIS ATTEMPT BELONGS TO, decided from the parsed recipe kind and
+    // nothing else (R6/KTD2). A recipe-LESS or UNREADABLE Surface falls through to
+    // the blocker path below, which records WHY where a reader can see it — "nothing
+    // happened and nobody said why" is the state this whole plan exists to end.
+    const execution: 'host' | 'owner' = surface.content.recipe?.kind === 'host' ? 'host' : 'owner'
+    // AN AGENT ATTEMPT REQUIRES A HUMAN (R11/R12). Without an intent stamp there is
+    // nobody's permission behind it, and a job created here by a timer or a commit
+    // would become a prompt in somebody's conversation on the next sweep — the exact
+    // fan-out this plan exists to end. `humanIntent` is the only caller that passes
+    // one.
+    if (execution === 'owner' && opts.intentAt === undefined) return undefined
 
     const generation = surface.source?.generation ?? 0
     const existing = this.deps.jobs.active(surface.id)
@@ -473,6 +571,8 @@ export class SurfaceRefreshCoordinator {
       ...(runId ? { runId } : {}),
       ...(worktree ? { worktree } : {}),
       state: 'queued',
+      execution,
+      ...(opts.intentAt !== undefined ? { intentAt: opts.intentAt } : {}),
       reason: reason ?? {
         kind: 'human-intent', key: `human-intent ${surface.id} ${at}`,
         detail: 'you asked for it', generation, at,
@@ -1024,6 +1124,11 @@ export class SurfaceRefreshCoordinator {
         observedGeneration: job.targetGeneration,
         ...(live.baseContentDigest ? { expectedContentDigest: live.baseContentDigest } : {}),
         ...(staged.content ? { content: staged.content } : {}),
+        check: {
+          ...(job.dispatch ? { startedAt: job.dispatch.at } : {}),
+          execution: 'owner',
+          reason: job.reason.detail,
+        },
       }, this.ctx(this.deps.now()))
 
       await this.deps.clearStaged(job.stagingPath).catch(() => { /* best effort */ })
@@ -1041,12 +1146,12 @@ export class SurfaceRefreshCoordinator {
           state: 'superseded', result: { ok: false, message: completed.error.message },
         }, this.deps.now())
         report.superseded.push(job.id)
-        // Exactly ONE successor, for the newest pending generation. The Surface is
-        // back at possibly-stale and holds no active job, so this creates one.
-        const pending = this.surface(job.surfaceId)
-        if (pending && effectiveDeclaration(pending).policy === 'automatic') {
-          await this.scheduleFor(pending, pending.freshness.staleReason, report)
-        }
+        // NO AUTOMATIC SUCCESSOR FOR AGENT WORK (R11/R18). A supersession leaves the
+        // Surface dirty and visibly so; scheduling another attempt here would put a
+        // second prompt in somebody's conversation that nobody asked for, which is
+        // precisely the ambient execution this plan removed. It waits for the next
+        // discrete human action. Host work re-schedules itself in `runHostJob`,
+        // where doing so costs a bounded machine lookup and no attention at all.
         continue
       }
       await this.failJob(job, completed.error.message, report)
@@ -1123,6 +1228,23 @@ export class SurfaceRefreshCoordinator {
         continue
       }
 
+      // HOST WORK RUNS HERE, UNDER THE BROKER (R7/R8). No prompt, no session, no
+      // process — one bounded machine lookup that either answers, says it could not,
+      // or says the budget had no room for it.
+      if (job.execution === 'host') {
+        await this.runHostJob(job, surface, report)
+        continue
+      }
+
+      // AGENT WORK REQUIRES A HUMAN'S STAMP (R11/R12, KTD4). Defence in depth: only
+      // `humanIntent` creates a job carrying one, so a job that reached here without
+      // one was made by something that had nobody's permission. Failed rather than
+      // silently dropped, so it cannot sit active and block the Surface forever.
+      if (job.intentAt === undefined) {
+        await this.failJob(job, 'this refresh was scheduled without a human asking for it', report)
+        continue
+      }
+
       // THE ONE RECIPIENT. A foreground session the human is already talking to,
       // which costs no port and no new process. It is bounded by its own per-pass
       // budget because what it DOES cost is a prompt in somebody's live conversation.
@@ -1166,6 +1288,114 @@ export class SurfaceRefreshCoordinator {
   }
 
   /**
+   * Run one host job to completion inside this pass (R7/R8, KTD6/KTD10).
+   *
+   * THE ORDER IS THE INTERESTING PART. The lookup happens FIRST, before the Surface
+   * is moved to `refreshing`, because the broker may decline: a deferral must leave
+   * the record exactly as it was — no phase change, no revision, no check — and a
+   * Surface badged `refreshing` for a lookup that never ran would be the most
+   * misleading state available. Only once there is a real answer does the job begin,
+   * which is also what snapshots the content digest the barrier compares against.
+   *
+   * The barrier is unchanged and still mandatory: re-observe the sources, then let
+   * `completeRefresh` compare the revision, the generation, and the digest inside the
+   * transaction that would commit. A machine result gets no more trust than an
+   * agent's.
+   */
+  private async runHostJob(job: SurfaceRefreshJob, surface: Surface, report: RefreshPassReport): Promise<void> {
+    const recipe = surface.content.recipe
+    if (recipe?.kind !== 'host') {
+      // The recipe changed under the job. Whatever it is now, this attempt was
+      // authorized against something else.
+      await this.failJob(job, 'its refresh recipe changed while this check was queued', report)
+      return
+    }
+    const startedAt = this.deps.now()
+    let outcome: HostRefreshOutcome
+    try {
+      outcome = await this.deps.runHostRecipe({ surface, recipe })
+    } catch (err) {
+      // The registry never rejects. A wiring that does must not take down a pass that
+      // is also looking at other Surfaces.
+      outcome = { status: 'failed', detail: `the host check threw: ${(err as Error).message}` }
+    }
+
+    if (outcome.status === 'deferred') {
+      // NOTHING HAPPENED, so nothing is written. The job stays queued and the next
+      // sweep asks again; recording a check here would claim the host looked and
+      // would advance the deadline past the backlog it is meant to expose (R8).
+      report.heldByCap.push(job.id)
+      return
+    }
+
+    const check = { startedAt, execution: 'host' as const, reason: job.reason.detail }
+    if (outcome.status === 'unavailable' || outcome.status === 'failed') {
+      const at = this.deps.now()
+      this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message: outcome.detail } }, at)
+      await this.deps.service.failRefresh(job.surfaceId, {
+        jobId: job.id, message: outcome.detail,
+        ...(outcome.status === 'unavailable' ? { outcome: 'unavailable' as const } : {}),
+        check,
+      }, this.ctx(at))
+      report.failed.push({ jobId: job.id, reason: outcome.detail })
+      return
+    }
+
+    const began = await this.begin(job, surface)
+    if (!began) return
+
+    // THE BARRIER, identical to the agent path's. A host result computed against a
+    // repository that moved while the lookup ran describes a world that no longer
+    // exists, and machine provenance does not change that.
+    try {
+      await this.deps.observeSources(surface)
+    } catch (err) {
+      await this.failJob(job, `sources could not be re-observed: ${(err as Error).message}`, report)
+      return
+    }
+    const observed = this.surface(job.surfaceId)
+    if (!observed) {
+      await this.finishJob(job, 'cancelled', 'its Surface no longer exists', report)
+      return
+    }
+    const live = this.deps.jobs.get(job.id) ?? job
+    const at = this.deps.now()
+    const completed = await this.deps.service.completeRefresh(observed.id, {
+      jobId: job.id,
+      expectedRev: observed.rev,
+      observedGeneration: job.targetGeneration,
+      ...(live.baseContentDigest ? { expectedContentDigest: live.baseContentDigest } : {}),
+      // `unchanged` commits NO content, which is what makes it advance `lastCheck`
+      // and leave `lastKnownAt` alone (KTD5) — the common answer, honestly recorded.
+      ...(outcome.status === 'replaced' ? { content: outcome.content } : {}),
+      check,
+    }, this.ctx(at))
+
+    if (completed.ok) {
+      this.deps.jobs.update(job.id, {
+        state: 'completed',
+        result: { ok: true, ...(outcome.detail ? { message: outcome.detail } : {}) },
+      }, this.deps.now())
+      report.completed.push(job.id)
+      return
+    }
+    if (completed.error.reason === 'superseded') {
+      this.deps.jobs.update(job.id, {
+        state: 'superseded', result: { ok: false, message: completed.error.message },
+      }, this.deps.now())
+      report.superseded.push(job.id)
+      // ONE successor, and only for host work: an agent Surface left dirty by a
+      // supersession waits for the next human action rather than being re-scheduled.
+      const pending = this.surface(job.surfaceId)
+      if (pending?.content.recipe?.kind === 'host') {
+        await this.scheduleFor(pending, pending.freshness.staleReason, report)
+      }
+      return
+    }
+    await this.failJob(job, completed.error.message, report)
+  }
+
+  /**
    * Take the Surface into `refreshing` and the job into `running`, under a lease.
    *
    * Returns false when the Surface refused — which is how two sweeps racing one
@@ -1197,10 +1427,24 @@ export class SurfaceRefreshCoordinator {
     return true
   }
 
-  private async failJob(job: SurfaceRefreshJob, message: string, report: RefreshPassReport): Promise<void> {
+  private async failJob(
+    job: SurfaceRefreshJob,
+    message: string,
+    report: RefreshPassReport,
+    outcome: 'failed' | 'unavailable' = 'failed',
+  ): Promise<void> {
     await this.deps.clearStaged(job.stagingPath).catch(() => { /* best effort */ })
-    this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message } }, this.deps.now())
-    await this.deps.service.failRefresh(job.surfaceId, { jobId: job.id, message }, this.ctx(this.deps.now()))
+    const at = this.deps.now()
+    this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message } }, at)
+    await this.deps.service.failRefresh(job.surfaceId, {
+      jobId: job.id, message,
+      ...(outcome === 'unavailable' ? { outcome } : {}),
+      check: {
+        ...(job.dispatch ? { startedAt: job.dispatch.at } : {}),
+        execution: job.execution,
+        reason: job.reason.detail,
+      },
+    }, this.ctx(at))
     report.failed.push({ jobId: job.id, reason: message })
   }
 
@@ -1245,6 +1489,22 @@ export class SurfaceRefreshCoordinator {
         continue
       }
       if (job.state === 'queued') continue
+
+      // HOST ATTEMPTS RESUME (KTD8). A machine lookup that was interrupted can simply
+      // be asked again — it costs one bounded, brokered request and nobody's
+      // attention — so the job goes back to the queue rather than being failed, and
+      // the broker's budgets govern when it actually runs.
+      if (job.execution === 'host') {
+        this.deps.jobs.update(job.id, { state: 'queued', dispatch: undefined, lease: undefined }, this.deps.now())
+        report.queued.push(job.id)
+        continue
+      }
+
+      // OWNER ATTEMPTS DO NOT. A delivered prompt may have outlived the server, and
+      // the host cannot tell "the agent is still working on it" from "the agent read
+      // it, moved on, and will never write the staging file". Failed as unavailable
+      // and left waiting for a NEW human action, which is strictly better than a
+      // spinner nobody will ever clear.
       const target = job.dispatch?.kind === 'owner' ? job.dispatch.target : undefined
       await this.failJob(
         job,
@@ -1252,6 +1512,7 @@ export class SurfaceRefreshCoordinator {
           ? `the host restarted while ${target} was rebuilding this; ask for it again when you need it fresh`
           : 'the host restarted while this refresh was in flight',
         report,
+        'unavailable',
       )
     }
     return report

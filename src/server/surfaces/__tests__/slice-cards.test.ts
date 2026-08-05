@@ -51,6 +51,8 @@ import { refreshDispatchPrompt } from '../refresh-wiring'
 import { reconcileSlateEpoch, type SlateSourceEpoch } from '../source-reconciler'
 import { slateSourceAdapters } from '../slate-source'
 import { claimLocusAdmits } from '../surface-trigger-matcher'
+import { runHostRecipe } from '../host-refresh-registry'
+import { SurfaceLookupBroker } from '../surface-lookup-broker'
 import { runWitness, type WitnessDeps } from '../witness-registry'
 import type { SlateSurface, Surface } from '../../../domain/types'
 
@@ -321,6 +323,8 @@ function chain(): Chain {
   }
   let n = 0
   const jobs = SurfaceRefreshJobStore.open('/cfg', memoryIo())
+  // The REAL broker: "many cards, one fetch" is one of the things this chain proves.
+  const broker = new SurfaceLookupBroker()
   const deps: RefreshCoordinatorDeps = {
     service: svc,
     jobs,
@@ -345,6 +349,20 @@ function chain(): Chain {
     // THE SHIPPED PROMPT BUILDER, not a stand-in. A test that asserts which card a
     // dispatch was about has to read the text production would actually deliver.
     buildPrompt: ({ surface, stagingPath }) => refreshDispatchPrompt(surface, stagingPath),
+    // THE SHIPPED HOST REGISTRY, through the real broker, against the same witness
+    // deps the claim checker uses. The roadmap card's rail is host-owned (KTD7), so
+    // this is the path that actually maintains it — and it is machine work: the
+    // negative assertions below are about `delivered` staying empty while it runs.
+    runHostRecipe: ({ surface, recipe }) => runHostRecipe({
+      recipe,
+      prior: surface.content,
+      deps: {
+        broker,
+        witness: witnessDeps,
+        ...(surface.source?.worktree ? { worktree: surface.source.worktree } : {}),
+        now: () => clock.now,
+      },
+    }),
     // THE REGISTRY'S OWN RUNNER, not a stub of it. `unit-landed` shells out to the
     // real `git` in the fixture worktree; the three-valued outcome is produced by the
     // shipped code rather than asserted into existence.
@@ -510,9 +528,9 @@ describe('the two slice surfaces, over the real chain', () => {
   // file asserts `delivered` is empty. That assertion is worth nothing unless this
   // harness can produce a dispatch at all — "nothing dispatched because nothing ran"
   // and "nothing dispatched because nothing needed to" are indistinguishable
-  // otherwise. Same chain, same seams, same moved value; the only difference is a
-  // recipe, which is what R12 says the difference is.
-  it('a moved value DOES wake a rebuild when the surface carries a recipe', async () => {
+  // otherwise. Same chain, same seams, same moved value; the difference is a HUMAN,
+  // which is what R11 says the difference is.
+  it('a moved value waits for a human, and then delivers exactly one prompt', async () => {
     const c = chain()
     await authorBothCards(c, c.clock.now)
     await sweepAndWait(c)
@@ -523,18 +541,21 @@ describe('the two slice surfaces, over the real chain', () => {
     c.httpStatus = 503
     c.clock.now += 11 * 60_000
     await sweepAndWait(c)
-    // The pass that records the delta queues nothing; the next sweep drains the
-    // marker into a job, and the one after dispatches it.
+    // Three more full passes over a card whose asserted value demonstrably moved.
+    // Under the old contract this is where the rebuild queued itself and a prompt
+    // landed in somebody's session; now the delta sits on the record and waits.
     await sweepAndWait(c)
+    await sweepAndWait(c)
+    expect(c.delivered).toEqual([])
+    expect(c.jobFor('rebuildable-infra')).toBeUndefined()
+
+    // The human opens the card. NOW it rebuilds — once, and only this one.
+    const target = c.docStore.surfaceForRunAlias(RUN, 'rebuildable-infra')!
+    await c.coord.humanIntent(target.id)
     await sweepAndWait(c)
 
-    // Exactly one, and only for the card with a recipe — the two slice cards took the
-    // same 503 and queued nothing.
-    // Exactly one delivery, naming the card that carries the recipe — and the two
-    // slice cards took the same 503 and produced nothing.
     expect(c.delivered).toHaveLength(1)
     expect(c.delivered[0]!.prompt).toContain('A card whose prose a moved value would invalidate')
-    expect(c.jobFor('rebuildable-infra')).toBeDefined()
     expect(c.jobFor('standalone-api-reachable')).toBeUndefined()
     expect(c.surface('rebuildable-infra').freshness.claimRebuild!.moves)
       .toEqual([{ claimId: 'api', from: 200, to: 503 }])
@@ -613,7 +634,6 @@ describe('the two slice surfaces, over the real chain', () => {
     await sweepAndWait(c)
     await sweepAndWait(c)
     expect(c.jobFor('standalone-api-reachable')).toBeUndefined()
-    expect(c.jobFor('rebuildable-infra')).toBeDefined()
     // AND IT IS STILL `possibly-stale`, which is the assertion that survives the
     // interesting mutations. "No active job" alone is too weak: a job that WAS
     // dispatched and then failed for want of a recipe also leaves `jobs.active`, so a
