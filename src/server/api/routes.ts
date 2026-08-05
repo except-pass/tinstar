@@ -106,7 +106,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
-import { handleSurfaceRoutes } from './surfaceRoutes'
+import { handleSurfaceRoutes, handleRefreshIntent } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 import {
@@ -5072,28 +5072,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const coordinator = ctx.refreshCoordinator
     const canonical = ctx.docStore.surfaceForRunAlias(runId, pid)
     if (coordinator && canonical) {
-      // NO SECOND EXECUTOR HERE (KTD4). This route used to drive the `current →
-      // queued` transition itself and then ask for a job, which meant two places knew
-      // how a refresh starts and could disagree — most visibly when the second one
-      // declined, leaving a Surface badged `queued` with nothing behind it. The
-      // canonical operation owns the whole transition now, including the honest
-      // `unavailable` answer.
-      // ONE CANONICAL OPERATION (KTD4). The run-scoped route resolves its alias and
-      // delegates; it has no executor of its own, and a repeated request JOINS the
-      // attempt already running rather than reporting a second queue error.
-      const intent = await coordinator.humanIntent(canonical.id)
-      const job = intent.status === 'started' || intent.status === 'joined' ? intent.job : undefined
-      // `delivered` keeps the existing client contract: a live attempt IS delivery —
-      // the host has taken responsibility — and the freshness badge now carries the
-      // detail the spinner could not, including the honest `unavailable` case.
-      ok(res, {
-        delivered: !!job,
-        queued: !!job,
-        joined: intent.status === 'joined',
-        outcome: intent.status,
-        jobId: job?.id,
-        surfaceId: canonical.id,
-      })
+      // RESOLVE THE ALIAS AND DELEGATE — that is the whole of this branch (KTD4).
+      // It used to drive the `current → queued` transition itself and then ask for a
+      // job, which meant two places knew how a refresh starts and could disagree;
+      // most visibly when the second one declined, leaving a Surface badged `queued`
+      // with nothing behind it. The canonical handler owns the intent vocabulary, the
+      // human-principal check, the bulk-check narrowing, and the join, so this route
+      // and `/api/surfaces/:id/refresh` cannot drift apart.
+      const raw = await readBody(req).then(t => { try { return JSON.parse(t || '{}') } catch { return {} } })
+      const svc = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      await handleRefreshIntent(ctx, req, res, corsHeaders, canonical.id, raw, svc)
       return true
     }
 

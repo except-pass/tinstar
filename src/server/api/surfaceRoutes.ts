@@ -394,7 +394,7 @@ export async function handleSurfaceRoutes(
  * the dispatch; this function owns none of them, which is why the run-scoped alias
  * can reach the identical behaviour by resolving its id and calling the same code.
  */
-async function handleRefreshIntent(
+export async function handleRefreshIntent(
   ctx: SurfaceRouteContext,
   req: IncomingMessage,
   res: ServerResponse,

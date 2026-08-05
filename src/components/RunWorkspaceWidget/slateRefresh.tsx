@@ -1,204 +1,201 @@
-// Slate v2 U3 — per-surface refresh (re-run the surface's author).
+// Deliberate interaction, bound to freshness (R11-R14, KTD4/KTD9/KTD11).
 //
-// A surface carries an optional file-owned `refresh` recipe. Refreshing a surface
-// POSTs to …/slate/surfaces/:pid/refresh, which delivers that recipe (or a bare
-// regenerate-nudge) to the run's agent and persists NOTHING. The new surface body
-// then arrives later over the SSE `run` delta, bumping `surface.amendedAt`.
+// WHAT CHANGED AND WHY IT MATTERS. This hook used to own the truth about whether a
+// Surface was refreshing: it set a spinner optimistically on click, held it for up to
+// ten minutes, and cleared it when `amendedAt` happened to advance. Every part of
+// that is a guess. The server now records the attempt and the completed check on the
+// record itself, so the client's job is to REPORT state, not to invent it — the only
+// local state left is a one-request-at-a-time guard covering the round trip, because
+// a second click before the response has nothing yet to read.
 //
-// So "refreshing" is a claim that a fresh version is ON ITS WAY. Like RoundupWidget's
-// shimmer (SHIMMER_MAX_MS), that claim has to be BOUNDED: an agent can ignore, drop,
-// or die on the request, and a spinner that pulses forever is a lie. This hook clears
-// the spinner three ways:
-//   · a newer version landed  — the incoming surface.amendedAt exceeds the value we
-//     recorded at click time (the honest "it arrived" signal), or
-//   · the bound elapsed        — REFRESH_MAX_MS passed with no new version, or
-//   · the run is unreachable   — the POST returned delivered:false, so nothing is
-//     coming; we clear at once and surface a "session not reachable" note instead of
-//     spinning on a dead run.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+// INTENT IS SENT ONLY FROM A TRUSTED USER EVENT. `onSurfaceIntent` is called from
+// pointer selection, `j`/`k` selection changes, a Surface's own controls, and the ⟳
+// button — all inside real event handlers. It is deliberately NOT called from a mount
+// effect, a focus or visibility listener, an SSE delivery, or an interval, because
+// those fire while nobody is looking and "Tinstar happened to be open" is not
+// permission to spend a model call (R12). The server checks the same thing again: it
+// verifies the Surface is dirty and that the caller is a human principal, so a client
+// bug cannot manufacture authority.
+//
+// "REFRESH ALL" IS A CHEAP CHECK (KTD9). It sends `bulk-check`, which the server runs
+// only against machine (host) recipes; agent Surfaces are left dirty for their owner
+// to visit. A button that fanned prompts out across a Slate is the thing this plan
+// exists to remove, so the label says "check" and the request says so too.
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SlateSurface } from '../../types'
 import { apiFetch } from '../../apiClient'
 
-/** How long a refresh keeps spinning before it gives up. Mirrors RoundupWidget's
- *  SHIMMER_MAX_MS: a bound past which "a new version is coming" stops being true. */
-export const REFRESH_MAX_MS = 10 * 60_000
+/** Why a refresh is being asked for. Mirrors the server's closed list — see
+ *  `REFRESH_INTENTS` in `src/server/api/surfaceRoutes.ts`, which refuses anything
+ *  outside it rather than defaulting. */
+export type SurfaceIntent = 'navigate' | 'interact' | 'explicit' | 'bulk-check'
+
+/** What the server said about one intent. `skipped` covers both "already current"
+ *  and "a bulk check passing over agent work" — neither is an error. */
+export type IntentOutcome =
+  | 'started' | 'joined' | 'unavailable' | 'not-executable' | 'skipped' | 'unreachable'
 
 export interface SlateRefreshApi {
-  /** Ids currently showing the refresh spinner (POST sent, no newer version yet). */
-  refreshingIds: ReadonlySet<string>
-  /** Ids whose last refresh reached nobody (delivered:false) — show a small note. */
+  /** Surfaces with a request in flight RIGHT NOW — between the POST and its
+   *  response, and nothing longer. The spinner past that point comes from the
+   *  server's own `freshness.phase`, which is the only thing that actually knows. */
+  pendingIds: ReadonlySet<string>
+  /** Surfaces whose last intent could not reach anybody. Distinct from a failure the
+   *  server recorded: this one means the REQUEST did not land. */
   unreachableIds: ReadonlySet<string>
-  /** True while a "refresh all" fan-out is still settling (any surface refreshing). */
-  bulkRefreshing: boolean
-  /** Refresh ONE surface: POST, spin, and record its current amendedAt as the baseline. */
+  /** True while a cheap check-all is still settling. */
+  bulkChecking: boolean
+  /**
+   * Tell the server a person is looking at this Surface.
+   *
+   * Call ONLY from a real event handler. Sending `navigate` on mount, on focus, or
+   * from an SSE effect would be the ambient execution R12 forbids — and the server
+   * would refuse it anyway, which is the point of checking in both places.
+   */
+  onSurfaceIntent: (surface: SlateSurface, intent: SurfaceIntent) => Promise<IntentOutcome> | undefined
+  /** The ⟳ control. `explicit` works whatever the phase says (R18). */
   refresh: (surface: SlateSurface) => void
-  /** Fan out: refresh every surface in `visible`, and hold a Slate-level loading
-   *  state until they've each settled (a new version, a timeout, or unreachable). */
-  refreshAll: (visible: SlateSurface[]) => void
+  /** Check every visible Surface CHEAPLY. Host recipes may run; agent Surfaces are
+   *  left dirty, and no prompt is delivered for any of them. */
+  checkAll: (visible: SlateSurface[]) => void
 }
 
-/** Owns the refresh state for a run's whole Slate, so BOTH the per-surface buttons
- *  (cards + open-point rows) and the header "refresh all" share one source of truth. */
-export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateRefreshApi {
-  // surfaceId → the amendedAt we recorded when refresh was requested. Membership IS
-  // "this surface is refreshing"; the value is the baseline the clear-effect compares.
-  const [refreshing, setRefreshing] = useState<Map<string, number>>(() => new Map())
-  // surfaceId → the amendedAt when the last refresh reached nobody. The note clears
-  // when the user refreshes again OR the surface later updates (amendedAt advances).
-  const [unreachable, setUnreachable] = useState<Map<string, number>>(() => new Map())
-  const [bulkRefreshing, setBulkRefreshing] = useState(false)
-  // Per-surface timeout handles (the bound) and in-flight POST guard, in refs so they
-  // don't churn identities or leak into the closure as stale values.
-  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+/** Is this Surface something a human's arrival should refresh? Only a dirty one —
+ *  moving around a healthy Slate must cost nothing, which is most of what "leaving
+ *  Tinstar open is free" means in practice. The server re-checks this; sending
+ *  anyway would just be noise. */
+export function isDirty(surface: SlateSurface): boolean {
+  const phase = surface.freshness?.phase
+  return phase !== undefined && phase !== 'current'
+}
+
+/** Would a cheap check-all do anything for this Surface? Only a host recipe can run
+ *  without a person, so only a host recipe is worth a request. */
+export function isHostMaintained(surface: SlateSurface): boolean {
+  return surface.refresh?.kind === 'host'
+}
+
+/** Owns the refresh state for a run's whole Slate, so the per-surface controls, the
+ *  selection seam, and the header's check-all share one source of truth. */
+export function useSlateRefresh(runId: string): SlateRefreshApi {
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
+  const [unreachable, setUnreachable] = useState<ReadonlySet<string>>(() => new Set())
+  const [bulkChecking, setBulkChecking] = useState(false)
+  // The ONE piece of local truth: a request is on the wire for this Surface. Held in
+  // a ref rather than state because it gates the very next call, and a state update
+  // that has not flushed yet would let a double click through.
   const inFlight = useRef<Set<string>>(new Set())
 
-  const clear = useCallback((id: string) => {
-    const t = timers.current.get(id)
-    if (t) { clearTimeout(t); timers.current.delete(id) }
-    setRefreshing((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Map(prev)
-      next.delete(id)
+  const mark = useCallback((set: (v: (prev: ReadonlySet<string>) => ReadonlySet<string>) => void, id: string, on: boolean) => {
+    set(prev => {
+      if (prev.has(id) === on) return prev
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
       return next
     })
   }, [])
 
-  const refresh = useCallback(
-    (surface: SlateSurface) => {
+  const onSurfaceIntent = useCallback(
+    (surface: SlateSurface, intent: SurfaceIntent): Promise<IntentOutcome> | undefined => {
       const id = surface.id
-      if (inFlight.current.has(id)) return // one POST per surface in flight at a time
+      // ONE REQUEST AT A TIME, and only across the round trip. Past the response the
+      // server's own state is authoritative and a second intent legitimately JOINS
+      // the attempt in flight — refusing it locally would be the client re-inventing
+      // the single-flight rule the durable record already enforces.
+      if (inFlight.current.has(id)) return undefined
       inFlight.current.add(id)
-      // Optimistic: spin immediately (before the round trip) and drop any stale note.
-      setRefreshing((prev) => {
-        const next = new Map(prev)
-        next.set(id, surface.amendedAt)
-        return next
-      })
-      setUnreachable((prev) => {
-        if (!prev.has(id)) return prev
-        const next = new Map(prev)
-        next.delete(id)
-        return next
-      })
-      const existing = timers.current.get(id)
-      if (existing) clearTimeout(existing)
-      timers.current.set(id, setTimeout(() => clear(id), REFRESH_MAX_MS))
+      mark(setPending, id, true)
+      mark(setUnreachable, id, false)
 
-      // Return the POST promise so refreshAll can await each in sequence — concurrent
-      // POSTs all hit the SAME tmux session and interleave keystrokes (send-keys +
-      // sleep + Enter is not serialized), garbling the agent's input.
-      return (async () => {
+      return (async (): Promise<IntentOutcome> => {
         try {
           const res = await apiFetch(`/api/runs/${runId}/slate/surfaces/${id}/refresh`, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ intent }),
           })
           const body = (await res.json().catch(() => null)) as
-            | { ok?: boolean; data?: { delivered?: boolean }; error?: { message?: string } }
+            | { ok?: boolean; data?: { outcome?: IntentOutcome; delivered?: boolean } }
             | null
-          if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `refresh failed (${res.status})`)
-          // Delivered:false — the run is unreachable, so no new version is coming.
-          // Clear the spinner NOW and flag the note; don't spin on a dead run.
-          if (body.data?.delivered === false) {
-            setUnreachable((prev) => new Map(prev).set(id, surface.amendedAt))
-            clear(id)
-          }
-          // Delivered:true — keep spinning until amendedAt advances or the bound elapses.
+          if (!res.ok || !body?.ok) throw new Error(`refresh failed (${res.status})`)
+          const outcome = body.data?.outcome
+            // An older server answers `{ delivered }` and no outcome. Read as
+            // started/unavailable rather than as a failure, so a client ahead of its
+            // server degrades instead of showing an error nobody can act on.
+            ?? (body.data?.delivered === false ? 'unavailable' : 'started')
+          if (outcome === 'unavailable') mark(setUnreachable, id, true)
+          return outcome
         } catch {
-          // Couldn't even reach the endpoint — treat like unreachable: stop spinning.
-          setUnreachable((prev) => new Map(prev).set(id, surface.amendedAt))
-          clear(id)
+          // The REQUEST did not land — a different fact from the server recording an
+          // unavailable check, and the only one the client is entitled to assert.
+          mark(setUnreachable, id, true)
+          return 'unreachable'
         } finally {
           inFlight.current.delete(id)
+          mark(setPending, id, false)
         }
       })()
     },
-    [runId, clear],
+    [runId, mark],
   )
 
-  const refreshAll = useCallback(
+  const refresh = useCallback(
+    (surface: SlateSurface) => { void onSurfaceIntent(surface, 'explicit') },
+    [onSurfaceIntent],
+  )
+
+  const checkAll = useCallback(
     (visible: SlateSurface[]) => {
-      if (visible.length === 0) return
-      setBulkRefreshing(true)
-      // Fan out: fire every surface's refresh at once. The tmux backend now
-      // serializes send-keys per session (serializeByKey), so concurrent POSTs
-      // can't interleave a session's keystrokes — and recipe-bearing surfaces
-      // (code-spawned authors, separate processes) refresh TRULY in parallel with
-      // no main-agent bottleneck. Clear the bulk flag once every POST has settled
-      // (Promise.all), NOT on a transient refreshing.size===0 — a dead run clears
-      // its first surface at once, which would otherwise flip the flag off early.
-      void Promise.all(visible.map((s) => refresh(s))).finally(() => setBulkRefreshing(false))
+      // ONLY THE HOST-MAINTAINED ONES. Sending `bulk-check` for an agent Surface would
+      // be answered with `skipped`, so filtering here is not a second policy — it is
+      // not asking a question whose answer is already known, on every card, every time.
+      const checkable = visible.filter(isHostMaintained)
+      if (checkable.length === 0) return
+      setBulkChecking(true)
+      void Promise.all(checkable.map(s => onSurfaceIntent(s, 'bulk-check')))
+        .finally(() => setBulkChecking(false))
     },
-    [refresh],
+    [onSurfaceIntent],
   )
 
-  // Clear the spinner once a NEWER version of the surface has landed (its amendedAt
-  // exceeds the recorded baseline). Watching amendedAt directly — not just "the id is
-  // still present" — is what distinguishes a real re-authoring from an SSE re-emit of
-  // the same surface.
-  useEffect(() => {
-    if (refreshing.size === 0) return
-    let changed = false
-    const next = new Map(refreshing)
-    for (const [id, recordedAt] of refreshing) {
-      const s = surfaces.find((x) => x.id === id)
-      if (s && s.amendedAt > recordedAt) {
-        const t = timers.current.get(id)
-        if (t) { clearTimeout(t); timers.current.delete(id) }
-        next.delete(id)
-        changed = true
-      }
-    }
-    if (changed) setRefreshing(next)
-  }, [surfaces, refreshing])
+  // Membership sets are already sets; memoised so consumers get stable identities.
+  const pendingIds = useMemo(() => pending, [pending])
+  const unreachableIds = useMemo(() => unreachable, [unreachable])
 
-  // Clear the "session not reachable" note once the surface actually updates — a newer
-  // amendedAt means a version DID arrive, so the note is stale.
-  useEffect(() => {
-    if (unreachable.size === 0) return
-    let changed = false
-    const next = new Map(unreachable)
-    for (const [id, at] of unreachable) {
-      const s = surfaces.find((x) => x.id === id)
-      if (s && s.amendedAt > at) { next.delete(id); changed = true }
-    }
-    if (changed) setUnreachable(next)
-  }, [surfaces, unreachable])
-
-  // Drop every pending timer on unmount.
-  useEffect(() => {
-    const pending = timers.current
-    return () => {
-      for (const t of pending.values()) clearTimeout(t)
-      pending.clear()
-    }
-  }, [])
-
-  // Membership sets for consumers (the Maps' values are internal baselines only).
-  const refreshingIds = useMemo(() => new Set(refreshing.keys()), [refreshing])
-  const unreachableIds = useMemo(() => new Set(unreachable.keys()), [unreachable])
-
-  return { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll }
+  return { pendingIds, unreachableIds, bulkChecking, onSurfaceIntent, refresh, checkAll }
 }
 
-/** A ⟳ refresh affordance shared by the surface cards and the open-point rows. Shows
- *  a spinning glyph while its surface is refreshing; disabled so a second click can't
- *  re-arm mid-flight. `data-refreshing` lets a test read the state directly. */
-export function RefreshButton({ id, refreshing, onClick, className }: {
+/**
+ * The ⟳ control.
+ *
+ * `refreshing` comes from the SERVER's phase now, not from a local optimistic flag —
+ * so a spinner means the host really is working on it, and it stops when the host
+ * says so rather than when a ten-minute timer gives up. `pending` is the separate,
+ * much shorter local state covering the request itself.
+ */
+export function RefreshButton({ id, refreshing, pending, onClick, className }: {
   id: string
   refreshing: boolean
+  pending?: boolean
   onClick: () => void
   className?: string
 }) {
+  const busy = refreshing || !!pending
   return (
     <button
       data-testid={`refresh-surface-${id}`}
       data-refreshing={refreshing ? 'true' : undefined}
+      data-pending={pending ? 'true' : undefined}
       onClick={onClick}
-      disabled={refreshing}
-      title={refreshing ? 'Refreshing…' : 'Refresh — re-run this surface’s author'}
+      // Disabled only across the round trip. A second click once the server has
+      // answered is legitimate — it joins the attempt in flight — and greying the
+      // control out for the whole refresh would tell the user the opposite.
+      disabled={!!pending}
+      title={busy ? 'Refreshing…' : 'Refresh — rebuild this surface now'}
       className={`leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-70 ${className ?? ''}`}
     >
-      <span className={refreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
+      <span className={busy ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
     </button>
   )
 }

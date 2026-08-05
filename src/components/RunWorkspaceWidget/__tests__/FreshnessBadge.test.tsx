@@ -176,3 +176,76 @@ describe('freshnessTitle', () => {
     expect(title).toContain('deadline has passed')
   })
 })
+
+// ---------------------------------------------------------------------------
+// What is KNOWN vs when it was last CHECKED (R3, KTD5).
+//
+// The phase says what the host is DOING. The check outcome says how the last look
+// ENDED. They are different questions, and a Surface can be dirty because a check
+// succeeded and found a change, or dirty because nothing could look at it at all. A
+// reader who cannot tell those apart has no idea whether to wait or to act.
+// ---------------------------------------------------------------------------
+
+describe('the last completed check', () => {
+  const check = (over: Partial<NonNullable<SurfaceFreshness['lastCheck']>> = {}) => ({
+    startedAt: 1_700_000_000_000,
+    finishedAt: 1_700_000_060_000,
+    execution: 'host' as const,
+    reason: 'its verification interval elapsed',
+    targetGeneration: 3,
+    outcome: 'succeeded' as const,
+    ...over,
+  })
+
+  it('renders NOTHING for a successful check — the resting state is silence here too', () => {
+    // Same discipline as `current`: a Slate where every card wears a green tick is a
+    // Slate where nobody reads any of them.
+    render(<FreshnessBadge freshness={freshness({ phase: 'possibly-stale', lastCheck: check() })} />)
+    expect(screen.queryByTestId('freshness-last-check')).toBeNull()
+  })
+
+  it.each([
+    ['failed', 'check failed'],
+    ['unavailable', 'not checked'],
+    ['superseded', 'moved again'],
+  ] as const)('gives %s its own words', (outcome, label) => {
+    render(<FreshnessBadge freshness={freshness({ phase: 'possibly-stale', lastCheck: check({ outcome }) })} />)
+    const el = screen.getByTestId('freshness-last-check')
+    expect(el.dataset.outcome).toBe(outcome)
+    expect(el.textContent).toContain(label)
+  })
+
+  it('the three non-success outcomes are visually distinct from each other', () => {
+    const looks = (['failed', 'unavailable', 'superseded'] as const).map(outcome => {
+      cleanup()
+      render(<FreshnessBadge freshness={freshness({ phase: 'possibly-stale', lastCheck: check({ outcome }) })} />)
+      return screen.getByTestId('freshness-last-check').className
+    })
+    expect(new Set(looks).size).toBe(3)
+  })
+
+  it('a DIRTY surface whose check succeeded reads differently from one nothing could check', () => {
+    // The distinction the whole two-field split exists for. Both are stale; only one
+    // of them means "the host cannot tell you anything".
+    const succeeded = freshnessTitle(freshness({ phase: 'possibly-stale', lastCheck: check() }))
+    const unavailable = freshnessTitle(freshness({
+      phase: 'possibly-stale',
+      lastCheck: check({ outcome: 'unavailable', detail: 'its foreground agent is not running' }),
+    }))
+    expect(succeeded).toMatch(/last confirmed this at/)
+    expect(unavailable).toMatch(/Nothing could check this at/)
+    expect(unavailable).toContain('its foreground agent is not running')
+    expect(succeeded).not.toBe(unavailable)
+  })
+
+  it('says plainly when the host has never finished a check, rather than reassuring', () => {
+    expect(freshnessTitle(freshness({ lastCheck: null }))).toMatch(/has not finished a check/)
+  })
+
+  it('names WHO checked, so a machine check reads differently from an agent rebuild', () => {
+    const byHost = freshnessTitle(freshness({ lastCheck: check({ execution: 'host' }) }))
+    const byOwner = freshnessTitle(freshness({ lastCheck: check({ execution: 'owner' }) }))
+    expect(byHost).toMatch(/A machine check/)
+    expect(byOwner).toMatch(/Its foreground agent/)
+  })
+})
