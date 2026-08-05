@@ -41,6 +41,7 @@ import {
 import type { SurfaceHostProbe } from '../surfaces/surface-context'
 import { slateSourceAdapters } from '../surfaces/slate-source'
 import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
+import { humanIntents, unavailableOwners } from '../observability/refresh-metrics'
 
 /** What this module needs from `RouteContext`. Narrowed deliberately: a handler
  *  that could reach NATS or the simulator would eventually be asked to. */
@@ -463,6 +464,11 @@ export async function handleRefreshIntent(
   }
 
   const result = await coordinator.humanIntent(surfaceId)
+  // COUNTED HERE, at the one place every intent passes through. `joined` climbing far
+  // above `started` is a UI sending intent too eagerly — absorbed correctly by the
+  // durable single-flight rule, but worth being able to see.
+  humanIntents.inc({ outcome: result.status })
+  if (result.status === 'unavailable') unavailableOwners.inc()
   if (result.status === 'unknown-surface') {
     return refuse('NOT_FOUND', `Surface ${surfaceId} not found`)
   }

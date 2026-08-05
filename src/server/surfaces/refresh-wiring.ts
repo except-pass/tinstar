@@ -40,6 +40,7 @@ import { agentRecipePrompt } from './surface-trigger-matcher'
 import { runWitness, witnessLookupIdentity, witnessTimeoutMs, type WitnessOutcome } from './witness-registry'
 import { defaultWitnessDeps } from './witness-runtime'
 import { resolveLookupBudget, SurfaceLookupBroker } from './surface-lookup-broker'
+import { coalescedLookups, deferredLookups, hostChecks } from '../observability/refresh-metrics'
 import { runHostRecipe } from './host-refresh-registry'
 
 const execFileAsync = promisify(execFile)
@@ -218,7 +219,8 @@ export function buildRefreshCoordinatorDeps(
     // seams. There is nothing here that could invoke a model, create a session,
     // allocate a terminal, or delegate to an agent (R7), and that is structural — a
     // handler cannot reach a capability nothing gives it.
-    runHostRecipe: ({ surface, recipe }) => runHostRecipe({
+    runHostRecipe: async ({ surface, recipe }) => {
+      const outcome = await runHostRecipe({
       recipe,
       prior: surface.content,
       deps: {
@@ -229,7 +231,14 @@ export function buildRefreshCoordinatorDeps(
           : {}),
         now: () => Date.now(),
       },
-    }),
+      })
+      // Counted at the SEAM that knows the answer, so the series and the coordinator
+      // can never disagree about what happened. `deferred` is counted too — it is the
+      // one outcome that records nothing on the Surface, and a budget nobody can see
+      // is a budget nobody can size.
+      hostChecks.inc({ outcome: outcome.status })
+      return outcome
+    },
 
     runWitness: async ({ surface, claim }) => {
       // The BOUND worktree first, then provenance — the same order
@@ -260,7 +269,11 @@ export function buildRefreshCoordinatorDeps(
         return run()
       }
       const result = await broker.lookup<WitnessOutcome>({ ...identity, run })
-      if (result.status === 'deferred') return { status: 'deferred', detail: result.detail }
+      if (result.status === 'deferred') {
+        deferredLookups.inc({ provider: identity.provider })
+        return { status: 'deferred', detail: result.detail }
+      }
+      if (result.status === 'done' && result.coalesced) coalescedLookups.inc({ provider: identity.provider })
       if (result.status === 'threw') {
         return { status: 'unresolved', detail: `the ${identity.provider} lookup threw: ${String(result.error)}` }
       }

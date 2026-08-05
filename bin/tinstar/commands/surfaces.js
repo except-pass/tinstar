@@ -29,7 +29,7 @@ const USAGE = `usage: tinstar surfaces <command>
   update <id> --rev <n> [--headline <text>] [--recipe <text>|--clear-recipe]
   authority <id> --rev <n> --to <canonical-direct|source-binding>
   thread <id> --text <text> [--author <user|agent|process>]
-  refresh <id>
+  refresh <id> [--intent <navigate|interact|explicit|bulk-check>]
 
   group <childId,...> --headline <text>  fold siblings into one new parent
   reparent <id,...> --home <canvas|surfaceId>
@@ -170,9 +170,21 @@ export function buildRequest(argv) {
         },
       }
     }
-    case 'refresh':
+    case 'refresh': {
       if (!first) throw new Error('surfaces refresh: <id> is required')
-      return { method: 'POST', path: `/api/surfaces/${enc(first)}/refresh`, body: {} }
+      // THE INTENT IS THE PERMISSION (plan U5). `explicit` is the default because a
+      // bare `surfaces refresh <id>` is a person at a terminal asking for it — the
+      // same claim the ⟳ button makes. An AGENT driving this CLI should pass
+      // `--intent bulk-check`, which runs machine checks and can never deliver a
+      // prompt: agent work needs a human, and a tool announcing itself honestly is
+      // how that stays true rather than becoming a header nobody sets.
+      const intent = typeof flags.intent === 'string' ? flags.intent : 'explicit'
+      const known = ['navigate', 'interact', 'explicit', 'bulk-check']
+      if (!known.includes(intent)) {
+        throw new Error(`surfaces refresh: --intent must be one of ${known.join(', ')}`)
+      }
+      return { method: 'POST', path: `/api/surfaces/${enc(first)}/refresh`, body: { intent } }
+    }
 
     case 'group': {
       const childIds = commaList(first, 'surfaces group: <childId,...>')

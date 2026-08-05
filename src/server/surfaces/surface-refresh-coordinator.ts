@@ -63,6 +63,7 @@ import {
   type SurfaceTriggerEvent,
 } from './surface-trigger-matcher'
 import type { WitnessOutcome } from './witness-registry'
+import { legacyJobsReconciled } from '../observability/refresh-metrics'
 
 /** An executor's staged output, after the caller has validated it. */
 export interface StagedRefreshResult {
@@ -1534,6 +1535,7 @@ export class SurfaceRefreshCoordinator {
    */
   private async reconcileLegacyJobs(report: RefreshPassReport): Promise<void> {
     for (const entry of this.deps.jobs.takeLegacyReconciliations()) {
+      legacyJobsReconciled.inc()
       const surface = this.surface(entry.surfaceId)
       if (!surface) continue
       const at = this.deps.now()
