@@ -112,7 +112,7 @@ describe('isLiveSessionRecord', () => {
 
 describe('refreshDispatchPrompt', () => {
   const surface = {
-    content: { headline: 'Coverage', recipe: 'Re-run\ncoverage\nnow' },
+    content: { headline: 'Coverage', recipe: { kind: 'agent', prompt: 'Re-run\ncoverage\nnow' } },
     freshness: {
       phase: 'possibly-stale' as const, overdue: false,
       staleReason: { kind: 'git-revision' as const, key: 'k', detail: 'the worktree moved', generation: 2, at: 1 },

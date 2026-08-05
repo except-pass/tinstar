@@ -36,6 +36,7 @@ import {
   type RefreshCoordinatorDeps,
   type StagedRefreshResult,
 } from './surface-refresh-coordinator'
+import { agentRecipePrompt } from './surface-trigger-matcher'
 import { runWitness, witnessTimeoutMs } from './witness-registry'
 import { defaultWitnessDeps } from './witness-runtime'
 
@@ -244,7 +245,11 @@ export function buildRefreshCoordinator(
  * its argument as data rather than interpolating it into a command line.
  */
 export function refreshDispatchPrompt(surface: Surface, stagingPath: string): string {
-  const recipe = surface.content.recipe
+  // ONLY AN AGENT RECIPE HAS A PROMPT. A host recipe is machine work with no
+  // instruction to deliver, and reading its handler name into somebody's
+  // conversation would be a category error — so this goes through the accessor
+  // rather than reaching into the union.
+  const recipe = agentRecipePrompt(surface.content.recipe)
   return [
     `The host scheduled a refresh of your Slate surface "${oneLine(surface.content.headline)}".`,
     ...(surface.freshness.staleReason ? [`It scheduled it because ${surface.freshness.staleReason.detail}.`] : []),

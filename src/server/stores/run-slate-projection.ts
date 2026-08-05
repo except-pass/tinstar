@@ -32,6 +32,7 @@ import {
   type Surface,
   type SurfaceClaimObservation,
   type SurfaceCompatAlias,
+  type SurfaceRefreshRecipe,
 } from '../../domain/types'
 
 /** The compatibility alias a Surface carries for `runId`, if any. A Surface may
@@ -129,12 +130,27 @@ const MAX_BOUND_STEPS = 1200
  * adapter writes the author's file back unchanged; this is a read on the way out.
  * Returns the SAME body object when nothing bound, so an unbound Surface costs the
  * document store's `JSON.stringify` comparison nothing extra.
+ *
+ * ONLY FOR A HOST-OWNED SURFACE (KTD7, R1/R2/R5). A Surface has ONE writer and one
+ * outcome, and binding here is the host writing part of a card. That is legitimate
+ * when the Surface's own recipe is a host check — the host is the writer, and it
+ * returns the whole Surface — and it is NOT legitimate on an interaction Surface,
+ * where the agent owns the prose and the host would be silently editing regions
+ * underneath it. On those, claim observations still DETECT drift (they mark the
+ * Surface dirty) but never patch its content: the reader sees the author's own last
+ * word, honestly dated, until the author's next rebuild replaces the whole thing.
+ *
+ * The previous behaviour was the second case, unconditionally: a roadmap card's rail
+ * corrected itself while its prose kept describing the world the author last saw, so
+ * one card said two different things and neither was marked as older than the other.
  */
 export function bindClaimSteps(
   body: A2uiContent | undefined,
   observations: Record<string, SurfaceClaimObservation> | undefined,
+  recipe?: SurfaceRefreshRecipe,
 ): A2uiContent | undefined {
   if (!body) return body
+  if (recipe?.kind !== 'host') return body
   let bodyChanged = false
   const components = body.components.map(component => {
     if (component.component !== 'Stepper' || !Array.isArray(component.steps)) return component
@@ -179,7 +195,7 @@ function claimStepStatus(
 /** One canonical Surface as the client-facing `Run.slate` entry it aliases. */
 export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSurface {
   const objective = isObjectiveSurface(s, localId)
-  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations, s.content.recipe)
   return {
     id: localId,
     author: s.author,
@@ -188,6 +204,9 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
     // whatever order it happens to carry cannot strand it mid-list.
     order: objective ? OBJECTIVE_ORDER : s.order ?? s.createdAt,
     ...(body ? { body } : {}),
+    // THE TYPED RECIPE, not a rendered string. The panel has to tell an agent
+    // recipe (which only a human's deliberate interaction may run) from a host one
+    // (which the host keeps warm by itself) to decide what its controls mean.
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
     // The author's CLAIM about the work, beside the status rather than in it. The
     // panel needs both: `discussing` says the agent spoke last, and only the proposal
@@ -231,7 +250,7 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
  * its content from a request body — so a derived status here never reaches the record.
  */
 export function pointFromCanonical(s: Surface, runId: string, localId: string): Point {
-  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations, s.content.recipe)
   return {
     id: localId,
     runId,

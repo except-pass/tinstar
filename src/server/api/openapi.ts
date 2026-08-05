@@ -1,3 +1,33 @@
+import { HOST_RECIPE_KINDS } from '../../domain/types'
+
+/** The typed refresh recipe, as an author may write it (R1/R6/R7, KTD1). Shared by
+ *  the create/update bodies and the Surface schema so the two cannot drift. */
+const RECIPE_SCHEMA = {
+  oneOf: [
+    { type: 'string', description: 'Prose. Read as an AGENT recipe: only a human\'s deliberate navigation or interaction runs it.' },
+    {
+      type: 'object',
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['agent', 'host'] },
+        prompt: { type: 'string', description: 'agent only: the instruction delivered to the foreground agent.' },
+        handler: {
+          type: 'string', enum: [...HOST_RECIPE_KINDS],
+          description: 'host only: a registered machine check. The ONLY proactive-eligible form.',
+        },
+        params: {
+          type: 'object', additionalProperties: { type: 'string' },
+          description: 'host only: flat string parameters.',
+        },
+      },
+    },
+  ],
+  description:
+    'The ONE recipe that rebuilds this whole Surface. The kind decides who may run it: a host '
+    + 'handler from the closed list may run proactively; anything else, including all prose, runs '
+    + 'only on a discrete human action. An unrecognised handler is refused, never guessed at.',
+}
+
 /** OpenAPI 3.0 specification for the Tinstar API */
 export const spec = {
   openapi: '3.0.3',
@@ -804,7 +834,7 @@ export const spec = {
             expectedRev: { type: 'integer' },
             headline: { type: 'string' },
             body: { type: 'object', nullable: true },
-            recipe: { type: 'string', nullable: true },
+            recipe: { ...RECIPE_SCHEMA, nullable: true },
             expectedWatermark: { type: 'string' },
           },
         } } } },
@@ -1190,7 +1220,7 @@ export const spec = {
         properties: {
           headline: { type: 'string' },
           body: { type: 'object', description: 'A2UI content from the bounded component catalog; validated at the boundary' },
-          recipe: { type: 'string', description: 'Self-contained instruction that rebuilds this Surface. Absent means refresh degrades to a nudge.' },
+          recipe: RECIPE_SCHEMA,
         },
       },
       State: {

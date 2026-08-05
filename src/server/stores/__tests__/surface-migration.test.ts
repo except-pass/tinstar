@@ -92,7 +92,7 @@ describe('migrateLegacySlate — happy path', () => {
       author: 'agent',
       headline: 'Which rollback path?',
       content: body('the two options') as never,
-      refresh: 're-run the rollback analysis',
+      refresh: { kind: 'agent' as const, prompt: 're-run the rollback analysis' },
       order: 42,
       status: 'waiting',
       replies: [{ id: 'rep1', author: 'user', text: 'roll forward', createdAt: 2_000 }],
@@ -105,7 +105,9 @@ describe('migrateLegacySlate — happy path', () => {
     expect(s.content.headline).toBe('Which rollback path?')
     expect(s.content.body).toEqual(body('the two options'))
     // The legacy file-owned `refresh` prompt IS the canonical author-declared recipe.
-    expect(s.content.recipe).toBe('re-run the rollback analysis')
+    // TYPED, and specifically `agent`: a legacy record's recipe is prose, and prose
+    // migrates to the human-authorized path rather than to anything the host runs.
+    expect(s.content.recipe).toEqual({ kind: 'agent', prompt: 're-run the rollback analysis' })
     expect(s.author).toBe('agent')
     expect(s.order).toBe(42)
     expect(s.thread.replies.map(r => r.text)).toEqual(['roll forward'])

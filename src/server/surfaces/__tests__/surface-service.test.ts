@@ -345,7 +345,7 @@ describe('claims (plan U1, R1)', () => {
     }, ctx({ at: 3_000 })))
     expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
     expect(done.surfaces[0]!.surface.content.claims).toEqual([claim])
-    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+    expect(done.surfaces[0]!.surface.content.recipe).toEqual({ kind: 'agent', prompt: 'rebuild me' })
   })
 
   it('sorts params so reordering keys is not an edit', async () => {
@@ -1673,6 +1673,189 @@ describe('the author proposes, the user disposes (status honesty)', () => {
     }, ctx({ at: 3_000 })))
     expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
     expect(done.surfaces[0]!.surface.content.proposal?.state).toBe('working')
-    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+    expect(done.surfaces[0]!.surface.content.recipe).toEqual({ kind: 'agent', prompt: 'rebuild me' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Freshness evidence: what is KNOWN vs when it was last CHECKED (R3/R15-R18, KTD5).
+//
+// A Surface shows two facts, and one timestamp could never tell them apart: the
+// content's own age, and the age of the last time the host looked. The common case
+// is the one that proves it — a check that succeeds and changes nothing must move
+// exactly one of them.
+// ---------------------------------------------------------------------------
+
+describe('last-known and last-checked evidence', () => {
+  /** A Surface taken all the way to `refreshing`, ready for a completion. */
+  async function refreshing(h: Harness, at = 2_000): Promise<Surface> {
+    await h.create('Coverage 88%')
+    await h.svc.refreshRequest('sf-1', {}, ctx({ at }))
+    const queued = h.docStore.getSurface('sf-1')!
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: queued.rev }, ctx({ at }))
+    return h.docStore.getSurface('sf-1')!
+  }
+
+  it('stamps both fields at birth, so no record is ever without evidence', async () => {
+    const h = harness()
+    const created = await h.create('hello')
+    expect(created.freshness.lastKnownAt).toBe(created.createdAt)
+    // Explicitly null rather than absent: an omitted key is dropped from an SSE
+    // delta, so "never checked" has to be a value a client can actually receive.
+    expect(created.freshness.lastCheck).toBeNull()
+  })
+
+  it('an UNCHANGED successful check advances lastCheck and leaves lastKnownAt alone', async () => {
+    // THE COMMON CASE, and the whole reason the two fields exist. 110 of 121 measured
+    // refreshes changed nothing; each one is honestly "we confirmed at 10:47 that the
+    // 09:12 answer still holds", and a single timestamp would have said "10:47" and
+    // quietly relabelled month-old content as fresh.
+    const h = harness()
+    const before = await refreshing(h)
+    const knownAt = before.freshness.lastKnownAt
+
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: before.source?.generation ?? 0,
+      check: { startedAt: 2_000, execution: 'host', reason: 'its verification interval elapsed' },
+    }, ctx({ at: 3_000 })))
+
+    const f = done.surfaces[0]!.surface.freshness
+    expect(f.lastKnownAt).toBe(knownAt)
+    expect(f.lastCheck).toMatchObject({
+      outcome: 'succeeded', execution: 'host', startedAt: 2_000, finishedAt: 3_000,
+      reason: 'its verification interval elapsed',
+    })
+    expect(done.surfaces[0]!.surface.content.headline).toBe('Coverage 88%')
+  })
+
+  it('a REPLACEMENT advances both, atomically', async () => {
+    const h = harness()
+    const before = await refreshing(h)
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: before.source?.generation ?? 0,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 3_000 })))
+
+    const s = done.surfaces[0]!.surface
+    expect(s.content.headline).toBe('Coverage 92%')
+    expect(s.freshness.lastKnownAt).toBe(3_000)
+    expect(s.freshness.lastCheck?.outcome).toBe('succeeded')
+    expect(s.freshness.phase).toBe('current')
+  })
+
+  it('a FAILED check preserves the content and records why', async () => {
+    const h = harness()
+    await refreshing(h)
+    unwrap(await h.svc.failRefresh('sf-1', {
+      jobId: 'job-1', message: 'the coverage tool is not installed',
+    }, ctx({ at: 3_000 })))
+
+    const s = h.docStore.getSurface('sf-1')!
+    expect(s.content.headline).toBe('Coverage 88%')   // last known, still readable
+    expect(s.freshness.lastKnownAt).toBe(s.createdAt) // and still honestly dated
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'failed', finishedAt: 3_000 })
+    expect(s.freshness.lastCheck?.detail).toMatch(/not installed/)
+  })
+
+  it('UNAVAILABLE is a distinct outcome from failed, because it calls for something different', async () => {
+    // "Jira is down" and "your agent has exited" both leave the card stale, and a
+    // reader does different things about them. Collapsing them would hide that.
+    const h = harness()
+    await refreshing(h)
+    unwrap(await h.svc.failRefresh('sf-1', {
+      jobId: 'job-1', outcome: 'unavailable',
+      message: 'its foreground agent is not running, so nobody could rebuild it',
+      check: { execution: 'owner', reason: 'you navigated to it' },
+    }, ctx({ at: 3_000 })))
+
+    const f = h.docStore.getSurface('sf-1')!.freshness
+    expect(f.lastCheck?.outcome).toBe('unavailable')
+    expect(f.lastCheck?.execution).toBe('owner')
+    expect(h.docStore.getSurface('sf-1')!.content.headline).toBe('Coverage 88%')
+  })
+
+  it('SUPERSEDED is a completed check with a non-current outcome, not an error', async () => {
+    // KTD10. The host looked, got an answer, and the answer described a world that
+    // had already moved. The Surface stays dirty and keeps its content.
+    const h = harness()
+    const before = await refreshing(h)
+    const stale = await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: (before.source?.generation ?? 0) - 1,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 3_000 }))
+
+    expect(err(stale).reason).toBe('superseded')
+    const s = h.docStore.getSurface('sf-1')!
+    expect(s.content.headline).toBe('Coverage 88%')
+    expect(s.freshness.phase).toBe('possibly-stale')
+    expect(s.freshness.lastCheck?.outcome).toBe('superseded')
+    expect(s.freshness.lastKnownAt).toBe(s.createdAt)
+  })
+
+  it('the four outcomes are distinguishable from the record alone, without logs', async () => {
+    // R3's readable requirement, asserted as a set rather than one at a time: a UI
+    // that has to tell these apart can, and cannot accidentally render two of them
+    // the same way.
+    const outcomes = new Set<string>()
+    for (const build of [
+      async (h: Harness, before: Surface) => {
+        await h.svc.completeRefresh('sf-1', {
+          jobId: 'j', expectedRev: before.rev, observedGeneration: before.source?.generation ?? 0,
+        }, ctx({ at: 3_000 }))
+      },
+      async (h: Harness) => { await h.svc.failRefresh('sf-1', { jobId: 'j', message: 'boom' }, ctx({ at: 3_000 })) },
+      async (h: Harness) => {
+        await h.svc.failRefresh('sf-1', { jobId: 'j', outcome: 'unavailable', message: 'gone' }, ctx({ at: 3_000 }))
+      },
+      async (h: Harness, before: Surface) => {
+        await h.svc.completeRefresh('sf-1', {
+          jobId: 'j', expectedRev: before.rev, observedGeneration: (before.source?.generation ?? 0) - 1,
+        }, ctx({ at: 3_000 }))
+      },
+    ]) {
+      const h = harness()
+      const before = await refreshing(h)
+      await build(h, before)
+      outcomes.add(h.docStore.getSurface('sf-1')!.freshness.lastCheck!.outcome)
+    }
+    expect([...outcomes].sort()).toEqual(['failed', 'succeeded', 'superseded', 'unavailable'])
+  })
+
+  it('queueing answers nothing, so it does not overwrite the last completed check', async () => {
+    // A check that has not finished has not answered anything. Overwriting the last
+    // one that did would destroy evidence to produce none.
+    const h = harness()
+    await refreshing(h)
+    await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
+    const failed = h.docStore.getSurface('sf-1')!.freshness.lastCheck
+
+    await h.svc.refreshRequest('sf-1', {}, ctx({ at: 4_000 }))
+    expect(h.docStore.getSurface('sf-1')!.freshness.phase).toBe('queued')
+    expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck).toEqual(failed)
+  })
+
+  it('a later success CLEARS a prior failure rather than leaving both readable', async () => {
+    const h = harness()
+    await refreshing(h)
+    await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
+    expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck?.outcome).toBe('failed')
+
+    await h.svc.refreshRequest('sf-1', {}, ctx({ at: 4_000 }))
+    const queued = h.docStore.getSurface('sf-1')!
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-2', expectedRev: queued.rev }, ctx({ at: 4_000 }))
+    const now = h.docStore.getSurface('sf-1')!
+    unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-2', expectedRev: now.rev, observedGeneration: now.source?.generation ?? 0,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 5_000 })))
+
+    const f = h.docStore.getSurface('sf-1')!.freshness
+    expect(f.lastCheck?.outcome).toBe('succeeded')
+    // The failure itself is gone from the record — a successful barrier answers it,
+    // and a card showing both would be showing a problem that no longer exists.
+    expect(f.failure).toBeUndefined()
   })
 })

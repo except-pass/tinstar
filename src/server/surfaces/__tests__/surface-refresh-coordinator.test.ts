@@ -26,6 +26,7 @@ import {
 import { parseStagedResult } from '../refresh-wiring'
 import type {
   Surface, SurfaceClaim, SurfaceClaimValue, SurfaceFreshness, SurfaceRefreshDeclaration,
+  SurfaceRefreshRecipe,
 } from '../../../domain/types'
 import type { SurfaceTriggerEvent } from '../surface-trigger-matcher'
 import type { WitnessOutcome } from '../witness-registry'
@@ -146,7 +147,7 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}, sharedIo?: JobSto
       id: 'sf-1',
       spaceId: SPACE,
       home: { kind: 'canvas', spaceId: SPACE },
-      content: { headline: 'Coverage', recipe: 'Re-run coverage.' },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' } },
       contentAuthority: 'canonical-direct',
       author: 'agent',
       provenance: { runId: RUN, worktreeId: WORKTREE },
@@ -192,7 +193,7 @@ const MARK_STALE: SurfaceRefreshDeclaration = { policy: 'mark-stale', triggers: 
 const MANUAL: SurfaceRefreshDeclaration = { policy: 'manual', triggers: ['git-revision'] }
 
 function withPolicy(decl: SurfaceRefreshDeclaration): Partial<Surface> {
-  return { content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: decl } }
+  return { content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: decl } }
 }
 
 // --- Claims (plan U4) -------------------------------------------------------
@@ -217,13 +218,15 @@ const sawValue = (value: SurfaceClaimValue): WitnessOutcome => ({ status: 'value
 function claiming(over: {
   id?: string
   claims?: SurfaceClaim[]
-  recipe?: string | null
+  recipe?: SurfaceRefreshRecipe | null
   /** Values the host has ALREADY observed. A claim with none has never been looked at,
    *  which is a different due-ness (R8) and a different match outcome. */
   stored?: Record<string, SurfaceClaimValue>
   freshness?: Partial<SurfaceFreshness>
 } = {}): Partial<Surface> {
-  const recipe = over.recipe === null ? undefined : over.recipe ?? 'Re-derive the roadmap.'
+  const recipe = over.recipe === null
+    ? undefined
+    : over.recipe ?? { kind: 'agent' as const, prompt: 'Re-derive the roadmap.' }
   const observations = over.stored
     ? Object.fromEntries(Object.entries(over.stored).map(([id, value]) => [id, { value, at: 5_000 }]))
     : undefined
@@ -297,7 +300,7 @@ describe('triggers → possibly stale', () => {
     // revision and a generation every few seconds, forever.
     const h = harness()
     await h.seed({
-      content: { headline: 'Coverage', recipe: 'Re-run coverage.' },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' } },
       freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 1_000 },
     })
     h.clock.now = 2_000_000
@@ -361,7 +364,7 @@ describe('triggers → possibly stale', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: 'Re-run coverage.',
+        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
@@ -473,7 +476,7 @@ describe('dispatch', () => {
     expect(s.freshness.phase).toBe('failed')
     // LAST-KNOWN CONTENT IS UNTOUCHED (R17). The card still says what it said.
     expect(s.content.headline).toBe('Coverage')
-    expect(s.content.recipe).toBe('Re-run coverage.')
+    expect(s.content.recipe).toEqual({ kind: 'agent', prompt: 'Re-run coverage.' })
   })
 
   it('an unavailable owner does not retry on every sweep', async () => {
@@ -538,7 +541,7 @@ describe('dispatch', () => {
    *  schedule for the same Surface. */
   async function overdueOnDefaults(h: Harness): Promise<void> {
     await h.seed({
-      content: { headline: 'Coverage', recipe: 'Re-run coverage.' },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' } },
       freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: 1_000 },
     })
     h.clock.now = 2_000_000 // long past verifiedAt + defaultIntervalMs
@@ -720,7 +723,7 @@ describe('the observation barrier', () => {
     // that assigned the staged content wholesale deleted both on the FIRST success
     // and left the Surface permanently unrefreshable. Asserted here rather than in
     // a dedicated test because this is the ordinary path that destroyed them.
-    expect(s.content.recipe).toBe('Re-run coverage.')
+    expect(s.content.recipe).toEqual({ kind: 'agent', prompt: 'Re-run coverage.' })
     expect(s.content.refreshPolicy).toEqual(AUTOMATIC)
     // The staged artifact was consumed. Nothing else needs taking down: there is no
     // session, port, or pane to give back, which is the whole point of the unit.
@@ -877,7 +880,7 @@ describe('the observation barrier', () => {
         worktree: WORKTREE,
         alias: { bucket: { kind: 'run', runId: RUN }, localId: 'cov', visible: true },
         author: 'agent',
-        content: { headline: 'Coverage 90% (agent)', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+        content: { headline: 'Coverage 90% (agent)', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: AUTOMATIC },
         watermark: 'sha256:moved',
       }, ctx(29_000))
     }
@@ -1092,7 +1095,7 @@ describe('freshness transitions the coordinator relies on', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: 'Re-run coverage.',
+        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
       // Exactly what the sweep will derive: verifiedAt 5,000 + 60,000 = 65,000.
@@ -1115,7 +1118,7 @@ describe('a source that is GONE', () => {
   // machine as a Surface stuck in `refreshing` while a background agent ran to its
   // ten-minute timeout, failed, waited one interval, and did it again, forever.
   const MISSING: Partial<Surface> = {
-    content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+    content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: AUTOMATIC },
     source: {
       adapter: 'slate-file', locator: 'file:cov.json#cov', worktree: WORKTREE,
       generation: 1, state: 'missing', missingSince: 9_000,
@@ -1142,7 +1145,7 @@ describe('a source that is GONE', () => {
     await h.seed({
       ...MISSING,
       content: {
-        headline: 'Coverage', recipe: 'Re-run coverage.',
+        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
@@ -1203,7 +1206,7 @@ describe('a source that is GONE', () => {
       worktree: WORKTREE,
       alias: { bucket: { kind: 'run', runId: RUN }, localId: 'cov', visible: true },
       author: 'agent',
-      content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: AUTOMATIC },
       watermark: 'sha256:back',
     }, ctx(40_000))
     expect(h.get('sf-1').source?.state).not.toBe('missing')
@@ -1219,7 +1222,7 @@ describe('deadlines', () => {
       const h = harness()
       await h.seed({
         content: {
-          headline: 'Coverage', recipe: 'Re-run coverage.',
+          headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
           refreshPolicy: { ...decl, triggers: [...decl.triggers, 'periodic'], intervalMs: 60_000 },
         },
       })
@@ -1238,7 +1241,7 @@ describe('deadlines', () => {
       const h = harness()
       await h.seed({
         content: {
-          headline: 'Coverage', recipe: 'Re-run coverage.',
+          headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
           refreshPolicy: { ...decl, triggers: [...decl.triggers, 'periodic'], intervalMs: 60_000 },
         },
       })
@@ -1253,7 +1256,7 @@ describe('deadlines', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: 'Re-run coverage.',
+        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
         refreshPolicy: { policy: 'mark-stale', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
@@ -1269,7 +1272,7 @@ describe('deadlines', () => {
     const h = harness()
     await h.seed({
       content: {
-        headline: 'Coverage', recipe: 'Re-run coverage.',
+        headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
         refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
       },
     })
@@ -1379,7 +1382,7 @@ describe('restart', () => {
     // DIRTY, not refreshing, and its content is exactly what it was.
     expect(s.freshness.phase).toBe('possibly-stale')
     expect(s.content.headline).toBe('Coverage')
-    expect(s.content.recipe).toBe('Re-run coverage.')
+    expect(s.content.recipe).toEqual({ kind: 'agent', prompt: 'Re-run coverage.' })
     expect(s.freshness.failure?.message).toMatch(/background-worker architecture/)
 
     // ONCE. A second boot off the rewritten table reconciles nothing, so the Surface

@@ -42,7 +42,7 @@ import { SurfaceService } from '../../surfaces/surface-service'
 
 /** The A2UI body the seeded surfaces carry — one Text node, valid per the catalog. */
 const TEXT = { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] } as never
-import type { Point, Run } from '../../../domain/types'
+import type { Point, Run, SurfaceRefreshRecipe } from '../../../domain/types'
 
 interface Harness {
   docStore: DocumentStore
@@ -435,14 +435,14 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   // Seed a FILE-projected surface: `refresh` is file-owned, so it arrives via the
   // watcher projection, NOT the user-point POST route (which never carries a recipe).
-  async function seedSurface(srv: Harness, over: { recipe?: string } = {}): Promise<string> {
+  async function seedSurface(srv: Harness, over: { recipe?: SurfaceRefreshRecipe } = {}): Promise<string> {
     await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-1', headline: 'a surface', body: TEXT, ...over }])
     return 'srf-1'
   }
 
   it('with a recipe delivers the recipe VERBATIM and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'Re-run the blind PR eval and rewrite the file' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'Re-run the blind PR eval and rewrite the file' } })
     getSession.mockReturnValue({ name: RUN }) // reachable
     sendPrompt.mockClear()
 
@@ -475,7 +475,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   it('an unreachable session returns delivered:false + 200 and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } })
     getSession.mockReturnValue(null) // session gone
 
     const res = await refresh(srv, pid)
@@ -487,7 +487,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   it('rejects a cross-run pid (point.runId !== URL runId) with 404, nothing delivered', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' }) // belongs to RUN
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } }) // belongs to RUN
     getSession.mockReturnValue({ name: RUN })
     // POST under a DIFFERENT run id — the cross-run guard must reject it.
     const res = await srv.fetch(`/api/runs/OTHER-run/slate/surfaces/${pid}/refresh`, { method: 'POST' })
@@ -517,7 +517,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
   // NOT eat it — it returns the refresh envelope).
   it('is matched by the anchored regex — a generic handler does not eat it', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } })
     getSession.mockReturnValue({ name: RUN })
     const res = await refresh(srv, pid)
     expect(res.status).toBe(200)
@@ -625,7 +625,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
   async function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): Promise<string> {
     await seedRunSlate(srv.docStore, RUN, [{
       id, headline: 'a surface', body: TEXT,
-      recipe: 'Re-run the eval of PR #7 and rewrite this surface',
+      recipe: { kind: 'agent' as const, prompt: 'Re-run the eval of PR #7 and rewrite this surface' },
     }])
     return id
   }

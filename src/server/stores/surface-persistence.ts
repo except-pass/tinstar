@@ -430,6 +430,40 @@ function isUsableRecord(r: unknown): r is Surface {
   return true
 }
 
+/**
+ * Guarantee the freshness evidence every persisted canonical Surface must carry
+ * (R3, KTD5/KTD11).
+ *
+ * WHERE "REQUIRED ON PERSISTED RECORDS" IS ACTUALLY ENFORCED. The TypeScript type
+ * leaves both fields optional — making them mandatory would have meant touching
+ * every Surface literal in the tree for a guarantee this one function already
+ * gives — so the load path is what makes the guarantee true. Every record the store
+ * hands out has been through here.
+ *
+ * DETERMINISTIC AND RE-ENTRANT, which the plan asks for by name: it derives from
+ * fields the record already holds and never from `Date.now()`, so the same snapshot
+ * hydrates to the same records on every boot, and a record that has already been
+ * hydrated is returned untouched rather than re-stamped.
+ *
+ * `lastKnownAt` is backfilled from the best evidence a legacy record has, in
+ * decreasing order of how well it dates the CONTENT: the last successful
+ * verification, then the last amendment, then creation. `lastCheck` becomes an
+ * explicit `null` — never-checked is a real state, and leaving the key off would let
+ * an SSE delta drop it and a client keep rendering a check the server no longer has.
+ */
+export function hydrateFreshnessEvidence(record: Surface): Surface {
+  const f = record.freshness
+  if (f.lastKnownAt !== undefined && f.lastCheck !== undefined) return record
+  return {
+    ...record,
+    freshness: {
+      ...f,
+      lastKnownAt: f.lastKnownAt ?? f.verifiedAt ?? record.amendedAt ?? record.createdAt,
+      lastCheck: f.lastCheck ?? null,
+    },
+  }
+}
+
 type ReadResult =
   | {
       ok: true
@@ -496,7 +530,7 @@ function readSnapshotFile(path: string): ReadResult {
   for (const r of snap.records) {
     if (!isUsableRecord(r) || seen.has(r.id)) { quarantined++; continue }
     seen.add(r.id)
-    records.push(r)
+    records.push(hydrateFreshnessEvidence(r))
   }
   const idempotency = Array.isArray(snap.idempotency)
     ? snap.idempotency.filter(

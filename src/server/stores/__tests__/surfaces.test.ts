@@ -107,7 +107,7 @@ describe('createSurface', () => {
     expect(s.homeRev).toBe(1)
     expect(s.createdAt).toBe(1000)
     expect(s.thread).toEqual({ replies: [], status: 'open' })
-    expect(s.freshness).toEqual({ phase: 'current', overdue: false })
+    expect(s.freshness).toEqual({ phase: 'current', overdue: false, lastKnownAt: 1000, lastCheck: null })
     // No source binding ⇒ the record itself is authoritative; the alternative
     // would hand authority to a source that does not exist.
     expect(s.contentAuthority).toBe('canonical-direct')

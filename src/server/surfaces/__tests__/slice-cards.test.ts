@@ -89,17 +89,22 @@ const UNITS: { unit: string; label: string; landed: boolean }[] = [
  * means finished. Nothing in the body states a status; there is nothing for an agent
  * to keep up to date, and nothing it could get wrong.
  *
- * NO `refresh` RECIPE, deliberately. A landing does not make this card false — the
- * rail re-derives itself from the new value — so there is nothing for a rebuild to
- * do, and R12's recipe-less arm is exactly right here: record the delta, mark it
- * stale for a human to glance at, queue no agent. A recipe would spend a background
- * session redrawing a card that had already corrected itself.
+ * A `host` RECIPE, and that is what licenses the rail to correct itself (KTD7). The
+ * host may write part of a card only when it owns that card's rebuild outright and
+ * returns the whole thing — which is exactly what a machine-only `unit-landed` check
+ * does. An AGENT recipe here would be the forbidden shape: the agent would own the
+ * prose while the host silently edited the rail underneath it, leaving one card
+ * saying two things with nothing marking which half was older.
+ *
+ * No agent is woken either way. A landing does not make this card false — the rail
+ * re-derives itself from the new value — so there is nothing for a prompt to do.
  */
 function roadmapCard(): Record<string, unknown> {
   return {
     id: 'recursive-surfaces-roadmap',
     headline: 'Recursive collaborative surfaces — what has actually landed',
     author: 'agent',
+    refresh: { kind: 'host', handler: 'unit-landed' },
     claims: UNITS.map(u => ({
       id: u.unit.toLowerCase(),
       witness: 'unit-landed',

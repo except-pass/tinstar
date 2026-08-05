@@ -818,7 +818,7 @@ describe('SlatePanel refresh (U3)', () => {
     render(
       <SlatePanel
         runId="run-1"
-        surfaces={[surface('withrecipe', 'x', { refresh: 're-run the eval' }), surface('norecipe', 'y')]}
+        surfaces={[surface('withrecipe', 'x', { refresh: { kind: 'agent' as const, prompt: 're-run the eval' } }), surface('norecipe', 'y')]}
       />,
     )
     // Exactly one badge — the recipe-bearing surface.

@@ -412,6 +412,19 @@ export class SurfaceRefreshCoordinator {
       report.blocked.push({ jobId: '', reason: permanent.reason })
       return undefined
     }
+    // A HOST RECIPE IS NOT THIS EXECUTOR'S WORK (R6/R9, KTD2). It is machine work
+    // with its own executor and its own budgets; queueing it here would hand it to
+    // the one dispatcher there is, which delivers prompts to a live foreground agent
+    // — the exact opposite of "machine-only". Left DIRTY instead, which is what R9
+    // asks for: a trigger may mark anything dirty, and only the parsed recipe kind
+    // decides what may then execute.
+    //
+    // A recipe-LESS or UNREADABLE Surface deliberately does NOT return here: it falls
+    // through to the blocker path below, which records WHY on the Surface where a
+    // reader can see it. "Nothing happened and nobody said why" is the state this
+    // whole plan exists to end.
+    if (surface.content.recipe?.kind === 'host') return undefined
+
     const generation = surface.source?.generation ?? 0
     const existing = this.deps.jobs.active(surface.id)
     if (existing) {
@@ -509,11 +522,20 @@ export class SurfaceRefreshCoordinator {
     if (!bound && !provenance) {
       return { reason: 'no worktree is recorded, so there is nowhere authorized to run a refresh', permanent: false }
     }
-    if (!surface.content.recipe) {
+    const recipe = surface.content.recipe
+    if (!recipe) {
       return {
         reason: 'this Surface declares no refresh recipe, so nothing can rebuild it without a human',
         permanent: false,
       }
+    }
+    // AN UNREADABLE RECIPE FAILS TOWARD THE HUMAN AND STOPS (KTD1). The host will not
+    // guess what the author meant, and it will not fall back to running the text as
+    // an instruction — that guess is the authority leak the closed union exists to
+    // close. Reported so the author can see what was wrong instead of watching a
+    // Surface quietly never refresh.
+    if (recipe.kind === 'unreadable') {
+      return { reason: `its refresh recipe cannot be read: ${recipe.detail}`, permanent: false }
     }
     return undefined
   }
