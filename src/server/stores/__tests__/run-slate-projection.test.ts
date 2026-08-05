@@ -330,3 +330,35 @@ describe('a bound rail reaches Run.slate and the point routes alike', () => {
     expect(store.getSurface(id)!.freshness.claimObservations?.u1).toBeDefined()
   })
 })
+
+describe('who may write a claim-bound rail (KTD7)', () => {
+  const steps = [
+    { label: 'U1', claim: 'u1', done: 'landed' },
+    { label: 'U4', claim: 'u4', done: 'landed' },
+  ]
+  const obs = observed({ u1: 'landed', u4: 'pending' })
+
+  it('a HOST recipe may write it — the host owns the rebuild outright', () => {
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, HOST_RECIPE)).map(s => s.status))
+      .toEqual(['done', 'pending'])
+  })
+
+  it('NO recipe may write it — nothing else rebuilds the card, so nobody is raced', () => {
+    // The author wrote it once and declared the rail derived. Refusing here would
+    // leave a rail they deliberately left blank blank forever, for no safety.
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, undefined)).map(s => s.status))
+      .toEqual(['done', 'pending'])
+  })
+
+  it('an AGENT recipe may NOT — the agent owns the prose and will rewrite it', () => {
+    // The failure this prevents: a rail describing today beside prose describing
+    // whenever the author last looked, with nothing marking which half was older.
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, { kind: 'agent', prompt: 'rebuild' })).map(s => s.status))
+      .toEqual([undefined, undefined])
+  })
+
+  it('an UNREADABLE recipe may not either — the host cannot tell what rebuilds this', () => {
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, { kind: 'unreadable', detail: 'x' })).map(s => s.status))
+      .toEqual([undefined, undefined])
+  })
+})

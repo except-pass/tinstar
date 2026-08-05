@@ -447,15 +447,21 @@ Every newly authored surface should declare at least one claim. It is a conventi
 ```
 
 Note the recipe is a **host** one. A claim-bound rail is the host writing part of your
-card, and the host may only do that when it owns the card's rebuild outright and
-returns the whole thing. On an **agent** recipe the same claims still detect drift —
-they mark the surface dirty — but they never patch its body, because otherwise one card
-would say two things: a rail describing today and prose describing whenever you last
-looked, with nothing marking which half was older.
+card, so the question is whether the host would be editing underneath somebody else:
 
-A **recipe-less** claim-bearing card records the delta, marks itself for a human
-glance, and queues nothing. Give a claim-bearing card an *agent* recipe only when a
-moved value genuinely requires **prose** to be rewritten.
+- **host recipe** — the host owns the rebuild outright. The rail binds.
+- **no recipe** — nothing rebuilds the card at all, so there is no competing writer.
+  The rail binds. (The card still records the delta and marks itself for a glance; it
+  just queues no agent.)
+- **agent recipe** — *you* own the prose and will rewrite it, so the host does **not**
+  bind the rail. The claims still detect drift and mark the surface dirty; they simply
+  do not edit your body. Otherwise one card would say two things — a rail describing
+  today and prose describing whenever you last looked — with nothing marking which
+  half was older.
+
+So give a claim-bearing card an *agent* recipe only when a moved value genuinely
+requires **prose** to be rewritten, and expect to write the rail's statuses yourself
+when you do.
 
 **(b) An infra card with a single claim.**
 

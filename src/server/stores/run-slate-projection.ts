@@ -131,18 +131,26 @@ const MAX_BOUND_STEPS = 1200
  * Returns the SAME body object when nothing bound, so an unbound Surface costs the
  * document store's `JSON.stringify` comparison nothing extra.
  *
- * ONLY FOR A HOST-OWNED SURFACE (KTD7, R1/R2/R5). A Surface has ONE writer and one
- * outcome, and binding here is the host writing part of a card. That is legitimate
- * when the Surface's own recipe is a host check — the host is the writer, and it
- * returns the whole Surface — and it is NOT legitimate on an interaction Surface,
- * where the agent owns the prose and the host would be silently editing regions
- * underneath it. On those, claim observations still DETECT drift (they mark the
- * Surface dirty) but never patch its content: the reader sees the author's own last
- * word, honestly dated, until the author's next rebuild replaces the whole thing.
+ * NOT WHEN AN AGENT OWNS THE REBUILD (KTD7, R1/R2/R5). A Surface has ONE writer and
+ * one outcome, and binding here is the host writing part of a card. The question is
+ * therefore not "is this card interesting" but "would the host be editing underneath
+ * somebody else":
  *
- * The previous behaviour was the second case, unconditionally: a roadmap card's rail
- * corrected itself while its prose kept describing the world the author last saw, so
- * one card said two different things and neither was marked as older than the other.
+ *   · `host` recipe — the host owns the rebuild outright and returns the whole
+ *     Surface. Binding is the same writer doing the same job, cheaply, between
+ *     rebuilds. Allowed.
+ *   · NO recipe — nothing rebuilds this card at all. The author wrote it once and
+ *     declared the rail derived; there is no competing writer for the host to race,
+ *     and refusing to bind would leave a rail the author deliberately left blank
+ *     blank forever. Allowed.
+ *   · `agent` recipe — the agent owns the prose and will rewrite it. Binding here is
+ *     the host editing a region of somebody else's card, which is exactly what left
+ *     one card saying two things: a rail describing today and prose describing
+ *     whenever the author last looked, with nothing marking which half was older.
+ *     REFUSED — the observation still marks the Surface dirty, so drift is still
+ *     detected; it just does not get written.
+ *   · `unreadable` — the host could not tell what rebuilds this. Refused for the same
+ *     reason unknown recipes fail toward the human everywhere else.
  */
 export function bindClaimSteps(
   body: A2uiContent | undefined,
@@ -150,7 +158,7 @@ export function bindClaimSteps(
   recipe?: SurfaceRefreshRecipe,
 ): A2uiContent | undefined {
   if (!body) return body
-  if (recipe?.kind !== 'host') return body
+  if (recipe !== undefined && recipe.kind !== 'host') return body
   let bodyChanged = false
   const components = body.components.map(component => {
     if (component.component !== 'Stepper' || !Array.isArray(component.steps)) return component
