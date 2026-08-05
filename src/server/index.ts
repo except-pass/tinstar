@@ -71,6 +71,8 @@ import {
   describeTtydFailure,
 } from './sessions/backends/ttyd-diagnostics'
 import { reconnectSessionNats } from './sessions/natsReconnect'
+import { migrateCliTemplateIds } from './sessions/cli-template-id-migration'
+import { getDefaultHandsDir } from './hands'
 import {
   startProcessNatsManager,
   stopProcessNatsManager,
@@ -1174,6 +1176,33 @@ export function initBackend(): RouteContext {
 
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
+
+      // Rewrite pre-ID CLI template references (display name → stable ID). Runs
+      // immediately after hydration and before any session rehydration, so the
+      // records the boot path is about to resolve are already migrated.
+      try {
+        const tplMigration = migrateCliTemplateIds(
+          sessionConfig.cliTemplates,
+          sessionConfig.dirs.sessions,
+          docStore,
+          getDefaultHandsDir(),
+        )
+        const touched = tplMigration.sessions.length + tplMigration.entities.length
+          + tplMigration.tombstones.length + tplMigration.hands.length
+        if (touched > 0) {
+          log.info('sessions', `migrated ${touched} legacy CLI template reference(s) to stable IDs`, {
+            sessions: tplMigration.sessions,
+            entities: tplMigration.entities,
+            tombstones: tplMigration.tombstones,
+            hands: tplMigration.hands,
+          })
+        }
+        for (const { where, value } of tplMigration.unresolved) {
+          log.warn('sessions', `CLI template "${value}" (${where}) matches no configured template — left as-is`)
+        }
+      } catch (err) {
+        log.warn('sessions', `CLI template ID migration failed: ${(err as Error).message}`)
+      }
 
       // Canonical Surfaces (U1) — SAME GATE as docStore.enablePersistence, and
       // deliberately immediately after it: the migration reconciles the legacy

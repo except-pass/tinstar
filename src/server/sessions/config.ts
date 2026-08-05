@@ -265,22 +265,6 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
   },
   {
-    id: 'claude-auto',
-    name: 'Claude (auto)',
-    icon: '/agent-icons/claude.svg',
-    adapter: 'claude',
-    startCmd: 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
-    resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
-  },
-  {
-    id: 'claude-interactive',
-    name: 'Claude (interactive)',
-    icon: '/agent-icons/claude.svg',
-    adapter: 'claude',
-    startCmd: 'claude --session-id {sessionId} -- {prompt}',
-    resumeCmd: 'claude --resume {sessionId}',
-  },
-  {
     id: 'codex-full-auto',
     name: 'Codex (full auto)',
     icon: '/agent-icons/openai.svg',
@@ -325,11 +309,15 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     // modal that --yolo can't bypass. Tinstar pre-seeds cursor's trust marker
     // before launch (see sessions/cursor-trust.ts) so the session starts
     // unattended. NATS is intentionally never wired for this generic adapter.
-    startCmd: 'agent --yolo -- {prompt}',
+    //
+    // --model pins Grok 4.5 rather than leaving cursor on `auto`; drop the flag
+    // (or change it) in Settings → Agents to pick a different one. Model IDs
+    // come from `cursor-agent --list-models`.
+    startCmd: 'agent --yolo --model cursor-grok-4.5-high -- {prompt}',
     // --yolo (alias for --force, "Run Everything") MUST be repeated on resume.
     // Without it, `agent resume` falls back to the CLI's configured approvalMode
     // (allowlist), which blocks every tool call in a headless session.
-    resumeCmd: 'agent --yolo resume',
+    resumeCmd: 'agent --yolo --model cursor-grok-4.5-high resume',
   },
   {
     id: 'shell',
