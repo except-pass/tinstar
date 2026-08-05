@@ -21,6 +21,7 @@ import {
   SurfaceRefreshCoordinator,
   WITNESS_BUDGET_PER_PASS,
   type RefreshCoordinatorConfig,
+  type DeferredLookup,
   type RefreshCoordinatorDeps,
 } from '../surface-refresh-coordinator'
 import { parseStagedResult } from '../refresh-wiring'
@@ -72,7 +73,8 @@ interface Harness {
    *  a `git fetch` and an HTTP request — exactly like `readStaged` beside it. The
    *  three-valued outcome is the registry's own shape, so a test can express "nobody
    *  could look" as something other than a value. */
-  witness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome> | WitnessOutcome
+  witness: (input: { surface: Surface; claim: SurfaceClaim }) =>
+    Promise<WitnessOutcome | DeferredLookup> | WitnessOutcome | DeferredLookup
   /** Every witness the coordinator actually ran, in order. */
   witnessRuns: { surfaceId: string; claimId: string }[]
   seed(over?: Partial<Surface>): Promise<Surface>
@@ -1887,5 +1889,65 @@ describe('the owner-delivery budget (KTD9)', () => {
     expect(h.delivered).toHaveLength(OWNER_DELIVERIES_PER_PASS * 2)
     // Every dispatch went to a session that already existed. There is no other kind.
     expect(h.jobs.list().every(j => j.dispatch === undefined || j.dispatch.kind === 'owner')).toBe(true)
+  })
+})
+
+describe('a deferred lookup is not an observation (R8, KTD6)', () => {
+  it('records NOTHING when the broker declines a slot', async () => {
+    // A deferral is the host DECLINING TO LOOK. Recording it would be two lies at
+    // once: it would claim the host checked, and — because a recorded check advances
+    // the deadline — it would hide the backlog the deferral exists to make visible.
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => ({ status: 'deferred', detail: 'git is already being asked 1 question (its limit)' })
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+
+    await h.coord.sweep()
+    const pass = await h.coord.witnessPass()
+
+    const s = h.get('sf-1')
+    // Not witnessed (nothing held), not unresolved (nobody reported a problem), not
+    // moved, and no observation stored — the record is exactly as it was.
+    expect(pass.witnessed).toEqual([])
+    expect(pass.unresolved).toEqual([])
+    expect(pass.moved).toEqual([])
+    expect(s.freshness.witnessedAt).toBe(5_000)
+    expect(s.freshness.claimObservations?.u4).toEqual({ value: 'landed', at: 5_000 })
+    expect(s.freshness.claimRebuild).toBeUndefined()
+  })
+
+  it('a deferral costs no revision, so a busy provider cannot storm the record', async () => {
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => ({ status: 'deferred', detail: 'no slot' })
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    const rev = h.get('sf-1').rev
+
+    for (let i = 0; i < 5; i++) {
+      h.clock.now += 60_000
+      await h.coord.sweep()
+      await h.coord.witnessPass()
+    }
+    expect(h.get('sf-1').rev).toBe(rev)
+  })
+
+  it('the SAME Surface is checked normally once the budget frees up', async () => {
+    // Deferral must not be sticky: it is a "not now", and the next pass has to be
+    // able to answer. A backing-off deferral would be a Surface nothing ever checks.
+    const h = harness()
+    await h.seed(claiming({ stored: { u4: 'landed' }, freshness: { witnessedAt: 5_000 } }))
+    h.witness = () => ({ status: 'deferred', detail: 'no slot' })
+    h.clock.now = 5_000 + 10 * 60_000 + 1
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(h.get('sf-1').freshness.witnessedAt).toBe(5_000)
+
+    h.witness = () => sawValue('landed')
+    h.clock.now += 10 * 60_000
+    await h.coord.sweep()
+    await h.coord.witnessPass()
+    expect(h.get('sf-1').freshness.witnessedAt).toBe(h.clock.now)
   })
 })

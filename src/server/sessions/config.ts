@@ -180,6 +180,15 @@ export interface TinstarConfig {
     /** How often the coordinator sweeps: schedules due host work, harvests finished
      *  attempts, and re-derives `overdue`. */
     sweepMs: number
+    /** Concurrent proactive host lookups across the whole process (KTD6). The bound
+     *  that makes the host as a whole polite, however many providers are involved. */
+    maxConcurrentLookups: number
+    /** Concurrent proactive lookups against ONE provider (KTD6). One by default: a
+     *  provider is a shared, often rate-limited resource Tinstar does not own, and the
+     *  broker's coalescing means the common burst — many Surfaces, one question —
+     *  needs no more than one slot. A value out of range is REFUSED and logged rather
+     *  than clamped; see `resolveLookupBudget`. */
+    maxConcurrentLookupsPerProvider: number
     /** Default verification interval for a Surface whose author declared a policy
      *  but no interval. `dueAt` is derived from the last successful verification
      *  plus this. */
@@ -365,6 +374,8 @@ export const BASE_CONFIG = {
     // last-known content and waits for the next discrete human action (R17/R18).
     attemptTimeoutMs: 10 * 60_000,
     sweepMs: 5_000,
+    maxConcurrentLookups: 4,
+    maxConcurrentLookupsPerProvider: 1,
     // SIX HOURS, raised from thirty minutes on measured evidence: across a
     // three-hour session every one of twelve periodic fires returned "no change",
     // and the surface that most needed periodic verification was tracking a number
@@ -501,6 +512,8 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       attemptTimeoutMs: merged.refresh.attemptTimeoutMs,
       sweepMs: merged.refresh.sweepMs,
       defaultIntervalMs: merged.refresh.defaultIntervalMs,
+      maxConcurrentLookups: merged.refresh.maxConcurrentLookups,
+      maxConcurrentLookupsPerProvider: merged.refresh.maxConcurrentLookupsPerProvider,
     },
   }
 

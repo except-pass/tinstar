@@ -101,7 +101,13 @@ describe('retired refresh-worker configuration', () => {
   })
 
   it('the shipped refresh slice names no worker cap, timeout, or kill switch', () => {
-    expect(Object.keys(BASE_CONFIG.refresh).sort()).toEqual(['attemptTimeoutMs', 'defaultIntervalMs', 'sweepMs'])
+    // What DOES survive is the attempt bound, the sweep cadence, the default
+    // verification interval, and the broker's two budgets — none of which can create
+    // anything.
+    expect(Object.keys(BASE_CONFIG.refresh).sort()).toEqual([
+      'attemptTimeoutMs', 'defaultIntervalMs', 'maxConcurrentLookups',
+      'maxConcurrentLookupsPerProvider', 'sweepMs',
+    ])
   })
 
   it('drops a retired refresh port window left in a user config', () => {

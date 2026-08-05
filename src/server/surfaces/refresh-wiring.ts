@@ -37,8 +37,9 @@ import {
   type StagedRefreshResult,
 } from './surface-refresh-coordinator'
 import { agentRecipePrompt } from './surface-trigger-matcher'
-import { runWitness, witnessTimeoutMs } from './witness-registry'
+import { runWitness, witnessLookupIdentity, witnessTimeoutMs, type WitnessOutcome } from './witness-registry'
 import { defaultWitnessDeps } from './witness-runtime'
+import { resolveLookupBudget, SurfaceLookupBroker } from './surface-lookup-broker'
 
 const execFileAsync = promisify(execFile)
 
@@ -150,6 +151,16 @@ export function buildRefreshCoordinatorDeps(
   // Built once. The registry's runners take their effects at CALL time, so this is a
   // plain record of two functions and holds nothing open between passes.
   const witnessDeps = defaultWitnessDeps()
+  // ONE BROKER PER HOST (KTD6). Two would each enforce the budget faithfully and the
+  // provider would see twice it, which is the failure the broker exists to prevent —
+  // so it is constructed here, once, and everything that looks outward goes through
+  // this instance.
+  const { budget, problems } = resolveLookupBudget({
+    maxConcurrent: cfg.refresh.maxConcurrentLookups,
+    maxConcurrentPerProvider: cfg.refresh.maxConcurrentLookupsPerProvider,
+  })
+  for (const problem of problems) log.warn('refresh', problem)
+  const broker = new SurfaceLookupBroker(budget)
 
   const deps: RefreshCoordinatorDeps = {
     service,
@@ -201,22 +212,41 @@ export function buildRefreshCoordinatorDeps(
 
     buildPrompt: ({ surface, stagingPath }) => refreshDispatchPrompt(surface, stagingPath),
 
-    runWitness: ({ surface, claim }) => runWitness({
-      claim,
+    runWitness: async ({ surface, claim }) => {
       // The BOUND worktree first, then provenance — the same order
       // `authorizationProblem` reads them in, so a repo witness can never read a
       // repository a rebuild of the same Surface would refuse to run in. Absent is
       // not an error to pre-empt: the repo kind answers `unresolved`, and the infra
       // kind does not want a worktree at all.
-      ...(surface.source?.worktree ?? surface.provenance?.worktreeId
-        ? { worktree: (surface.source?.worktree ?? surface.provenance!.worktreeId)! }
-        : {}),
-      deps: witnessDeps,
-      // The kind's own budget, under the host ceiling. A whole pass is that times the
-      // number of batches — a minute at worst — and none of it is spent holding the
-      // coordinator's serialization key, which is what makes a minute affordable.
-      timeoutMs: Math.min(witnessTimeoutMs(claim.witness) ?? WITNESS_TIMEOUT_MS, WITNESS_TIMEOUT_MS),
-    }),
+      const worktree = surface.source?.worktree ?? surface.provenance?.worktreeId
+      const run = (): Promise<WitnessOutcome> => runWitness({
+        claim,
+        ...(worktree ? { worktree } : {}),
+        deps: witnessDeps,
+        // The kind's own budget, under the host ceiling. A whole pass is that times
+        // the number of batches — a minute at worst — and none of it is spent holding
+        // the coordinator's serialization key, which is what makes a minute
+        // affordable.
+        timeoutMs: Math.min(witnessTimeoutMs(claim.witness) ?? WITNESS_TIMEOUT_MS, WITNESS_TIMEOUT_MS),
+      })
+
+      // THROUGH THE BROKER (R8, KTD6). This is where "twenty cards watching
+      // origin/main cost one fetch" actually happens: the identity comes from the
+      // registry that owns the schema, so two Surfaces asking the same question share
+      // one lookup and the second consumes no provider slot at all.
+      const identity = witnessLookupIdentity(claim, worktree)
+      if (!identity) {
+        // No identity means no schema accepted it, so there is no question to ask and
+        // nothing to spend a slot on. The runner's own refusal is the honest answer.
+        return run()
+      }
+      const result = await broker.lookup<WitnessOutcome>({ ...identity, run })
+      if (result.status === 'deferred') return { status: 'deferred', detail: result.detail }
+      if (result.status === 'threw') {
+        return { status: 'unresolved', detail: `the ${identity.provider} lookup threw: ${String(result.error)}` }
+      }
+      return result.value
+    },
   }
 
   try { mkdirSync(jobs.stagingDir, { recursive: true }) } catch { /* reported by the store */ }

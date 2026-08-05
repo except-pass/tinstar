@@ -108,11 +108,15 @@ export interface RefreshCoordinatorDeps {
   observeSources: (surface: Surface) => Promise<void>
   /** Build the self-contained instruction the foreground owner receives. */
   buildPrompt: (input: { surface: Surface; job: SurfaceRefreshJob; stagingPath: string }) => string
-  /** Run ONE claim's witness and report what it saw (plan U4, R9).
+  /** Run ONE claim's witness and report what it saw, or that the broker had no slot
+   *  for it (R8/R9, KTD6).
    *
    *  Injected for the same reason `observeSources` is: it reaches a subprocess
    *  (`git fetch`) and the network, and the state machine that decides WHEN to check
    *  a claim has to be testable without either.
+   *
+   *  A `deferred` result is NOT an observation and must not be recorded as one — see
+   *  {@link DeferredLookup}. Everything else is a completed check's answer.
    *
    *  Must never reject — `runWitness` in the registry already guarantees that, and it
    *  matters here because a rejection would take down a pass that is looking at other
@@ -120,7 +124,22 @@ export interface RefreshCoordinatorDeps {
    *  wiring can forget, and the symptom of forgetting this one is a fleet of cards
    *  that quietly never check themselves — the exact failure this plan exists to end,
    *  reintroduced as a missing key. */
-  runWitness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome>
+  runWitness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome | DeferredLookup>
+}
+
+/**
+ * The broker declined to spend a slot on this lookup (R8, KTD6).
+ *
+ * A FOURTH ANSWER THAT IS NOT AN OUTCOME. `value`, `unresolved`, and `failed` all
+ * describe a lookup that HAPPENED; this one describes one that did not. Recording it
+ * as an outcome would be two lies at once — it would claim the host looked, and,
+ * because a recorded check advances the deadline, it would hide the backlog the
+ * deferral exists to make visible. So the pass skips it entirely and asks again on
+ * the next sweep, which is seconds away.
+ */
+export interface DeferredLookup {
+  status: 'deferred'
+  detail: string
 }
 
 /** One Surface's claims, snapshotted at collect so the run outside the lock and the
@@ -837,7 +856,7 @@ export class SurfaceRefreshCoordinator {
     if (!surface) return []
     const out: WitnessObservationInput[] = []
     for (const claim of task.claims) {
-      let outcome: WitnessOutcome
+      let outcome: WitnessOutcome | DeferredLookup
       try {
         outcome = await this.deps.runWitness({ surface, claim })
       } catch (err) {
@@ -845,6 +864,10 @@ export class SurfaceRefreshCoordinator {
         // the pass — and must not be recorded as a value either.
         outcome = { status: 'unresolved', detail: `the witness runner threw: ${(err as Error).message}` }
       }
+      // DEFERRED IS NOT AN OBSERVATION (R8). Nothing looked, so nothing is recorded —
+      // no value, no problem, no stamp. `commitWitness` never sees it, which is what
+      // keeps a budget from quietly reading as "we checked and could not tell".
+      if (outcome.status === 'deferred') continue
       out.push({ claimId: claim.id, outcome })
     }
     return out
