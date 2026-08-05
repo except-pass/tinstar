@@ -3,9 +3,11 @@
 
 import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
+import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
 
 // ── Formatting ──
 
@@ -41,6 +43,26 @@ function cmdExists(cmd) {
     execSync(`which ${cmd}`, { encoding: 'utf-8', stdio: 'pipe' })
     return true
   } catch { return false }
+}
+
+// Distro ttyd packages (Debian/Ubuntu) ship a standalone `ttyd.service` and
+// enable it at boot, serving a login shell on a fixed port. That unit has
+// nothing to do with Tinstar — Tinstar spawns its own per-session ttyd
+// processes on demand — so it is pure attack surface the operator did not ask
+// for. Report it; never touch it. Returns null when there is nothing to say.
+function checkStandaloneTtydService() {
+  if (process.platform !== 'linux' || !cmdExists('systemctl')) return null
+  const r = spawnSync('systemctl', ['is-enabled', 'ttyd.service'], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
+  // Only `enabled`/`enabled-runtime` mean it comes back on its own. `static`,
+  // `disabled`, and the not-installed error all mean there is nothing to warn about.
+  const state = (r.stdout || '').trim()
+  if (state !== 'enabled' && state !== 'enabled-runtime') return null
+  return {
+    status: 'warn',
+    summarize: true,
+    label: 'standalone ttyd.service enabled at boot',
+    detail: 'unrelated to Tinstar (it spawns its own); disable: sudo systemctl disable --now ttyd.service',
+  }
 }
 
 function httpGet(url, timeoutMs = 3000) {
@@ -151,6 +173,20 @@ async function doctor() {
       const v = cmdVersion('expect', ['-v']) || ''
       return { status: 'pass', label: `expect${v ? ' ' + v.replace('expect version ', '') : ''}` }
     })(),
+    // bun runs the per-session NATS channel MCP server. Checked at the exact
+    // absolute path nats-mcp.json spawns, not via `which` — the two can differ.
+    // A miss is only fatal once sessions actually depend on it; before that it
+    // is a warning, since NATS is opt-in per session.
+    (() => {
+      const bun = probeBun()
+      if (bun.ok) return { status: 'pass', label: `bun ${bun.version}`, detail: bun.path }
+      return {
+        status: bun.natsSessions > 0 ? 'fail' : 'warn',
+        summarize: true,
+        label: `bun — ${bun.reason} at ${bun.path}`,
+        detail: `${describeMissingBun(bun)}; ${BUN_INSTALL_HINT}`,
+      }
+    })(),
     (() => {
       const v = cmdVersion('git', ['--version'])
       if (!v) return { status: 'fail', label: 'git — not found', detail: 'commit tracking broken' }
@@ -172,9 +208,14 @@ async function doctor() {
       }
     })(),
   ]
+  const ttydService = checkStandaloneTtydService()
+  if (ttydService) sysChecks.push(ttydService)
+
   for (const c of sysChecks) {
     printCheck(c)
-    if (c.status === 'fail') issues.push(c)
+    // `summarize` opts a warning into the closing summary — warnings that are
+    // only advisory (e.g. expect) stay inline so the summary keeps its signal.
+    if (c.status === 'fail' || c.summarize) issues.push(c)
   }
 
   // ────── Config ──────
