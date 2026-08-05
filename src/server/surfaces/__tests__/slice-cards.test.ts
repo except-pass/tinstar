@@ -281,9 +281,10 @@ interface Chain {
   fetched: string[]
   /** What the stubbed fetch answers next. */
   httpStatus: number
-  /** Every dispatch the coordinator attempted — the negative claim's evidence. */
+  /** Every dispatch the coordinator attempted — the negative claim's evidence.
+   *  There is exactly one dispatch seam now (plan U1): a prompt to a session that
+   *  already exists. An empty list therefore means no agent work of ANY kind. */
   delivered: { sessionName: string; prompt: string }[]
-  launches: string[]
   slate(): SlateSurface[]
   card(localId: string): SlateSurface
   surface(localId: string): Surface
@@ -303,13 +304,11 @@ function chain(): Chain {
   const svc = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
   const clock = { now: 1_000_000 }
   const cfg: RefreshCoordinatorConfig = {
-    maxConcurrentWorkers: 2,
-    workerTimeoutMs: 60_000,
+    attemptTimeoutMs: 60_000,
     defaultIntervalMs: 10 * 60_000,
-    autonomousWorkers: true,
   }
-  const state: Pick<Chain, 'fetched' | 'httpStatus' | 'delivered' | 'launches'> = {
-    fetched: [], httpStatus: 200, delivered: [], launches: [],
+  const state: Pick<Chain, 'fetched' | 'httpStatus' | 'delivered'> = {
+    fetched: [], httpStatus: 200, delivered: [],
   }
   const witnessDeps: WitnessDeps = {
     exec: (argv, opts) => execCommand(argv, { cwd: opts.cwd, timeoutMs: opts.timeoutMs }),
@@ -324,23 +323,17 @@ function chain(): Chain {
     config: () => cfg,
     now: () => clock.now,
     newJobId: () => `job-${++n}`,
-    // BOTH DISPATCH SEAMS ACCEPT, and that is deliberate. A refused dispatch fails
-    // its job, and a failed job leaves `jobs.active` on the same sweep — so "this
-    // surface has no rebuild job" would be equally true of a surface whose rebuild
-    // was dispatched and broke, which is the opposite of what R12 asserts. Nothing is
+    // THE DISPATCH SEAM ACCEPTS, and that is deliberate. A refused dispatch fails its
+    // job, and a failed job leaves `jobs.active` on the same sweep — so "this surface
+    // has no rebuild job" would be equally true of a surface whose rebuild was
+    // dispatched and broke, which is the opposite of what R12 asserts. Nothing is
     // ever staged, so the dispatched work simply sits there.
     //
-    // In practice it is `deliverToOwner` that fires here: these Surfaces carry the
-    // run's provenance, so the run's own session is their owner and the coordinator
-    // hands it the work directly rather than spawning a background worker.
+    // There is only one seam to accept on (plan U1): these Surfaces carry the run's
+    // provenance, so the run's own live session is their foreground owner and the
+    // coordinator hands it the work. Nothing here could create a session.
     deliverToOwner: async d => { state.delivered.push(d); return true },
     isLiveSession: () => true,
-    sessionIncarnation: name => `conv-${name}`,
-    launchWorker: async ({ job }) => {
-      state.launches.push(job.id)
-      return { ok: true, sessionName: `refresh-${job.id}`, incarnation: `conv-refresh-${job.id}` }
-    },
-    retireWorker: async () => {},
     readStaged: async () => null,
     clearStaged: async () => {},
     observeSources: async () => {},
@@ -363,7 +356,6 @@ function chain(): Chain {
     get httpStatus() { return state.httpStatus },
     set httpStatus(v: number) { state.httpStatus = v },
     get delivered() { return state.delivered },
-    get launches() { return state.launches },
     slate: () => docStore.getRun(RUN)?.slate ?? [],
     card(localId) {
       const found = (docStore.getRun(RUN)?.slate ?? []).find(s => s.id === localId)
@@ -503,17 +495,15 @@ describe('the two slice surfaces, over the real chain', () => {
     expect(c.fetched).toEqual(Array(4).fill(LOCAL_API))
 
     // THE HEADLINE NEGATIVE. Ten claims across the two slice cards, two full passes,
-    // and not one agent session. Observable rather than vacuous: `delivered` is the
-    // seam that actually fires in this harness — the run's own session owns these
-    // Surfaces, so a rebuild is DELIVERED rather than spawned — and the next test
-    // watches it fire on a card that differs only by carrying a recipe.
+    // and not one agent prompt. Observable rather than vacuous: `delivered` is the
+    // only dispatch seam there is, and the next test watches it fire on a card that
+    // differs only by carrying a recipe.
     expect(c.delivered).toEqual([])
-    expect(c.launches).toEqual([])
   })
 
   // THE POSITIVE THAT MAKES THE NEGATIVE MEAN SOMETHING. Every other test in this
-  // file asserts `launches` is empty. That assertion is worth nothing unless this
-  // harness can produce a launch at all — "nothing dispatched because nothing ran"
+  // file asserts `delivered` is empty. That assertion is worth nothing unless this
+  // harness can produce a dispatch at all — "nothing dispatched because nothing ran"
   // and "nothing dispatched because nothing needed to" are indistinguishable
   // otherwise. Same chain, same seams, same moved value; the only difference is a
   // recipe, which is what R12 says the difference is.
@@ -660,7 +650,6 @@ describe('the two slice surfaces, over the real chain', () => {
     // The rail corrected itself with no agent involved (R22) …
     expect(renderedSteps(c.card('recursive-surfaces-roadmap'))[UNITS[3]!.label]).toBe('done')
     expect(c.delivered).toEqual([])
-    expect(c.launches).toEqual([])
     // … the delta is on the record …
     expect(c.surface('recursive-surfaces-roadmap').freshness.claimRebuild!.moves)
       .toEqual([{ claimId: 'u4', from: 'pending', to: 'landed' }])

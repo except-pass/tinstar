@@ -613,6 +613,14 @@ describe('POST /api/runs/:id/slate/compose', () => {
   }))
 })
 
+// THE COMPOSE AUTHOR IS FOR COMPOSE ONLY (plan U1, KTD3).
+//
+// Refresh used to have its own branch here: a surface carrying a recipe spawned a
+// fresh headless `claude -p` child per refresh — a refresh-created process by
+// another name, reached automatically off a trigger. It is gone. Compose keeps the
+// path, because compose is a human explicitly asking for a Surface that does not
+// exist yet, with no record to hold an attempt and nothing for a barrier to
+// supersede.
 describe('refresh/compose — code-spawned author branch (feat: multi-agent Slate)', () => {
   async function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): Promise<string> {
     await seedRunSlate(srv.docStore, RUN, [{
@@ -622,34 +630,36 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
     return id
   }
 
-  it('a surface WITH a recipe spawns an author — no main-agent nudge', withServer(async srv => {
+  it('a surface WITH a recipe never spawns an author — it nudges the run\'s live agent', withServer(async srv => {
+    // The plan's negative for this route (R12, R19): no refresh request may reach a
+    // process-creating seam. `dispatchSurfaceAuthor` is the last one that was left.
     seedRun(srv.docStore)
     const pid = await seedSurfaceWithRecipe(srv)
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
-    getSession.mockReturnValue({ name: RUN }) // would be reachable — the author path skips it
-    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
-    expect(res.status).toBe(200)
-    expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)
-    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
-    const arg = dispatchSurfaceAuthor.mock.calls[0]![0] as { runId: string; prompt: string }
-    expect(arg.runId).toBe(RUN)
-    expect(arg.prompt).toContain('Re-run the eval of PR #7') // recipe carried into the author prompt
-    expect(sendPrompt).not.toHaveBeenCalled()                // the run's main agent is untouched
-  }))
-
-  it('a recipe surface falls back to the main agent when the spawn declines', withServer(async srv => {
-    seedRun(srv.docStore)
-    const pid = await seedSurfaceWithRecipe(srv)
-    dispatchSurfaceAuthor.mockReturnValue({ dispatched: false }) // disabled / no workdir / spawn error
     getSession.mockReturnValue({ name: RUN })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
-    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
-    expect(sendPrompt).toHaveBeenCalledTimes(1) // fell back to the unchanged main-agent nudge
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    // The recipe still reaches an agent — the one the human is already talking to.
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]!.join(' ')).toContain('Re-run the eval of PR #7')
   }))
 
-  it('a surface WITHOUT a recipe never spawns an author (session-derived stays main-agent)', withServer(async srv => {
+  it('an unreachable run reports delivered:false rather than spawning something', withServer(async srv => {
+    // The branch that used to justify a background executor. There is no agent to
+    // reach, so the honest answer is that nothing was delivered (R13/R17).
+    seedRun(srv.docStore)
+    const pid = await seedSurfaceWithRecipe(srv)
+    getSession.mockReturnValue(null)
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('a surface WITHOUT a recipe never spawns an author either', withServer(async srv => {
     seedRun(srv.docStore)
     await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-norecipe', headline: 'no recipe', body: TEXT }])
     getSession.mockReturnValue({ name: RUN })

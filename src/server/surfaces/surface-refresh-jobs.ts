@@ -38,20 +38,27 @@ export type SurfaceRefreshJobState =
 /** States a job may still move out of. Exactly one may exist per Surface. */
 export const ACTIVE_JOB_STATES: readonly SurfaceRefreshJobState[] = ['queued', 'running']
 
-/** How the work reached a worker. */
+/**
+ * The value a retired background-worker dispatch was recorded under.
+ *
+ * NAMED ONCE, HERE, AND READ NOWHERE ELSE. It exists only so {@link hydrate} can
+ * recognise a job written by the removed autonomous-worker architecture and
+ * terminalize it. Keeping it as a named constant rather than an inline literal is
+ * deliberate: it makes the one legitimate mention greppable and distinguishes it
+ * from a dispatch path, which is what the plan's safety gate is looking for.
+ */
+export const LEGACY_WORKER_DISPATCH_KIND = 'worker'
+
+/** How the work reached its executor. */
 export interface SurfaceRefreshDispatch {
-  /** `owner` — handed to the Surface's live owner session, serialized.
-   *  `worker` — a background managed session launched for this job.
-   *  `blocked` — nothing was dispatched, and `reason` says why. */
-  kind: 'owner' | 'worker' | 'blocked'
-  /** Session name for `owner`/`worker`; absent for `blocked`. */
+  /** `owner` — handed to the Surface's live foreground agent, serialized.
+   *  `blocked` — nothing was dispatched, and `reason` says why.
+   *
+   *  There is deliberately no background variant (plan U1, KTD3). A refresh may not
+   *  create a managed session, so there is no third recipient to name. */
+  kind: 'owner' | 'blocked'
+  /** Session name for `owner`; absent for `blocked`. */
   target?: string
-  /** The INCARNATION of `target` at dispatch — a `worker` launch's conversation id
-   *  (or creation stamp). Persisted so restart recovery can require that the session
-   *  it adopts is the one this job launched: a session name is reusable, and adopting
-   *  a stranger that shares it would attribute someone else's output to this job.
-   *  Absent on jobs written before this was recorded, and on owner dispatches. */
-  incarnation?: string
   reason?: string
   at: number
 }
@@ -108,10 +115,36 @@ export interface SurfaceRefreshJob {
  *  bound would eventually cost more to rewrite than the refreshes it records. */
 export const TERMINAL_JOB_RETENTION = 200
 
+/**
+ * The format this store writes.
+ *
+ * 1 — the autonomous-worker era: a job could carry a `worker` dispatch naming a
+ *     managed session the host had launched for it.
+ * 2 — after the safety cut (plan U1). No job may name a background session, and any
+ *     version-1 job that still did is terminalized once on hydration.
+ */
+export const REFRESH_JOBS_FORMAT_VERSION = 2
+
 interface JobsFile {
-  version: 1
+  version: number
   jobs: SurfaceRefreshJob[]
 }
+
+/** What one boot's legacy reconciliation did, so the coordinator can settle the
+ *  Surfaces those jobs abandoned (KTD8: content preserved, Surface left dirty). */
+export interface LegacyJobReconciliation {
+  jobId: string
+  surfaceId: string
+  /** What the terminal record says happened, reused verbatim as the Surface's
+   *  recorded check detail so the two cannot drift. */
+  message: string
+}
+
+/** The message a terminalized legacy worker job carries. One phrasing, so a
+ *  diagnostic can recognise reconciled history rather than a live failure. */
+export const LEGACY_WORKER_RECONCILED =
+  'this refresh was left behind by the removed background-worker architecture; '
+  + 'its content is preserved and the Surface is dirty again'
 
 /** Filesystem seam, so tests need no temp dir. */
 export interface JobStoreIo {
@@ -156,6 +189,10 @@ function isJob(v: unknown): v is SurfaceRefreshJob {
 export class SurfaceRefreshJobStore {
   private jobs = new Map<string, SurfaceRefreshJob>()
 
+  /** Legacy worker jobs this boot terminalized. Read once by the coordinator's
+   *  recovery pass; see {@link takeLegacyReconciliations}. */
+  private reconciled: LegacyJobReconciliation[] = []
+
   private constructor(
     private readonly path: string,
     readonly stagingDir: string,
@@ -171,17 +208,83 @@ export class SurfaceRefreshJobStore {
     return store
   }
 
+  /**
+   * Load the table, reconciling anything the removed worker architecture left
+   * behind (plan U1, KTD8).
+   *
+   * TERMINALIZED ONCE, AND THE "ONCE" IS THE PERSIST. An active job naming a
+   * background session describes a process that cannot exist any more — nothing
+   * will ever write its staging artifact, nothing will ever harvest it, and while
+   * it stays active `scheduleFor` coalesces every later trigger onto it, so its
+   * Surface stops refreshing entirely. Failing it here converts a permanently
+   * wedged Surface into a dirty one.
+   *
+   * ITS CONTENT IS NOT TOUCHED. This store holds no Surface content and writes
+   * none; the coordinator settles the Surface itself from
+   * {@link takeLegacyReconciliations}, which preserves last-known content by
+   * construction because the only mutators it calls are the ones that do.
+   *
+   * The rewrite at version {@link REFRESH_JOBS_FORMAT_VERSION} is what makes the
+   * conversion idempotent across boots: the second boot reads a table with no
+   * active legacy dispatch left in it, so it reconciles nothing.
+   */
   private hydrate(): void {
     const raw = this.io.read(this.path)
     if (!raw) return
+    let migrated = false
     try {
       const parsed = JSON.parse(raw) as Partial<JobsFile>
       for (const job of parsed.jobs ?? []) {
-        if (isJob(job)) this.jobs.set(job.id, job)
+        if (!isJob(job)) continue
+        if (this.isAbandonedLegacyJob(job)) {
+          migrated = true
+          this.reconciled.push({
+            jobId: job.id, surfaceId: job.surfaceId, message: LEGACY_WORKER_RECONCILED,
+          })
+          this.jobs.set(job.id, {
+            ...job,
+            state: 'failed',
+            result: { ok: false, message: LEGACY_WORKER_RECONCILED },
+            // The lease goes with it. A live lease on a terminal job is a claim
+            // nobody can release, and a later reader would treat it as work in hand.
+            lease: undefined,
+          })
+          continue
+        }
+        this.jobs.set(job.id, job)
       }
+      if ((parsed.version ?? 1) !== REFRESH_JOBS_FORMAT_VERSION) migrated = true
     } catch (err) {
       log.warn('refresh', `refresh job table unreadable, starting empty: ${(err as Error).message}`)
+      return
     }
+    if (this.reconciled.length) {
+      log.info('refresh', `reconciled ${this.reconciled.length} refresh job(s) from the removed worker architecture`)
+    }
+    // Rewrite so the reconciliation is durable. Without this the same jobs are
+    // re-terminalized on every boot, which would re-dirty their Surfaces forever.
+    if (migrated) this.persist()
+  }
+
+  /** An ACTIVE job whose dispatch named a background session. Terminal legacy jobs
+   *  are left exactly as they are — they are history, and rewriting evidence to
+   *  match a newer vocabulary is how evidence stops being evidence. */
+  private isAbandonedLegacyJob(job: SurfaceRefreshJob): boolean {
+    if (!ACTIVE_JOB_STATES.includes(job.state)) return false
+    return (job.dispatch as { kind?: string } | undefined)?.kind === LEGACY_WORKER_DISPATCH_KIND
+  }
+
+  /**
+   * Hand the caller this boot's legacy reconciliations, exactly once.
+   *
+   * DRAINED RATHER THAN READ, because the caller's job is to commit a Surface-side
+   * consequence for each one and a second reader committing it again would burn a
+   * revision — and an SSE frame — for a decision already made.
+   */
+  takeLegacyReconciliations(): LegacyJobReconciliation[] {
+    const out = this.reconciled
+    this.reconciled = []
+    return out
   }
 
   /** Where a job's worker stages its result. Per-job, so two workers can never
@@ -206,28 +309,6 @@ export class SurfaceRefreshJobStore {
       if (job.surfaceId === surfaceId && ACTIVE_JOB_STATES.includes(job.state)) return job
     }
     return undefined
-  }
-
-  /**
-   * Running jobs that hold a BACKGROUND WORKER.
-   *
-   * The fleet cap bounds managed sessions and the ttyd ports they claim, and an
-   * OWNER delivery claims neither — it is a prompt handed to a session that already
-   * exists. `activeCount('running')` cannot tell the two apart, so it counted owner
-   * deliveries against the cap from the sweep AFTER the one that dispatched them.
-   * The invariant the dispatch path documents ("this costs no port and no session,
-   * so it is NOT counted against the cap") therefore held for exactly one pass, and
-   * with `maxConcurrentWorkers: 4`, four in-flight owner deliveries — claiming zero
-   * ports — blocked the entire background fleet for up to the worker timeout. Owner
-   * delivery is the preferred path whenever the run's session is live, so that was
-   * the common case, not the corner.
-   */
-  runningWorkerCount(): number {
-    let n = 0
-    for (const job of this.jobs.values()) {
-      if (job.state === 'running' && job.dispatch?.kind === 'worker') n++
-    }
-    return n
   }
 
   activeCount(state?: SurfaceRefreshJobState): number {
@@ -256,7 +337,7 @@ export class SurfaceRefreshJobStore {
 
   private persist(): void {
     this.prune()
-    const file: JobsFile = { version: 1, jobs: [...this.jobs.values()] }
+    const file: JobsFile = { version: REFRESH_JOBS_FORMAT_VERSION, jobs: [...this.jobs.values()] }
     try {
       this.io.write(this.path, JSON.stringify(file))
     } catch (err) {
