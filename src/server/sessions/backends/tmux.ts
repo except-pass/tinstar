@@ -313,6 +313,28 @@ export function interactivePortWindow(): PortWindow | null {
   return interactiveWindow
 }
 
+/** The address every spawned ttyd binds, registered once at boot beside the
+ *  interactive port window. Loopback by default so a terminal is never reachable
+ *  from another host just because nobody configured a bind — and so unit tests
+ *  that never call the setter still assert the shipped posture.
+ *
+ *  It lives at module scope rather than in spawn options because dashboard HTTP
+ *  config is deliberately withheld from spawned guest processes (see
+ *  docs/solutions/conventions/guest-env-boundary.md), so a ttyd cannot inherit
+ *  it, and threading it through options would touch every restart path. */
+let ttydBindAddress = '127.0.0.1'
+
+/** Declare which address spawned terminals bind. Called from server boot with
+ *  the same setting that governs the dashboard listener, so the two cannot
+ *  drift apart. */
+export function setTerminalBindAddress(address: string): void {
+  ttydBindAddress = address
+}
+
+export function terminalBindAddress(): string {
+  return ttydBindAddress
+}
+
 /**
  * Claim a free port from `window`.
  *
@@ -2047,18 +2069,34 @@ export interface StartTtydAttemptDeps {
   ) => Promise<number | undefined>
 }
 
+/**
+ * The exact argv every ttyd is spawned with — the single place a terminal's
+ * network exposure is decided.
+ *
+ * `-i` takes the IPv4 loopback literal rather than an interface name (portable:
+ * the loopback interface is `lo` on Linux and `lo0` on macOS) and rather than a
+ * unix socket (which would remove the port that port reclaim, orphan sweeps,
+ * readiness probes and the /s/{name} proxy all key on). ttyd's help documents
+ * only interface names and socket paths for `-i`, but an IP literal binds
+ * exactly that address — verified on ttyd 1.7.4.
+ */
+export function ttydSpawnArgv(opts: StartTtydOptions): string[] {
+  return [
+    '-W',
+    '-i', terminalBindAddress(),
+    '-p', String(opts.port),
+    '-t', 'titleFixed=Tinstar',
+    '-t', 'theme={"background":"#000000"}',
+    'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
+  ]
+}
+
 const startTtydAttemptDeps: StartTtydAttemptDeps = {
   incumbentsOnPort: ttydIncumbentsOnPortStrict,
   allIncumbents: allTtydIncumbentsStrict,
   stopManaged: stopManagedTtyd,
   killProcess: pid => process.kill(pid, 'SIGTERM'),
-  spawnProcess: opts => spawn('ttyd', [
-    '-W',
-    '-p', String(opts.port),
-    '-t', 'titleFixed=Tinstar',
-    '-t', 'theme={"background":"#000000"}',
-    'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
-  ], {
+  spawnProcess: opts => spawn('ttyd', ttydSpawnArgv(opts), {
     stdio: 'ignore',
     env: tmuxClientEnv(),
   }),

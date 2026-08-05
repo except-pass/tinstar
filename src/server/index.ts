@@ -1164,6 +1164,14 @@ export function initBackend(): RouteContext {
       // into the range user sessions draw from is rejected at the call rather than
       // quietly competing for the same ports.
       tmuxBackend.setInteractivePortWindow(interactivePortWindow(sessionConfig))
+
+      // Terminal exposure. This is the ONE site where the bind setting reaches
+      // the terminal spawner: a spawned ttyd cannot inherit dashboard HTTP
+      // config across the guest-env boundary, so it has to be told. Loopback
+      // means a terminal is reachable only through this backend, never directly
+      // from another host — remote reach is granted per room, not by leaving a
+      // terminal port open on every interface.
+      tmuxBackend.setTerminalBindAddress('127.0.0.1')
       const portProblem = refreshConfigProblem(sessionConfig)
       if (portProblem) {
         // A user edit, not a code bug — so it degrades the refresh engine rather

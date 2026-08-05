@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import type { ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { connect } from 'node:net'
+import { networkInterfaces } from 'node:os'
 import { log } from '../../logger'
 import {
   allTtydIncumbentsStrict,
   clearTtydStartCancellationReasonForTests,
+  findPort,
+  releasePort,
+  setTerminalBindAddress,
+  terminalBindAddress,
+  ttydSpawnArgv,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
@@ -1165,4 +1172,173 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
     )
     expect(pids.sort((a, b) => a - b)).toEqual([2, 3])
   })
+})
+
+/** The address argument ttyd is told to bind, read out of a built argv. */
+function bindArgFrom(argv: string[]): string | null {
+  const flag = argv.indexOf('-i')
+  return flag === -1 ? null : (argv[flag + 1] ?? null)
+}
+
+function ttydInstalled(): boolean {
+  try {
+    execFileSync('ttyd', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function firstNonLoopbackIPv4(): string | null {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address
+    }
+  }
+  return null
+}
+
+function connectFails(host: string, port: number): Promise<string> {
+  return new Promise((resolve) => {
+    const sock = connect({ host, port, timeout: 1_500 })
+    sock.on('connect', () => { sock.destroy(); resolve('connected') })
+    sock.on('timeout', () => { sock.destroy(); resolve('timeout') })
+    sock.on('error', (err: NodeJS.ErrnoException) => {
+      sock.destroy()
+      resolve(err.code ?? 'error')
+    })
+  })
+}
+
+async function waitForListener(port: number, timeoutMs = 5_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let out = ''
+  while (Date.now() < deadline) {
+    out = execFileSync('ss', ['-tln']).toString()
+    const line = out.split('\n').find(l => l.includes(`:${port} `))
+    if (line) return line
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error(`no listener on port ${port} within ${timeoutMs}ms; ss said:\n${out}`)
+}
+
+describe('terminal bind address — every spawned ttyd is loopback-only', () => {
+  const opts = {
+    sessionName: 'bind-addr',
+    tmuxName: 'tinstar-bind-addr',
+    port: 6321,
+  }
+
+  afterEach(() => {
+    setTerminalBindAddress('127.0.0.1')
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'session stop requested',
+    })
+  })
+
+  it('defaults to the IPv4 loopback literal', () => {
+    expect(terminalBindAddress()).toBe('127.0.0.1')
+    expect(bindArgFrom(ttydSpawnArgv(opts))).toBe('127.0.0.1')
+  })
+
+  it('reflects a non-default address once the boot setter runs', () => {
+    setTerminalBindAddress('127.0.0.2')
+    expect(bindArgFrom(ttydSpawnArgv(opts))).toBe('127.0.0.2')
+  })
+
+  it('keeps the argv shape the tmux-target parser reads', () => {
+    // The interface flag must not shadow ttyd's own -t options or the trailing
+    // `tmux attach -t =<name>`, which identity inspection parses back out.
+    const argv = ttydSpawnArgv(opts)
+    expect(tmuxTargetFromArgs(['ttyd', ...argv].join(' '))).toBe(opts.tmuxName)
+    expect(argv).toContain('-W')
+    expect(argv[argv.indexOf('-p') + 1]).toBe(String(opts.port))
+  })
+
+  it('spawns the same interface argument on the restart-after-exit path', async () => {
+    const argvs: string[][] = []
+    const children = [fakeChild(811), fakeChild(812)]
+    let spawnCount = 0
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn((o) => {
+        argvs.push(ttydSpawnArgv(o))
+        return children[spawnCount++]!
+      }),
+      tmuxAlive: vi.fn(async () => true),
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+    // Production's restart path re-enters the same attempt with the same opts.
+    deps.enqueueRestart = (o, token) =>
+      startTtydForTokenAttempt(o, token, () => true, deps)
+
+    const attempt = startTtydWithDeps(opts, deps)
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+    await expect(attempt).resolves.toBe(811)
+
+    children[0]!.emit('exit', 1)
+    await vi.waitFor(() => expect(deps.tmuxAlive).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+    await vi.waitFor(() => expect(argvs).toHaveLength(2))
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+
+    expect(argvs.map(bindArgFrom)).toEqual(['127.0.0.1', '127.0.0.1'])
+  })
+
+  it('spawns the same interface argument on the reattach path', async () => {
+    const argvs: string[][] = []
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn((o) => {
+        argvs.push(ttydSpawnArgv(o))
+        return fakeChild(820 + argvs.length)
+      }),
+    })
+
+    // Reattach after a backend restart lands the session on a fresh port.
+    await expect(startTtydForTokenAttempt(
+      opts, Symbol('initial'), () => true, deps,
+    )).resolves.toBe(821)
+    await expect(startTtydForTokenAttempt(
+      { ...opts, port: opts.port + 1 }, Symbol('reattach'), () => true, deps,
+    )).resolves.toBe(822)
+
+    expect(argvs.map(bindArgFrom)).toEqual(['127.0.0.1', '127.0.0.1'])
+  })
+
+  const liveIt = ttydInstalled() ? it : it.skip
+
+  liveIt('binds only loopback when a real ttyd is spawned', async () => {
+    // An argv assertion cannot tell an accepted bind address from a silently
+    // ignored one, so this one proves it against a live process. The port comes
+    // from findPort, whose probe binds 127.0.0.1 — if the probe and the spawn
+    // disagreed about the interface, the spawned terminal would fail to bind.
+    const port = await findPort({ label: 'ttyd-bind-proof', start: 41_311, count: 40 })
+    const argv = ttydSpawnArgv({
+      sessionName: 'bind-proof',
+      tmuxName: 'tinstar-bind-proof-nonexistent',
+      port,
+    })
+    const child = spawn('ttyd', argv, { stdio: 'ignore' })
+    try {
+      const line = await waitForListener(port)
+      expect(line).toContain(`127.0.0.1:${port}`)
+      expect(line).not.toContain(`0.0.0.0:${port}`)
+      expect(line).not.toContain(`*:${port}`)
+
+      const lan = firstNonLoopbackIPv4()
+      if (lan) {
+        expect(await connectFails(lan, port)).not.toBe('connected')
+      }
+      expect(await connectFails('127.0.0.1', port)).toBe('connected')
+    } finally {
+      child.kill('SIGKILL')
+      releasePort(port)
+    }
+  }, 20_000)
 })
