@@ -101,6 +101,72 @@ describe('CodexOtelReceiver', () => {
     ))
     expect(totals.at(-1)?.value).toBe(45)
   })
+
+  // Codex leaves `timeUnixNano` at OTLP's "unset" sentinel of 0 and carries the
+  // real clock in `observedTimeUnixNano`. Reading the sentinel as a real time
+  // stamped every event 1970-01-01, which made each one instantly stale and
+  // collapsed the dedup key so distinct turns swallowed each other.
+  it('reads the observed time when Codex leaves timeUnixNano at the unset sentinel', () => {
+    const { receiver, stores } = setup()
+    const at = '2026-08-04T18:00:00.000Z'
+    const payload = otlpPayload([{
+      timeUnixNano: '0',
+      observedTimeUnixNano: String(Date.parse(at) * 1_000_000),
+      attributes: [
+        attribute('event.name', 'codex.sse_event'),
+        attribute('event.kind', 'response.completed'),
+        attribute('input_token_count', 100),
+        attribute('output_token_count', 50),
+        attribute('tool_token_count', 150),
+      ],
+    }])
+
+    expect(receiver.ingestPayload('unset-time', payload)).toBe(1)
+    expect(stores.sessions.getUsage('codex', 'unset-time')?.freshness.observedAt).toBe(at)
+  })
+
+  it('still prefers a real timeUnixNano over the observed time', () => {
+    const { receiver, stores } = setup()
+    const emitted = '2026-08-04T18:00:00.000Z'
+    const observed = '2026-08-04T18:00:09.000Z'
+    const payload = otlpPayload([{
+      timeUnixNano: String(Date.parse(emitted) * 1_000_000),
+      observedTimeUnixNano: String(Date.parse(observed) * 1_000_000),
+      attributes: [
+        attribute('event.name', 'codex.sse_event'),
+        attribute('event.kind', 'response.completed'),
+        attribute('input_token_count', 10),
+        attribute('output_token_count', 5),
+        attribute('tool_token_count', 15),
+      ],
+    }])
+
+    expect(receiver.ingestPayload('real-time', payload)).toBe(1)
+    expect(stores.sessions.getUsage('codex', 'real-time')?.freshness.observedAt).toBe(emitted)
+  })
+
+  it('keeps two same-sized turns distinct instead of deduplicating them', () => {
+    const { receiver, stores } = setup()
+    const turn = (at: string) => ({
+      timeUnixNano: '0',
+      observedTimeUnixNano: String(Date.parse(at) * 1_000_000),
+      attributes: [
+        attribute('event.name', 'codex.sse_event'),
+        attribute('event.kind', 'response.completed'),
+        attribute('input_token_count', 100),
+        attribute('output_token_count', 50),
+        attribute('tool_token_count', 150),
+      ],
+    })
+
+    expect(receiver.ingestPayload('two-turns', otlpPayload([
+      turn('2026-08-04T18:00:00.000Z'),
+      turn('2026-08-04T18:05:00.000Z'),
+    ]))).toBe(2)
+
+    expect(stores.sessions.getUsage('codex', 'two-turns')?.availability)
+      .toMatchObject({ value: { cumulativeTokens: { total: 300 } } })
+  })
 })
 
 function setup(statePath: string | null = null) {
