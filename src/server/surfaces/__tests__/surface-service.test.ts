@@ -1082,19 +1082,29 @@ describe('recoverable deletion (KTD15)', () => {
   })
 })
 
-describe('refresh-request', () => {
+// THE SERVICE NO LONGER HAS A `refreshRequest` MUTATOR (plan U5, KTD4).
+//
+// It moved `current → queued` at a human's request and REFUSED when a refresh was
+// already in flight — semantics R14 reverses, because a second ask now joins the
+// attempt rather than conflicting with it. Two mutators that both queue a refresh,
+// disagreeing about the busy case, is exactly the duplicate entry point the plan
+// forbids. `enqueueRefresh` is the one that remains, and the coordinator's
+// `humanIntent` is the only thing that calls it.
+describe('enqueue-refresh — the one queueing transition', () => {
   it('queues a Surface and reports whether the host can rebuild it unattended', async () => {
     const h = harness()
-    await h.create('needs a rebuild', { content: { headline: 'needs a rebuild', recipe: 'run the suite' } })
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
+    await h.create('needs a rebuild', {
+      content: { headline: 'needs a rebuild', recipe: { kind: 'agent', prompt: 'run the suite' } },
+    })
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
     expect(r.surfaces[0]!.surface.freshness.phase).toBe('queued')
     expect(r.surfaces[0]!.capabilities.refreshRecipe).toBe(true)
   })
 
-  it('accepts a request with no recipe but says it is a nudge', async () => {
+  it('accepts a Surface with no recipe but says it is a nudge', async () => {
     const h = harness()
     await h.create('no recipe')
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
     expect(r.surfaces[0]!.surface.freshness.phase).toBe('queued')
     expect(r.surfaces[0]!.capabilities.refreshRecipe).toBe(false)
   })
@@ -1104,15 +1114,20 @@ describe('refresh-request', () => {
     await h.create('late')
     const surface = h.docStore.getSurface('sf-1')!
     await h.docStore.commitSurfaceContent({ ...surface, freshness: { phase: 'current', overdue: true }, rev: 2 })
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
-    expect(r.surfaces[0]!.surface.freshness).toEqual({ phase: 'queued', overdue: true })
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
+    expect(r.surfaces[0]!.surface.freshness).toMatchObject({ phase: 'queued', overdue: true })
   })
 
-  it('refuses to re-queue work that is already in flight', async () => {
+  it('says a refresh is available even while one is in flight, because a second ask JOINS it', async () => {
+    // The capability used to report `refresh: false` here, which disabled the
+    // control whose behaviour R14 now defines. A capability that lies is worse than
+    // an absent one: the caller has no reason to check.
     const h = harness()
-    await h.create('busy')
-    unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
-    expect(err(await h.svc.refreshRequest('sf-1', {}, ctx())).reason).toBe('already-queued')
+    const created = await h.create('busy')
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx())
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: h.docStore.getSurface('sf-1')!.rev }, ctx())
+    expect(h.docStore.getSurface('sf-1')!.freshness.phase).toBe('refreshing')
+    expect(unwrap(h.svc.get(created.id)).capabilities.refresh).toBe(true)
   })
 })
 
@@ -1553,8 +1568,7 @@ describe('parity coverage', () => {
       'group': 'group',
       'reparent': 'reparent',
       'ungroup': 'ungroup',
-      'refresh-request': 'refreshRequest',
-      'mark-possibly-stale': 'markPossiblyStale',
+        'mark-possibly-stale': 'markPossiblyStale',
       'enqueue-refresh': 'enqueueRefresh',
       'begin-refresh': 'beginRefresh',
       'complete-refresh': 'completeRefresh',
@@ -1690,7 +1704,7 @@ describe('last-known and last-checked evidence', () => {
   /** A Surface taken all the way to `refreshing`, ready for a completion. */
   async function refreshing(h: Harness, at = 2_000): Promise<Surface> {
     await h.create('Coverage 88%')
-    await h.svc.refreshRequest('sf-1', {}, ctx({ at }))
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at }))
     const queued = h.docStore.getSurface('sf-1')!
     await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: queued.rev }, ctx({ at }))
     return h.docStore.getSurface('sf-1')!
@@ -1832,7 +1846,7 @@ describe('last-known and last-checked evidence', () => {
     await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
     const failed = h.docStore.getSurface('sf-1')!.freshness.lastCheck
 
-    await h.svc.refreshRequest('sf-1', {}, ctx({ at: 4_000 }))
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-2' }, ctx({ at: 4_000 }))
     expect(h.docStore.getSurface('sf-1')!.freshness.phase).toBe('queued')
     expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck).toEqual(failed)
   })
@@ -1843,7 +1857,7 @@ describe('last-known and last-checked evidence', () => {
     await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
     expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck?.outcome).toBe('failed')
 
-    await h.svc.refreshRequest('sf-1', {}, ctx({ at: 4_000 }))
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-2' }, ctx({ at: 4_000 }))
     const queued = h.docStore.getSurface('sf-1')!
     await h.svc.beginRefresh('sf-1', { jobId: 'job-2', expectedRev: queued.rev }, ctx({ at: 4_000 }))
     const now = h.docStore.getSurface('sf-1')!

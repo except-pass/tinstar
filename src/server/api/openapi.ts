@@ -1,4 +1,5 @@
 import { HOST_RECIPE_KINDS } from '../../domain/types'
+import { REFRESH_INTENTS } from './surfaceRoutes'
 
 /** The typed refresh recipe, as an author may write it (R1/R6/R7, KTD1). Shared by
  *  the create/update bodies and the Surface schema so the two cannot drift. */
@@ -879,10 +880,45 @@ export const spec = {
     '/api/surfaces/{id}/refresh': {
       post: {
         tags: ['Surfaces'],
-        summary: 'Request a refresh',
-        description: 'Moves freshness to `queued`. An `overdue` flag is carried through, never cleared — only a successful verification clears it. Refused while a refresh is already queued or running.',
+        summary: 'Start or join the one refresh of this Surface',
+        description:
+          'THE ONLY WAY A SURFACE REFRESHES. `intent` says why, and it is the permission model: '
+          + '`navigate`, `interact`, and `explicit` mean a person is looking at this Surface now, and only '
+          + 'they may run an agent recipe; `bulk-check` is a cheap sweep that may run machine (host) checks '
+          + 'and never delivers a prompt.\n\n'
+          + 'A human intent requires a human principal — a session, job, or process caller may observe '
+          + "freshness and may execute work a human already authorized, but may not mint the authorization "
+          + 'itself. Within Tinstar\'s trusted-local model this is a workflow boundary, not authentication.\n\n'
+          + 'Repeated intent JOINS the attempt already running rather than starting a second one. '
+          + '`navigate`/`interact` on a Surface that is already current do nothing and say so. '
+          + 'When no foreground agent is live, the response reports `unavailable` in the same cycle and the '
+          + 'Surface keeps its last-known content — nothing is spawned to go looking for one. '
+          + '`overdue` is carried through every transition and cleared only by a successful verification.',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'Queued' }, 409: { description: 'Already queued or refreshing' } },
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            intent: {
+              type: 'string',
+              enum: [...REFRESH_INTENTS],
+              default: 'explicit',
+              description:
+                'Why this refresh is being asked for. Defaults to `explicit` so a body-less POST from the ⟳ '
+                + 'button keeps working; a client sending navigate/interact is claiming LESS authority, never more.',
+            },
+          },
+        } } } },
+        responses: {
+          200: {
+            description:
+              'The outcome: `started`, `joined`, `unavailable` (no live foreground agent), `not-executable` '
+              + '(no runnable recipe), or `skipped` (already current, or a bulk check passing over agent work). '
+              + 'Carries the Surface\'s freshness as of after the operation.',
+          },
+          403: { description: 'A non-human principal attempted a human intent' },
+          404: { description: 'No such Surface' },
+          503: { description: 'The refresh engine is not running on this host' },
+        },
       },
     },
     '/api/surfaces/{id}/ungroup': {

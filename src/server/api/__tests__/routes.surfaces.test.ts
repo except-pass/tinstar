@@ -33,7 +33,27 @@ interface Harness {
   close(): Promise<void>
 }
 
-function createTestServer(root: string): Harness {
+/**
+ * A stand-in for the refresh engine that records what it was asked and answers
+ * whatever the test needs (plan U5).
+ *
+ * The COORDINATOR's behaviour has its own suite; what this file owns is the gate in
+ * front of it — which intents reach it, from which principals, and on which recipe
+ * classes. So the fake exists mainly to be observed as NOT CALLED.
+ */
+function fakeCoordinator() {
+  const asked: string[] = []
+  let answer: { status: string; job?: { id: string; execution: string } } = {
+    status: 'started', job: { id: 'job-1', execution: 'owner' },
+  }
+  return {
+    asked,
+    answerWith(next: typeof answer) { answer = next },
+    humanIntent: async (id: string) => { asked.push(id); return answer },
+  }
+}
+
+function createTestServer(root: string, coordinator?: unknown): Harness {
   const cfg = {
     sessions: { prefix: 'tinstar' },
     cliTemplates: [],
@@ -51,6 +71,7 @@ function createTestServer(root: string): Harness {
   const ctx = {
     sessionConfig: cfg,
     docStore,
+    ...(coordinator ? { refreshCoordinator: coordinator } : {}),
     bus: { emit: () => {} },
     readyQueue: { onDelete: () => {}, getQueue: () => [] },
     sse: { setReadyQueue: () => {}, broadcastReadyQueueUpdate: () => {} },
@@ -185,9 +206,18 @@ describe('route ordering', () => {
     const a = await create('a')
     const thread = await h.call('POST', `/api/surfaces/${a.id}/thread`, { text: 'hi' })
     expect(thread.body.ok && thread.body.data.op).toBe('append-thread')
+    // `refresh` is NOT a thin pass-through to one mutator any more (plan U5): it is
+    // the intent-aware operation, and its response is the outcome rather than a
+    // service receipt. What this ordering test still owns is that the sub-route is
+    // MATCHED at all — a broader handler swallowing it would 404, or worse be read
+    // as a bare Surface id. This harness runs with no refresh engine, so reaching
+    // the handler is exactly what a 503 proves.
     const refresh = await h.call('POST', `/api/surfaces/${a.id}/refresh`)
-    expect(refresh.body.ok && refresh.body.data.op).toBe('refresh-request')
-    const content = await h.call('PATCH', `/api/surfaces/${a.id}/content`, { headline: 'b', expectedRev: 3 })
+    expect(refresh.status).toBe(503)
+    expect(!refresh.body.ok && refresh.body.error.message).toMatch(/refresh engine is not running/)
+    // rev 2, not 3: the refresh above reached the intent handler and committed
+    // nothing, which is itself part of what this asserts.
+    const content = await h.call('PATCH', `/api/surfaces/${a.id}/content`, { headline: 'b', expectedRev: 2 })
     expect(content.body.ok && content.body.data.op).toBe('update-content')
   })
 
@@ -320,5 +350,163 @@ describe('delete, restore, purge over HTTP', () => {
     if (!r.body.ok) throw new Error('expected ok')
     expect(h.docStore.getSurfaceRoots(SPACE).map(s => s.id).sort()).toEqual([a.id, b.id].sort())
     expect(h.docStore.getSurfaceRecoveryRoots(SPACE).map(s => s.id)).toEqual([boxId])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The canonical refresh intent (R11-R14, KTD4/KTD9).
+//
+// The coordinator's behaviour has its own suite. What THIS file owns is the gate in
+// front of it: which intents reach it, from which principals, and on which recipe
+// classes. Most of these assert the fake was NOT called, which is the whole point —
+// the expensive thing must not happen, and "it did not happen" is only convincing
+// when something is watching for it.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/surfaces/:id/refresh — intent', () => {
+  let root2: string
+  let coord: ReturnType<typeof fakeCoordinator>
+  let srv: Harness
+
+  beforeEach(() => {
+    root2 = mkdtempSync(join(tmpdir(), 'tinstar-refresh-intent-'))
+    coord = fakeCoordinator()
+    srv = createTestServer(root2, coord)
+  })
+  afterEach(async () => {
+    await srv.close()
+    rmSync(root2, { recursive: true, force: true })
+  })
+
+  /** A dirty Surface with the given recipe, seeded straight onto the store. */
+  async function dirty(recipe?: Record<string, unknown>): Promise<string> {
+    const created = await srv.call('POST', '/api/surfaces', {
+      spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE },
+      content: { headline: 'Coverage', ...(recipe ? { recipe } : {}) },
+    })
+    if (!created.body.ok) throw new Error('seed failed')
+    const id = (created.body.data.surfaces as { surface: Surface }[])[0]!.surface.id
+    const s = srv.docStore.getSurface(id)!
+    await srv.docStore.commitSurfaceContent({
+      ...s, freshness: { ...s.freshness, phase: 'possibly-stale' }, rev: s.rev + 1,
+    })
+    return id
+  }
+
+  const AGENT = { kind: 'agent', prompt: 'Re-run coverage.' }
+  const HOST = { kind: 'host', handler: 'unit-landed', params: { plan: 'docs/plans/x.md', unit: 'U1' } }
+
+  it('a human navigating to a dirty Surface starts the one attempt', async () => {
+    const id = await dirty(AGENT)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'navigate' })
+    expect(r.status).toBe(200)
+    expect(r.body.ok && r.body.data.outcome).toBe('started')
+    expect(r.body.ok && r.body.data.attemptId).toBe('job-1')
+    expect(coord.asked).toEqual([id])
+  })
+
+  it('repeated intent reports JOINED rather than a second queue error', async () => {
+    // The old route answered `already-queued` with a 409 here, which a UI could only
+    // render as a failure. R14 says the attempt in flight IS the answer.
+    const id = await dirty(AGENT)
+    coord.answerWith({ status: 'joined', job: { id: 'job-1', execution: 'owner' } })
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'interact' })
+    expect(r.status).toBe(200)
+    expect(r.body.ok && r.body.data.outcome).toBe('joined')
+    expect(r.body.ok && r.body.data.attemptId).toBe('job-1')
+  })
+
+  it('a SESSION principal may not authorize agent work, and nothing is dispatched', async () => {
+    // The workflow boundary (KTD4). An agent tool, a cron, or a plugin may read
+    // freshness and may execute work a human already authorized — it may not be the
+    // thing that decides to spend a model call.
+    const id = await dirty(AGENT)
+    for (const kind of ['session', 'job', 'process']) {
+      const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'navigate' }, {
+        'x-tinstar-actor': 'sess-a', 'x-tinstar-actor-kind': kind,
+      })
+      expect(r.status).toBe(403)
+      expect(!r.body.ok && r.body.error.message).toMatch(/may not authorize a refresh/)
+    }
+    expect(coord.asked).toEqual([])
+    expect(srv.docStore.getSurface(id)!.freshness.phase).toBe('possibly-stale')
+  })
+
+  it('BULK-CHECK never touches an agent recipe (KTD9)', async () => {
+    // "Refresh everything" must be a cheap check, not a prompt fan-out. The Surface
+    // is left dirty and the response says why rather than reporting a queue.
+    const id = await dirty(AGENT)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'bulk-check' })
+    expect(r.status).toBe(200)
+    expect(r.body.ok && r.body.data.outcome).toBe('skipped')
+    expect(r.body.ok && String(r.body.data.reason)).toMatch(/refreshes when you visit it/)
+    expect(coord.asked).toEqual([])
+  })
+
+  it('BULK-CHECK does run a host recipe, so the sweep is not vacuous', async () => {
+    const id = await dirty(HOST)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'bulk-check' })
+    expect(r.body.ok && r.body.data.outcome).toBe('started')
+    expect(coord.asked).toEqual([id])
+  })
+
+  it('a bulk check needs no human principal — it cannot spend a model call', async () => {
+    const id = await dirty(HOST)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'bulk-check' }, {
+      'x-tinstar-actor': 'sess-a', 'x-tinstar-actor-kind': 'session',
+    })
+    expect(r.status).toBe(200)
+    expect(coord.asked).toEqual([id])
+  })
+
+  it('navigating to a CURRENT Surface does nothing, so moving around a healthy Slate is free', async () => {
+    const created = await srv.call('POST', '/api/surfaces', {
+      spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE },
+      content: { headline: 'Coverage', recipe: AGENT },
+    })
+    if (!created.body.ok) throw new Error('seed failed')
+    const id = (created.body.data.surfaces as { surface: Surface }[])[0]!.surface.id
+    for (const intent of ['navigate', 'interact']) {
+      const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent })
+      expect(r.body.ok && r.body.data.outcome).toBe('skipped')
+    }
+    expect(coord.asked).toEqual([])
+
+    // …but the ⟳ button still works, because pressing it is unambiguous (R18).
+    const explicit = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'explicit' })
+    expect(explicit.body.ok && explicit.body.data.outcome).toBe('started')
+    expect(coord.asked).toEqual([id])
+  })
+
+  it('defaults to `explicit`, so a body-less POST from the ⟳ button keeps working', async () => {
+    const id = await dirty(AGENT)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`)
+    expect(r.body.ok && r.body.data.intent).toBe('explicit')
+    expect(coord.asked).toEqual([id])
+  })
+
+  it('refuses an unknown intent rather than defaulting to one', async () => {
+    // Every default here is either "run a model nobody asked for" or "silently do
+    // nothing". A 400 is better than both.
+    const id = await dirty(AGENT)
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'because-i-said-so' })
+    expect(r.status).toBe(400)
+    expect(coord.asked).toEqual([])
+  })
+
+  it('carries the freshness AFTER the operation, so an unavailable answer needs no second request', async () => {
+    const id = await dirty(AGENT)
+    coord.answerWith({ status: 'unavailable' })
+    const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'navigate' })
+    expect(r.status).toBe(200)
+    expect(r.body.ok && r.body.data.outcome).toBe('unavailable')
+    expect(r.body.ok && r.body.data.freshness).toBeDefined()
+    expect(r.body.ok && r.body.data.attemptId).toBeUndefined()
+  })
+
+  it('404s an unknown Surface without reaching the engine', async () => {
+    const r = await srv.call('POST', '/api/surfaces/sf-nope/refresh', { intent: 'explicit' })
+    expect(r.status).toBe(404)
+    expect(coord.asked).toEqual([])
   })
 })

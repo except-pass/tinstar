@@ -111,7 +111,6 @@ export type SurfaceOperation =
   | 'group'
   | 'reparent'
   | 'ungroup'
-  | 'refresh-request'
   /** U6's durable freshness lifecycle: a typed trigger advanced the host
    *  observation generation; a job took the Surface; the barrier accepted or
    *  refused its result; the sweep re-derived `dueAt`/`overdue`. */
@@ -1706,53 +1705,6 @@ export class SurfaceService {
       amendedAt: now,
     }
     return this.commitContent('set-thread-disposition', prior, next, ctx, flight.fingerprint)
-  }
-
-  /**
-   * Ask for this Surface to be rebuilt.
-   *
-   * U3 owns the REQUEST; U6 owns the durable job that services it. So this moves
-   * freshness to `queued` and stops — it does not launch anything, and it is
-   * careful not to claim more than that. A Surface already `refreshing` is left
-   * alone rather than re-queued: the state machine has no refreshing→queued edge
-   * for a human request, and pretending otherwise would let a request cancel work
-   * that is in flight.
-   */
-  async refreshRequest(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
-    const flight = this.preflight('refresh-request', id, body, ctx)
-    if (flight.done) return flight.done
-    const raw = asObject(body) ?? {}
-    const forbidden = forbiddenField(raw)
-    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on refresh-request`)
-    const prior = this.docStore.getSurface(id)
-    if (!prior) return notFound(id)
-    const guard = this.guardLive(prior, 'refresh-request')
-    if (guard) return guard
-    if (raw.expectedRev !== undefined) {
-      if (typeof raw.expectedRev !== 'number') return invalid('expectedRev must be a number')
-      if (raw.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
-    }
-    if (prior.freshness.phase === 'refreshing' || prior.freshness.phase === 'queued') {
-      return {
-        ok: false,
-        error: {
-          code: 'conflict',
-          reason: prior.freshness.phase === 'queued' ? 'already-queued' : 'already-refreshing',
-          message: `Surface ${id} is already ${prior.freshness.phase}; one refresh runs per Surface`,
-          current: [prior],
-        },
-      }
-    }
-    const next: Surface = {
-      ...prior,
-      // `overdue` is deliberately carried through, not cleared. It is orthogonal
-      // to the phase and only a successful verification may clear it — otherwise a
-      // retry loop would make an overdue Surface look attended to (R18).
-      freshness: { ...prior.freshness, phase: 'queued' },
-      rev: prior.rev + 1,
-      amendedAt: ctx.at ?? Date.now(),
-    }
-    return this.commitContent('refresh-request', prior, next, ctx, flight.fingerprint)
   }
 
   // --- Freshness lifecycle (plan U6, KTD10) ----------------------------------
