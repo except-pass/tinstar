@@ -47,7 +47,7 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
   it('returns the resolved provider telemetry state for every template', async () => {
     const templates = await getTemplates()
 
-    expect(templates.find(template => template.id === 'claude-auto')?.telemetryState)
+    expect(templates.find(template => template.id === 'claude-multi-agent')?.telemetryState)
       .toBe('enabled')
     expect(templates.find(template => template.id === 'codex-full-auto')?.telemetryState)
       .toBe('enabled')
