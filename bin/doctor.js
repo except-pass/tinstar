@@ -4,6 +4,7 @@
 import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
 
@@ -225,6 +226,43 @@ async function doctor() {
   for (const c of configChecks) {
     printCheck(c)
     if (c.status === 'fail') issues.push(c)
+  }
+
+  // ────── Claude Code integration ──────
+  //
+  // The statusline hook is the only source of per-session context-window
+  // utilization. When it's missing the meter shows "--" and nothing else in
+  // the UI hints at why — so it gets its own loud check.
+  printSection('Claude Code integration')
+
+  const hookChecks = []
+  try {
+    const { inspectStatusline, missingShimDeps } = await import('./install-statusline.js')
+    const hook = inspectStatusline()
+    const FIX = 'run: tinstar install-statusline'
+
+    if (hook.state === 'ok') {
+      hookChecks.push({ status: 'pass', label: 'statusline hook registered (context meter)', detail: hook.scriptPath })
+      const missing = missingShimDeps()
+      if (missing.length) {
+        hookChecks.push({ status: 'warn', label: `statusline shim deps missing: ${missing.join(', ')}`, detail: 'hook runs but posts nothing' })
+      }
+    } else if (hook.state === 'missing') {
+      hookChecks.push({ status: 'warn', label: 'statusline hook not registered — context meters will read "--"', detail: FIX })
+    } else if (hook.state === 'drifted') {
+      hookChecks.push({ status: 'warn', label: 'statusline hook out of date', detail: FIX })
+    } else if (hook.state === 'foreign') {
+      hookChecks.push({ status: 'warn', label: 'a non-Tinstar statusLine is registered — context meters will read "--"', detail: `${FIX} --force` })
+    } else if (hook.state === 'unreadable') {
+      hookChecks.push({ status: 'fail', label: 'claude settings.json — parse error', detail: hook.error })
+    }
+  } catch (err) {
+    hookChecks.push({ status: 'warn', label: 'statusline hook — check failed', detail: err.message })
+  }
+
+  for (const c of hookChecks) {
+    printCheck(c)
+    if (c.status !== 'pass') issues.push(c)
   }
 
   // ────── Server ──────

@@ -14,6 +14,7 @@
     "bin/",
     "dist/client/",
     "dist/server/",
+    "scripts/cc-quota-statusline.sh",
     "README.md"
   ],
   "keywords": [
