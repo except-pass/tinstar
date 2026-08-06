@@ -40,13 +40,38 @@ import {
 } from '../surfaces/surface-service'
 import type { SurfaceHostProbe } from '../surfaces/surface-context'
 import { slateSourceAdapters } from '../surfaces/slate-source'
+import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
+import { humanIntents, unavailableOwners } from '../observability/refresh-metrics'
 
 /** What this module needs from `RouteContext`. Narrowed deliberately: a handler
  *  that could reach NATS or the simulator would eventually be asked to. */
 export interface SurfaceRouteContext {
   docStore: DocumentStore
   sessionConfig: TinstarConfig | null
+  /** The refresh engine. Absent when sessions are disabled, in which case refresh
+   *  reports that it cannot run rather than pretending to have queued something. */
+  refreshCoordinator?: SurfaceRefreshCoordinator
 }
+
+/**
+ * Why a refresh is being asked for (R11/R12, KTD4).
+ *
+ * THE CLOSED LIST IS THE PERMISSION MODEL. Three of these are a HUMAN saying "I am
+ * looking at this now", and they are the only things that may run an agent recipe.
+ * The fourth is a cheap sweep that may run machine checks and must never produce a
+ * prompt — which is what stops a "refresh everything" button from becoming a fan-out
+ * of model calls (KTD9).
+ *
+ * Deliberately NOT inferred from the caller. An intent is a claim about what the
+ * user did, and the three human ones are the ones a UI must only send from a real
+ * event handler — see `slateRefresh.tsx`, where mount, focus, visibility, and SSE
+ * delivery are all explicitly not intents.
+ */
+export const REFRESH_INTENTS = ['navigate', 'interact', 'explicit', 'bulk-check'] as const
+export type RefreshIntent = typeof REFRESH_INTENTS[number]
+
+/** The three that mean a person is looking at this Surface right now. */
+const HUMAN_INTENTS: readonly RefreshIntent[] = ['navigate', 'interact', 'explicit']
 
 /** Header carrying the caller's stable actor id. The browser sends the id it
  *  minted in `uiPrefs`; a managed session sends its session name.
@@ -294,12 +319,24 @@ export async function handleSurfaceRoutes(
     return true
   }
 
+  // THE CANONICAL REFRESH ENTRY POINT (KTD4). Handled ahead of the generic
+  // sub-resource table because it is not a thin pass-through to one service mutator:
+  // it is where an INTENT is checked against the caller and against the recipe class
+  // before any state moves. Everything that refreshes a Surface — this route, the
+  // run-scoped alias, an agent tool — comes through here, so there is exactly one
+  // place that decides what authorizes what.
+  const refreshId = method === 'POST' ? matchId(path, 'refresh') : null
+  if (refreshId) {
+    const parsed = await readOrRefuse()
+    if (!parsed) return true
+    return handleRefreshIntent(ctx, req, res, cors, refreshId, parsed.value, svc)
+  }
+
   if (method === 'POST' || method === 'PATCH') {
     const subs: [string, (id: string, b: unknown, c: SurfaceCallContext) => Promise<SurfaceResult<unknown>>][] = [
       ['content', (id, b, c) => svc.updateContent(id, b, c)],
       ['authority', (id, b, c) => svc.transferContentAuthority(id, b, c)],
       ['thread', (id, b, c) => svc.appendThread(id, b, c)],
-      ['refresh', (id, b, c) => svc.refreshRequest(id, b, c)],
       ['ungroup', (id, b, c) => svc.ungroup(id, b, c)],
       ['restore', (id, b, c) => svc.restore(id, b, c)],
     ]
@@ -332,4 +369,119 @@ export async function handleSurfaceRoutes(
   }
 
   return false
+}
+
+/**
+ * `POST /api/surfaces/:id/refresh` — the one operation that starts or joins a
+ * refresh (R11-R14, KTD4).
+ *
+ * WHAT IT CHECKS, in the order that matters:
+ *
+ *  1. THE INTENT IS IN THE CLOSED LIST. An unrecognised one is refused rather than
+ *     defaulted, because every default here is either "run a model nobody asked for"
+ *     or "silently do nothing", and both are worse than a 400.
+ *  2. A HUMAN INTENT COMES FROM A HUMAN PRINCIPAL. Within Tinstar's trusted-local
+ *     model this is a WORKFLOW boundary, not authentication: a session, job, or
+ *     process principal may read freshness and may EXECUTE work a human already
+ *     authorized, but it may not mint the authorization itself. That is what stops
+ *     an agent tool, a cron, or a plugin becoming the thing that decides to spend a
+ *     model call. It does not defend against a malicious local process, and the plan
+ *     says so.
+ *  3. `bulk-check` TOUCHES ONLY HOST RECIPES (KTD9). "Refresh everything" is a cheap
+ *     check, not a prompt fan-out — an agent Surface is left dirty for its owner to
+ *     visit, and the response says so rather than reporting a queue that is not there.
+ *
+ * Then it delegates. The coordinator owns the transition, the attempt, the join, and
+ * the dispatch; this function owns none of them, which is why the run-scoped alias
+ * can reach the identical behaviour by resolving its id and calling the same code.
+ */
+export async function handleRefreshIntent(
+  ctx: SurfaceRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  cors: Record<string, string>,
+  surfaceId: string,
+  rawBody: unknown,
+  svc: SurfaceService,
+): Promise<true> {
+  const refuse = (code: ErrorCode, message: string, status?: number): true =>
+    fail(res, code, message, { headers: cors, ...(status ? { status } : {}) })
+
+  const found = svc.get(surfaceId)
+  if (!found.ok) return respond(res, found, cors)
+  const surface = found.data.surface
+
+  const raw = (rawBody ?? {}) as Record<string, unknown>
+  // `explicit` is the default because the historic caller of this route is the ⟳
+  // button, and a body-less POST from it means exactly that. A UI sending
+  // `navigate`/`interact` is making a NARROWER claim than the default, never a wider
+  // one, so an old client cannot accidentally acquire authority it did not have.
+  const intent = (raw.intent === undefined ? 'explicit' : raw.intent) as RefreshIntent
+  if (!REFRESH_INTENTS.includes(intent)) {
+    return refuse('INVALID_PARAMS', `intent must be one of ${REFRESH_INTENTS.join(', ')}`)
+  }
+
+  const actor = resolveActor(req)
+  if (HUMAN_INTENTS.includes(intent) && actor.kind !== 'human') {
+    return refuse(
+      'FORBIDDEN',
+      `a ${actor.kind} principal may observe this Surface's freshness but may not authorize a refresh of it; `
+      + 'only a person navigating to or interacting with it can do that',
+      403,
+    )
+  }
+
+  const coordinator = ctx.refreshCoordinator
+  if (!coordinator) {
+    return refuse('BACKEND_UNAVAILABLE', 'the refresh engine is not running on this host', 503)
+  }
+
+  // NAVIGATION IS ONLY PERMISSION FOR A DIRTY SURFACE (R11). Selecting your way
+  // around a healthy Slate must cost nothing — that is most of what "leaving Tinstar
+  // open is free" means in practice, and a UI cannot be trusted to know whether a
+  // card is dirty when its own state can be a frame behind the server's.
+  //
+  // `explicit` is exempt, deliberately: pressing ⟳ on a current Surface is an
+  // unambiguous "check it again", and R18's manual recovery depends on it working
+  // whatever the phase says.
+  if ((intent === 'navigate' || intent === 'interact') && surface.freshness.phase === 'current') {
+    return ok(res, {
+      surfaceId, intent, outcome: 'skipped',
+      reason: 'this Surface is already current, so visiting it changed nothing',
+      freshness: surface.freshness,
+    }, { headers: cors })
+  }
+
+  const recipeKind = surface.content.recipe?.kind
+  if (intent === 'bulk-check' && recipeKind !== 'host') {
+    // NOT AN ERROR, and not a queue either. The cheap sweep passed over a Surface it
+    // is not allowed to run, and the honest answer is the state it is in.
+    return ok(res, {
+      surfaceId, intent, outcome: 'skipped',
+      reason: 'this Surface is rebuilt by its foreground agent, so it refreshes when you visit it',
+      freshness: surface.freshness,
+    }, { headers: cors })
+  }
+
+  const result = await coordinator.humanIntent(surfaceId)
+  // COUNTED HERE, at the one place every intent passes through. `joined` climbing far
+  // above `started` is a UI sending intent too eagerly — absorbed correctly by the
+  // durable single-flight rule, but worth being able to see.
+  humanIntents.inc({ outcome: result.status })
+  if (result.status === 'unavailable') unavailableOwners.inc()
+  if (result.status === 'unknown-surface') {
+    return refuse('NOT_FOUND', `Surface ${surfaceId} not found`)
+  }
+  const attempt = result.status === 'started' || result.status === 'joined' ? result.job : undefined
+  // The FRESHNESS IS READ BACK after the operation, not before: an `unavailable`
+  // answer records a completed check, and a caller that had to make a second request
+  // to see it would render a spinner for a refresh that already ended.
+  const after = svc.get(surfaceId)
+  return ok(res, {
+    surfaceId,
+    intent,
+    outcome: result.status,
+    ...(attempt ? { attemptId: attempt.id, execution: attempt.execution } : {}),
+    ...(after.ok ? { freshness: after.data.surface.freshness } : {}),
+  }, { headers: cors })
 }

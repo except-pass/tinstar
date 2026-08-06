@@ -54,6 +54,20 @@ A run's standing statement of what the session is for: one short piece of user-w
 ### Surface
 A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
 
+A Surface is also the atomic refresh boundary. A refreshable Surface has one recipe, one whole-Surface result, and one freshness record; independently refreshed content belongs on separate Surfaces composed by the Slate. Its last-known result remains real information even when dirty, provided the Surface shows when that result was known and when freshness was last checked.
+
+### Refresh recipe
+The single instruction that rebuilds one whole Surface, and the thing that decides who is allowed to run it. A **host** recipe names a machine check from a closed, code-owned list: it is read-only, bounded, cannot invoke a model or create a session, and the host may therefore run it on its own. An **agent** recipe is prose, delivered to the Surface's existing foreground collaborator, and runs only when a person deliberately reaches the Surface. Prose can never become a host recipe however it is worded — machine authority comes from naming a registered handler, which an author has no way to forge. A recipe the host cannot read is kept and reported rather than dropped, so a mistyped one says so instead of leaving a Surface that quietly never updates.
+
+### Dirty vs refreshing
+Two different things a Surface can be, deliberately kept apart. **Dirty** means an observation has invalidated it: a commit landed, a deadline passed, a claim moved. Marking is cheap and happens freely. **Refreshing** means an executor is actually rebuilding it right now, which for an agent recipe requires a person to have asked. Making the two synonymous is what produced a background agent per matching event; separating them is what makes an open dashboard cost nothing.
+
+### Last known vs last checked
+The two facts a Surface presents about its own freshness. **Last known** dates the content on screen and moves only when that content is replaced. **Last checked** dates the host's most recent completed look and records how it ended — succeeded, failed, unavailable (nothing could look), or superseded (the world moved first). A check that succeeds and finds nothing to change moves only the second, which is the common case: collapsing them into one timestamp reports month-old content as fresh.
+
+### Lookup broker
+The single gate every proactive host check passes through before it leaves the process. It holds a host-wide concurrency budget, a per-provider budget, and an in-flight map keyed by provider plus a stable question identity, so many Surfaces asking the same question share one answer and the second asker consumes no budget at all. Its purpose is that Surface count cannot buy provider load. A request it declines is **deferred**, which is not a failure and is recorded nowhere: nothing looked, so there is nothing to write down.
+
 ### Dismissed vs deleted
 Two different endings, deliberately kept apart. **Dismissed** is a discussion outcome on an addressable point: the question was raised and the user decided it needs nothing further. The surface stays exactly where it is and remains visible. **Deleted** is structural: the surface and its descendants move into the recovery store, out of the workspace, and can be restored to their former home. A dismissed surface is still there and settled; a deleted one is gone but recoverable. Only **purge** erases, and only a deleted surface can be purged.
 

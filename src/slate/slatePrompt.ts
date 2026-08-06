@@ -105,14 +105,20 @@ export function slateAnswerPromptText(
 
 /** Prompt for a REFRESH nudge (POST /slate/surfaces/:pid/refresh). Refresh persists
  *  NOTHING (plan KTD2): this text is delivered best-effort and the surface regenerates
- *  through the normal file→watcher→projection path. When the surface carries a
- *  file-owned `refresh` recipe, the delivered text IS that recipe verbatim, plus a
- *  one-line instruction to rewrite the surface's `.tinstar/slate` file; otherwise a
- *  bare regenerate-nudge naming the surface. `_origin` is unused (regeneration is
- *  file-based, not a curl) but kept for signature parity with the other builders. */
+ *  through the normal file→watcher→projection path. When the surface carries an AGENT
+ *  recipe, the delivered text IS that recipe verbatim, plus a one-line instruction to
+ *  rewrite the surface's `.tinstar/slate` file; otherwise a bare regenerate-nudge
+ *  naming the surface.
+ *
+ *  A HOST recipe produces the bare nudge, deliberately. It is machine work with no
+ *  instruction to deliver, and rendering its handler name into somebody's
+ *  conversation would put a host identifier where an author's sentence belongs.
+ *  `_origin` is unused (regeneration is file-based, not a curl) but kept for
+ *  signature parity with the other builders. */
 export function slateRefreshPromptText(point: Point, _origin: string): string {
-  const body = point.refresh
-    ? [point.refresh, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
+  const recipe = point.refresh?.kind === 'agent' ? point.refresh.prompt : undefined
+  const body = recipe
+    ? [recipe, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
     : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite the .tinstar/slate file that defines it.`]
   // Carry the GUARDRAIL like every other Slate prompt: the recipe is file-authored
   // (an untrusted repo/branch/process could plant one), so frame it as a note, not a

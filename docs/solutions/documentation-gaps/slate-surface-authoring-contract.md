@@ -54,7 +54,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `author` | `'agent' \| 'user' \| 'process'` | No | Any other value drops the entry. Use **`'agent'`** for agent-authored surfaces. (See "Why This Matters" — mislabeling has behavioral consequences around self-prompting and staleness.) |
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
-| `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
+| `refresh` | string, or `{ kind, … }` | No | **The ONE recipe that rebuilds this whole surface.** A plain string is an **agent** recipe: only a person navigating to or interacting with the surface runs it. An object `{ "kind": "host", "handler": "http-status"\|"unit-landed", "params": { … } }` is a **host** check the host runs by itself. Anything else is kept as *unreadable* and refused with a message naming what was wrong — see "Two kinds of recipe" below. |
 | `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
 | `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
 | `proposal` | `{ state, detail? }` | No | **What you claim about the work** — `working`, `blocked`, `resolved`, or `superseded`, plus one short line. A hint the card renders beside the status; it never *becomes* the status. See "Say what you know about the work" below. |
@@ -252,7 +252,39 @@ The client surfaces the age of each panel ("updated 3m ago", ambering when unten
 
 ## The vacuum test: source-derived vs session-derived
 
-Under multi-agent authoring the `refresh` recipe stops being a convenience and becomes the **authoring contract a fresh, context-free author executes.** When a surface carries a self-contained recipe, refreshing it spawns a one-shot author (a headless child in the run's workdir) that runs the recipe and rewrites the file — the run's main agent is never involved.
+## Two kinds of recipe, and who is allowed to run them
+
+A surface has **one recipe**, it replaces the **whole surface**, and the recipe's *kind*
+— not your `refreshPolicy` — decides who may run it.
+
+| You write | Kind | Who runs it | When |
+|---|---|---|---|
+| `"refresh": "Re-read the open PRs and rewrite this surface."` | **agent** | the surface's existing foreground agent | only when a person navigates to, interacts with, or explicitly refreshes it |
+| `"refresh": { "kind": "host", "handler": "http-status", "params": { "url": "https://…" } }` | **host** | the host itself, no model and no session | on its own, under a shared provider budget |
+| anything else | **unreadable** | nobody | never — the host says what was wrong instead |
+
+**A string recipe can never become proactive.** However it is worded — even if it
+literally says `http-status` — prose parses as an *agent* recipe. Machine authority
+comes from naming a handler in the host's closed list, which is code you cannot write
+from a file, and a name outside that list is refused and quoted back to you rather
+than guessed at. This is deliberate: the only thing that can grant unattended
+execution is something an author has no way to forge.
+
+**`"policy": "automatic"` grants nothing.** Policy governs *invalidation* — which
+observations mark your surface dirty. It has never governed execution and now
+visibly does not: an `automatic` agent recipe is marked dirty by a commit and then
+waits for a person, which is exactly the point.
+
+**What that means for you as an author.** A surface whose prose must be rewritten is
+an agent recipe, and it refreshes when a human opens it — so write the recipe to
+survive that delay, and keep the surface honest in the meantime (it will show its
+last-known content with an honest age). A surface whose answer is a machine fact — an
+endpoint's status, whether a plan unit landed — should be a host recipe, because the
+host will keep it warm for free.
+
+Under multi-agent authoring the `refresh` recipe is still the **authoring contract a
+fresh, context-free author executes** — it just executes on a human's cue rather than
+on a timer.
 
 So apply the **vacuum test** to every living surface: *could this recipe produce a sensible refresh in a vacuum, with no session context?*
 
@@ -414,7 +446,22 @@ Every newly authored surface should declare at least one claim. It is a conventi
 }
 ```
 
-Note there is **no `refresh` recipe**. A landing does not make this card false — the rail re-derives itself from the new value — so there is nothing for a rebuild to do. A moved value on a recipe-less surface records the delta and marks it for a human glance, and queues no agent. Give a claim-bearing card a recipe only when a moved value genuinely requires *prose* to be rewritten.
+Note the recipe is a **host** one. A claim-bound rail is the host writing part of your
+card, so the question is whether the host would be editing underneath somebody else:
+
+- **host recipe** — the host owns the rebuild outright. The rail binds.
+- **no recipe** — nothing rebuilds the card at all, so there is no competing writer.
+  The rail binds. (The card still records the delta and marks itself for a glance; it
+  just queues no agent.)
+- **agent recipe** — *you* own the prose and will rewrite it, so the host does **not**
+  bind the rail. The claims still detect drift and mark the surface dirty; they simply
+  do not edit your body. Otherwise one card would say two things — a rail describing
+  today and prose describing whenever you last looked — with nothing marking which
+  half was older.
+
+So give a claim-bearing card an *agent* recipe only when a moved value genuinely
+requires **prose** to be rewritten, and expect to write the rail's statuses yourself
+when you do.
 
 **(b) An infra card with a single claim.**
 

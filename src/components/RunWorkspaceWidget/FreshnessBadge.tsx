@@ -49,7 +49,7 @@ export function freshnessTitle(freshness: SurfaceFreshness): string {
       parts.push(why ? `May be out of date — ${why}.` : 'May be out of date.')
       break
     case 'queued':
-      parts.push('A refresh is queued and waiting for a free worker.')
+      parts.push('A refresh is queued and waiting its turn.')
       if (why) parts.push(`It was scheduled because ${why}.`)
       break
     case 'refreshing':
@@ -64,7 +64,40 @@ export function freshnessTitle(freshness: SurfaceFreshness): string {
   // a queued Surface can be overdue, and hiding that would make a retry loop look
   // like attention.
   if (freshness.overdue) parts.push('Its verification deadline has passed.')
-  return parts.join(' ')
+  // THE TWO FACTS A READER ACTUALLY NEEDS (R3, KTD5), and they are different facts.
+  // The phase says what the host is DOING; this says what is KNOWN and when the host
+  // last LOOKED. A successful check that changed nothing moves only the second, which
+  // is the common case and the one a single timestamp reported as freshness.
+  parts.push(lastCheckSentence(freshness))
+  return parts.filter(Boolean).join(' ')
+}
+
+/** What the host's last completed check said, in one sentence. Empty when it has
+ *  never finished one — "never checked" is a real state and the badge says it
+ *  elsewhere rather than inventing a reassuring phrase here. */
+export function lastCheckSentence(freshness: SurfaceFreshness): string {
+  const check = freshness.lastCheck
+  if (!check) return 'The host has not finished a check of this surface yet.'
+  const who = check.execution === 'host' ? 'A machine check' : 'Its foreground agent'
+  switch (check.outcome) {
+    case 'succeeded':
+      // Named separately from `verifiedAt` on purpose: "checked and unchanged" is
+      // NOT "rewritten", and collapsing them is what made month-old content read as
+      // fresh.
+      return `${who} last confirmed this at ${stamp(check.finishedAt)}.`
+    case 'failed':
+      return `${who} tried at ${stamp(check.finishedAt)} and could not finish`
+        + `${check.detail ? `: ${check.detail}` : '.'}`
+    case 'unavailable':
+      return `Nothing could check this at ${stamp(check.finishedAt)}`
+        + `${check.detail ? `: ${check.detail}` : '.'}`
+    case 'superseded':
+      return `A check finished at ${stamp(check.finishedAt)}, but the world had already moved on.`
+  }
+}
+
+function stamp(at: number): string {
+  return new Date(at).toLocaleTimeString()
 }
 
 /**
@@ -103,8 +136,39 @@ export function FreshnessBadge({ freshness, className }: {
       {freshness.overdue && (
         <span data-testid="freshness-overdue" className="text-amber-400/90">overdue</span>
       )}
+      {/* THE CHECK OUTCOME, beside the phase rather than folded into it (R3/KTD5).
+          They answer different questions — "what is the host doing" and "how did the
+          last look end" — and a Surface can be dirty because a check SUCCEEDED and
+          found a change, or dirty because nothing could look at it at all. A reader
+          who cannot tell those apart has no idea whether to wait or to act. */}
+      {freshness.lastCheck && freshness.lastCheck.outcome !== 'succeeded' && (
+        <span
+          data-testid="freshness-last-check"
+          data-outcome={freshness.lastCheck.outcome}
+          className={CHECK_LOOKS[freshness.lastCheck.outcome]}
+        >
+          {CHECK_LABELS[freshness.lastCheck.outcome]}
+        </span>
+      )}
     </span>
   )
+}
+
+/** How a completed check's outcome reads. `succeeded` is absent by construction —
+ *  it renders nothing, for the same reason `current` does: a Slate where every card
+ *  wears a green tick is a Slate where nobody reads any of them. */
+const CHECK_LABELS: Record<'failed' | 'unavailable' | 'superseded', string> = {
+  failed: 'check failed',
+  // "Nobody could look" and "we looked and it broke" call for different things from
+  // a reader, so they are never the same word.
+  unavailable: 'not checked',
+  superseded: 'moved again',
+}
+
+const CHECK_LOOKS: Record<'failed' | 'unavailable' | 'superseded', string> = {
+  failed: 'text-rose-400/90',
+  unavailable: 'text-amber-400/90',
+  superseded: 'text-ink-mid',
 }
 
 /**

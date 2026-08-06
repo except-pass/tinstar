@@ -1329,6 +1329,19 @@ export class SurfaceStore {
       freshness: {
         phase: init.freshness?.phase ?? 'current',
         overdue: init.freshness?.overdue ?? false,
+        // THE EVIDENCE PAIR EVERY RECORD CARRIES (R3, KTD5/KTD11), stamped at birth
+        // so a live record and the one that comes back off disk are identical. The
+        // sidecar backfills these when it hydrates a snapshot written before they
+        // existed, and without them here a freshly created Surface would differ from
+        // its own reload — which the persistence suite compares directly, and which
+        // would make the migration's steady-state boot report a change and burn a
+        // revision on every Surface, forever.
+        //
+        // The content arrived NOW, so `lastKnownAt` is the creation stamp. Nothing
+        // has been checked yet, and `null` says so explicitly rather than by omission
+        // (an omitted key is dropped from an SSE delta).
+        lastKnownAt: init.freshness?.lastKnownAt ?? createdAt,
+        lastCheck: init.freshness?.lastCheck ?? null,
         ...(init.freshness?.dueAt != null ? { dueAt: init.freshness.dueAt } : {}),
         ...(init.freshness?.observedGeneration != null
           ? { observedGeneration: init.freshness.observedGeneration }

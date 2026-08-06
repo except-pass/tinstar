@@ -47,7 +47,11 @@ import type {
   SurfaceFreshness,
   SurfaceHome,
   SurfacePrincipalRef,
+  SurfaceCheckExecution,
+  SurfaceCheckOutcome,
+  SurfaceLastCheck,
   SurfaceProvenance,
+  SurfaceRefreshRecipe,
   SurfaceSourceBinding,
   SurfaceStaleReason,
 } from '../../domain/types'
@@ -64,7 +68,7 @@ import type {
   SurfaceIdempotencyReceipt,
 } from '../stores/surface-persistence'
 import { derivePointStatus } from '../stores/slate'
-import { parseProposal, parseRefreshDeclaration } from './surface-trigger-matcher'
+import { parseProposal, parseRefreshDeclaration, parseRefreshRecipe } from './surface-trigger-matcher'
 import type {
   SurfaceDeleteOpts,
   SurfacePlanResult,
@@ -107,7 +111,6 @@ export type SurfaceOperation =
   | 'group'
   | 'reparent'
   | 'ungroup'
-  | 'refresh-request'
   /** U6's durable freshness lifecycle: a typed trigger advanced the host
    *  observation generation; a job took the Surface; the barrier accepted or
    *  refused its result; the sweep re-derived `dueAt`/`overdue`. */
@@ -712,11 +715,12 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
     if (!parsed) return 'content.body is not valid A2UI for the bounded component catalog'
     body = parsed
   }
-  if (raw.recipe !== undefined && raw.recipe !== null && typeof raw.recipe !== 'string') {
-    return 'content.recipe must be a string'
-  }
-  const recipeTooLong = oversize('content.recipe', typeof raw.recipe === 'string' ? raw.recipe : undefined, TEXT_MAX)
-  if (recipeTooLong) return recipeTooLong
+  // THROUGH THE SAME PARSER THE FILE DOOR USES (KTD1). An HTTP author gets exactly
+  // the recipe kinds a file author gets, and — more to the point — cannot reach a
+  // host handler this build does not implement: an unknown name parses to
+  // `unreadable`, which nothing executes.
+  const recipe = parseRefreshRecipe(raw.recipe)
+  if (recipe?.kind === 'unreadable') return `content.recipe is not usable: ${recipe.detail}`
   // Claims are settable here so an agent can author through this door what it can
   // author through a file (plan U1/R1). `[]` is kept as `[]`: the author checked and
   // found nothing witnessable, which is a different answer from never having said.
@@ -736,7 +740,7 @@ function parseContent(value: unknown, required: boolean): SurfaceContent | strin
   return {
     headline: raw.headline.trim(),
     ...(body ? { body } : {}),
-    ...(typeof raw.recipe === 'string' && raw.recipe ? { recipe: raw.recipe } : {}),
+    ...(recipe ? { recipe } : {}),
     ...(claims !== undefined ? { claims } : {}),
     ...(refreshPolicy ? { refreshPolicy } : {}),
     ...(proposal ? { proposal } : {}),
@@ -1157,13 +1161,17 @@ export class SurfaceService {
       if (!parsed) return invalid('body is not valid A2UI for the bounded component catalog')
       nextBody = parsed
     }
-    let recipe: string | undefined = prior.content.recipe
+    let recipe: SurfaceRefreshRecipe | undefined = prior.content.recipe
     if (raw.recipe === null) recipe = undefined
     else if (raw.recipe !== undefined) {
-      if (typeof raw.recipe !== 'string') return invalid('recipe must be a string or null')
-      const recipeTooLong = oversize('recipe', raw.recipe, TEXT_MAX)
-      if (recipeTooLong) return invalid(recipeTooLong)
-      recipe = raw.recipe || undefined
+      // REFUSED RATHER THAN STORED AS `unreadable` on this door, unlike the file
+      // door. A file is read at arm's length and an author who mistyped a handler
+      // needs to find that out from a diagnostic; an HTTP caller is right here and
+      // can be told now, so storing a recipe nothing will ever run would just be a
+      // silent no-op with a 200 on it.
+      const parsed = parseRefreshRecipe(raw.recipe)
+      if (parsed?.kind === 'unreadable') return invalid(`recipe is not usable: ${parsed.detail}`)
+      recipe = parsed
     }
     // PATCH semantics, exactly as `body` and `recipe` have them: `null` clears the
     // declaration, omitting it keeps what is there. The omission case is the
@@ -1699,53 +1707,6 @@ export class SurfaceService {
     return this.commitContent('set-thread-disposition', prior, next, ctx, flight.fingerprint)
   }
 
-  /**
-   * Ask for this Surface to be rebuilt.
-   *
-   * U3 owns the REQUEST; U6 owns the durable job that services it. So this moves
-   * freshness to `queued` and stops — it does not launch anything, and it is
-   * careful not to claim more than that. A Surface already `refreshing` is left
-   * alone rather than re-queued: the state machine has no refreshing→queued edge
-   * for a human request, and pretending otherwise would let a request cancel work
-   * that is in flight.
-   */
-  async refreshRequest(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
-    const flight = this.preflight('refresh-request', id, body, ctx)
-    if (flight.done) return flight.done
-    const raw = asObject(body) ?? {}
-    const forbidden = forbiddenField(raw)
-    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on refresh-request`)
-    const prior = this.docStore.getSurface(id)
-    if (!prior) return notFound(id)
-    const guard = this.guardLive(prior, 'refresh-request')
-    if (guard) return guard
-    if (raw.expectedRev !== undefined) {
-      if (typeof raw.expectedRev !== 'number') return invalid('expectedRev must be a number')
-      if (raw.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
-    }
-    if (prior.freshness.phase === 'refreshing' || prior.freshness.phase === 'queued') {
-      return {
-        ok: false,
-        error: {
-          code: 'conflict',
-          reason: prior.freshness.phase === 'queued' ? 'already-queued' : 'already-refreshing',
-          message: `Surface ${id} is already ${prior.freshness.phase}; one refresh runs per Surface`,
-          current: [prior],
-        },
-      }
-    }
-    const next: Surface = {
-      ...prior,
-      // `overdue` is deliberately carried through, not cleared. It is orthogonal
-      // to the phase and only a successful verification may clear it — otherwise a
-      // retry loop would make an overdue Surface look attended to (R18).
-      freshness: { ...prior.freshness, phase: 'queued' },
-      rev: prior.rev + 1,
-      amendedAt: ctx.at ?? Date.now(),
-    }
-    return this.commitContent('refresh-request', prior, next, ctx, flight.fingerprint)
-  }
-
   // --- Freshness lifecycle (plan U6, KTD10) ----------------------------------
   //
   // These four are the durable half of the refresh engine. Like the source-ingress
@@ -1929,6 +1890,10 @@ export class SurfaceService {
       /** Validated authored content, or absent for a verification that found
        *  nothing to change (a byte-identical regeneration). */
       content?: SurfaceContent
+      /** What the EXECUTOR knows and the record does not: when the attempt actually
+       *  started, which executor ran it, and why. Recorded on the completed check so
+       *  a reader can tell a machine check from an agent rebuild without logs (R3). */
+      check?: { startedAt?: number; execution?: SurfaceCheckExecution; reason?: string }
     },
     ctx: SurfaceCallContext,
   ): Promise<SurfaceResult<SurfaceMutation>> {
@@ -1977,7 +1942,19 @@ export class SurfaceService {
       // one successor is scheduled for whatever moved past this result.
       const superseded: Surface = {
         ...prior,
-        freshness: { ...omitJob(prior.freshness), phase: 'possibly-stale' },
+        freshness: {
+          ...omitJob(prior.freshness),
+          phase: 'possibly-stale',
+          // SUPERSESSION IS A COMPLETED CHECK (KTD10), not an error. The host looked,
+          // got an answer, and the answer was about a world that had already moved —
+          // which is a different thing to tell a reader than "the check broke", and
+          // the Surface stays dirty either way.
+          lastCheck: this.buildLastCheck(prior, {
+            outcome: 'superseded', at: now,
+            targetGeneration: input.observedGeneration, detail: message,
+            ...(input.check ? { check: input.check } : {}),
+          }),
+        },
         rev: prior.rev + 1,
         amendedAt: now,
       }
@@ -2137,6 +2114,14 @@ export class SurfaceService {
           : {}),
         observedGeneration: hostGeneration,
         verifiedAt: now,
+        // THE SUCCESSFUL CHECK, recorded whether or not the content moved (R16). An
+        // executor that looked and found nothing to change advances only this;
+        // `commitContent` decides `lastKnownAt` from the content digest, so the two
+        // fields cannot disagree about what actually happened.
+        lastCheck: this.buildLastCheck(prior, {
+          outcome: 'succeeded', at: now, targetGeneration: hostGeneration,
+          ...(input.check ? { check: input.check } : {}),
+        }),
       },
       rev: prior.rev + 1,
       amendedAt: now,
@@ -2153,7 +2138,18 @@ export class SurfaceService {
    * only a successful verification may clear it (R18).
    */
   async failRefresh(
-    id: string, input: { jobId: string; message: string }, ctx: SurfaceCallContext,
+    id: string,
+    input: {
+      jobId: string
+      message: string
+      /** `failed` — an executor ran and could not produce or commit a result.
+       *  `unavailable` — there was no authorized way to run it at all: no live
+       *  foreground agent, no reachable source (R13/R17). Defaulted rather than
+       *  required so an existing caller keeps meaning what it meant. */
+      outcome?: Extract<SurfaceCheckOutcome, 'failed' | 'unavailable'>
+      check?: { startedAt?: number; execution?: SurfaceCheckExecution; reason?: string }
+    },
+    ctx: SurfaceCallContext,
   ): Promise<SurfaceResult<SurfaceMutation>> {
     const prior = this.docStore.getSurface(id)
     if (!prior) return notFound(id)
@@ -2166,6 +2162,15 @@ export class SurfaceService {
         ...omitJob(prior.freshness),
         phase: 'failed',
         failure: { message: input.message.slice(0, 400), at: now },
+        // THE CHECK IS RECORDED, THE CONTENT IS NOT TOUCHED (R17). A reader gets the
+        // last-known answer plus an honest account of when the host last tried and
+        // what happened — which is strictly more than a Surface that just stops
+        // saying anything.
+        lastCheck: this.buildLastCheck(prior, {
+          outcome: input.outcome ?? 'failed', at: now,
+          targetGeneration: prior.source?.generation ?? 0, detail: input.message,
+          ...(input.check ? { check: input.check } : {}),
+        }),
       },
       rev: prior.rev + 1,
       amendedAt: now,
@@ -2699,9 +2704,93 @@ export class SurfaceService {
    * success carrying an unbumped revision would be worse than a refusal — the
    * caller would record a revision the record never reached.
    */
+  /**
+   * Build the completed-check record a terminal transition leaves behind (R3/R15-R18,
+   * KTD5).
+   *
+   * ONLY TERMINAL TRANSITIONS CALL THIS. Queueing, budget deferral, and an attempt
+   * that is still running deliberately do not: a check that has not finished has not
+   * answered anything, and overwriting the last one that did would destroy evidence
+   * to produce none.
+   *
+   * `check` is what the executor knows and the record does not — when the attempt
+   * actually started, which executor ran it, and why. A caller that supplies none
+   * still gets an honest record rather than nothing, because R3 says every Surface
+   * presents its last check and "the caller was terse" is not a reason to show the
+   * user less.
+   */
+  private buildLastCheck(
+    prior: Surface,
+    input: {
+      outcome: SurfaceCheckOutcome
+      at: number
+      targetGeneration: number
+      detail?: string
+      check?: { startedAt?: number; execution?: SurfaceCheckExecution; reason?: string }
+    },
+  ): SurfaceLastCheck {
+    return {
+      startedAt: input.check?.startedAt ?? input.at,
+      finishedAt: input.at,
+      execution: input.check?.execution ?? 'owner',
+      reason: input.check?.reason
+        ?? prior.freshness.staleReason?.detail
+        ?? 'the host re-checked this surface',
+      targetGeneration: input.targetGeneration,
+      outcome: input.outcome,
+      ...(input.detail ? { detail: input.detail.slice(0, 400) } : {}),
+    }
+  }
+
+  /**
+   * Stamp `lastKnownAt` from what actually happened to the CONTENT (R3, KTD5).
+   *
+   * CENTRALIZED HERE ON PURPOSE, because "when did the visible answer become known"
+   * is a property of the content and not of the operation that carried it. Every
+   * content-bearing commit funnels through {@link commitContent}, so deriving it
+   * once from a digest comparison means a file save, an API edit, a compose, and a
+   * refresh commit all date the card the same way — and no future mutator can forget
+   * to.
+   *
+   * A commit that does not move the content — a schedule write, a stale mark, a
+   * successful check that found nothing to change — carries the previous stamp
+   * forward untouched. That is exactly the case KTD5 exists for: `lastCheck` moves,
+   * `lastKnownAt` does not, and the card can honestly say "known at 09:12, confirmed
+   * at 10:47".
+   *
+   * A record that has never carried one is backfilled from its own creation stamp
+   * rather than from `now`, so migrating an old Surface does not make its content
+   * look like it arrived at boot.
+   */
+  private withLastKnownAt(prior: Surface, next: Surface, at: number): Surface {
+    // STAMPS ONLY ON A REAL CONTENT MOVE, and never backfills. Backfilling here
+    // looked harmless and was not: `commitContent` refuses a commit that would
+    // change nothing, and a stamp added to an otherwise identical record IS a
+    // change — so every no-op request (a form saved unchanged, a claim smuggled
+    // through the parser and dropped) would have started succeeding and advancing
+    // the durable revision. Legacy records get their stamp from
+    // `hydrateFreshnessEvidence` on the load path instead, where inventing one costs
+    // nothing because no comparison depends on it.
+    if (surfaceContentDigest(prior.content) !== surfaceContentDigest(next.content)) {
+      return next.freshness.lastKnownAt === at
+        ? next
+        : { ...next, freshness: { ...next.freshness, lastKnownAt: at } }
+    }
+    // CONTENT DID NOT MOVE, so neither does the stamp — but a mutator that REBUILDS
+    // freshness from scratch (a successful barrier does exactly that, so a stale
+    // reason cannot survive as decoration on a current Surface) would otherwise drop
+    // it. Carried forward only when the prior record actually has one: inventing a
+    // value for a record that never carried one would make an otherwise no-op commit
+    // look like a change, which `commitContent` refuses and which used to let every
+    // unchanged form save advance the durable revision.
+    if (next.freshness.lastKnownAt !== undefined || prior.freshness.lastKnownAt === undefined) return next
+    return { ...next, freshness: { ...next.freshness, lastKnownAt: prior.freshness.lastKnownAt } }
+  }
+
   private async commitContent(
-    op: SurfaceOperation, prior: Surface, next: Surface, ctx: SurfaceCallContext, fingerprint?: string,
+    op: SurfaceOperation, prior: Surface, nextIn: Surface, ctx: SurfaceCallContext, fingerprint?: string,
   ): Promise<SurfaceResult<SurfaceMutation>> {
+    const next = this.withLastKnownAt(prior, nextIn, ctx.at ?? Date.now())
     if (this.docStore.checkSurfaceUpsert(next) === 'no-change') {
       return {
         ok: false,

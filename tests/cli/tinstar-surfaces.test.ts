@@ -274,3 +274,40 @@ describe('CLI against a live backend', () => {
     expect(docStore.getSurfaceRecoveryRoots(SPACE).map(s => s.id)).toEqual([boxId])
   })
 })
+
+// ---------------------------------------------------------------------------
+// The intent an agent CLI announces (plan U7, R11/R12).
+//
+// The CLI is a tool an AGENT reaches for as often as a person does, and the server
+// cannot tell them apart from a header alone within Tinstar's trusted-local model.
+// So the honest thing the tool can do is say what it is: `explicit` for a person at a
+// terminal, `bulk-check` for an agent sweeping — which can never deliver a prompt.
+// ---------------------------------------------------------------------------
+
+describe('surfaces refresh — intent', () => {
+  it('defaults to explicit, because a bare command is a person asking', () => {
+    expect(buildRequest(argv('refresh', 'sf-1'))).toEqual({
+      method: 'POST', path: '/api/surfaces/sf-1/refresh', body: { intent: 'explicit' },
+    })
+  })
+
+  it('carries bulk-check, which the server runs only against machine recipes', () => {
+    expect(buildRequest(argv('refresh', 'sf-1', '--intent', 'bulk-check'))).toEqual({
+      method: 'POST', path: '/api/surfaces/sf-1/refresh', body: { intent: 'bulk-check' },
+    })
+  })
+
+  it('refuses an intent outside the closed list rather than sending it', () => {
+    // Failing at the tool is better than a 400 from the server: the caller is right
+    // here, and a silent default would be either "spend a model call" or "do nothing".
+    expect(() => buildRequest(argv('refresh', 'sf-1', '--intent', 'because-i-said-so')))
+      .toThrow(/--intent must be one of/)
+  })
+
+  it('the closed list matches the four intents the server accepts', () => {
+    for (const intent of ['navigate', 'interact', 'explicit', 'bulk-check']) {
+      expect(buildRequest(argv('refresh', 'sf-1', '--intent', intent)).body)
+        .toEqual({ intent })
+    }
+  })
+})

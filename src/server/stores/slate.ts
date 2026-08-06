@@ -21,6 +21,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import type {
+  SurfaceRefreshRecipe,
   A2uiContent, Point, PointAnchor, PointAuthor, PointStatus,
   SurfaceClaim, SurfaceProposal, SurfaceRefreshDeclaration,
 } from '../../domain/types'
@@ -36,10 +37,13 @@ export interface PointInput {
   anchor?: PointAnchor
   headline: string
   content?: A2uiContent
-  /** File-owned refresh recipe (plan U3/KTD3): the exact prompt the agent re-runs to
-   *  regenerate this surface. Optional — a recipe-less surface still gets a bare nudge.
-   *  Rides the file→store→bridge path exactly like `headline`/`content`/`anchor`. */
-  refresh?: string
+  /** File-owned refresh recipe, PARSED (R1, KTD1). The file may write it as prose
+   *  (an agent instruction) or as a named host check; `parseRefreshRecipe` in the
+   *  watcher turns both into the one typed value, so nothing downstream has to
+   *  re-decide what kind of work a recipe is. Optional — a recipe-less surface still
+   *  gets a bare nudge. Rides the file→store→bridge path exactly like
+   *  `headline`/`content`/`anchor`. */
+  refresh?: SurfaceRefreshRecipe
   /** File-owned WORKBENCH set id (S4): points sharing a non-empty `group` render
    *  side-by-side as one multi-question workbench. Rides the same file→store→bridge
    *  path as `refresh` — overwritten on projection, cleared when the file omits it. */
@@ -128,7 +132,10 @@ function pointEqual(a: Point, b: Point): boolean {
 function fileOwnedChanged(prior: Point, input: PointInput): boolean {
   return (
     prior.headline !== input.headline ||
-    (prior.refresh ?? undefined) !== (input.refresh ?? undefined) ||
+    // Structural, because a recipe is an object now: `!==` on two equal parsed
+    // recipes is always true, which would re-project (and bump `amendedAt` on) every
+    // recipe-bearing surface on every file epoch.
+    JSON.stringify(prior.refresh ?? null) !== JSON.stringify(input.refresh ?? null) ||
     // LOAD-BEARING (S4): without this comparison an amend that changes ONLY `group`
     // short-circuits on `pointEqual` and never re-projects — the workbench would
     // silently never form. Guard-tested in slate.test.ts.

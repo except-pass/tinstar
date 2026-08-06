@@ -54,7 +54,9 @@ import { parseA2uiContent } from '../../a2ui/schema'
 import { synthesizeId, type PointInput } from '../stores/slate'
 import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
 import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
-import { parseProposal, parseRefreshDeclaration, parseSurfaceClaims } from '../surfaces/surface-trigger-matcher'
+import {
+  parseProposal, parseRefreshDeclaration, parseRefreshRecipe, parseSurfaceClaims,
+} from '../surfaces/surface-trigger-matcher'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A watched run and the worktree the watcher resolves its slate dir from. */
@@ -671,9 +673,13 @@ export function toPointInput(
     out.content = content
   }
 
-  // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
-  // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
-  if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+  // File-owned refresh recipe, PARSED HERE AND NOWHERE ELSE ON THIS PATH (KTD1).
+  // A string is prose and becomes an `agent` recipe; an object naming a registered
+  // host check becomes a `host` one; anything else becomes `unreadable`, which is
+  // kept rather than dropped so a diagnostic can tell the author what was wrong
+  // instead of the recipe silently vanishing. Nothing downstream re-decides.
+  const recipe = parseRefreshRecipe(r.refresh)
+  if (recipe) out.refresh = recipe
 
   // File-owned freshness declaration (plan U6). Same posture as `refresh`: an
   // unusable value yields NO declaration rather than an error, so the surface falls

@@ -17,6 +17,7 @@ import { reconcileSlateEpoch } from '../../surfaces/source-reconciler'
 import { slateEntryWatermark, type SlateSourceEntry } from '../../surfaces/slate-source'
 import { resolveRunSurfaceContext } from '../../surfaces/run-context'
 import type {
+  SurfaceRefreshRecipe,
   A2uiContent, PointAuthor, SurfaceClaim, SurfaceProposal, SurfacePrincipalRef,
 } from '../../../domain/types'
 
@@ -27,7 +28,7 @@ export interface SeedEntry {
   id: string
   headline: string
   body?: A2uiContent
-  recipe?: string
+  recipe?: SurfaceRefreshRecipe
   proposal?: SurfaceProposal
   /** What the entry declares would prove it wrong (U1). Tri-state, exactly as the
    *  file contract is: omit for "the author never said", pass `[]` for "the author

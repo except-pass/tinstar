@@ -15,15 +15,18 @@
 //
 // Server-only and React-free.
 
-import type {
-  Surface,
-  SurfaceClaim,
-  SurfaceClaimLocus,
-  SurfaceRefreshDeclaration,
-  SurfaceProposal,
-  SurfaceRefreshPolicy,
-  SurfaceStaleReason,
-  SurfaceTriggerKind,
+import {
+  HOST_RECIPE_KINDS,
+  type Surface,
+  type SurfaceClaim,
+  type SurfaceClaimLocus,
+  type SurfaceHostRecipeKind,
+  type SurfaceRefreshDeclaration,
+  type SurfaceProposal,
+  type SurfaceRefreshPolicy,
+  type SurfaceRefreshRecipe,
+  type SurfaceStaleReason,
+  type SurfaceTriggerKind,
 } from '../../domain/types'
 // The registry is a PURE lookup — it spawns nothing, fetches nothing, and reads no
 // clock — which is what lets this module import it without stopping being pure
@@ -341,6 +344,129 @@ function strings(raw: unknown): string[] | undefined {
     if (out.length >= MAX_DECLARED) break
   }
   return out
+}
+
+/** Longest agent prompt a recipe may carry. Matches the service's own `TEXT_MAX`
+ *  for authored strings — a recipe is an instruction, not a document. */
+const MAX_RECIPE_LEN = 8 * 1024
+/** How many parameters a host recipe may declare, and how long each may be. Sized
+ *  like a claim's params for the same reason: a parameter is a URL or a document
+ *  path, and anything longer has stopped being one. */
+const MAX_RECIPE_PARAMS = 16
+const MAX_RECIPE_PARAM_LEN = 1024
+
+/**
+ * Parse an author's `refresh` value into the ONE typed recipe that governs who may
+ * rebuild this Surface (R1/R6/R7, KTD1/KTD2).
+ *
+ * THE AUTHORITY BOUNDARY, and it fails toward the human in every direction:
+ *
+ *  · A STRING is an `agent` recipe. Every recipe authored before this existed is a
+ *    string of prose, and prose describes work only an agent can do. Reading one as
+ *    machine work would be the leak this function exists to close, so a string can
+ *    never become proactive-eligible however it is worded.
+ *  · AN OBJECT naming a handler in {@link HOST_RECIPE_KINDS}, with parameters that
+ *    validate, is a `host` recipe — the only proactive-eligible outcome. The name is
+ *    matched against a code-owned union, never derived from the text.
+ *  · ANYTHING ELSE is `unreadable`: an object with no `kind`, a `kind` outside the
+ *    union, a `host` entry whose parameters are not flat strings, an empty prompt.
+ *    Kept rather than dropped, because a Surface whose recipe silently vanished
+ *    looks identical to one that never had a recipe, and the author has no way to
+ *    find out. `unreadable` is executed by nobody and SAYS why.
+ *
+ * There is deliberately no path from `refreshPolicy`, from a claim, or from the
+ * recipe's own words to a host handler. Guessing is the failure mode.
+ */
+export function parseRefreshRecipe(raw: unknown): SurfaceRefreshRecipe | undefined {
+  if (raw === undefined || raw === null) return undefined
+
+  if (typeof raw === 'string') {
+    const prompt = raw.trim()
+    if (!prompt) return undefined
+    if (prompt.length > MAX_RECIPE_LEN) {
+      return { kind: 'unreadable', detail: `its refresh recipe is longer than ${MAX_RECIPE_LEN} characters` }
+    }
+    return { kind: 'agent', prompt }
+  }
+
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { kind: 'unreadable', detail: 'its refresh recipe is neither an instruction nor a host check' }
+  }
+
+  const obj = raw as Record<string, unknown>
+  const kind = typeof obj.kind === 'string' ? obj.kind.trim() : ''
+
+  if (kind === 'agent') {
+    const prompt = typeof obj.prompt === 'string' ? obj.prompt.trim() : ''
+    if (!prompt) return { kind: 'unreadable', detail: 'its agent refresh recipe carries no instruction' }
+    if (prompt.length > MAX_RECIPE_LEN) {
+      return { kind: 'unreadable', detail: `its refresh recipe is longer than ${MAX_RECIPE_LEN} characters` }
+    }
+    return { kind: 'agent', prompt }
+  }
+
+  if (kind === 'host') {
+    const handler = typeof obj.handler === 'string' ? obj.handler.trim() : ''
+    if (!(HOST_RECIPE_KINDS as readonly string[]).includes(handler)) {
+      // NAMED IN THE REFUSAL. An author who mistyped `http-satus` has to be able to
+      // see what they wrote; a bare "unknown recipe" would send them to the source.
+      return {
+        kind: 'unreadable',
+        detail: handler
+          ? `"${handler.slice(0, 64)}" is not a host check this Tinstar knows how to run`
+          : 'its host refresh recipe names no check',
+      }
+    }
+    const params = parseRecipeParams(obj.params)
+    if (params === 'invalid') {
+      return { kind: 'unreadable', detail: `the parameters for its "${handler}" check are not plain text` }
+    }
+    return { kind: 'host', handler: handler as SurfaceHostRecipeKind, ...(params ? { params } : {}) }
+  }
+
+  return {
+    kind: 'unreadable',
+    detail: kind
+      ? `"${kind.slice(0, 64)}" is not a kind of refresh recipe`
+      : 'its refresh recipe does not say what kind of recipe it is',
+  }
+}
+
+/** Flat string parameters, key-sorted so a formatter reordering the file cannot
+ *  change the record. `'invalid'` rather than a silent drop: a host check run
+ *  against half its parameters would answer a question nobody asked. */
+function parseRecipeParams(raw: unknown): Record<string, string> | undefined | 'invalid' {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'invalid'
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > MAX_RECIPE_PARAMS) return 'invalid'
+  const out: Record<string, string> = {}
+  for (const [key, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+    if (typeof value !== 'string' || value.length > MAX_RECIPE_PARAM_LEN) return 'invalid'
+    out[key] = value
+  }
+  return out
+}
+
+/**
+ * May the host run this recipe WITHOUT a human asking (R6/R7, KTD1/KTD2)?
+ *
+ * The whole scheduling decision, in one predicate, deliberately reading only the
+ * parsed variant. It does not consult `refreshPolicy`, the trigger that fired, or
+ * anything the author wrote in prose — an unclassified or unreadable recipe is
+ * interaction-triggered, which is the direction that costs a wait rather than an
+ * unrequested model call.
+ */
+export function isProactiveEligible(recipe: SurfaceRefreshRecipe | undefined): boolean {
+  return recipe?.kind === 'host'
+}
+
+/** The instruction to hand a foreground agent, or undefined when this Surface's
+ *  recipe is not agent work. Callers that build a prompt go through this rather than
+ *  reaching into the union, so adding a variant cannot silently start rendering a
+ *  handler name into somebody's conversation. */
+export function agentRecipePrompt(recipe: SurfaceRefreshRecipe | undefined): string | undefined {
+  return recipe?.kind === 'agent' ? recipe.prompt : undefined
 }
 
 /**

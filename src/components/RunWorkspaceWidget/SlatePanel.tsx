@@ -37,7 +37,7 @@ import {
   getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface,
   getMinimizedSlateSurfaces, addMinimizedSlateSurface, removeMinimizedSlateSurface,
 } from '../../lib/uiPrefs'
-import { useSlateRefresh, RefreshButton } from './slateRefresh'
+import { useSlateRefresh, RefreshButton, isDirty, isHostMaintained } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
 import { SlateCleanButton } from './SlateCleanButton'
@@ -224,7 +224,30 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   // Sorted once, above the early return, so the refresh hook (which must run
   // unconditionally) can watch the same list the render uses.
   const sorted = useMemo(() => sortSurfaces(gridSurfaces), [gridSurfaces])
-  const { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll } = useSlateRefresh(runId, sorted)
+  const {
+    pendingIds, unreachableIds, bulkChecking, refresh, checkAll, onSurfaceIntent,
+  } = useSlateRefresh(runId)
+  /** The server's own phase, not a local optimistic flag (plan U6). A spinner now
+   *  means the HOST is working on it, and it stops when the host says so rather than
+   *  when a ten-minute client timer gives up. */
+  const isServerRefreshing = useCallback((s: SlateSurface) => {
+    const phase = s.freshness?.phase
+    return phase === 'refreshing' || phase === 'queued'
+  }, [])
+  /**
+   * A person deliberately reached this Surface (R11, KTD4).
+   *
+   * Called ONLY from pointer selection and the `j`/`k` handlers below — never from a
+   * mount effect, a focus or visibility listener, or an SSE update. Those fire while
+   * nobody is looking, and "Tinstar happened to be open" is not permission to spend a
+   * model call. Dirty-only for the same reason: navigating a healthy Slate must cost
+   * nothing. The server checks both again, so a bug here cannot manufacture authority.
+   */
+  const notifyIntent = useCallback((id: string | null, intent: 'navigate' | 'interact') => {
+    if (!id) return
+    const surface = sorted.find(s => s.id === id)
+    if (surface && isDirty(surface)) void onSurfaceIntent(surface, intent)
+  }, [sorted, onSurfaceIntent])
   // One ticking clock for the whole panel — every surface's "updated Xm ago" reads
   // from this so they agree and there's no timer-per-card.
   const now = useNow()
@@ -345,11 +368,22 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     setFocusedSurfaceId((prev) => {
       if (focusRows.length === 0) return null
       const i = prev ? focusRows.findIndex((s) => s.id === prev) : -1
-      if (i < 0) return focusRows[0]!.id
-      const next = Math.min(Math.max(i + delta, 0), focusRows.length - 1)
-      return focusRows[next]!.id
+      const nextId = i < 0
+        ? focusRows[0]!.id
+        : focusRows[Math.min(Math.max(i + delta, 0), focusRows.length - 1)]!.id
+      // NAVIGATION IS THE INTENT (R11). `j`/`k` is a person moving through the Slate,
+      // so arriving on a dirty card is the deliberate act that authorizes its one
+      // refresh — the same act as clicking it, and it must mean the same thing.
+      //
+      // Fired from inside the updater but guarded by `nextId !== prev`, so the clamp
+      // at either end (which returns the same id) does NOT re-fire on every keypress.
+      // React may invoke an updater twice in StrictMode; the request is idempotent on
+      // the server — a second one joins the attempt — and the hook's in-flight guard
+      // collapses it anyway.
+      if (nextId !== prev) notifyIntent(nextId, 'navigate')
+      return nextId
     })
-  }, [focusRows])
+  }, [focusRows, notifyIntent])
 
   const hideFocused = useCallback(() => {
     const i = focusRows.findIndex((s) => s.id === focusedSurfaceId)
@@ -365,6 +399,19 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     const s = focusRows.find((x) => x.id === focusedSurfaceId)
     if (s) refresh(s)
   }, [focusRows, focusedSurfaceId, refresh])
+
+  /**
+   * A pointer landed on a Surface (R11).
+   *
+   * Selection AND intent, in that order, from one real event handler. Clicking the
+   * card you are already on still counts — that is a person saying "this one, now",
+   * and it is how a user asks again for something whose last check failed. Repeats
+   * join the attempt in flight rather than starting another (R14).
+   */
+  const selectSurface = useCallback((id: string) => {
+    setFocusedSurfaceId(id)
+    notifyIntent(id, 'interact')
+  }, [notifyIntent])
 
   const openComposer = useCallback(() => {
     // On a blank Slate the composer is already on screen (U5) — put the cursor in it
@@ -470,6 +517,16 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
   // too) — a recipe is optional, so all of them are refreshable.
   const visibleSurfaces = matched.filter((s) => showHidden || !hidden.has(s.id))
+  /** How many of the visible surfaces the host can check WITHOUT an agent. Drives the
+   *  check-all control's label and its disabled state, so a Slate of agent-written
+   *  cards offers a button that says what it would do rather than one that does
+   *  nothing quietly. */
+  const checkableCount = visibleSurfaces.filter(isHostMaintained).length
+  /** Server-truth refreshing set, for the child that still takes a set. */
+  const serverRefreshingIds = useMemo(
+    () => new Set(sorted.filter(isServerRefreshing).map((s) => s.id)),
+    [sorted, isServerRefreshing],
+  )
 
   return (
     <div ref={rootRef} className="relative flex flex-col h-full min-w-0">
@@ -517,26 +574,28 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               {hiddenCount} hidden · {showHidden ? 'hide' : 'show'}
             </button>
           )}
-          {/* Slate-level loading state while a refresh-all is still settling. */}
-          {bulkRefreshing && (
+          {/* Slate-level loading state while a cheap check-all is still settling. */}
+          {bulkChecking && (
             <span data-testid="slate-refreshing-all" className="text-2xs font-mono text-ink-low animate-pulse">
-              refreshing…
+              checking…
             </span>
           )}
-          {/* Refresh ALL visible surfaces (each open point counts). Maintenance, not
-              generative — quiet control ink, never cyan. */}
+          {/* CHECK, not refresh (KTD9). This runs the machine checks and nothing else:
+              an agent-written surface is left dirty for its owner to visit, because a
+              button that fanned prompts across a whole Slate is exactly what this work
+              removed. The label says "check" because that is what it does — a control
+              named for something it deliberately does not do is worse than no control. */}
           <button
             data-testid="slate-refresh-all"
-            onClick={() => refreshAll(visibleSurfaces)}
-            disabled={bulkRefreshing}
-            // While a filter is on, this fans out over the MATCHES only — say so,
-            // rather than promising "every surface" and quietly skipping the rest.
-            title={q
-              ? `Refresh the ${visibleSurfaces.length} matching surface${visibleSurfaces.length === 1 ? '' : 's'} — re-run each one’s author`
-              : 'Refresh every surface — re-run each one’s author'}
+            onClick={() => checkAll(visibleSurfaces)}
+            disabled={bulkChecking || checkableCount === 0}
+            title={checkableCount === 0
+              ? 'Nothing here can be checked without an agent — open a surface to refresh it'
+              : `Check ${checkableCount} surface${checkableCount === 1 ? '' : 's'} the host can verify on its own. `
+                + 'Agent-written surfaces refresh when you open them.'}
             className="text-ink-ctrl hover:text-ink-high disabled:opacity-70 leading-none"
           >
-            <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
+            <span className={bulkChecking ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
           </button>
           {/* Wipe the whole Slate (files + points, Objective survives). Destructive,
               so it confirms first — and it takes EVERY surface, not the filtered
@@ -660,7 +719,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   showHidden={showHidden}
                   onHide={hide}
                   onUnhide={unhide}
-                  refreshingIds={refreshingIds}
+                  refreshingIds={serverRefreshingIds}
                   unreachableIds={unreachableIds}
                   onRefresh={refresh}
                   now={now}
@@ -674,7 +733,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // Hidden + not revealing → skip entirely; revealing → render dimmed.
           if (isHidden && !showHidden) return null
 
-          const isRefreshing = refreshingIds.has(surface.id)
+          const isRefreshing = isServerRefreshing(surface)
           const isUnreachable = unreachableIds.has(surface.id)
           // Minimize is orthogonal to hide (S6 U3); a hidden surface isn't rendered
           // at all (or is rendered dimmed under "show hidden"), so hide wins.
@@ -683,7 +742,12 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           const controls = (
             <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
               {!isHidden && (
-                <RefreshButton id={surface.id} refreshing={isRefreshing} onClick={() => refresh(surface)} />
+                <RefreshButton
+                  id={surface.id}
+                  refreshing={isRefreshing}
+                  pending={pendingIds.has(surface.id)}
+                  onClick={() => refresh(surface)}
+                />
               )}
               {!isHidden && (
                 <MinimizeToggle
@@ -772,6 +836,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                 data-freshness={phase}
                 data-focused={isFocused ? 'true' : undefined}
                 className={shellClass}
+                // POINTER SELECTION IS INTENT (R11). A real pointer event on a dirty
+                // card is a person saying "this one, now" — the same act as landing on
+                // it with `j`/`k`, and it has to mean the same thing. Repeats join the
+                // attempt in flight rather than starting a second (R14).
+                onPointerDown={() => selectSurface(surface.id)}
               >
                 {controls}
                 <div className="flex items-center gap-2 pr-16 min-w-0">
@@ -832,6 +901,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               data-freshness={phase}
               data-focused={isFocused ? 'true' : undefined}
               className={shellClass}
+              // Same seam as the minimized card above: one selection path, one intent.
+              onPointerDown={() => selectSurface(surface.id)}
             >
               {controls}
               {surface.kind === 'diagram' ? (
