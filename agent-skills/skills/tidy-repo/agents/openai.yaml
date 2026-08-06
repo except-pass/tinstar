@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tidy Repo"
+  short_description: "Brief, land, and clean up pull requests"
+  default_prompt: "Use $tidy-repo to review and land this repository’s open pull requests safely."
