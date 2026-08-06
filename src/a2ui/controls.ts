@@ -197,9 +197,17 @@ export interface DecisionHorizon {
 
 export interface ParsedDecision {
   options: DecisionOption[]
+  /** Raw `options` entries never examined because MAX_DECISION_OPTIONS was hit
+   *  (0 when nothing was cut). Mirrors Stepper's `hidden` — an upper bound on the
+   *  loss, not a claim about what those entries would have parsed to. Unlike
+   *  Stepper, Decision has exactly one truncation cause (the hard row cap), so
+   *  there is no second "scan window" story to distinguish. */
+  hiddenOptions: number
   risks: DecisionRisk[]
   /** The author declared risks and none survived → show the inline notice. */
   risksMalformed: boolean
+  /** Raw `risks` entries never examined because MAX_DECISION_RISKS was hit. */
+  hiddenRisks: number
   reversal: DecisionReversal | null
   reversalMalformed: boolean
   horizon: DecisionHorizon | null
@@ -211,26 +219,34 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 
-function parseOptions(raw: unknown): DecisionOption[] {
-  if (!Array.isArray(raw)) return []
+/** `hidden` is `raw.length - i`, i.e. the count of raw entries the loop never
+ *  reached because MAX_DECISION_OPTIONS was already full — the same "entries
+ *  never examined" accounting parseSteps uses, minus the scan-window half of
+ *  that story (Decision has no second cap to distinguish). */
+function parseOptions(raw: unknown): { options: DecisionOption[]; hidden: number } {
+  if (!Array.isArray(raw)) return { options: [], hidden: 0 }
   const out: DecisionOption[] = []
-  for (const o of raw) {
+  let i = 0
+  for (; i < raw.length; i++) {
     if (out.length >= MAX_DECISION_OPTIONS) break
+    const o: unknown = raw[i]
     if (!isRecord(o)) continue
     const { id, label } = o
     if (typeof id !== 'string' || id === '') continue
     if (typeof label !== 'string' || label === '') continue
     out.push({ id, label, gain: prose(o.gain), cost: prose(o.cost), wrongIf: prose(o.wrongIf) })
   }
-  return out
+  return { options: out, hidden: raw.length - i }
 }
 
-function parseRisks(raw: unknown): { risks: DecisionRisk[]; malformed: boolean } {
-  if (raw === undefined || raw === null) return { risks: [], malformed: false }
-  if (!Array.isArray(raw)) return { risks: [], malformed: true }
+function parseRisks(raw: unknown): { risks: DecisionRisk[]; malformed: boolean; hidden: number } {
+  if (raw === undefined || raw === null) return { risks: [], malformed: false, hidden: 0 }
+  if (!Array.isArray(raw)) return { risks: [], malformed: true, hidden: 0 }
   const risks: DecisionRisk[] = []
-  for (const r of raw) {
+  let i = 0
+  for (; i < raw.length; i++) {
     if (risks.length >= MAX_DECISION_RISKS) break
+    const r: unknown = raw[i]
     if (!isRecord(r)) continue
     const label = r.label
     if (typeof label !== 'string' || label === '') continue
@@ -244,7 +260,7 @@ function parseRisks(raw: unknown): { risks: DecisionRisk[]; malformed: boolean }
   }
   // An author who declared risks and got none rendered needs to be told; an
   // author who declared none is simply not using the block.
-  return { risks, malformed: risks.length === 0 && raw.length > 0 }
+  return { risks, malformed: risks.length === 0 && raw.length > 0, hidden: raw.length - i }
 }
 
 function parseReversal(raw: unknown): { reversal: DecisionReversal | null; malformed: boolean } {
@@ -282,15 +298,17 @@ function parseComment(raw: unknown): { label: string; placeholder: string } {
  *  horizon each degrade on their own so a typo in one cannot hide the options. */
 export function parseDecision(node: A2uiComponent): ParsedDecision | null {
   if (node.component !== DECISION_COMPONENT) return null
-  const options = parseOptions(node.options)
+  const { options, hidden: hiddenOptions } = parseOptions(node.options)
   if (options.length < 2) return null
-  const { risks, malformed: risksMalformed } = parseRisks(node.risks)
+  const { risks, malformed: risksMalformed, hidden: hiddenRisks } = parseRisks(node.risks)
   const { reversal, malformed: reversalMalformed } = parseReversal(node.reversal)
   const { horizon, malformed: horizonMalformed } = parseHorizon(node.horizon)
   return {
     options,
+    hiddenOptions,
     risks,
     risksMalformed,
+    hiddenRisks,
     reversal,
     reversalMalformed,
     horizon,

@@ -11,6 +11,10 @@ vi.mock('../../logger', () => ({ log: { info: () => {}, warn: () => {} } }))
 
 import { dispatchSurfaceAuthor, SLATE_AUTHOR_CONTRACT } from '../surfaceAuthor'
 import { CATALOG } from '../../../a2ui/catalog'
+import {
+  SEVERITY_SCALE, LIKELIHOOD_SCALE, DISCOVERABILITY_SCALE,
+  REVERSAL_ACTION_SCALE, REVERSAL_DAMAGE_SCALE, HORIZON_SCALE,
+} from '../../../a2ui/controls'
 
 function fakeChild() {
   return { on: vi.fn(), unref: vi.fn() }
@@ -137,5 +141,23 @@ describe('SLATE_AUTHOR_CONTRACT covers the render catalog', () => {
     expect(named.length).toBeGreaterThan(0) // the regex still matches the contract's shape
     const unrenderable = [...new Set(named)].filter(type => !(type in CATALOG))
     expect(unrenderable).toEqual([])
+  })
+})
+
+// SEVERITY_SCALE/LIKELIHOOD_SCALE/DISCOVERABILITY_SCALE/REVERSAL_ACTION_SCALE/
+// REVERSAL_DAMAGE_SCALE/HORIZON_SCALE (controls.ts) are consumed by nothing
+// outside that file — not even the tests, until this guard. Without it, renaming
+// a scale value there (e.g. severe → critical) leaves every test green while the
+// contract goes on instructing a one-shot author to emit a word the parser no
+// longer recognises. Derived from the exported constants, not a hardcoded copy,
+// so the two can never drift apart silently again.
+describe('SLATE_AUTHOR_CONTRACT covers the Decision scale vocabulary', () => {
+  it('names every value of every exported Decision scale', () => {
+    const allValues: readonly string[] = [
+      ...SEVERITY_SCALE, ...LIKELIHOOD_SCALE, ...DISCOVERABILITY_SCALE,
+      ...REVERSAL_ACTION_SCALE, ...REVERSAL_DAMAGE_SCALE, ...HORIZON_SCALE,
+    ]
+    const missing = allValues.filter(v => !SLATE_AUTHOR_CONTRACT.includes(v))
+    expect(missing).toEqual([])
   })
 })

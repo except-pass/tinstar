@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import type { A2uiComponent } from '../../domain/types'
 import { DecisionControl, NoticeFormProvider, type NoticeFormState } from '../controlComponents'
+import { MAX_DECISION_OPTIONS, MAX_DECISION_RISKS } from '../controls'
 
 function form(overrides: Partial<NoticeFormState> = {}): NoticeFormState {
   return {
@@ -130,6 +131,24 @@ describe('DecisionControl', () => {
   it('renders inert with no form provider (read-only context)', () => {
     render(<DecisionControl node={FULL} />)
     expect(screen.getAllByRole('radio').every(r => (r as HTMLInputElement).disabled)).toBe(true)
+  })
+
+  it('shows a "+N more entries not shown" notice when options exceed the cap, and none at or under it (FIX1)', () => {
+    const many = Array.from({ length: MAX_DECISION_OPTIONS + 3 }, (_, i) => ({ id: `o${i}`, label: `O${i}` }))
+    renderDecision({ component: 'Decision', id: 'd', options: many })
+    expect(screen.getByTestId('decision-options-overflow').textContent).toBe('+3 more entries not shown')
+    cleanup()
+    renderDecision(FULL)
+    expect(screen.queryByTestId('decision-options-overflow')).toBeNull()
+  })
+
+  it('shows a "+N more entries not shown" notice when risks exceed the cap, and none at or under it (FIX1)', () => {
+    const manyRisks = Array.from({ length: MAX_DECISION_RISKS + 4 }, (_, i) => ({ label: `r${i}` }))
+    renderDecision({ ...FULL, risks: manyRisks })
+    expect(screen.getByTestId('decision-risks-overflow').textContent).toBe('+4 more entries not shown')
+    cleanup()
+    renderDecision(FULL)
+    expect(screen.queryByTestId('decision-risks-overflow')).toBeNull()
   })
 })
 

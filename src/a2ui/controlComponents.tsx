@@ -232,6 +232,17 @@ function SectionLabel({ text }: { text: string }): ReactNode {
   return <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-low mt-2 mb-1">{text}</div>
 }
 
+/** The truncation notice for a capped Decision section (options or risks) — the
+ *  same "say so out loud" posture as Stepper's overflow row (catalog.tsx). Unlike
+ *  Stepper, Decision has exactly ONE truncation cause (the hard row cap): there is
+ *  no scan window to run out of, so there is only ever this one message. This is
+ *  the component whose entire thesis is that a risk must never be quietly
+ *  dropped, so an entry past MAX_DECISION_OPTIONS/MAX_DECISION_RISKS says so. */
+function decisionOverflowNote(hidden: number): string {
+  const unit = hidden === 1 ? 'entry' : 'entries'
+  return `+${hidden} more ${unit} not shown`
+}
+
 /** Authored prose inside the card. `font-sans` is load-bearing: the run card
  *  defaults to mono, so an unpinned sentence renders as terminal output. */
 function Prose({ text, testId }: { text: string; testId?: string }): ReactNode {
@@ -246,7 +257,10 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
   const disabled = !form.interactive || form.answered || form.submitting
   const choiceId = typeof node.id === 'string' && node.id ? node.id : ''
   const selected = form.selectedFor(choiceId)
-  const { options, risks, risksMalformed, reversal, reversalMalformed, horizon, horizonMalformed, comment } = parsed
+  const {
+    options, hiddenOptions, risks, risksMalformed, hiddenRisks,
+    reversal, reversalMalformed, horizon, horizonMalformed, comment,
+  } = parsed
   // Emphasis, not a score: the combination the reader most needs to catch.
   const permanent = horizon?.span?.value === 'permanent'
   const flareFor = (risk: DecisionRisk) => permanent && risk.discoverability?.value === 'silent'
@@ -296,6 +310,14 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
             </span>
           </label>
         ))}
+        {/* Last row of the section, matching StepperRail's overflow placement —
+            inside the list, not a footnote beside it, so an author whose 9th
+            option got dropped learns it existed at all (FIX1). */}
+        {hiddenOptions > 0 && (
+          <div className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6" data-testid="decision-options-overflow">
+            {decisionOverflowNote(hiddenOptions)}
+          </div>
+        )}
       </div>
 
       {(risks.length > 0 || risksMalformed) && <SectionLabel text="Risks" />}
@@ -311,6 +333,11 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
           <Prose text={risk.note} />
         </div>
       ))}
+      {hiddenRisks > 0 && (
+        <div className="font-mono text-[11.5px] leading-[1.5] text-ink-low mb-2" data-testid="decision-risks-overflow">
+          {decisionOverflowNote(hiddenRisks)}
+        </div>
+      )}
 
       {(reversal || reversalMalformed) && <SectionLabel text="Reversal" />}
       {reversalMalformed && <span className="text-xs italic text-amber-300/80" data-testid="decision-reversal-fallback">⚠ decision: reversal needs how long to undo the action or the damage</span>}

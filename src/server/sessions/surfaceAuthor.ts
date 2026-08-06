@@ -119,6 +119,8 @@ export const SLATE_AUTHOR_CONTRACT = [
   '           very different number from action.',
   '           horizon?: { span, until }   span: until-next-commit|until-this-ships|while-the-code-lives|permanent.',
   '           `until` is REQUIRED whenever span is set — what ends it, phrased to complete "this matters until…".',
+  '           comment?: { label?, placeholder? }   customizes the comment box the card ALWAYS renders at its foot',
+  '           (label defaults to "Anything else?" when omitted). You may customize it; you may not remove it.',
   '           Needs a Submit sibling, same as Choice. Do NOT also add a TextInput: Decision renders its own',
   '           comment box and already owns the surface\'s one text field — a sibling TextInput just writes the',
   '           same field a second time.',

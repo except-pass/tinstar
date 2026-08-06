@@ -128,6 +128,14 @@ describe('parseDecision', () => {
     expect(parseDecision({ component: 'Decision', options: many })!.options).toHaveLength(MAX_DECISION_OPTIONS)
   })
 
+  it('reports hiddenOptions for entries past MAX_DECISION_OPTIONS, zero at or under the cap (FIX1)', () => {
+    const many = Array.from({ length: MAX_DECISION_OPTIONS + 5 }, (_, i) => ({ id: `o${i}`, label: `O${i}` }))
+    expect(parseDecision({ component: 'Decision', options: many })!.hiddenOptions).toBe(5)
+    const atCap = Array.from({ length: MAX_DECISION_OPTIONS }, (_, i) => ({ id: `o${i}`, label: `O${i}` }))
+    expect(parseDecision({ component: 'Decision', options: atCap })!.hiddenOptions).toBe(0)
+    expect(parseDecision(decisionNode())!.hiddenOptions).toBe(0)
+  })
+
   it('rates a three-value scale onto the 0/2/3 ramp so its top step is fully hot', () => {
     const d = parseDecision(decisionNode({
       risks: [
@@ -181,6 +189,15 @@ describe('parseDecision', () => {
   it('caps risks at MAX_DECISION_RISKS', () => {
     const many = Array.from({ length: MAX_DECISION_RISKS + 5 }, (_, i) => ({ label: `r${i}` }))
     expect(parseDecision(decisionNode({ risks: many }))!.risks).toHaveLength(MAX_DECISION_RISKS)
+  })
+
+  it('reports hiddenRisks for entries past MAX_DECISION_RISKS, zero at or under the cap (FIX1)', () => {
+    const many = Array.from({ length: MAX_DECISION_RISKS + 5 }, (_, i) => ({ label: `r${i}` }))
+    expect(parseDecision(decisionNode({ risks: many }))!.hiddenRisks).toBe(5)
+    const atCap = Array.from({ length: MAX_DECISION_RISKS }, (_, i) => ({ label: `r${i}` }))
+    expect(parseDecision(decisionNode({ risks: atCap }))!.hiddenRisks).toBe(0)
+    expect(parseDecision(decisionNode({ risks: [{ label: 'keep' }] }))!.hiddenRisks).toBe(0)
+    expect(parseDecision(decisionNode())!.hiddenRisks).toBe(0)
   })
 
   it('requires `until` whenever a horizon span is present (R4)', () => {

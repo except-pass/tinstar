@@ -82,9 +82,12 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       '`horizon: { span, until }` — span is until-next-commit|until-this-ships|' +
       'while-the-code-lives|permanent, and `until` completes "this matters until…". ' +
       'Use permanent when something survives an undo: rows written, mail sent, an API ' +
-      'published, a person who already saw it. Do NOT add a TextInput — the Decision ' +
-      'card renders its own comment box. Write it to .tinstar/slate/decision.json ' +
-      '(id, headline, A2UI content, refresh recipe).',
+      'published, a person who already saw it. The card always renders a comment box at ' +
+      'its foot (default label "Anything else?"); optionally set `comment: { label, ' +
+      'placeholder }` to customize it, but do NOT add a TextInput — the Decision card ' +
+      'already owns the surface\'s one text field. Write it to .tinstar/slate/decision.json ' +
+      '(id, headline, A2UI content). Do not set a `refresh` recipe: refreshing would ' +
+      're-derive the very question the user is mid-answer on and rewrite it under them.',
   },
 ]
 
