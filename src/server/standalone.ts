@@ -29,6 +29,7 @@ import {
   describeSingletonFailure,
   formatSingletonFailureForConsole,
 } from './infra/lock'
+import { openListeners, resolveBindTargets } from './bind'
 import { decideStaticServe } from './staticServe'
 import {
   createSessionUpgradeHandler,
@@ -44,12 +45,12 @@ interface ServerOptions {
   clientDir: string
   open?: boolean
   /**
-   * Optional bind address(es). When omitted/empty, Node binds to the
-   * unspecified address (all interfaces). Pass an array (e.g. `['127.0.0.1',
-   * '<tailscale-ip>']`) to bind multiple specific interfaces — useful for
-   * keeping local CLI/hooks talking to loopback while exposing the UI on
-   * tailscale, without opening the primary LAN interface. For backwards-
-   * compat a single string is still accepted.
+   * Optional bind address(es). When omitted/empty the server binds the
+   * loopback pair only — reaching it from another device is an explicit act,
+   * not the state you get by doing nothing. Pass an array (e.g. `['127.0.0.1',
+   * '<tailscale-ip>']`) to bind multiple specific interfaces; 127.0.0.1 is
+   * force-added to any explicit set so host-local hooks keep working. For
+   * backwards-compat a single string is still accepted.
    */
   host?: string | string[]
   /**
@@ -229,44 +230,30 @@ export function startServer(opts: ServerOptions) {
 
   process.on('exit', () => { removePortFile(); removeHostFile(); removePidFile() })
 
-  // Normalize hosts to an array. Empty array → bind to the unspecified address
-  // (one listener, all interfaces). Multi-entry → one listener per address,
-  // all on the same port. The first entry is the "preferred" host used for
-  // the server.host file and the browser-open URL.
-  const hosts: string[] = Array.isArray(opts.host)
-    ? opts.host.filter(h => h && h.length > 0)
-    : (opts.host ? [opts.host] : [])
-
-  // Always bind 127.0.0.1 alongside any explicit host so localhost-pointing
-  // hooks (project .claude/settings.json, the cc-quota statusline) keep
-  // working when the server is exposed on a specific external interface.
-  // Skip when a wildcard already covers localhost.
-  const coversLocalhost = hosts.some(h => h === '0.0.0.0' || h === '::' || h === '127.0.0.1' || h === 'localhost')
-  if (hosts.length > 0 && !coversLocalhost) {
-    hosts.push('127.0.0.1')
-  }
+  // One listener per address, all on the same port. No explicit host no longer
+  // means the unspecified address — see resolveBindTargets for why that default
+  // was the whole exposure.
+  const bind = resolveBindTargets(opts.host)
 
   async function listenAll(port: number, isRetry = false): Promise<void> {
-    const targets: Array<string | undefined> = hosts.length > 0 ? hosts : [undefined]
-    const opened: Server[] = []
     try {
-      for (const h of targets) {
-        const s = makeServer()
-        await new Promise<void>((resolve, reject) => {
-          const onErr = (err: NodeJS.ErrnoException) => { s.removeListener('listening', onOk); reject(err) }
-          const onOk = () => { s.removeListener('error', onErr); resolve() }
-          s.once('error', onErr)
-          s.once('listening', onOk)
-          if (h) s.listen(port, h)
-          else s.listen(port)
-        })
-        opened.push(s)
+      const bound: string[] = []
+      const opened = await openListeners(
+        bind.targets,
+        port,
+        makeServer,
+        (target, err) => log.warn(
+          'server',
+          `skipping best-effort bind on ${target.host}: ${err.code ?? err.message}`,
+        ),
+      )
+      for (const s of opened) {
         s.on('error', (err) => log.warn('server', `listener error: ${err.message}`))
+        const addr = s.address()
+        bound.push(typeof addr === 'object' && addr ? addr.address : String(addr))
       }
-      onAllListening(port)
+      onAllListening(port, bound)
     } catch (err) {
-      // Roll back any listeners that already bound at this port.
-      for (const s of opened) { try { s.close() } catch { /* best effort */ } }
       const e = err as NodeJS.ErrnoException
       if (e?.code === 'EADDRINUSE') {
         if (process.env.TINSTAR_NO_PORT_FALLBACK === '1') {
@@ -289,14 +276,16 @@ export function startServer(opts: ServerOptions) {
     }
   }
 
-  function onAllListening(port: number) {
+  function onAllListening(port: number, bound: string[]) {
     boundPort = port
-    const preferredHost = hosts[0] ?? 'localhost'
-    const url = `http://${preferredHost}:${port}`
+    const url = `http://${bind.preferredHost}:${port}`
     writePortFile(port)
-    writeHostFile(hosts[0] ?? '127.0.0.1')
+    writeHostFile(bind.hostFileValue)
     writePidFile()
-    const bindNote = hosts.length > 0 ? ` (bound to ${hosts.join(', ')})` : ''
+    // Report what actually bound, not what was asked for: the IPv6 loopback is
+    // best-effort, and a note that names an address nobody can reach is worse
+    // than no note.
+    const bindNote = ` (bound to ${bound.join(', ')})`
     log.info('server', `Tinstar running at ${url}${bindNote}`)
     console.log(`\n  Tinstar running at ${url}${bindNote}\n`)
     if (opts.open) {
@@ -325,7 +314,10 @@ if (isDirectRun) {
   const args = process.argv.slice(2)
   const portIdx = args.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : parseInt(process.env.TINSTAR_BACKEND_PORT ?? '5273')
-  // Support repeated --host flags and/or a comma-separated list.
+  // Support repeated --host flags and/or a comma-separated list. Like
+  // bin/tinstar.js, this carries no default of its own — an empty list means
+  // "whatever resolveBindTargets decides", so the two entry points cannot
+  // disagree about what no `--host` means.
   const hosts: string[] = []
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--host' && args[i + 1]) {

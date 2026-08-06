@@ -22,6 +22,7 @@ import {
   TTYD_NON_CAUSAL_INTERRUPTION,
 } from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
+import { LOOPBACK_BIND_ADDRESS } from '../../bind'
 import { log } from '../../logger'
 import {
   defaultProviderRegistry,
@@ -322,7 +323,7 @@ export function interactivePortWindow(): PortWindow | null {
  *  config is deliberately withheld from spawned guest processes (see
  *  docs/solutions/conventions/guest-env-boundary.md), so a ttyd cannot inherit
  *  it, and threading it through options would touch every restart path. */
-let ttydBindAddress = '127.0.0.1'
+let ttydBindAddress: string = LOOPBACK_BIND_ADDRESS
 
 /** Declare which address spawned terminals bind. Called from server boot with
  *  the same setting that governs the dashboard listener, so the two cannot

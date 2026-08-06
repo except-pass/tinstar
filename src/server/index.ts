@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
+import { LOOPBACK_BIND_ADDRESS } from './bind'
 import { getConfigRoot } from './configRoot'
 import {
   acquireBackendSingleton,
@@ -1167,11 +1168,12 @@ export function initBackend(): RouteContext {
 
       // Terminal exposure. This is the ONE site where the bind setting reaches
       // the terminal spawner: a spawned ttyd cannot inherit dashboard HTTP
-      // config across the guest-env boundary, so it has to be told. Loopback
-      // means a terminal is reachable only through this backend, never directly
-      // from another host — remote reach is granted per room, not by leaving a
-      // terminal port open on every interface.
-      tmuxBackend.setTerminalBindAddress('127.0.0.1')
+      // config across the guest-env boundary, so it has to be told. The address
+      // comes from the same constant the dashboard listener defaults to, so the
+      // two cannot drift apart (R3). Terminals stay on it even when the
+      // operator widens the dashboard's bind: a terminal is reachable only
+      // through this backend's session proxy, never directly from another host.
+      tmuxBackend.setTerminalBindAddress(LOOPBACK_BIND_ADDRESS)
       const portProblem = refreshConfigProblem(sessionConfig)
       if (portProblem) {
         // A user edit, not a code bug — so it degrades the refresh engine rather
