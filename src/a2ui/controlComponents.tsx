@@ -9,7 +9,7 @@
 // disabled/static so nothing is ever half-wired.
 import { createContext, useContext, type ReactNode } from 'react'
 import type { A2uiComponent } from '../domain/types'
-import { parseChoice, parseDecision, type Rating } from './controls'
+import { parseChoice, parseDecision, type DecisionRisk, type Rating } from './controls'
 import type { FollowUpPreset } from './followUps'
 
 /** Shared textarea styling for every free-text control (`TextInput`, and
@@ -196,12 +196,29 @@ const HEAT: readonly string[] = [
 // no amber at all. Coercing it either way would lie about a risk (R8).
 const HEAT_UNKNOWN = 'border-hairline bg-surface-hover text-ink-low'
 
-/** One `label VALUE` pair. Mono throughout — a rating is meta, not prose. */
-function RatingChip({ label, rating }: { label: string; rating: Rating | null }): ReactNode {
+// The one cross-field emphasis on the card: a risk nothing will alert on,
+// attached to a decision that never stops mattering. Brighter than heat 3, and
+// deliberately NOT a score — nothing is computed, sorted, or thresholded on it.
+const HEAT_FLARE = 'border-hue-discussing/60 bg-hue-discussing/25 text-hue-discussing'
+
+/** One `label VALUE` pair. Mono throughout — a rating is meta, not prose. `flare`
+ *  is a visual-only brightness bump (see DecisionControl's `flareFor`); the
+ *  `data-flare` attribute is not a second source of meaning for sighted users —
+ *  `data-heat` already carries the underlying rating unchanged, so nothing is
+ *  lost if flare is ignored. Reserving an sr-only word for it (as the option
+ *  gain/cost/wrong-if lines do) would announce a color-only judgment call as if
+ *  it were an independent fact, which is exactly the composite-score framing
+ *  this task is forbidden from introducing. */
+function RatingChip({ label, rating, flare = false }: { label: string; rating: Rating | null; flare?: boolean }): ReactNode {
   if (!rating) return null
-  const tone = rating.heat === null ? HEAT_UNKNOWN : HEAT[rating.heat]
+  const tone = rating.heat === null ? HEAT_UNKNOWN : flare ? HEAT_FLARE : HEAT[rating.heat]
   return (
-    <span className="inline-flex items-baseline gap-1.5" data-testid={`decision-rating-${label}`} data-heat={rating.heat === null ? 'unknown' : String(rating.heat)}>
+    <span
+      className="inline-flex items-baseline gap-1.5"
+      data-testid={`decision-rating-${label}`}
+      data-heat={rating.heat === null ? 'unknown' : String(rating.heat)}
+      {...(flare ? { 'data-flare': 'true' } : {})}
+    >
       <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">{label}</span>
       <span className={`font-mono text-[10px] uppercase tracking-[0.08em] rounded-[3px] border px-1.5 py-px ${tone}`}>
         {rating.value}
@@ -230,6 +247,9 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
   const choiceId = typeof node.id === 'string' && node.id ? node.id : ''
   const selected = form.selectedFor(choiceId)
   const { options, risks, risksMalformed, reversal, reversalMalformed, horizon, horizonMalformed, comment } = parsed
+  // Emphasis, not a score: the combination the reader most needs to catch.
+  const permanent = horizon?.span?.value === 'permanent'
+  const flareFor = (risk: DecisionRisk) => permanent && risk.discoverability?.value === 'silent'
 
   return (
     <div className="flex flex-col my-1" data-testid="decision">
@@ -286,7 +306,7 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
           <div className="flex flex-row flex-wrap gap-x-3 gap-y-1">
             <RatingChip label="severity" rating={risk.severity} />
             <RatingChip label="likelihood" rating={risk.likelihood} />
-            <RatingChip label="discoverability" rating={risk.discoverability} />
+            <RatingChip label="discoverability" rating={risk.discoverability} flare={flareFor(risk)} />
           </div>
           <Prose text={risk.note} />
         </div>
@@ -308,7 +328,7 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
       {horizonMalformed && <span className="text-xs italic text-amber-300/80" data-testid="decision-horizon-fallback">⚠ decision: horizon needs a span and an `until`</span>}
       {horizon && (
         <div className="flex flex-col gap-0.5 mb-2">
-          <RatingChip label="span" rating={horizon.span} />
+          <RatingChip label="span" rating={horizon.span} flare={risks.some(flareFor)} />
           <Prose text={`until: ${horizon.until}`} testId="decision-until" />
         </div>
       )}

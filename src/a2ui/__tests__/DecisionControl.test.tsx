@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { A2uiComponent } from '../../domain/types'
 import { DecisionControl, NoticeFormProvider, type NoticeFormState } from '../controlComponents'
 
@@ -130,5 +130,36 @@ describe('DecisionControl', () => {
   it('renders inert with no form provider (read-only context)', () => {
     render(<DecisionControl node={FULL} />)
     expect(screen.getAllByRole('radio').every(r => (r as HTMLInputElement).disabled)).toBe(true)
+  })
+})
+
+describe('DecisionControl · silent × permanent emphasis', () => {
+  const withRisk = (discoverability: string, span: string): A2uiComponent => ({
+    component: 'Decision', id: 'd',
+    options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    risks: [{ label: 'r', discoverability, severity: 'severe' }],
+    horizon: { span, until: 'x' },
+  })
+
+  it('flares both chips when a silent risk meets a permanent horizon', () => {
+    renderDecision(withRisk('silent', 'permanent'))
+    expect(screen.getByTestId('decision-rating-discoverability').getAttribute('data-flare')).toBe('true')
+    expect(screen.getByTestId('decision-rating-span').getAttribute('data-flare')).toBe('true')
+  })
+
+  it('does not flare when only one half is present', () => {
+    renderDecision(withRisk('subtle', 'permanent'))
+    expect(screen.getByTestId('decision-rating-span').getAttribute('data-flare')).toBeNull()
+    // Each renderDecision mounts a fresh tree; without an explicit cleanup between
+    // the two calls in this test, both stay mounted and the second getByTestId
+    // finds two matches (one per render) instead of testing the second in isolation.
+    cleanup()
+    renderDecision(withRisk('silent', 'until-this-ships'))
+    expect(screen.getByTestId('decision-rating-discoverability').getAttribute('data-flare')).toBeNull()
+  })
+
+  it('leaves every other chip unflared — this is the only cross-field inference', () => {
+    renderDecision(withRisk('silent', 'permanent'))
+    expect(screen.getByTestId('decision-rating-severity').getAttribute('data-flare')).toBeNull()
   })
 })
