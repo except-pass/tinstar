@@ -6,6 +6,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
+import {
+  TAILSCALE_FLOOR_VERIFIED_ON,
+  TAILSCALE_MIN_VERSION,
+  TTYD_MIN_VERSION,
+  checkExternalVersion,
+  checkReachState,
+  classifyListenerBind,
+  parseSsListeners,
+} from './tinstar/diagnostics.js'
 
 // ── Formatting ──
 
@@ -451,6 +460,81 @@ async function doctor() {
   }
 
   // ────── Skills ──────
+  // ────── Exposure ──────
+  //
+  // The one section that answers "can anything off this host reach me". The
+  // bind is OBSERVED from the live listener set, never read from server.host —
+  // that file is self-reported, so a server that believed it bound loopback and
+  // did not would report itself clean.
+  printSection('Exposure')
+
+  let listeners = []
+  try {
+    listeners = parseSsListeners(
+      execSync('ss -tlnp', { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }),
+    )
+  } catch {
+    printCheck({ status: 'warn', label: 'ss unavailable — bind cannot be observed' })
+  }
+
+  const exposureChecks = []
+
+  if (listeners.length) {
+    exposureChecks.push(classifyListenerBind(
+      `Tinstar server :${serverPort}`,
+      listeners.filter(l => l.port === serverPort),
+    ))
+
+    const terminalPorts = [...new Set(
+      listeners.filter(l => l.process === 'ttyd').map(l => l.port),
+    )].sort((a, b) => a - b)
+    if (!terminalPorts.length) {
+      exposureChecks.push({ status: 'skip', label: 'no terminals running' })
+    }
+    for (const port of terminalPorts) {
+      exposureChecks.push(classifyListenerBind(
+        `terminal :${port}`,
+        listeners.filter(l => l.port === port),
+      ))
+    }
+  }
+
+  // Both operator-installed externals carry a containment guarantee, so both
+  // are gated. Reporting one and not the other was an asymmetry, not a choice.
+  exposureChecks.push(checkExternalVersion(
+    'ttyd',
+    (cmdVersion('ttyd', ['--version']) || '').replace(/^ttyd version\s*/i, '').trim() || null,
+    TTYD_MIN_VERSION,
+  ))
+
+  const tailscaleVersion = cmdExists('tailscale')
+    ? ((cmdVersion('tailscale', ['version']) || '').split('\n')[0] || '').trim() || null
+    : null
+  if (tailscaleVersion) {
+    exposureChecks.push(checkExternalVersion('tailscale', tailscaleVersion, TAILSCALE_MIN_VERSION))
+  }
+  exposureChecks.push({
+    status: 'pass',
+    label: `tailscale floor ${TAILSCALE_MIN_VERSION}`,
+    detail: `last checked against advisories ${TAILSCALE_FLOOR_VERIFIED_ON}`,
+  })
+
+  let reachMapping = null
+  try {
+    const raw = JSON.parse(readFileSync(join(ROOT, 'reach', 'mapping.json'), 'utf-8'))
+    if (raw && typeof raw.url === 'string' && typeof raw.port === 'number') reachMapping = raw
+  } catch { /* no mapping recorded */ }
+  exposureChecks.push(checkReachState({
+    providerPresent: Boolean(tailscaleVersion),
+    mapping: reachMapping,
+    serverPort: reachMapping ? serverPort : undefined,
+  }))
+
+  for (const c of exposureChecks) {
+    printCheck(c)
+    if (c.status === 'fail') issues.push(c)
+  }
+
   printSection('Skills')
 
   const commitSkillPath = join(homedir(), '.claude', 'commands', 'tinstar-commit.md')
