@@ -32,7 +32,31 @@ tinstar --host a.b.c.d,e.f.g.h    # or repeat --host
 
 `127.0.0.1` is force-added to whatever you name, so host-local callers keep working. `TINSTAR_HOST` takes the same value.
 
-This is the **interim** path. It widens the bind, which is exactly what the containment work narrowed — the whole address is reachable to anything that can route to it, with no authentication in front. A tailnet-fronted path that keeps the bind on loopback is the intended replacement.
+This widens the bind, which is exactly what the containment work narrowed — the whole address is reachable to anything that can route to it, with no authentication in front. Prefer tailnet reach below, which keeps the bind on loopback.
+
+### Preferred: tailnet reach
+
+Reach fronts the loopback bind with `tailscale serve` instead of widening it. Tailnet membership is the authorization; Tinstar ships no credential of its own, and the listener stays on `127.0.0.1`.
+
+```bash
+tinstar install-service --port 5273   # installs the scoped privilege grant
+```
+
+Then opt in once. The opt-in is persisted, so a restart or reboot brings the same URL back with no second decision — a clean shutdown takes the mapping down but never the preference.
+
+Preconditions, each refused by name rather than generically if unmet:
+
+- **Tailscale 1.98.9 or newer.** Refused below that, not warned. Bulletins TS-2026-005, TS-2026-007 and TS-2026-008 are fixed in 1.98.9, and TS-2026-008 is an unauthenticated denial of service against the exact serve path this turns on, reachable from any tailnet peer.
+- **MagicDNS and HTTPS certificates enabled for the tailnet.** Both are admin-console settings, not device settings.
+- **The privilege grant installed.** `tinstar install-service` writes a sudoers drop-in at `/etc/sudoers.d/tinstar-reach` permitting exactly the two `tailscale serve` invocations Tinstar issues and nothing else — no other subcommand, no wildcard. It prints the rule before writing it. `tinstar uninstall-service` removes it, and you can remove it yourself at any time with `sudo rm /etc/sudoers.d/tinstar-reach`. Tailscale's own `--operator` grant is deliberately *not* used: it confers control of the whole daemon and is the pivot in one of the advisories above.
+
+Run `tinstar doctor` to see the observed bind of every listener, both external version floors, and the current reach state.
+
+**The tailnet is assumed to be single-user** — every member one of your own devices. Default Tailscale ACLs let any member reach any peer, so on a shared tailnet this relocates the exposure rather than closing it. Nothing enforces this; it is a precondition.
+
+### If you installed the systemd unit before v5.4
+
+Regenerate it: `tinstar install-service --port <port>`. The old unit resolved a tailnet IP into `--host` at every start, which re-opens the bind this release closed, and it froze a CORS allowlist at install time that the server now seeds itself. Tinstar warns about a stale unit on every service command rather than only at install.
 
 ### Why a runtime notice as well as this note
 
