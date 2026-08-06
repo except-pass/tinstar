@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import { ReachCoordinator } from '../coordinator'
 import type { ReachProvider, ReachProviderMapping } from '../provider'
 import { readReachMapping, readReachPreference } from '../state'
+import {
+  currentOriginAllowlist,
+  resetOriginAllowlistForTests,
+} from '../../api/originAllowlist'
 
 let root: string
 
@@ -14,6 +18,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
+  resetOriginAllowlistForTests()
 })
 
 /** A provider whose whole world is one list of mappings. */
@@ -225,5 +230,36 @@ describe('ReachCoordinator — one holder per host', () => {
     expect(result.state).toBe('refused')
     expect(result.detail).toContain('tailscaled not running')
     expect(readReachMapping(root)).toBeNull()
+  })
+})
+
+describe('ReachCoordinator — the reach origin is allowed for exactly its lifetime', () => {
+  it('registers the origin on establish', async () => {
+    const { provider } = fakeProvider()
+    const reach = coordinator(provider)
+
+    await reach.enable(5273)
+
+    expect(currentOriginAllowlist()).toContain('https://fake.example/5273')
+  })
+
+  it('unregisters it on revoke', async () => {
+    const { provider } = fakeProvider()
+    const reach = coordinator(provider)
+    await reach.enable(5273)
+
+    await reach.disable()
+
+    expect(currentOriginAllowlist()).not.toContain('https://fake.example/5273')
+  })
+
+  it('unregisters it on a clean shutdown too', async () => {
+    const { provider } = fakeProvider()
+    const reach = coordinator(provider)
+    await reach.enable(5273)
+
+    await reach.shutdown()
+
+    expect(currentOriginAllowlist()).not.toContain('https://fake.example/5273')
   })
 })

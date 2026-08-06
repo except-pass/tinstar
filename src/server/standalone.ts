@@ -31,6 +31,7 @@ import {
 } from './infra/lock'
 import { openListeners, resolveBindTargets } from './bind'
 import { announceBindChangeOnce } from './bindNotice'
+import { seedOriginAllowlist } from './api/originAllowlist'
 import { getReachCoordinator } from './reach'
 import { decideStaticServe } from './staticServe'
 import {
@@ -302,6 +303,11 @@ export function startServer(opts: ServerOptions) {
     const bindNote = ` (bound to ${bound.join(', ')})`
     log.info('server', `Tinstar running at ${url}${bindNote}`)
     console.log(`\n  Tinstar running at ${url}${bindNote}\n`)
+    // Seed the browser-origin allowlist with what this server actually is. It
+    // must never be empty: an empty allowlist answers every origin with a
+    // wildcard, which on a containment-only install would hand the whole canvas
+    // API to any page the operator visits.
+    seedOriginAllowlist(port)
     // Reach fronts the port that ACTUALLY bound. listenAll may have walked past
     // a busy one, and fronting the configured port would leave the remote URL
     // pointing at nothing while localhost worked fine. A host that never opted

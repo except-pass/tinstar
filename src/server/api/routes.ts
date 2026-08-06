@@ -105,7 +105,8 @@ import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
 import type { SlashUsage } from '../sessions/slashUsage'
 import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
-import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+import { resolveCorsHeaders } from './cors'
+import { currentOriginAllowlist } from './originAllowlist'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import { handleSurfaceRoutes } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
@@ -131,8 +132,13 @@ import {
 } from '../messaging/live-recipient-resolution'
 import { projectLegacySessionContextWindow } from '../providers/legacy-observation-projections'
 
+/**
+ * The environment allowlist plus the origins seeded at bind and registered by
+ * reach. Never empty in normal operation, which is what keeps the wildcard
+ * branch of resolveCorsHeaders out of reach — see api/originAllowlist.ts.
+ */
 function currentCorsAllowlist(): string[] {
-  return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+  return currentOriginAllowlist()
 }
 
 function validateCliTemplateProvider(

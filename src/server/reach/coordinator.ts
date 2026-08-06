@@ -1,3 +1,4 @@
+import { registerReachOrigin, unregisterReachOrigin } from '../api/originAllowlist'
 import { log } from '../logger'
 import type { ReachProvider, ReachProviderMapping, ReachStatus } from './provider'
 import {
@@ -149,6 +150,9 @@ export class ReachCoordinator {
       establishedAt: this.now(),
     }
     writeReachMapping(this.configRoot, record)
+    // For the lifetime of this reach, and no longer (R19). Without it the
+    // remote canvas loads but every credentialed API call it makes is refused.
+    registerReachOrigin(mapping.url)
     log.info('reach', `${this.provider.name} now fronts :${mapping.port} at ${mapping.url}`)
     return { state: 'active', url: mapping.url }
   }
@@ -162,6 +166,7 @@ export class ReachCoordinator {
       log.warn('reach', `revoke failed, leaving the record for reconcile: ${(err as Error).message}`)
       return
     }
+    unregisterReachOrigin(recorded.url)
     clearReachMapping(this.configRoot)
   }
 
