@@ -248,19 +248,29 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
             />
             <span className="min-w-0">
               <span className="font-sans text-[13px] leading-[1.4] text-ink-high block">{opt.label}</span>
+              {/* The glyph is decorative (aria-hidden); an sr-only word carries the same
+                  distinction to assistive tech, matching StepperRail's status-text pattern
+                  (catalog.tsx) — without it, gain/cost/wrong-if read as three indistinguishable
+                  plain lines to a screen reader. */}
               {opt.gain && (
                 <span className="font-sans text-[12.5px] leading-[1.5] text-ink-mid block">
-                  <span aria-hidden="true">{'+ '}</span>{opt.gain}
+                  <span aria-hidden="true">{'+ '}</span>
+                  <span className="sr-only">{'gain: '}</span>
+                  {opt.gain}
                 </span>
               )}
               {opt.cost && (
                 <span className="font-sans text-[12.5px] leading-[1.5] text-ink-mid block">
-                  <span aria-hidden="true">{'− '}</span>{opt.cost}
+                  <span aria-hidden="true">{'− '}</span>
+                  <span className="sr-only">{'cost: '}</span>
+                  {opt.cost}
                 </span>
               )}
               {opt.wrongIf && (
                 <span className="font-sans text-[12.5px] leading-[1.5] text-ink-low block">
-                  <span aria-hidden="true">{'⚑ wrong if '}</span>{opt.wrongIf}
+                  <span aria-hidden="true">{'⚑ wrong if '}</span>
+                  <span className="sr-only">{'wrong if: '}</span>
+                  {opt.wrongIf}
                 </span>
               )}
             </span>

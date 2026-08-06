@@ -75,6 +75,19 @@ describe('DecisionControl', () => {
     expect(chip.getAttribute('data-heat')).toBe('unknown')
   })
 
+  it('renders no element for an omitted risk dimension, distinct from an unrecognised one', () => {
+    renderDecision({ ...FULL, risks: [{ label: 'r', severity: 'severe' }] })
+    expect(screen.getByTestId('decision-rating-severity')).toBeTruthy()
+    expect(screen.queryByTestId('decision-rating-likelihood')).toBeNull()
+    expect(screen.queryByTestId('decision-rating-discoverability')).toBeNull()
+  })
+
+  it('renders no element for an omitted reversal dimension', () => {
+    renderDecision({ ...FULL, reversal: { action: 'costly', note: 'x' } })
+    expect(screen.getByTestId('decision-rating-action')).toBeTruthy()
+    expect(screen.queryByTestId('decision-rating-damage')).toBeNull()
+  })
+
   it('states the horizon `until` line', () => {
     renderDecision(FULL)
     expect(screen.getByTestId('decision-until').textContent).toContain('The migration writes rows we cannot un-write.')
