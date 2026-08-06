@@ -47,3 +47,24 @@ describe('surfaceCatalog', () => {
     })
   })
 })
+
+describe('decision template', () => {
+  it('is in the catalog', () => {
+    expect(SURFACE_CATALOG.some(t => t.id === 'decision')).toBe(true)
+  })
+
+  it('is findable by fuzzy search', () => {
+    expect(searchSurfaceCatalog('decision')[0]?.id).toBe('decision')
+    expect(searchSurfaceCatalog('dec').map(t => t.id)).toContain('decision')
+  })
+
+  it('names every scale value in its prompt so the agent cannot invent one', () => {
+    const { prompt } = SURFACE_CATALOG.find(t => t.id === 'decision')!
+    for (const v of ['annoying', 'costly', 'severe', 'unlikely', 'possible', 'likely',
+                     'obvious', 'subtle', 'silent', 'trivial', 'cheap', 'one-way',
+                     'minutes', 'hours', 'days', 'weeks+',
+                     'until-next-commit', 'until-this-ships', 'while-the-code-lives', 'permanent']) {
+      expect(prompt).toContain(v)
+    }
+  })
+})
