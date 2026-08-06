@@ -25,6 +25,7 @@ import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import { LOOPBACK_BIND_ADDRESS } from './bind'
+import { getReachCoordinator } from './reach'
 import { getConfigRoot } from './configRoot'
 import {
   acquireBackendSingleton,
@@ -838,6 +839,9 @@ export function initBackend(): RouteContext {
       try { await stopProcessNatsManager() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
       try { await observability.stop() } catch (e) { log.debug('shutdown', `observability: ${(e as Error).message}`) }
       try { await codexOtel.stop() } catch (e) { log.debug('shutdown', `codexOtel: ${(e as Error).message}`) }
+      // Clears the live mapping, never the operator's opt-in — the next start
+      // re-establishes from the preference (R6, KTD4).
+      try { await getReachCoordinator().shutdown() } catch (e) { log.debug('shutdown', `reach: ${(e as Error).message}`) }
       try { telemetryRoutes.stopPolling() } catch (e) { log.debug('shutdown', `telemetry: ${(e as Error).message}`) }
       try { docStore.flush() } catch (e) { log.debug('shutdown', `docStore: ${(e as Error).message}`) }
       try { await slashUsage.flush() } catch (e) { log.debug('shutdown', `slashUsage: ${(e as Error).message}`) }
