@@ -1,6 +1,7 @@
 import { getConfigRoot } from '../configRoot'
 import { ReachCoordinator } from './coordinator'
 import type { ReachProvider, ReachProviderMapping } from './provider'
+import { TailscaleReachProvider } from './tailscale'
 
 export { ReachCoordinator } from './coordinator'
 export type {
@@ -10,12 +11,17 @@ export type {
   ReachStatus,
 } from './provider'
 export type { ReachMapping, ReachPreference } from './state'
+export {
+  TAILSCALE_FLOOR_VERIFIED_ON,
+  TAILSCALE_MIN_VERSION,
+  TailscaleReachProvider,
+  compareVersions,
+} from './tailscale'
 
 /**
- * The placeholder adapter. Exactly one real adapter ships (Tailscale, U8); this
- * one keeps the lifecycle wiring exercisable and every refusal explicit before
- * it lands. It never claims a mapping, so a host that has not opted in behaves
- * exactly as it did before reach existed.
+ * The inert adapter, kept for tests and for any build that ships without one.
+ * It never claims a mapping, so a host using it behaves exactly as it did
+ * before reach existed.
  */
 export const unconfiguredReachProvider: ReachProvider = {
   name: 'none',
@@ -39,7 +45,7 @@ let coordinator: ReachCoordinator | null = null
 
 /** One coordinator per process, built from the live config root. */
 export function getReachCoordinator(
-  provider: ReachProvider = unconfiguredReachProvider,
+  provider: ReachProvider = new TailscaleReachProvider(),
 ): ReachCoordinator {
   coordinator ??= new ReachCoordinator({
     configRoot: getConfigRoot(),
