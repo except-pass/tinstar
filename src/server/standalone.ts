@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 
 // Parse --cors-origins as early as possible so that downstream module imports
@@ -30,6 +30,7 @@ import {
   formatSingletonFailureForConsole,
 } from './infra/lock'
 import { openListeners, resolveBindTargets } from './bind'
+import { announceBindChangeOnce } from './bindNotice'
 import { decideStaticServe } from './staticServe'
 import {
   createSessionRequestHandler,
@@ -230,6 +231,22 @@ export function startServer(opts: ServerOptions) {
   // means the unspecified address — see resolveBindTargets for why that default
   // was the whole exposure.
   const bind = resolveBindTargets(opts.host)
+
+  // An operator who never reads release notes still learns why their LAN URL
+  // stopped answering. A docstore in the config root is what says this install
+  // ran an older version, so a first-ever start stays quiet.
+  const noticeMarker = join(configDir, 'bind-notice')
+  announceBindChangeOnce(
+    {
+      read: () => existsSync(noticeMarker) ? readFileSync(noticeMarker, 'utf8').trim() : null,
+      write: value => writeFileSync(noticeMarker, value),
+    },
+    message => {
+      log.warn('server', message)
+      console.log(`\n${message}\n`)
+    },
+    { existingInstall: existsSync(join(configDir, 'docstore.json')) },
+  )
 
   async function listenAll(port: number, isRetry = false): Promise<void> {
     try {

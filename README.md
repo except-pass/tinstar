@@ -39,6 +39,8 @@ npx tinstar
 
 The CLI checks for dependencies (Claude Code, tmux, ttyd, lsof), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
 
+Tinstar binds **loopback only** (`127.0.0.1` and `::1`). It has no authentication layer, so an address other than loopback has to be asked for rather than assumed — `tinstar --host <address>` serves that address as well (`127.0.0.1` is always kept alongside it, so host-local hooks and every `tinstar` subcommand keep working). Agent terminals are loopback-only unconditionally and are reachable only through the server. See [release notes v5.4](docs/release-notes-v5-4.md) if you are upgrading and a LAN URL stopped answering.
+
 ## The Canvas
 
 Everything in Tinstar lives in space. The canvas is an infinite, Figma-style surface — pan, zoom, and arrange freely; it fills the full height of your screen.
