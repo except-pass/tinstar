@@ -15,6 +15,7 @@ As of v5.4:
 - The server binds **`127.0.0.1` and `::1`** and nothing else, unless you name an address.
 - Every agent terminal binds `127.0.0.1` only, and additionally requires a header that only Tinstar's own session proxy sends. A terminal port is no longer independently usable, even from the same machine.
 - A terminal left running by an older Tinstar is **replaced rather than reused**, because its bind does not match. Existing sessions restart their terminal once on the first start after upgrade. The tmux session behind it — and therefore the agent — is untouched.
+- **ttyd 1.7.4 or newer is now required.** Both containment flags (`-i`, `-H`) are silently ignored by older builds rather than rejected, so a terminal spawn is refused below that floor instead of quietly serving a world-reachable shell. `tinstar doctor` reports the installed version against it.
 
 ### What still works, unchanged
 
@@ -39,16 +40,18 @@ This widens the bind, which is exactly what the containment work narrowed — th
 Reach fronts the loopback bind with `tailscale serve` instead of widening it. Tailnet membership is the authorization; Tinstar ships no credential of its own, and the listener stays on `127.0.0.1`.
 
 ```bash
-tinstar install-service --port 5273   # installs the scoped privilege grant
+tinstar reach on       # prints the privilege grant, installs it, then enables
+tinstar reach status   # where you are reachable, or why not
+tinstar reach off      # revokes the mapping and removes the grant
 ```
 
-Then opt in once. The opt-in is persisted, so a restart or reboot brings the same URL back with no second decision — a clean shutdown takes the mapping down but never the preference.
+The opt-in is persisted, so a restart or reboot brings the same URL back with no second decision — a clean shutdown takes the mapping down but never the preference. `GET /api/reach` returns the same state, so an agent can ask whether it is reachable remotely.
 
 Preconditions, each refused by name rather than generically if unmet:
 
 - **Tailscale 1.98.9 or newer.** Refused below that, not warned. Bulletins TS-2026-005, TS-2026-007 and TS-2026-008 are fixed in 1.98.9, and TS-2026-008 is an unauthenticated denial of service against the exact serve path this turns on, reachable from any tailnet peer.
 - **MagicDNS and HTTPS certificates enabled for the tailnet.** Both are admin-console settings, not device settings.
-- **The privilege grant installed.** `tinstar install-service` writes a sudoers drop-in at `/etc/sudoers.d/tinstar-reach` permitting exactly the two `tailscale serve` invocations Tinstar issues and nothing else — no other subcommand, no wildcard. It prints the rule before writing it. `tinstar uninstall-service` removes it, and you can remove it yourself at any time with `sudo rm /etc/sudoers.d/tinstar-reach`. Tailscale's own `--operator` grant is deliberately *not* used: it confers control of the whole daemon and is the pivot in one of the advisories above.
+- **The privilege grant installed.** `tinstar reach on` writes a sudoers drop-in at `/etc/sudoers.d/tinstar-reach` permitting exactly the two `tailscale serve` invocations Tinstar issues and nothing else — no other subcommand, no wildcard. It prints the rule before writing it and validates it with `visudo -c` before anything reaches `/etc/sudoers.d`. The grant is installed only when you ask for reach, never by `install-service`; `tinstar reach off` removes it, and you can remove it yourself at any time with `sudo rm /etc/sudoers.d/tinstar-reach`. Tailscale's own `--operator` grant is deliberately *not* used: it confers control of the whole daemon and is the pivot in one of the advisories above.
 
 Run `tinstar doctor` to see the observed bind of every listener, both external version floors, and the current reach state.
 

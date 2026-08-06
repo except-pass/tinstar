@@ -21,6 +21,13 @@ export interface ReachCoordinatorOptions {
    */
   disabled: boolean
   now?: () => string
+  /**
+   * How long shutdown will wait for the provider before giving up. The shipped
+   * systemd unit sets TimeoutStopSec=10 and the provider CLI carries a 30s exec
+   * timeout, so an unbounded revoke can eat the entire stop grace and get the
+   * process SIGKILLed before the docstore flushes.
+   */
+  shutdownTimeoutMs?: number
 }
 
 /**
@@ -37,6 +44,7 @@ export class ReachCoordinator {
   private readonly disabled: boolean
   private readonly instanceId: string
   private readonly now: () => string
+  private readonly shutdownTimeoutMs: number
 
   constructor(opts: ReachCoordinatorOptions) {
     this.configRoot = opts.configRoot
@@ -44,6 +52,7 @@ export class ReachCoordinator {
     this.disabled = opts.disabled
     this.instanceId = reachInstanceId(opts.configRoot)
     this.now = opts.now ?? (() => new Date().toISOString())
+    this.shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 5_000
   }
 
   async status(): Promise<ReachStatus> {
@@ -94,7 +103,25 @@ export class ReachCoordinator {
    */
   async shutdown(): Promise<void> {
     if (this.disabled) return
-    await this.revokeOurMapping()
+    // Bounded well under the unit's stop grace. Losing the revoke costs one
+    // stale mapping that the next start's reconcile repairs; losing the
+    // shutdown costs an unflushed docstore, which is not recoverable.
+    let timer: NodeJS.Timeout | undefined
+    const bound = new Promise<void>(resolve => {
+      timer = setTimeout(() => {
+        log.warn(
+          'reach',
+          `revoke exceeded ${this.shutdownTimeoutMs}ms at shutdown; leaving the `
+          + 'mapping for the next start to reconcile',
+        )
+        resolve()
+      }, this.shutdownTimeoutMs)
+    })
+    try {
+      await Promise.race([this.revokeOurMapping(), bound])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private async establish(boundPort: number): Promise<ReachStatus> {

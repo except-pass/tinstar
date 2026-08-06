@@ -6,6 +6,7 @@ import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { log } from '../../logger'
 import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
+import { TTYD_MIN_VERSION } from '../../externalFloors'
 import {
   allTtydIncumbentsStrict,
   clearTtydStartCancellationReasonForTests,
@@ -15,6 +16,7 @@ import {
   setTerminalBindAddress,
   terminalBindAddress,
   ttydSpawnArgv,
+  ttydVersionRefusal,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
@@ -70,6 +72,7 @@ function fakeStartDeps(
     }) as unknown as typeof setTimeout,
     tmuxAlive: async () => true,
     enqueueRestart: vi.fn(async () => child.pid),
+    versionRefusal: () => null,
     ...overrides,
   }
 }
@@ -1184,11 +1187,23 @@ function bindArgFrom(argv: string[]): string | null {
   return flag === -1 ? null : (argv[flag + 1] ?? null)
 }
 
+/**
+ * These are the only proofs of the containment guarantee that run against a
+ * real ttyd rather than an argv assertion. Skipping them silently is how a
+ * suite goes green having tested nothing, so CI installs ttyd and sets
+ * TINSTAR_REQUIRE_LIVE_TTYD=1 to turn a missing binary into a failure instead.
+ */
 function ttydInstalled(): boolean {
   try {
     execFileSync('ttyd', ['--version'], { stdio: 'ignore' })
     return true
   } catch {
+    if (process.env.TINSTAR_REQUIRE_LIVE_TTYD === '1') {
+      throw new Error(
+        'TINSTAR_REQUIRE_LIVE_TTYD=1 but ttyd is not installed: the live '
+        + 'containment proofs would silently skip.',
+      )
+    }
     return false
   }
 }
@@ -1406,6 +1421,32 @@ describe('terminal bind address — every spawned ttyd is loopback-only', () => 
       releasePort(port)
     }
   }, 20_000)
+})
+
+describe('ttyd version floor — refused at spawn, not just reported', () => {
+  it('admits a build at or above the floor', () => {
+    expect(ttydVersionRefusal('ttyd version 1.7.4')).toBeNull()
+    expect(ttydVersionRefusal('ttyd version 1.8.0')).toBeNull()
+  })
+
+  it('refuses a build below the floor, naming installed and required', () => {
+    // Below the floor, -i and -H are ignored rather than honoured: the terminal
+    // binds every interface and accepts anyone, with no error anywhere. That is
+    // precisely the exposure this work closes, so it must refuse, not warn.
+    const refusal = ttydVersionRefusal('ttyd version 1.6.3')
+    expect(refusal).toContain('1.6.3')
+    expect(refusal).toContain(TTYD_MIN_VERSION)
+  })
+
+  it('compares numerically, so 1.7.10 is above 1.7.4', () => {
+    expect(ttydVersionRefusal('ttyd version 1.7.10')).toBeNull()
+  })
+
+  it('refuses rather than guesses when the version cannot be read', () => {
+    // An unreadable version is not evidence of a good one.
+    expect(ttydVersionRefusal('')).toContain(TTYD_MIN_VERSION)
+    expect(ttydVersionRefusal(null)).toContain(TTYD_MIN_VERSION)
+  })
 })
 
 describe('terminal auth header — every Tinstar hop presents it', () => {

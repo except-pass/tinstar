@@ -30,6 +30,15 @@ export const TAILSCALE_MIN_VERSION = '1.98.9'
  */
 export const TAILSCALE_FLOOR_VERIFIED_ON = '2026-08-05'
 
+/**
+ * Mirrors TERMINAL_AUTH_HEADER / TERMINAL_AUTH_VALUE in src/server/sessionProxy.ts.
+ * ttyd's `-H` gates every request it serves, so doctor's own terminal probes
+ * must present it or they report every healthy terminal as broken. A test holds
+ * these equal to the TypeScript originals.
+ */
+export const TERMINAL_AUTH_HEADER = 'X-Tinstar-Proxy'
+export const TERMINAL_AUTH_VALUE = 'tinstar-session-proxy'
+
 /** Numeric, component-wise: lexically '1.98.10' sorts below '1.98.9'. */
 export function compareVersions(a, b) {
   const left = String(a).split('.').map(Number)

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   TAILSCALE_FLOOR_VERIFIED_ON,
   TAILSCALE_MIN_VERSION,
+  TERMINAL_AUTH_HEADER,
+  TERMINAL_AUTH_VALUE,
   TTYD_MIN_VERSION,
   checkExternalVersion,
   checkReachState,
@@ -12,7 +14,12 @@ import {
 import {
   TAILSCALE_FLOOR_VERIFIED_ON as TS_FLOOR_TS,
   TAILSCALE_MIN_VERSION as TS_MIN_TS,
-} from '../../src/server/reach/tailscale'
+  TTYD_MIN_VERSION as TTYD_MIN_TS,
+} from '../../src/server/externalFloors'
+import {
+  TERMINAL_AUTH_HEADER as HEADER_TS,
+  TERMINAL_AUTH_VALUE as HEADER_VALUE_TS,
+} from '../../src/server/sessionProxy'
 
 const SS_OUTPUT = `State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
 LISTEN 0      511         127.0.0.1:5273       0.0.0.0:*     users:(("node",pid=101,fd=20))
@@ -153,9 +160,23 @@ describe('the provider floor carries its verification date', () => {
   })
 
   it('agrees with the server-side adapter, so the two cannot drift', () => {
-    // doctor is plain JS and cannot import the TypeScript adapter, so the floor
-    // exists in two places. This is the only thing keeping them honest.
+    // doctor is plain JS and cannot import TypeScript, so these constants exist
+    // in two places. This test is the only thing keeping them honest.
     expect(TAILSCALE_MIN_VERSION).toBe(TS_MIN_TS)
     expect(TAILSCALE_FLOOR_VERIFIED_ON).toBe(TS_FLOOR_TS)
+  })
+
+  it('agrees with the server on the ttyd floor the spawner enforces', () => {
+    // doctor REPORTS this floor; src/server/sessions/backends/tmux.ts REFUSES
+    // below it. Two different numbers would mean doctor says clean while the
+    // spawner refuses, or worse the reverse.
+    expect(TTYD_MIN_VERSION).toBe(TTYD_MIN_TS)
+  })
+
+  it('agrees with the server on the terminal auth header', () => {
+    // doctor's own terminal probes present this. A drift here makes doctor
+    // report every healthy terminal as broken.
+    expect(TERMINAL_AUTH_HEADER).toBe(HEADER_TS)
+    expect(TERMINAL_AUTH_VALUE).toBe(HEADER_VALUE_TS)
   })
 })

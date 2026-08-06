@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
 import {
+  TERMINAL_AUTH_HEADER,
+  TERMINAL_AUTH_VALUE,
   TAILSCALE_FLOOR_VERIFIED_ON,
   TAILSCALE_MIN_VERSION,
   TTYD_MIN_VERSION,
@@ -24,6 +26,9 @@ const YELLOW = '\x1b[33m'
 const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const RESET = '\x1b[0m'
+
+/** Every doctor probe that speaks to a terminal presents this. */
+const TERMINAL_AUTH_HEADERS = { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE }
 
 const SYM = { pass: `${GREEN}✓${RESET}`, fail: `${RED}✗${RESET}`, warn: `${YELLOW}⚠${RESET}`, skip: `${DIM}⊘${RESET}` }
 
@@ -52,10 +57,10 @@ function cmdExists(cmd) {
   } catch { return false }
 }
 
-function httpGet(url, timeoutMs = 3000) {
+function httpGet(url, timeoutMs = 3000, headers = {}) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url)
-    const req = httpRequest({ hostname: urlObj.hostname, port: urlObj.port, path: urlObj.pathname + urlObj.search, timeout: timeoutMs }, (res) => {
+    const req = httpRequest({ hostname: urlObj.hostname, port: urlObj.port, path: urlObj.pathname + urlObj.search, headers, timeout: timeoutMs }, (res) => {
       let body = ''
       res.on('data', chunk => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode, body }))
@@ -66,7 +71,7 @@ function httpGet(url, timeoutMs = 3000) {
   })
 }
 
-function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000) {
+function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = httpRequest({
       hostname: host,
@@ -77,6 +82,7 @@ function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000) {
         'Connection': 'Upgrade',
         'Sec-WebSocket-Key': Buffer.from(Math.random().toString()).toString('base64'),
         'Sec-WebSocket-Version': '13',
+        ...extraHeaders,
       },
       timeout: timeoutMs,
     })
@@ -408,7 +414,9 @@ async function doctor() {
 
         // HTTP check
         try {
-          const resp = await httpGet(`http://localhost:${port}/`)
+          // ttyd runs with -H, so an unauthenticated probe reads 407 and every
+          // healthy terminal would be reported broken.
+          const resp = await httpGet(`http://localhost:${port}/`, 3000, TERMINAL_AUTH_HEADERS)
           if (resp.status === 200) {
             parts.push(`${GREEN}✓${RESET}http`)
           } else {
@@ -422,7 +430,7 @@ async function doctor() {
 
         // WebSocket upgrade check
         try {
-          await wsUpgradeCheck('localhost', port, '/ws')
+          await wsUpgradeCheck('localhost', port, '/ws', 3000, TERMINAL_AUTH_HEADERS)
           parts.push(`${GREEN}✓${RESET}ws`)
         } catch {
           parts.push(`${RED}✗${RESET}ws`)

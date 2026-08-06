@@ -3,6 +3,7 @@ import { resolveCorsHeaders } from '../cors'
 import {
   DESKTOP_APP_ORIGINS,
   currentOriginAllowlist,
+  sessionUpgradeOrigins,
   registerReachOrigin,
   resetOriginAllowlistForTests,
   seedOriginAllowlist,
@@ -147,5 +148,49 @@ describe('origin allowlist — the environment allowlist still counts', () => {
     process.env.TINSTAR_CORS_ORIGINS = 'https://late.example'
     expect(headersFor('https://late.example')['Access-Control-Allow-Origin'])
       .toBe('https://late.example')
+  })
+})
+
+describe('sessionUpgradeOrigins — the set the terminal upgrade gate reads', () => {
+  it('admits the loopback origins for the bound port', () => {
+    seedOriginAllowlist(5273)
+    for (const origin of [
+      'http://localhost:5273',
+      'http://127.0.0.1:5273',
+      'http://[::1]:5273',
+    ]) {
+      expect(sessionUpgradeOrigins(5273)).toContain(origin)
+    }
+  })
+
+  it('admits a registered reach origin', () => {
+    // THE BUG THIS EXISTS FOR: reach registered its origin for CORS, but the
+    // WebSocket upgrade gate read a different, loopback-only list. The canvas
+    // loaded over the tailnet and every terminal upgrade was refused.
+    seedOriginAllowlist(5273)
+    registerReachOrigin('https://host.tailnet.ts.net')
+
+    expect(sessionUpgradeOrigins(5273)).toContain('https://host.tailnet.ts.net')
+  })
+
+  it('stops admitting it once reach is revoked', () => {
+    seedOriginAllowlist(5273)
+    registerReachOrigin('https://host.tailnet.ts.net')
+    unregisterReachOrigin('https://host.tailnet.ts.net')
+
+    expect(sessionUpgradeOrigins(5273)).not.toContain('https://host.tailnet.ts.net')
+  })
+
+  it('never admits an unknown origin', () => {
+    seedOriginAllowlist(5273)
+    registerReachOrigin('https://host.tailnet.ts.net')
+
+    expect(sessionUpgradeOrigins(5273)).not.toContain('http://evil.example')
+  })
+
+  it('keeps loopback working before the allowlist has been seeded', () => {
+    // The dev-server backend never calls seedOriginAllowlist, and there is a
+    // window at boot before the standalone server does.
+    expect(sessionUpgradeOrigins(5273)).toContain('http://localhost:5273')
   })
 })

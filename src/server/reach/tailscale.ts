@@ -1,5 +1,11 @@
 import { execFile } from 'node:child_process'
+import { log } from '../logger'
 import { promisify } from 'node:util'
+import {
+  TAILSCALE_MIN_VERSION,
+  compareVersions,
+  parseVersionTriplet,
+} from '../externalFloors'
 import { SESSION_PROXY_HOST } from '../sessionProxy'
 import type { ReachProvider, ReachProviderMapping } from './provider'
 
@@ -14,43 +20,24 @@ const execFileAsync = promisify(execFile)
  * machine-readable status forms, which need no privilege.
  */
 
-/**
- * Bulletins TS-2026-005, TS-2026-007 and TS-2026-008 are all fixed in 1.98.9.
- * TS-2026-008 in particular pins a CPU core indefinitely from a single
- * malformed HTTP request to a node running Serve, reachable by any tailnet
- * peer — that is, an unauthenticated denial of service against the exact
- * surface this feature turns on. Refused below the floor rather than warned
- * (KTD12).
- */
-export const TAILSCALE_MIN_VERSION = '1.98.9'
+export {
+  TAILSCALE_FLOOR_VERIFIED_ON,
+  TAILSCALE_MIN_VERSION,
+  compareVersions,
+} from '../externalFloors'
 
 /**
- * When the floor above was last checked against the published bulletin index.
- * Surfaced by `tinstar doctor` because a floor that has gone stale after a
- * later advisory is otherwise invisible — nothing else in the system would
- * ever mention it.
+ * The absolute path the privilege grant names. sudoers matches a whole command
+ * line, so this must be the literal the sudoers drop-in was written for — a
+ * bare `tailscale` resolved through PATH is a different string and the grant
+ * would not apply.
  */
-export const TAILSCALE_FLOOR_VERIFIED_ON = '2026-08-05'
+export const TAILSCALE_BIN = '/usr/bin/tailscale'
 
 /** `tailscale version` prints the version alone on its first line. */
 export function parseTailscaleVersion(stdout: string): string | null {
   const first = stdout.split('\n')[0]?.trim() ?? ''
-  const match = first.match(/^(\d+)\.(\d+)\.(\d+)/)
-  return match ? `${match[1]}.${match[2]}.${match[3]}` : null
-}
-
-/**
- * Numeric, component-wise. A lexical compare would put '1.98.10' *below*
- * '1.98.9' and silently admit a vulnerable build.
- */
-export function compareVersions(a: string, b: string): number {
-  const left = a.split('.').map(Number)
-  const right = b.split('.').map(Number)
-  for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const diff = (left[i] ?? 0) - (right[i] ?? 0)
-    if (diff !== 0) return diff
-  }
-  return 0
+  return parseVersionTriplet(first)
 }
 
 /** Establishing is a background mutation that must never wait on a human. */
@@ -112,8 +99,28 @@ export type ReachExec = (
   argv: readonly string[],
 ) => Promise<{ stdout: string; stderr: string }>
 
+/**
+ * Reads stay unprivileged: version, node status and serve status all run at
+ * every boot and from `tinstar doctor`, on hosts that may have no grant at all.
+ *
+ * Mutations go through `sudo -n` and the absolute path, because `tailscale
+ * serve` writes daemon configuration through a root-owned local API socket.
+ * `-n` never prompts — revoke runs at shutdown and repair at boot with nobody
+ * present, so a command that can block on a password is a command that hangs.
+ * The resulting line must stay byte-identical to `reachGrantCommands()` in
+ * bin/tinstar/reachGrant.js; a test asserts that.
+ */
 const defaultExec: ReachExec = async argv => {
   const { stdout, stderr } = await execFileAsync('tailscale', [...argv], { timeout: 30_000 })
+  return { stdout, stderr }
+}
+
+const defaultPrivilegedExec: ReachExec = async argv => {
+  const { stdout, stderr } = await execFileAsync(
+    'sudo',
+    ['-n', TAILSCALE_BIN, ...argv],
+    { timeout: 30_000 },
+  )
   return { stdout, stderr }
 }
 
@@ -133,9 +140,14 @@ function isPermissionRefusal(err: unknown): boolean {
 export class TailscaleReachProvider implements ReachProvider {
   readonly name = 'tailscale'
   private readonly exec: ReachExec
+  private readonly privilegedExec: ReachExec
 
-  constructor(opts: { exec?: ReachExec } = {}) {
+  constructor(opts: { exec?: ReachExec; privilegedExec?: ReachExec } = {}) {
     this.exec = opts.exec ?? defaultExec
+    // A test that injects only `exec` gets the same escalation shape as
+    // production, so the sudo prefix is observable rather than stubbed away.
+    this.privilegedExec = opts.privilegedExec
+      ?? (opts.exec ? argv => opts.exec!(['sudo', '-n', TAILSCALE_BIN, ...argv]) : defaultPrivilegedExec)
   }
 
   /**
@@ -158,12 +170,12 @@ export class TailscaleReachProvider implements ReachProvider {
     const name = await this.requireServableNode()
 
     try {
-      await this.exec(serveEstablishArgv(opts.port))
+      await this.privilegedExec(serveEstablishArgv(opts.port))
     } catch (err) {
       if (isPermissionRefusal(err)) {
         throw new Error(
           'tailscale serve needs privilege that is not available non-interactively. '
-          + 'Install the scoped sudoers grant with `tinstar service install` — it '
+          + 'Install the scoped sudoers grant with `tinstar reach on` — it '
           + 'permits exactly this serve invocation and no other subcommand. '
           + `(tailscale ${version})`,
         )
@@ -173,14 +185,24 @@ export class TailscaleReachProvider implements ReachProvider {
 
     // Read the mapping back rather than assuming it: the node's own URL is the
     // provider's to decide, and a certificate may still be provisioning.
-    const mappings = await this.currentMappings()
+    //
+    // A failure here must NOT propagate. serve has already mutated the daemon,
+    // so throwing would leave a live tailnet mapping with no record of it —
+    // and the next reconcile would read that mapping as a foreign holder and
+    // refuse to establish forever. Fall back to the node's own name.
+    let mappings: ReachProviderMapping[] = []
+    try {
+      mappings = await this.currentMappings()
+    } catch (err) {
+      log.warn('reach', `serve succeeded but its status read-back failed: ${(err as Error).message}`)
+    }
     return mappings.find(m => m.port === opts.port)
       ?? { port: opts.port, url: `https://${name}` }
   }
 
   async revoke(mapping: ReachProviderMapping): Promise<void> {
     try {
-      await this.exec(serveRevokeArgv(mapping))
+      await this.privilegedExec(serveRevokeArgv(mapping))
     } catch (err) {
       if (isMissingBinary(err)) return
       throw new Error(`tailscale serve off failed: ${(err as Error).message}`)

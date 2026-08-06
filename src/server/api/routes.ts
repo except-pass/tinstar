@@ -107,6 +107,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders } from './cors'
 import { currentOriginAllowlist } from './originAllowlist'
+import { getReachCoordinator } from '../reach'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import { handleSurfaceRoutes } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
@@ -1758,6 +1759,12 @@ async function createReservedSession(
 }
 
 export interface RouteContext {
+  /**
+   * The port the HTTP listener actually bound, set once the server is up.
+   * Reach must front what is listening, and listenAll walks past a busy port —
+   * the configured port would leave a remote URL pointing at nothing.
+   */
+  boundPort?: number
   docStore: DocumentStore
   otelStore: OTelStore
   sse: SSEBroadcaster
@@ -2601,6 +2608,36 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       session.model = resolveSessionModel(session)
     }
     json(res, { ...ctx.docStore.snapshot(), sessions })
+    return true
+  }
+
+  // GET /api/reach — reach state. Read-only and unprivileged.
+  if (method === 'GET' && url === '/api/reach') {
+    ok(res, await getReachCoordinator().status())
+    return true
+  }
+
+  // POST /api/reach — the operator's opt-in. The preference is what persists;
+  // establishing follows it on every start (R6).
+  if (method === 'POST' && url === '/api/reach') {
+    // readBody returns the raw string; every other write route parses it here.
+    let body: { enabled?: unknown } | null = null
+    try { body = JSON.parse(await readBody(req)) as { enabled?: unknown } } catch { /* reported below */ }
+    if (typeof body?.enabled !== 'boolean') {
+      fail(res, 'BAD_REQUEST', 'body must be {"enabled": true|false}')
+      return true
+    }
+    const coordinator = getReachCoordinator()
+    // The port that ACTUALLY bound, not the configured one: reach must front
+    // what is listening, and the listener walks past a busy port.
+    const status = body.enabled
+      ? await coordinator.enable(ctx.boundPort ?? 5273)
+      : await coordinator.disable()
+    if (status.state === 'refused') {
+      fail(res, 'BAD_REQUEST', status.detail ?? 'reach refused')
+      return true
+    }
+    ok(res, status)
     return true
   }
 

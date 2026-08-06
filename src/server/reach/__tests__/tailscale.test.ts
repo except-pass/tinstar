@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  TAILSCALE_BIN,
   TAILSCALE_FLOOR_VERIFIED_ON,
   TAILSCALE_MIN_VERSION,
   TailscaleReachProvider,
@@ -197,7 +198,47 @@ describe('TailscaleReachProvider — every refusal names its unmet precondition'
 
     await expect(p.currentMappings())
       .resolves.toEqual([{ port: 5273, url: 'https://host.tailnet.ts.net' }])
+    // Reads stay unprivileged so doctor and boot reconcile never need sudo.
     expect(exec.calls.every(c => !c.includes('sudo'))).toBe(true)
+  })
+
+  it('escalates privilege for establish, because reads cannot mutate serve', async () => {
+    const { provider: p, exec } = provider({
+      version: AT_FLOOR,
+      'status --json': HEALTHY_STATUS,
+      'serve status --json': { stdout: JSON.stringify(SERVE_CONFIG) },
+    })
+
+    await p.establish({ port: 5273 })
+
+    const mutate = exec.calls.find(c => c.includes('--bg'))!
+    expect(mutate[0]).toBe('sudo')
+    expect(mutate[1]).toBe('-n')
+    expect(mutate[2]).toBe(TAILSCALE_BIN)
+  })
+
+  it('escalates privilege for revoke too', async () => {
+    const { provider: p, exec } = provider({})
+    await p.revoke({ port: 5273, url: 'https://host.tailnet.ts.net' })
+
+    const mutate = exec.calls.find(c => c.includes('off'))!
+    expect(mutate.slice(0, 3)).toEqual(['sudo', '-n', TAILSCALE_BIN])
+  })
+
+  it('still reports the mapping when the status read-back fails after serve succeeded', async () => {
+    // serve already mutated the daemon. Throwing here would leave a live
+    // tailnet mapping with no record, and reconcile would then treat it as a
+    // foreign holder and refuse forever.
+    const { provider: p } = provider({
+      version: AT_FLOOR,
+      'status --json': HEALTHY_STATUS,
+      'serve status --json': { fail: new Error('local API unavailable') },
+    })
+
+    await expect(p.establish({ port: 5273 })).resolves.toEqual({
+      port: 5273,
+      url: 'https://host.tailnet.ts.net',
+    })
   })
 
   it('reports no mappings rather than throwing when the binary is absent', async () => {
@@ -216,3 +257,4 @@ describe('TailscaleReachProvider — every refusal names its unmet precondition'
     expect(exec.calls.some(c => c.includes('off'))).toBe(true)
   })
 })
+

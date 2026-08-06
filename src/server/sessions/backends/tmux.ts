@@ -23,6 +23,11 @@ import {
 } from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { LOOPBACK_BIND_ADDRESS } from '../../bind'
+import {
+  TTYD_MIN_VERSION,
+  compareVersions,
+  parseVersionTriplet,
+} from '../../externalFloors'
 import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
 import { log } from '../../logger'
 import {
@@ -2110,6 +2115,8 @@ export interface StartTtydAttemptDeps {
     opts: StartTtydOptions,
     startToken: symbol,
   ) => Promise<number | undefined>
+  /** Null when the installed ttyd may be spawned; the refusal message otherwise. */
+  versionRefusal: () => string | null
 }
 
 /**
@@ -2128,6 +2135,57 @@ export interface StartTtydAttemptDeps {
  * HTTP, upgrade included, so every Tinstar hop must present the header — see
  * {@link healthCheck}, which is the one that would otherwise fail silently.
  */
+/**
+ * Whether this ttyd may be spawned at all — the message to refuse with, or null.
+ *
+ * R23. The containment guarantee is entirely `-i` and `-H`. A build predating
+ * either does not error on the flag; it IGNORES it, binds every interface, and
+ * accepts anyone — the exact exposure this work closes, with nothing anywhere
+ * reporting a problem. Doctor reporting the floor is not enough, because doctor
+ * is something an operator runs and a spawn is something that just happens.
+ *
+ * An unreadable version refuses too: absence of a version is not evidence of a
+ * good one, and the cost of being wrong is a world-reachable shell.
+ */
+export function ttydVersionRefusal(versionOutput: string | null): string | null {
+  const installed = parseVersionTriplet(versionOutput ?? '')
+  if (!installed) {
+    return `cannot determine the installed ttyd version, and ttyd ${TTYD_MIN_VERSION} `
+      + 'or newer is required: below it the loopback bind and auth-header flags '
+      + 'are silently ignored, leaving terminals reachable from any host. '
+      + 'Install ttyd and retry.'
+  }
+  if (compareVersions(installed, TTYD_MIN_VERSION) < 0) {
+    return `ttyd ${installed} is below the required ${TTYD_MIN_VERSION}: below it `
+      + 'the loopback bind and auth-header flags are silently ignored, leaving '
+      + `terminals reachable from any host. Upgrade ttyd to ${TTYD_MIN_VERSION} or newer.`
+  }
+  return null
+}
+
+/** Probed once per process — a spawn must not pay for `ttyd -v` every time. */
+let ttydVersionRefusalCache: string | null | undefined
+
+export function ttydVersionRefusalCached(
+  readVersion: () => string | null = () => {
+    try {
+      return execSync('ttyd --version', { encoding: 'utf-8', timeout: 5_000, stdio: 'pipe' })
+    } catch {
+      return null
+    }
+  },
+): string | null {
+  if (ttydVersionRefusalCache === undefined) {
+    ttydVersionRefusalCache = ttydVersionRefusal(readVersion())
+  }
+  return ttydVersionRefusalCache
+}
+
+/** Tests only — the cache would otherwise pin one host's ttyd for the run. */
+export function clearTtydVersionRefusalCacheForTests(): void {
+  ttydVersionRefusalCache = undefined
+}
+
 export function ttydSpawnArgv(opts: StartTtydOptions): string[] {
   return [
     '-W',
@@ -2152,6 +2210,7 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
   schedule: setTimeout,
   tmuxAlive: tmuxHasSession,
   enqueueRestart: enqueueTtydStart,
+  versionRefusal: () => ttydVersionRefusalCached(),
 }
 
 function enqueueTtydStart(
@@ -2292,6 +2351,11 @@ export async function startTtydForTokenAttempt(
   if (!isCurrent()) {
     throw new TtydStartSupersededError(opts.sessionName, 'preflight')
   }
+
+  // Checked before the inventories, because reclaiming a port for a terminal we
+  // are about to refuse to spawn would kill a working incumbent for nothing.
+  const versionRefusal = deps.versionRefusal()
+  if (versionRefusal) throw new Error(versionRefusal)
 
   // Resolve both inventories before taking any destructive action. Operational
   // lsof/pgrep/ps failures therefore abort this attempt without killing a

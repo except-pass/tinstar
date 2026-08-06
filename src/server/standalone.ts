@@ -31,14 +31,13 @@ import {
 } from './infra/lock'
 import { openListeners, resolveBindTargets } from './bind'
 import { announceBindChangeOnce } from './bindNotice'
-import { seedOriginAllowlist } from './api/originAllowlist'
+import { seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
 import { getReachCoordinator } from './reach'
 import { decideStaticServe } from './staticServe'
 import {
   createSessionRequestHandler,
   createSessionUpgradeHandler,
   handleSessionProxyError,
-  loopbackOriginsForPort,
 } from './sessionProxy'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -188,7 +187,7 @@ export function startServer(opts: ServerOptions) {
 
   const upgradeHandler = createSessionUpgradeHandler({
     getRun: name => ctx.docStore.getRun(name),
-    allowedOrigins: () => loopbackOriginsForPort(boundPort),
+    allowedOrigins: () => sessionUpgradeOrigins(boundPort),
     proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
     onRefused: detail => log.warn('proxy', `upgrade refused (${detail.reason})`, detail),
     onClientSocketError: detail => log.warn('proxy', `upgrade client socket error: ${detail.error}`, detail),
@@ -233,6 +232,12 @@ export function startServer(opts: ServerOptions) {
   // means the unspecified address — see resolveBindTargets for why that default
   // was the whole exposure.
   const bind = resolveBindTargets(opts.host)
+
+  // Seeded BEFORE the listeners accept. onAllListening seeds again with the
+  // port that actually bound; doing it only there left a window in which a
+  // request arriving between bind and seed saw an empty allowlist and got the
+  // wildcard. The assignment is idempotent, so seeding twice costs nothing.
+  seedOriginAllowlist(opts.port)
 
   // An operator who never reads release notes still learns why their LAN URL
   // stopped answering. A docstore in the config root is what says this install
@@ -293,6 +298,8 @@ export function startServer(opts: ServerOptions) {
 
   function onAllListening(port: number, bound: string[]) {
     boundPort = port
+    // Published so the reach opt-in route fronts the port that actually bound.
+    ctx.boundPort = port
     const url = `http://${bind.preferredHost}:${port}`
     writePortFile(port)
     writeHostFile(bind.hostFileValue)

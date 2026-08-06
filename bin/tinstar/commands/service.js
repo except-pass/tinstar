@@ -13,7 +13,7 @@
 // ~/.config/tinstar/service.json so `restart` can rebuild from the right tree
 // even if invoked from elsewhere.
 
-import { execSync, spawnSync } from 'node:child_process'
+import { execFileSync, execSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -208,7 +208,6 @@ async function installService(args) {
   console.log(`${GREEN}✓${RESET} wrote ${UNIT_PATH}`)
 
   installCliShim(repoRoot)
-  installReachGrant({ port })
 
   writeServiceConfig({ repoRoot, port, nodePath, installedAt: new Date().toISOString() })
 
@@ -246,6 +245,7 @@ async function installService(args) {
   console.log(`\n${GREEN}✓${RESET} ${BOLD}tinstar service installed and running${RESET}`)
   console.log(`${DIM}Reachable at: http://localhost:${port} (loopback only — see \`tinstar reach\`)${RESET}`)
   console.log(`${DIM}Restart with:  tinstar restart${RESET}`)
+  console.log(`${DIM}Remote access: tinstar reach on${RESET}`)
   console.log(`${DIM}Tail logs:     tinstar logs${RESET}`)
 }
 
@@ -276,13 +276,16 @@ async function uninstallService() {
 /**
  * Install the scoped sudoers drop-in, printing its literal text first.
  *
- * Optional on purpose: a host with no tailscale, or an operator who declines,
- * gets a working service and a reach feature that refuses with a named reason
- * rather than an install that fails. What is NOT optional is showing the rule
- * — this is a root-adjacent grant on a machine running autonomous agents, and
- * it should never land without a human having read it.
+ * Called from `tinstar reach on`, NOT from `install-service`. An operator who
+ * installs the service and never wants remote access should never acquire a
+ * root-adjacent rule; and the moment they DO ask for reach is the moment they
+ * are present to read the rule before it is written. Showing it is not
+ * optional — this is a sudoers grant on a machine running autonomous agents.
+ *
+ * Returns whether the grant is in place, so the caller can refuse to enable
+ * reach rather than leave it failing on privilege with no explanation.
  */
-function installReachGrant({ port }) {
+export function installReachGrant({ port }) {
   const tailscalePath = '/usr/bin/tailscale'
   if (!existsSync(tailscalePath)) {
     console.log(`${DIM}tailscale not installed — skipping the reach privilege grant.${RESET}`)
@@ -310,10 +313,10 @@ function installReachGrant({ port }) {
   }
 }
 
-function removeReachGrant() {
+export function removeReachGrant() {
   if (!existsSync(REACH_SUDOERS_PATH)) return
   try {
-    sh(`sudo rm -f ${REACH_SUDOERS_PATH}`)
+    execFileSync('sudo', ['rm', '-f', REACH_SUDOERS_PATH], { stdio: 'inherit' })
     console.log(`${GREEN}✓${RESET} removed ${REACH_SUDOERS_PATH}`)
   } catch (err) {
     console.log(`${YELLOW}!${RESET} could not remove ${REACH_SUDOERS_PATH}: ${err.message}`)

@@ -1,3 +1,4 @@
+import { loopbackOriginsForPort } from '../sessionProxy'
 import { parseAllowlistFromEnv } from './cors'
 
 /**
@@ -75,4 +76,21 @@ export function currentOriginAllowlist(): string[] {
 export function resetOriginAllowlistForTests(): void {
   seeded = []
   registered.clear()
+}
+
+/**
+ * The origins a terminal WebSocket upgrade may carry.
+ *
+ * This exists as its own exported function because the wiring is what broke:
+ * the upgrade handler was given a hand-built loopback-only list while reach
+ * registered its origin somewhere else, so a remote canvas loaded and then
+ * every terminal upgrade was refused. A resolver that can be imported is a
+ * resolver a test can hold to the same contract the server uses.
+ *
+ * The loopback pair is unioned in unconditionally rather than relied on from
+ * the seeded set: the dev-server backend never seeds, and the standalone
+ * server has a window at boot before it does. Localhost must work in both.
+ */
+export function sessionUpgradeOrigins(boundPort: number): string[] {
+  return [...loopbackOriginsForPort(boundPort), ...currentOriginAllowlist()]
 }

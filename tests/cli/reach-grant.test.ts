@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { buildUnit } from '../../bin/tinstar/commands/service.js'
 import {
   REACH_SUDOERS_PATH,
   buildReachSudoersRule,
   describeReachGrant,
   grantPermits,
+  reachGrantCommands,
   unitNeedsRegeneration,
 } from '../../bin/tinstar/reachGrant.js'
+import {
+  TAILSCALE_BIN,
+  serveEstablishArgv,
+  serveRevokeArgv,
+} from '../../src/server/reach/tailscale'
 
 const RULE = buildReachSudoersRule({
   user: 'will',
@@ -156,5 +166,94 @@ describe('the generated systemd unit', () => {
 
   it('is not itself flagged as needing regeneration', () => {
     expect(unitNeedsRegeneration(unit).needsRegeneration).toBe(false)
+  })
+})
+
+describe('the grant covers exactly what the adapter runs', () => {
+  it('matches the establish and revoke command lines byte for byte', () => {
+    // sudoers matches the WHOLE command line. One extra flag on either side and
+    // the grant stops applying, which surfaces as a bare permission refusal
+    // with nothing pointing at the drift that caused it. This test is the
+    // only thing tying the plain-JS grant to the TypeScript adapter.
+    const port = 5273
+    expect(reachGrantCommands({ tailscalePath: TAILSCALE_BIN, port })).toEqual([
+      [TAILSCALE_BIN, ...serveEstablishArgv(port)].join(' '),
+      [TAILSCALE_BIN, ...serveRevokeArgv({ port, url: 'https://x' })].join(' '),
+    ])
+  })
+
+  it('grants exactly the two lines the adapter can issue, and nothing more', () => {
+    const rule = buildReachSudoersRule({
+      user: 'will',
+      tailscalePath: TAILSCALE_BIN,
+      port: 5273,
+    })
+    expect(grantPermits(rule, [TAILSCALE_BIN, ...serveEstablishArgv(5273)].join(' '))).toBe(true)
+    expect(grantPermits(
+      rule,
+      [TAILSCALE_BIN, ...serveRevokeArgv({ port: 5273, url: 'https://x' })].join(' '),
+    )).toBe(true)
+  })
+})
+
+/** visudo -cf parses a file without touching the live sudoers config. */
+function visudoAvailable(): boolean {
+  for (const bin of ['/usr/sbin/visudo', '/sbin/visudo', 'visudo']) {
+    try {
+      execFileSync(bin, ['-V'], { stdio: 'ignore' })
+      return true
+    } catch { /* try the next path */ }
+  }
+  return false
+}
+
+function visudoCheck(rule: string): { ok: boolean; output: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'tinstar-sudoers-'))
+  const file = join(dir, 'tinstar-reach')
+  try {
+    writeFileSync(file, `${rule}\n`, { mode: 0o600 })
+    for (const bin of ['/usr/sbin/visudo', '/sbin/visudo', 'visudo']) {
+      try {
+        execFileSync(bin, ['-cf', file], { stdio: 'pipe' })
+        return { ok: true, output: '' }
+      } catch (err) {
+        const e = err as { status?: number; stdout?: Buffer; stderr?: Buffer }
+        // A missing binary is not a parse failure — keep looking.
+        if (e.status === undefined) continue
+        return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+      }
+    }
+    return { ok: false, output: 'visudo not found' }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+describe('the generated rule parses as real sudoers', () => {
+  const realIt = visudoAvailable() ? it : it.skip
+
+  realIt('is accepted by visudo -c', () => {
+    // grantPermits models sudoers matching; it is not sudoers. The command
+    // lines carry `=` and `:`, which sudoers(5) lists among characters needing
+    // escaping — so "my matcher likes it" is not evidence the parser does.
+    // A drop-in that fails to parse locks every user out of sudo.
+    const verdict = visudoCheck(RULE)
+    expect(verdict.output).toBe('')
+    expect(verdict.ok).toBe(true)
+  })
+
+  realIt('rejects a malformed rule, so the check above is not vacuous', () => {
+    // Without this, a visudo that accepted everything would make the test above
+    // pass for the wrong reason. NB `will ALL=(root) NOPASSWD` is NOT a usable
+    // fixture: visudo parses it as a Cmnd_Alias reference and exits 0.
+    expect(visudoCheck('will ALL=(root').ok).toBe(false)
+  })
+
+  realIt('rejects the unescaped form, which is what shipped before', () => {
+    // The colon in `http://127.0.0.1:5273` is the sudoers list separator. This
+    // is the concrete reason the grant could never have installed.
+    expect(visudoCheck(
+      'will ALL=(root) NOPASSWD: /usr/bin/tailscale serve --bg --yes --https=443 http://127.0.0.1:5273',
+    ).ok).toBe(false)
   })
 })
