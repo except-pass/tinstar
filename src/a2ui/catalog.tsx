@@ -20,8 +20,9 @@
 // A2UI output is visually identical to the markdown it replaces.
 import type { ReactNode } from 'react'
 import type { A2uiComponent } from '../domain/types'
-import { ChoiceControl, TextInputControl, SubmitControl } from './controlComponents'
+import { ChoiceControl, TextInputControl, SubmitControl, DecisionControl } from './controlComponents'
 import { MermaidComponent } from './MermaidComponent'
+import { parseDecision } from './controls'
 
 /** A catalog entry renders one node given its already-resolved, already-rendered
  *  child elements (the renderer owns tree-walking, ref resolution, and cycle
@@ -374,6 +375,22 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
   Submit: {
     render: (node) => <SubmitControl node={node} />,
+  },
+  // Decision: one open decision — options with their tradeoffs, risks scored on
+  // three same-direction scales, the undo-action vs undo-damage split, and the
+  // horizon. A control, not a display block: `parseDecision` is the single place
+  // that decides what counts as a usable option, and the SAME parse feeds the
+  // server's answer validation via collectChoiceOptionIds — so the pick and the
+  // reasoning can never disagree. Fewer than two options degrades whole; a bad
+  // risks/reversal/horizon block degrades alone.
+  Decision: {
+    // One Decision node draws a row per option and per risk, so it charges those
+    // to the walker's per-SURFACE budget — the same reason Stepper charges.
+    cost: (node) => {
+      const d = parseDecision(node)
+      return d ? d.options.length + d.risks.length : 0
+    },
+    render: (node) => <DecisionControl node={node} />,
   },
   // `FollowUp` is a DECLARATION, not a body element: the agent names a question it
   // expects for this notice, and the widget surfaces it as a chip in the notice's
