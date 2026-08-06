@@ -1263,10 +1263,13 @@ export async function reattachTmuxSession(
   // if the lifecycle becomes stale during this await, the caller must be able
   // to release its claim without this helper silently recreating it.
 
-  // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
-  // any unrelated HTTP listener) must never make this session look healthy.
+  // Adopt only a ttyd attached to this exact tmux target and bound where we
+  // would bind it. A foreign ttyd (or any unrelated HTTP listener) must never
+  // make this session look healthy, and neither must one inherited from a
+  // lifecycle that exposed it more widely than this one would.
   const incumbent = (await deps.incumbentsOnPort(opts.port)).find(
-    candidate => candidate.tmuxTarget === tmuxName,
+    candidate => candidate.tmuxTarget === tmuxName
+      && ttydIncumbentBindMatches(candidate),
   )
   if (incumbent && await deps.verifySurface({
     port: opts.port,
@@ -1526,9 +1529,23 @@ export interface TtydIncumbent {
   pid: number
   /** tmux session this ttyd attaches (e.g. "tinstar-foo"), or null if unknown. */
   tmuxTarget: string | null
+  /** Address this ttyd bound, or null when it carries no interface argument —
+   *  which is how every terminal inherited from a pre-containment build reads. */
+  bindAddress: string | null
 }
 
-/** Exact process/target identity required before publishing a terminal port. */
+/**
+ * Whether an inherited terminal binds the address this server would spawn it
+ * with. A terminal that outlives its server keeps whatever exposure it was
+ * started with, so adopting one on identity alone would let a pre-containment
+ * ttyd — reachable on every interface — go on serving under a build whose whole
+ * point is that it cannot. Mismatches fall through to the respawn path.
+ */
+export function ttydIncumbentBindMatches(incumbent: TtydIncumbent): boolean {
+  return incumbent.bindAddress === terminalBindAddress()
+}
+
+/** Exact process/target/bind identity required before publishing a terminal port. */
 export function ttydIncumbentMatchesSession(
   incumbents: readonly TtydIncumbent[],
   pid: number | undefined,
@@ -1536,7 +1553,9 @@ export function ttydIncumbentMatchesSession(
 ): boolean {
   return pid !== undefined
     && incumbents.some(
-      incumbent => incumbent.pid === pid && incumbent.tmuxTarget === tmuxName,
+      incumbent => incumbent.pid === pid
+        && incumbent.tmuxTarget === tmuxName
+        && ttydIncumbentBindMatches(incumbent),
     )
 }
 
@@ -1555,6 +1574,24 @@ export function tmuxTargetFromArgs(args: string): string | null {
   if (!m) return null
   const target = m[1]!
   return target.startsWith('=') ? target.slice(1) : target
+}
+
+/**
+ * Extract the address a running ttyd bound from its full `ps -o args=` line —
+ * the inherited-terminal counterpart of {@link ttydSpawnArgv}'s `-i`, kept
+ * adjacent to {@link tmuxTargetFromArgs} so the two parsers cannot drift from
+ * the one argv that writes what they both read.
+ *
+ * Takes the FIRST `-i`, because ttyd's own options always precede the command
+ * it runs. A ttyd spawned without `-i` whose command happens to contain one
+ * therefore parses a bogus address — which fails the bind match and gets the
+ * terminal replaced. That is the safe direction: this parser's mistakes cost a
+ * respawn, never an adoption. Null means no interface argument at all, which is
+ * how every ttyd spawned before this flag existed reads.
+ */
+export function ttydBindAddressFromArgs(args: string): string | null {
+  const m = args.match(/(?:^|\s)-i\s+(\S+)/)
+  return m ? m[1]! : null
 }
 
 let ttydIdentityInspectionState: 'unknown' | 'available' | 'unavailable' = 'unknown'
@@ -1823,7 +1860,11 @@ async function inspectTtydPid(
       ['-o', 'args=', '-p', String(pid)],
       { timeout: 2_000 },
     )
-    return { pid, tmuxTarget: tmuxTargetFromArgs(args) }
+    return {
+      pid,
+      tmuxTarget: tmuxTargetFromArgs(args),
+      bindAddress: ttydBindAddressFromArgs(args),
+    }
   } catch (err) {
     if (isCleanInspectionMiss(err)) return null
     throw err

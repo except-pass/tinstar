@@ -21,6 +21,7 @@ import {
   onTtydRestart,
   orphanTtydPidsToReap,
   startTtydWithDeps,
+  ttydBindAddressFromArgs,
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
@@ -96,7 +97,7 @@ describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
 describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
   it('reclaims our own previous ttyd on the port', () => {
     const r = ttydPidsToReclaim(
-      [{ pid: 100, tmuxTarget: 'tinstar-mysession' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-mysession', bindAddress: '127.0.0.1' }],
       'tinstar-mysession',
     )
     expect(r.kill).toEqual([100])
@@ -104,31 +105,31 @@ describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
   })
 
   it('reclaims a ttyd whose tmux target we could not identify', () => {
-    const r = ttydPidsToReclaim([{ pid: 101, tmuxTarget: null }], 'tinstar-mysession')
+    const r = ttydPidsToReclaim([{ pid: 101, tmuxTarget: null, bindAddress: '127.0.0.1' }], 'tinstar-mysession')
     expect(r.kill).toEqual([101])
     expect(r.foreign).toEqual([])
   })
 
   it('does NOT kill a ttyd serving a different session — that is the kill-war', () => {
     const r = ttydPidsToReclaim(
-      [{ pid: 200, tmuxTarget: 'tinstar-other' }],
+      [{ pid: 200, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
       'tinstar-mysession',
     )
     expect(r.kill).toEqual([])
-    expect(r.foreign).toEqual([{ pid: 200, tmuxTarget: 'tinstar-other' }])
+    expect(r.foreign).toEqual([{ pid: 200, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }])
   })
 
   it('splits a mixed set correctly', () => {
     const r = ttydPidsToReclaim(
       [
-        { pid: 1, tmuxTarget: 'tinstar-mine' },
-        { pid: 2, tmuxTarget: 'tinstar-other' },
-        { pid: 3, tmuxTarget: null },
+        { pid: 1, tmuxTarget: 'tinstar-mine', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' },
+        { pid: 3, tmuxTarget: null, bindAddress: '127.0.0.1' },
       ],
       'tinstar-mine',
     )
     expect(r.kill.sort()).toEqual([1, 3])
-    expect(r.foreign).toEqual([{ pid: 2, tmuxTarget: 'tinstar-other' }])
+    expect(r.foreign).toEqual([{ pid: 2, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }])
   })
 })
 
@@ -210,7 +211,7 @@ describe('verified ttyd session surfaces', () => {
       })
 
     await expect(inspectTtydIncumbentsOnPort(6123, run)).resolves.toEqual([
-      { pid: 101, tmuxTarget: 'tinstar-ours' },
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
     ])
   })
 
@@ -368,12 +369,12 @@ describe('verified ttyd session surfaces', () => {
 
   it('requires the expected PID to attach to the exact tmux target', () => {
     expect(ttydIncumbentMatchesSession(
-      [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+      [{ pid: 101, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
       101,
       'tinstar-ours',
     )).toBe(false)
     expect(ttydIncumbentMatchesSession(
-      [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
       101,
       'tinstar-ours',
     )).toBe(true)
@@ -398,7 +399,7 @@ describe('verified ttyd session surfaces', () => {
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
         incumbentsOnPort: async () =>
-          [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+          [{ pid: 101, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
         healthCheck: async () => true,
       },
     )).resolves.toBe('unhealthy')
@@ -421,7 +422,7 @@ describe('verified ttyd session surfaces', () => {
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
         incumbentsOnPort: async () =>
-          [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+          [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
         healthCheck: async () => true,
       },
     )).resolves.toBe('verified')
@@ -599,11 +600,11 @@ describe('fenced ttyd start attempts', () => {
   it('kills an incumbent found by both inventories only once', async () => {
     const deps = fakeStartDeps({
       incumbentsOnPort: async () => [
-        { pid: 100, tmuxTarget: opts.tmuxName },
+        { pid: 100, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
       ],
       allIncumbents: async () => [
-        { pid: 100, tmuxTarget: opts.tmuxName },
-        { pid: 101, tmuxTarget: opts.tmuxName },
+        { pid: 100, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
+        { pid: 101, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
       ],
     })
 
@@ -1062,8 +1063,8 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
   it('reaps every ttyd attached to exactly our session, on any port', () => {
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-foo' }, // current
-        { pid: 2, tmuxTarget: 'tinstar-foo' }, // orphan from a prior restart (other port)
+        { pid: 1, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' }, // current
+        { pid: 2, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' }, // orphan from a prior restart (other port)
       ],
       'tinstar-foo',
     )
@@ -1074,9 +1075,9 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
     // Reclaiming the parent must not kill the ttyd serving tinstar-foo-reviewer-*.
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-foo' },
-        { pid: 2, tmuxTarget: 'tinstar-foo-reviewer-ab12' },
-        { pid: 3, tmuxTarget: 'tinstar-foo-general-purpose-cd34' },
+        { pid: 1, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: 'tinstar-foo-reviewer-ab12', bindAddress: '127.0.0.1' },
+        { pid: 3, tmuxTarget: 'tinstar-foo-general-purpose-cd34', bindAddress: '127.0.0.1' },
       ],
       'tinstar-foo',
     )
@@ -1086,8 +1087,8 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
   it('ignores ttyds for other sessions and unidentifiable ones', () => {
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-other' },
-        { pid: 2, tmuxTarget: null },
+        { pid: 1, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: null, bindAddress: '127.0.0.1' },
       ],
       'tinstar-foo',
     )
@@ -1099,7 +1100,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('reaps a tinstar ttyd whose tmux session is dead (the squatter)', () => {
     // The whole leak: tmux is gone but ttyd still holds the port.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 100, tmuxTarget: 'tinstar-dead' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-dead', bindAddress: '127.0.0.1' }],
       new Set<string>(), // no live tmux sessions
       'tinstar-',
     )
@@ -1110,7 +1111,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
     // Live tmux = in use, no matter who spawned it. This is the load-bearing
     // invariant that avoids the cross-backend kill-war.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 100, tmuxTarget: 'tinstar-alive' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-alive', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-alive']),
       'tinstar-',
     )
@@ -1122,7 +1123,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
     // backend never tracked. We must not kill it — predicate keys off liveness,
     // not "is it in my tracked set".
     const pids = orphanTtydPidsToReap(
-      [{ pid: 200, tmuxTarget: 'tinstar-otherbackend' }],
+      [{ pid: 200, tmuxTarget: 'tinstar-otherbackend', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-otherbackend']),
       'tinstar-',
     )
@@ -1132,7 +1133,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('does not touch non-tinstar ttyds even when their target is dead', () => {
     // The user's own `ttyd -p X bash -c "tmux attach -t my-notes"` must survive.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 300, tmuxTarget: 'my-notes' }],
+      [{ pid: 300, tmuxTarget: 'my-notes', bindAddress: '127.0.0.1' }],
       new Set<string>(),
       'tinstar-',
     )
@@ -1141,7 +1142,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
 
   it('ignores ttyds with no tmux target (e.g. `ttyd htop`)', () => {
     const pids = orphanTtydPidsToReap(
-      [{ pid: 400, tmuxTarget: null }],
+      [{ pid: 400, tmuxTarget: null, bindAddress: '127.0.0.1' }],
       new Set<string>(),
       'tinstar-',
     )
@@ -1151,7 +1152,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('reaps orphaned hand sessions too (they carry the prefix)', () => {
     // A dead child-hand session is just as much a squatter as a top-level one.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 500, tmuxTarget: 'tinstar-foo-reviewer-ab12' }],
+      [{ pid: 500, tmuxTarget: 'tinstar-foo-reviewer-ab12', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-foo']), // parent alive, hand dead
       'tinstar-',
     )
@@ -1161,11 +1162,11 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('partitions a realistic mixed fleet', () => {
     const pids = orphanTtydPidsToReap(
       [
-        { pid: 1, tmuxTarget: 'tinstar-live' },     // alive   → keep
-        { pid: 2, tmuxTarget: 'tinstar-ghost' },    // dead    → reap
-        { pid: 3, tmuxTarget: 'tinstar-ghost2' },   // dead    → reap
-        { pid: 4, tmuxTarget: 'someones-tmux' },    // foreign → keep
-        { pid: 5, tmuxTarget: null },               // unknown → keep
+        { pid: 1, tmuxTarget: 'tinstar-live', bindAddress: '127.0.0.1' },     // alive   → keep
+        { pid: 2, tmuxTarget: 'tinstar-ghost', bindAddress: '127.0.0.1' },    // dead    → reap
+        { pid: 3, tmuxTarget: 'tinstar-ghost2', bindAddress: '127.0.0.1' },   // dead    → reap
+        { pid: 4, tmuxTarget: 'someones-tmux', bindAddress: '127.0.0.1' },    // foreign → keep
+        { pid: 5, tmuxTarget: null, bindAddress: '127.0.0.1' },               // unknown → keep
       ],
       new Set(['tinstar-live']),
       'tinstar-',
@@ -1341,4 +1342,105 @@ describe('terminal bind address — every spawned ttyd is loopback-only', () => 
       releasePort(port)
     }
   }, 20_000)
+})
+
+describe('inherited terminal bind — parsing an incumbent back out of ps args', () => {
+  it('reads the interface argument the spawner wrote', () => {
+    const argv = ttydSpawnArgv({
+      sessionName: 'inherited',
+      tmuxName: 'tinstar-inherited',
+      port: 6321,
+    })
+    expect(ttydBindAddressFromArgs(['/usr/bin/ttyd', ...argv].join(' ')))
+      .toBe('127.0.0.1')
+  })
+
+  it('returns null for a ttyd spawned before the bind flag existed', () => {
+    expect(ttydBindAddressFromArgs(
+      'ttyd -W -p 6321 -t titleFixed=Tinstar bash -c tmux attach -t =tinstar-old',
+    )).toBe(null)
+  })
+
+  it('reads a non-loopback bind rather than assuming loopback', () => {
+    expect(ttydBindAddressFromArgs(
+      'ttyd -W -i 0.0.0.0 -p 6321 bash -c tmux attach -t =tinstar-wide',
+    )).toBe('0.0.0.0')
+  })
+
+  it('returns null rather than throwing on an unexpected argument shape', () => {
+    expect(ttydBindAddressFromArgs('')).toBe(null)
+    expect(ttydBindAddressFromArgs('ttyd')).toBe(null)
+    // A trailing flag with no value must not yield the empty string.
+    expect(ttydBindAddressFromArgs('ttyd -W -i')).toBe(null)
+  })
+})
+
+describe('inherited terminal bind — adoption requires the configured bind', () => {
+  afterEach(() => {
+    setTerminalBindAddress('127.0.0.1')
+  })
+
+  it('adopts an incumbent whose bind matches the configured one', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
+      101,
+      'tinstar-ours',
+    )).toBe(true)
+  })
+
+  it('refuses an incumbent left by a build that had no bind flag', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+  })
+
+  it('refuses an incumbent bound to a different address', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '0.0.0.0' }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+  })
+
+  it('tracks the configured bind rather than the loopback literal', () => {
+    setTerminalBindAddress('127.0.0.2')
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.2' }],
+      101,
+      'tinstar-ours',
+    )).toBe(true)
+  })
+
+  it('carries the parsed bind onto the incumbent record', async () => {
+    const run = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args.includes('-ti')) return { stdout: '101\n', stderr: '' }
+      if (args[1] === 'comm=') return { stdout: 'ttyd\n', stderr: '' }
+      return {
+        stdout: 'ttyd -W -i 127.0.0.1 -p 6123 bash -c tmux attach -t =tinstar-ours\n',
+        stderr: '',
+      }
+    })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run as never)).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' },
+    ])
+  })
+
+  it('refuses a mismatched incumbent at the readiness gate', async () => {
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: async () =>
+          [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '0.0.0.0' }],
+        healthCheck: async () => true,
+      },
+    )).resolves.toBe('unhealthy')
+  })
 })
