@@ -442,6 +442,44 @@ export function witnessTimeoutMs(witness: string): number | undefined {
 }
 
 /**
+ * Who this claim asks, and what it asks them — the broker's coalescing identity
+ * (R8, KTD6).
+ *
+ * DERIVED HERE BECAUSE THIS IS WHERE THE SCHEMA LIVES. A caller guessing a key from
+ * `claim.params` would have to re-derive defaults the schema already applies (the
+ * `origin/main` fallback is the one that bites), and a key that disagreed with the
+ * work would either coalesce two different questions onto one answer — the worst
+ * failure available here — or fail to coalesce two identical ones.
+ *
+ * `unit-landed` KEYS ON THE REF, NOT THE UNIT. The expensive step is one `git fetch`
+ * of the remote-tracking ref; every unit of every plan watching that ref is answered
+ * by the same fetch, and keying per unit would make the cost linear in units again.
+ * The per-unit reading happens inside that one lookup and is cheap.
+ *
+ * Returns undefined for a claim whose schema does not accept it, which is the honest
+ * answer: there is no question to identify.
+ */
+export function witnessLookupIdentity(
+  claim: SurfaceClaim, worktree?: string,
+): { provider: string; key: string } | undefined {
+  const entry = REGISTRY[claim.witness]
+  if (!entry) return undefined
+  const checked = entry.schema(claim.params)
+  if (!checked.ok) return undefined
+  if (claim.witness === 'http-status') {
+    return { provider: 'http', key: (checked.params as { url: string }).url }
+  }
+  if (claim.witness === 'unit-landed') {
+    const p = checked.params as UnitLandedParams
+    return { provider: 'git', key: `${worktree ?? ''} ${p.ref} ${p.unit}` }
+  }
+  // A kind added to the registry without an identity here would fall back to being
+  // unbrokered, which is exactly the ungoverned provider access this exists to stop.
+  // Named per kind rather than defaulted for that reason.
+  return undefined
+}
+
+/**
  * Run one claim's witness. NEVER REJECTS and never runs longer than its budget: a
  * caller sweeping a hundred surfaces cannot be left holding an unhandled rejection
  * or a promise that never settles.

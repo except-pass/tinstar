@@ -32,6 +32,7 @@ import {
   runWitness,
   validateClaim,
   witnessKinds,
+  witnessLookupIdentity,
   witnessMatches,
   type WitnessDeps,
   type WitnessExecResult,
@@ -582,6 +583,66 @@ describe('witness-runtime', () => {
       expect(seen[0]!.init.signal).toBe(controller.signal)
     } finally {
       vi.unstubAllGlobals()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The broker's coalescing identity (R8, KTD6).
+//
+// Derived HERE because this is where the schema lives. A caller guessing a key from
+// raw `claim.params` would miss the defaults the schema applies — `origin/main` is
+// the one that bites — and a key that disagreed with the work would either coalesce
+// two different questions onto one answer (the worst failure available) or fail to
+// coalesce two identical ones.
+// ---------------------------------------------------------------------------
+
+describe('witnessLookupIdentity', () => {
+  it('keys http-status on the URL, so two cards watching one endpoint share a lookup', () => {
+    const a = witnessLookupIdentity({ id: 'a', witness: 'http-status', locus: 'infra', params: { url: 'https://x/health' } })
+    const b = witnessLookupIdentity({ id: 'b', witness: 'http-status', locus: 'infra', params: { url: 'https://x/health' } })
+    expect(a?.provider).toBe('http')
+    expect(a).toEqual(b)
+  })
+
+  it('applies the schema\'s own default ref, so an explicit origin/main coalesces with an omitted one', () => {
+    // The trap a caller reading `claim.params` raw would fall into: these are the
+    // same question, and keying them apart would double the fetches for nothing.
+    const plan = 'docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md'
+    const implicit = witnessLookupIdentity({ id: 'a', witness: 'unit-landed', locus: 'repo', params: { plan, unit: 'U6' } }, '/wt')
+    const explicit = witnessLookupIdentity(
+      { id: 'b', witness: 'unit-landed', locus: 'repo', params: { plan, unit: 'U6', ref: 'origin/main' } }, '/wt',
+    )
+    expect(implicit?.provider).toBe('git')
+    expect(implicit).toEqual(explicit)
+  })
+
+  it('separates different worktrees — the same ref in two repositories is two questions', () => {
+    const plan = 'docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md'
+    const claim = { id: 'a', witness: 'unit-landed' as const, locus: 'repo' as const, params: { plan, unit: 'U6' } }
+    expect(witnessLookupIdentity(claim, '/wt/a')).not.toEqual(witnessLookupIdentity(claim, '/wt/b'))
+  })
+
+  it('has no identity for a claim no schema accepts — there is no question to ask', () => {
+    expect(witnessLookupIdentity({ id: 'a', witness: 'no-such-kind', locus: 'repo' })).toBeUndefined()
+    expect(witnessLookupIdentity({ id: 'a', witness: 'http-status', locus: 'infra', params: { url: 'not a url' } }))
+      .toBeUndefined()
+  })
+
+  it('gives every registered kind an identity, so none can slip past the broker', () => {
+    // A kind added to the registry without an identity here would run UNBROKERED,
+    // which is exactly the ungoverned provider access the broker exists to stop.
+    const samples: Record<string, SurfaceClaim> = {
+      'http-status': { id: 'a', witness: 'http-status', locus: 'infra', params: { url: 'https://x/y' } },
+      'unit-landed': {
+        id: 'b', witness: 'unit-landed', locus: 'repo',
+        params: { plan: 'docs/plans/2026-07-24-001-feat-recursive-collaborative-surfaces-plan.md', unit: 'U6' },
+      },
+    }
+    for (const kind of witnessKinds()) {
+      const sample = samples[kind]
+      expect(sample, `no sample claim for witness kind "${kind}" — add one when the kind ships`).toBeDefined()
+      expect(witnessLookupIdentity(sample!, '/wt'), `witness kind "${kind}" has no broker identity`).toBeDefined()
     }
   })
 })

@@ -43,7 +43,6 @@ import {
   updateSession,
   interactivePortWindow,
   loadSecrets,
-  refreshConfigProblem,
   type TinstarConfig,
   type Session,
 } from './sessions'
@@ -1161,18 +1160,12 @@ export function initBackend(): RouteContext {
       }))
       registerCodexDelivery(providerRegistry, sessionConfig)
 
-      // Port safety (plan U6). Registering the interactive window is what arms
-      // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
-      // into the range user sessions draw from is rejected at the call rather than
-      // quietly competing for the same ports.
+      // Port safety. Registering the interactive window is what arms `findPort`'s
+      // overlap refusal: any OTHER window that reaches into the range user sessions
+      // draw from is rejected at the call rather than quietly competing for the same
+      // ports. Refresh no longer has a window of its own — it creates no session, so
+      // it claims no port (plan U1).
       tmuxBackend.setInteractivePortWindow(interactivePortWindow(sessionConfig))
-      const portProblem = refreshConfigProblem(sessionConfig)
-      if (portProblem) {
-        // A user edit, not a code bug — so it degrades the refresh engine rather
-        // than stopping the boot. The coordinator reads the same predicate and
-        // stays in owner-delivery mode while it holds.
-        log.error('refresh', `refresh engine disabled — ${portProblem}`)
-      }
 
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))

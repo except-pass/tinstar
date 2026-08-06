@@ -27,6 +27,7 @@ import { join } from 'node:path'
 import {
   SURFACE_SIDECAR_SCHEMA_VERSION,
   SurfaceSidecar,
+  hydrateFreshnessEvidence,
   nodeSidecarIo,
   surfaceSidecarPaths,
   type SidecarIo,
@@ -872,5 +873,68 @@ describe('the backend singleton assertion', () => {
     await withConfigRoot(({ open }) => {
       expect(() => open()).not.toThrow()
     })
+  })
+})
+
+describe('freshness evidence is guaranteed on every persisted record (R3, KTD5/KTD11)', () => {
+  /** A record written before the evidence fields existed. */
+  function legacyRecord(over: Partial<Surface> = {}): Surface {
+    return {
+      id: 'sf-legacy',
+      spaceId: SPACE,
+      home: { kind: 'canvas', spaceId: SPACE },
+      content: { headline: 'Coverage 88%' },
+      contentAuthority: 'canonical-direct',
+      author: 'agent',
+      thread: { replies: [], status: 'open' },
+      freshness: { phase: 'current', overdue: false, verifiedAt: 7_000 },
+      rev: 3,
+      homeRev: 1,
+      createdAt: 1_000,
+      amendedAt: 8_000,
+      ...over,
+    } as Surface
+  }
+
+  it('backfills lastKnownAt from the best evidence the record already carries', () => {
+    // In decreasing order of how well each field dates the CONTENT. Never from
+    // `Date.now()`: a migration that stamped the boot clock would relabel month-old
+    // content as having arrived at startup.
+    expect(hydrateFreshnessEvidence(legacyRecord()).freshness.lastKnownAt).toBe(7_000)
+    const noVerify = legacyRecord({ freshness: { phase: 'current', overdue: false } })
+    expect(hydrateFreshnessEvidence(noVerify).freshness.lastKnownAt).toBe(8_000) // amendedAt
+    const bare = legacyRecord({ freshness: { phase: 'current', overdue: false }, amendedAt: undefined as never })
+    expect(hydrateFreshnessEvidence(bare).freshness.lastKnownAt).toBe(1_000) // createdAt
+  })
+
+  it('writes an EXPLICIT null for never-checked, not an absent key', () => {
+    // An omitted key is dropped from an SSE delta, so "never checked" has to be a
+    // value a client can actually receive.
+    const hydrated = hydrateFreshnessEvidence(legacyRecord())
+    expect(hydrated.freshness.lastCheck).toBeNull()
+    expect('lastCheck' in hydrated.freshness).toBe(true)
+  })
+
+  it('is DETERMINISTIC and RE-ENTRANT across repeated boots', () => {
+    // The property the plan asks for by name. Hydrating twice must produce the same
+    // bytes, or every boot would report a change and burn a revision on every
+    // Surface — the exact storm this work exists to end.
+    const once = hydrateFreshnessEvidence(legacyRecord())
+    const twice = hydrateFreshnessEvidence(once)
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once))
+    expect(twice).toBe(once) // already hydrated: returned untouched, not rebuilt
+  })
+
+  it('leaves a record that already carries evidence exactly as it is', () => {
+    const current = legacyRecord({
+      freshness: {
+        phase: 'current', overdue: false, lastKnownAt: 500,
+        lastCheck: {
+          startedAt: 1, finishedAt: 2, execution: 'host',
+          reason: 'r', targetGeneration: 0, outcome: 'succeeded',
+        },
+      },
+    })
+    expect(hydrateFreshnessEvidence(current)).toBe(current)
   })
 })

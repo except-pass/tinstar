@@ -14,13 +14,17 @@ import type { ErrorCode } from '../../domain/api'
 export type AdapterType = string
 
 /**
- * A named, explicit range of ttyd ports (plan U6).
+ * A named, explicit range of ttyd ports.
  *
- * Explicit rather than "100 from a start offset", because U6 gives autonomous
- * refresh workers their OWN slice of the port space and the two slices have to be
- * provably disjoint. A count baked into `findPort` could not express that: both
- * callers would scan the same 100 ports, and a trigger fan-out could take the port
- * a user's `POST /api/sessions` was about to claim.
+ * ONE WINDOW SHIPS TODAY — the interactive one. The type stays plural because
+ * `findPort` enforces a rule ABOUT windows (see its overlap refusal), and that
+ * rule is what makes "no future caller may quietly reach into the range user
+ * sessions draw from" enforceable in code rather than by convention.
+ *
+ * There is deliberately NO refresh window any more (plan U1, KTD3). Refresh does
+ * not create managed sessions, so it claims no ttyd port, so it needs no slice of
+ * the port space. A second window that only refresh used was the thing that made a
+ * hidden background fleet cheap to grow.
  *
  * Declared here rather than beside `findPort` only to keep the import graph
  * one-way — `tmux.ts` already imports this module, and the reverse would be a
@@ -70,10 +74,10 @@ export interface TinstarConfig {
   cliTemplates: CliTemplate[]
   editor: string
   /** ttyd port allocation. `hostStart`/`hostCount` is the window user-initiated
-   *  sessions draw from; `refreshStart`/`refreshCount` is the DISJOINT window
-   *  autonomous refresh workers draw from (plan U6). Keeping them apart is what
-   *  makes a user session unstarvable by background refresh work. */
-  ports: { ttyd: number; hostStart: number; hostCount: number; refreshStart: number; refreshCount: number }
+   *  sessions draw from, and it is now the ONLY window: refresh creates no managed
+   *  session and therefore claims no port (plan U1). A `refreshStart`/`refreshCount`
+   *  left in a user's config.json is dropped at parse rather than honoured. */
+  ports: { ttyd: number; hostStart: number; hostCount: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
   git: {
@@ -157,31 +161,34 @@ export interface TinstarConfig {
     }
   }
   /**
-   * The durable trigger and refresh engine (plan U6). Owns how many autonomous
-   * refresh workers may run at once, how long one may take, and how often the
-   * coordinator sweeps for due work.
+   * The durable trigger and refresh engine.
+   *
+   * WHAT IS NOT HERE ANY MORE (plan U1, KTD3). There is no `autonomousWorkers`
+   * switch, no `maxConcurrentWorkers` cap, and no worker timeout, because there is
+   * no background refresh fleet for them to govern. Those keys are DROPPED at parse
+   * (see `loadConfig`) rather than accepted and ignored, so a config file that still
+   * carries `refresh.autonomousWorkers: true` cannot be pointed at as the reason
+   * something might come back: the value has nowhere to land.
    */
   refresh: {
-    /** Master kill switch (plan U6: "Keep a temporary kill switch that falls back
-     *  to owner delivery while rollout is incomplete"). False ⇒ the coordinator
-     *  still tracks freshness and queues jobs, but every dispatch goes to the
-     *  surface's OWNER session rather than launching a background worker. */
-    autonomousWorkers: boolean
-    /** Fleet-wide cap on CONCURRENTLY RUNNING background refresh workers. Jobs
-     *  beyond it stay `queued` and launch nothing.
+    /** Hard wall-clock bound on ONE refresh attempt before it is failed.
      *
-     *  THE INVARIANT (plan U6): this defaults comfortably below
-     *  `ports.refreshCount`, so workers cannot exhaust even their own port slice —
-     *  and since that slice is disjoint from the interactive one, an interactive
-     *  session is unstarvable at any trigger volume. A config that raises this
-     *  above the refresh window size is refused at boot. */
-    maxConcurrentWorkers: number
-    /** Hard wall-clock bound on one worker before the job is failed and its
-     *  session retired. */
-    workerTimeoutMs: number
-    /** How often the coordinator sweeps: launches due queued work, harvests
-     *  finished workers, and re-derives `overdue`. */
+     *  Bounds the foreground-owner attempt — the host hands a live agent one staged
+     *  result prompt and has no other way to learn that the agent silently moved on.
+     *  A timeout records a failed check and creates NO successor (R18). */
+    attemptTimeoutMs: number
+    /** How often the coordinator sweeps: schedules due host work, harvests finished
+     *  attempts, and re-derives `overdue`. */
     sweepMs: number
+    /** Concurrent proactive host lookups across the whole process (KTD6). The bound
+     *  that makes the host as a whole polite, however many providers are involved. */
+    maxConcurrentLookups: number
+    /** Concurrent proactive lookups against ONE provider (KTD6). One by default: a
+     *  provider is a shared, often rate-limited resource Tinstar does not own, and the
+     *  broker's coalescing means the common burst — many Surfaces, one question —
+     *  needs no more than one slot. A value out of range is REFUSED and logged rather
+     *  than clamped; see `resolveLookupBudget`. */
+    maxConcurrentLookupsPerProvider: number
     /** Default verification interval for a Surface whose author declared a policy
      *  but no interval. `dueAt` is derived from the last successful verification
      *  plus this. */
@@ -192,38 +199,6 @@ export interface TinstarConfig {
 /** The ttyd port window user-initiated sessions draw from. */
 export function interactivePortWindow(cfg: TinstarConfig): PortWindow {
   return { label: 'interactive', start: cfg.ports.hostStart, count: cfg.ports.hostCount }
-}
-
-/** The DISJOINT ttyd port window autonomous refresh workers draw from (plan U6). */
-export function refreshPortWindow(cfg: TinstarConfig): PortWindow {
-  return { label: 'refresh', start: cfg.ports.refreshStart, count: cfg.ports.refreshCount }
-}
-
-/**
- * What is wrong with this config's refresh/port settings, or null.
- *
- * Two checks, and they are the two the plan names as the composed guard: the
- * windows must not overlap, and the worker cap must stay below the refresh
- * window's size. Reported rather than thrown so the caller decides whether a bad
- * user edit degrades the feature or stops the boot.
- */
-export function refreshConfigProblem(cfg: TinstarConfig): string | null {
-  const interactive = interactivePortWindow(cfg)
-  const refresh = refreshPortWindow(cfg)
-  if (refresh.count < 1 || interactive.count < 1) {
-    return `port windows must cover at least one port each (interactive=${interactive.count}, refresh=${refresh.count})`
-  }
-  if (portWindowsOverlap(interactive, refresh)) {
-    return `ports.refreshStart/refreshCount (${refresh.start}-${refresh.start + refresh.count - 1}) overlaps ` +
-      `ports.hostStart/hostCount (${interactive.start}-${interactive.start + interactive.count - 1}); ` +
-      'the interactive and refresh port windows must be disjoint'
-  }
-  if (cfg.refresh.maxConcurrentWorkers < 0) return 'refresh.maxConcurrentWorkers may not be negative'
-  if (cfg.refresh.maxConcurrentWorkers >= refresh.count) {
-    return `refresh.maxConcurrentWorkers (${cfg.refresh.maxConcurrentWorkers}) must stay below ports.refreshCount ` +
-      `(${refresh.count}) — the cap exists so workers cannot exhaust their own port slice`
-  }
-  return null
 }
 
 // --- Helpers ---
@@ -338,13 +313,9 @@ export const BASE_CONFIG = {
   ports: {
     ttyd: 7681,
     // Interactive sessions: 8681-8780, exactly the range findPort used to scan.
+    // The only window there is — refresh claims no ports (plan U1).
     hostStart: 8681,
     hostCount: 100,
-    // Autonomous refresh workers: 8801-8840. Disjoint from the interactive window
-    // with a deliberate gap, so a hand-edited `hostCount` has to be badly wrong
-    // before the two touch — and `findPort` refuses it even then.
-    refreshStart: 8801,
-    refreshCount: 40,
   },
   git: {
     taskMarkerRegex: '#([A-Za-z0-9_-]+)',
@@ -397,12 +368,14 @@ export const BASE_CONFIG = {
     },
   },
   refresh: {
-    autonomousWorkers: true,
-    // Four, against a 40-port refresh window: an order of magnitude of headroom,
-    // so the cap — not the port pool — is always what bounds the fleet.
-    maxConcurrentWorkers: 4,
-    workerTimeoutMs: 10 * 60_000,
+    // Ten minutes for one foreground-owner attempt. Generous because the recipient
+    // is a human's working agent that may legitimately finish an in-flight turn
+    // first, and a timeout here costs only a failed check — the Surface keeps its
+    // last-known content and waits for the next discrete human action (R17/R18).
+    attemptTimeoutMs: 10 * 60_000,
     sweepMs: 5_000,
+    maxConcurrentLookups: 4,
+    maxConcurrentLookupsPerProvider: 1,
     // SIX HOURS, raised from thirty minutes on measured evidence: across a
     // three-hour session every one of twelve periodic fires returned "no change",
     // and the surface that most needed periodic verification was tracking a number
@@ -475,7 +448,14 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     sessions: merged.sessions,
     cliTemplates,
     editor,
-    ports: merged.ports,
+    // Picked field by field rather than passed through, so a `refreshStart` /
+    // `refreshCount` left over in a user's config.json is DROPPED rather than
+    // carried into a frozen config object where something could later read it.
+    ports: {
+      ttyd: merged.ports.ttyd,
+      hostStart: merged.ports.hostStart,
+      hostCount: merged.ports.hostCount,
+    },
     dirs: {
       root: rootDir,
       secrets: join(rootDir, '.secrets'),
@@ -522,9 +502,19 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     },
     // deepMerge already folded any user `slate.author` overrides into merged.slate.
     slate: merged.slate,
-    // Same: `refresh` is a flat slice of scalars, so the deep merge is the whole
-    // override story. `refreshConfigProblem` is what validates the result.
-    refresh: merged.refresh,
+    // PICKED, NOT SPREAD (plan U1, KTD3). The deep merge would happily carry a
+    // retired `autonomousWorkers` / `maxConcurrentWorkers` / `workerTimeoutMs` out
+    // of an old config.json and into the frozen object. Naming the surviving keys
+    // is what makes "no config value may reactivate a worker path" structural: the
+    // retired ones do not exist on the object at all, so no future reader can find
+    // one to honour.
+    refresh: {
+      attemptTimeoutMs: merged.refresh.attemptTimeoutMs,
+      sweepMs: merged.refresh.sweepMs,
+      defaultIntervalMs: merged.refresh.defaultIntervalMs,
+      maxConcurrentLookups: merged.refresh.maxConcurrentLookups,
+      maxConcurrentLookupsPerProvider: merged.refresh.maxConcurrentLookupsPerProvider,
+    },
   }
 
   return deepFreeze(config)

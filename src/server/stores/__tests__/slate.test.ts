@@ -452,33 +452,33 @@ describe('DocumentStore — Slate prune cascade', () => {
 describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
   it('a projection carrying `refresh` sets it on the point', () => {
     const { store } = makeStore()
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'Re-run the PR eval' })], 100)
-    expect(store.getPoint(RUN, 'p1')!.refresh).toBe('Re-run the PR eval')
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'Re-run the PR eval' } })], 100)
+    expect(store.getPoint(RUN, 'p1')!.refresh).toEqual({ kind: 'agent', prompt: 'Re-run the PR eval' })
   })
 
   it('re-projecting an UNCHANGED recipe emits ZERO change (short-circuit holds)', () => {
     const { store, emit } = makeStore()
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'recipe A' } })], 100)
     emit.mockClear()
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 200)
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'recipe A' } })], 200)
     expect(emit).not.toHaveBeenCalled()          // byte-identical re-projection is a no-op
     expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(100) // amendedAt untouched
   })
 
   it('a recipe-ONLY change DOES emit and updates the point (zero-change guard must not swallow it)', () => {
     const { store, emit } = makeStore()
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'recipe A' } })], 100)
     emit.mockClear()
     // headline + content identical — ONLY the recipe changes.
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe B' })], 200)
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'recipe B' } })], 200)
     expect(emit).toHaveBeenCalledTimes(1)
-    expect(store.getPoint(RUN, 'p1')!.refresh).toBe('recipe B')
+    expect(store.getPoint(RUN, 'p1')!.refresh).toEqual({ kind: 'agent', prompt: 'recipe B' })
     expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(200) // a recipe change bumps amendedAt
   })
 
   it('clears `refresh` when a later projection omits the recipe', () => {
     const { store } = makeStore()
-    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: { kind: 'agent' as const, prompt: 'recipe A' } })], 100)
     store.applyProjection(RUN, [input('p1', 'body')], 200) // recipe omitted → cleared
     expect(store.getPoint(RUN, 'p1')!.refresh).toBeUndefined()
   })
@@ -489,11 +489,11 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
   it('projects `refresh` onto run.slate and a recipe-only change updates the surface', async () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: 'recipe A' }], 100)
-    expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe A')
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: { kind: 'agent' as const, prompt: 'recipe A' } }], 100)
+    expect(store.getRun('run-1')!.slate![0]!.refresh).toEqual({ kind: 'agent', prompt: 'recipe A' })
 
-    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: 'recipe B' }], 200)
-    expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe B')
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: { kind: 'agent' as const, prompt: 'recipe B' } }], 200)
+    expect(store.getRun('run-1')!.slate![0]!.refresh).toEqual({ kind: 'agent', prompt: 'recipe B' })
   })
 })
 

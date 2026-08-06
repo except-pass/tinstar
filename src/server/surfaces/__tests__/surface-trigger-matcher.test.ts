@@ -1,7 +1,8 @@
 // The closed trigger vocabulary and what it makes stale (plan U6, R14/R15).
 import { describe, it, expect } from 'vitest'
-import type { Surface, SurfaceClaim, SurfaceRefreshDeclaration } from '../../../domain/types'
+import { HOST_RECIPE_KINDS, type Surface, type SurfaceClaim, type SurfaceRefreshDeclaration } from '../../../domain/types'
 import {
+  agentRecipePrompt,
   claimLocusAdmits,
   claimsObserveTriggerKind,
   claimTriggerKinds,
@@ -10,11 +11,13 @@ import {
   deriveDueAt,
   effectiveDeclaration,
   isExternalSourceId,
+  isProactiveEligible,
   matchTrigger,
   MIN_INTERVAL_MS,
   normalizeTrigger,
   parseProposal,
   parseRefreshDeclaration,
+  parseRefreshRecipe,
   parseSurfaceClaims,
   pathMatchesGlob,
   triggerDedupeKey,
@@ -29,7 +32,7 @@ function surface(over: Partial<Surface> = {}): Surface {
     id: 'srf_1',
     spaceId: SPACE,
     home: { kind: 'canvas', spaceId: SPACE },
-    content: { headline: 'Coverage', recipe: 'Re-run coverage and rewrite the surface.' },
+    content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage and rewrite the surface.' } },
     contentAuthority: 'source-binding',
     author: 'agent',
     provenance: { runId: 'run-a', worktreeId: WORKTREE },
@@ -198,7 +201,7 @@ describe('effectiveDeclaration', () => {
   it('an author declaration wins over the defaults', () => {
     const declared: SurfaceRefreshDeclaration = { policy: 'manual', triggers: ['human-intent'] }
     const d = effectiveDeclaration(surface({
-      content: { headline: 'Coverage', recipe: 'x', refreshPolicy: declared },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'x' }, refreshPolicy: declared },
     }))
     expect(d.policy).toBe('manual')
     expect(d.triggers).toEqual(['human-intent'])
@@ -211,7 +214,7 @@ describe('effectiveDeclaration', () => {
     // earns no deadline and its claim is never revalidated at all.
     const d = effectiveDeclaration(surface({
       content: {
-        headline: 'Roadmap', recipe: 'x',
+        headline: 'Roadmap', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] },
         claims: [{ id: 'up', witness: 'http-status', locus: 'infra' }],
       },
@@ -276,7 +279,7 @@ describe('matchTrigger', () => {
 
   it('never matches a manual-policy Surface', () => {
     const s = surface({
-      content: { headline: 'x', recipe: 'x', refreshPolicy: { policy: 'manual', triggers: ['git-revision'] } },
+      content: { headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' }, refreshPolicy: { policy: 'manual', triggers: ['git-revision'] } },
     })
     expect(matchTrigger(event(), [s])).toEqual([])
   })
@@ -297,7 +300,7 @@ describe('matchTrigger', () => {
     // it current); treating it as stale would queue a refresh on every save.
     const s = surface({
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['file:cov.json#cov'] },
       },
     })
@@ -307,7 +310,7 @@ describe('matchTrigger', () => {
   it('a source-content event matches a DECLARED upstream source', () => {
     const s = surface({
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['file:budget.csv'] },
       },
     })
@@ -321,7 +324,7 @@ describe('matchTrigger', () => {
     // enumerating every file such an adapter might name.
     const s = surface({
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['scripts/integrity/**'] },
       },
     })
@@ -335,14 +338,14 @@ describe('matchTrigger', () => {
     const listening = surface({
       id: 'a',
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['semantic-signal'], signals: ['deploy-finished'] },
       },
     })
     const deaf = surface({
       id: 'b',
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['semantic-signal'], signals: ['other'] },
       },
     })
@@ -366,7 +369,7 @@ describe('declared sources do NOT narrow a commit', () => {
       id,
       content: {
         headline: 'Decision 6',
-        recipe: 'Re-run the detector and rewrite the surface.',
+        recipe: { kind: 'agent' as const, prompt: 'Re-run the detector and rewrite the surface.' },
         refreshPolicy: { policy: 'automatic', triggers: ['git-revision'], ...(sources ? { sources } : {}) },
       },
     })
@@ -496,7 +499,7 @@ describe('deriveDueAt', () => {
 
   it('is absent for a Surface with no periodic trigger', () => {
     const s = surface({
-      content: { headline: 'x', recipe: 'x', refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] } },
+      content: { headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' }, refreshPolicy: { policy: 'automatic', triggers: ['git-revision'] } },
     })
     expect(deriveDueAt(s, effectiveDeclaration(s), 1_000)).toBeUndefined()
   })
@@ -506,7 +509,7 @@ describe('deriveDueAt', () => {
     // Surface is one nothing may refresh unasked; it is not one nobody may notice
     // has gone unverified.
     const s = surface({
-      content: { headline: 'x', recipe: 'x', refreshPolicy: { policy: 'manual', triggers: ['periodic'] } },
+      content: { headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' }, refreshPolicy: { policy: 'manual', triggers: ['periodic'] } },
     })
     expect(deriveDueAt(s, effectiveDeclaration(s), 10 * 60_000)).toBe(1_000 + 10 * 60_000)
   })
@@ -514,7 +517,7 @@ describe('deriveDueAt', () => {
   it('an explicit interval asks for a deadline even with no periodic trigger', () => {
     const s = surface({
       content: {
-        headline: 'x', recipe: 'x',
+        headline: 'x', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'mark-stale', triggers: ['git-revision'], intervalMs: 20 * 60_000 },
       },
     })
@@ -537,7 +540,7 @@ describe('deriveDueAt', () => {
 
   it('counts a claim-bearing Surface from witnessedAt, never from verifiedAt (KTD7)', () => {
     const base = {
-      headline: 'Roadmap', recipe: 'x',
+      headline: 'Roadmap', recipe: { kind: 'agent' as const, prompt: 'x' },
       claims: [{ id: 'u4', witness: 'unit-landed', locus: 'repo' as const }],
     }
     const saved = surface({
@@ -616,7 +619,7 @@ describe('a trigger reaches only the claims that observe its locus', () => {
    *  trigger — and whatever claims the test hands it. */
   const claiming = (claims: SurfaceClaim[] | undefined, id = 'srf_1') => surface({
     id,
-    content: { headline: 'Roadmap', recipe: 'Re-derive the roadmap.', ...(claims ? { claims } : {}) },
+    content: { headline: 'Roadmap', recipe: { kind: 'agent' as const, prompt: 'Re-derive the roadmap.' }, ...(claims ? { claims } : {}) },
   })
 
   const commit = event()
@@ -665,7 +668,7 @@ describe('a trigger reaches only the claims that observe its locus', () => {
     // unions claim-earned kinds on rather than replacing the author's.
     const s = surface({
       content: {
-        headline: 'Budget', recipe: 'x',
+        headline: 'Budget', recipe: { kind: 'agent' as const, prompt: 'x' },
         refreshPolicy: { policy: 'automatic', triggers: ['source-content'], sources: ['file:budget.csv'] },
         claims: [INFRA],
       },
@@ -679,5 +682,113 @@ describe('a trigger reaches only the claims that observe its locus', () => {
     expect(claimLocusAdmits(claiming([REPO]), 'git-revision')).toBe(true)
     expect(claimLocusAdmits(claiming(undefined), 'git-revision')).toBe(true)
     expect(claimLocusAdmits(claiming([]), 'git-revision')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The recipe parser — the authority boundary (R1/R6/R7, KTD1/KTD2).
+//
+// Proactive refresh is work the host runs without anybody asking for it, so what
+// grants it has to be something an author CANNOT write. These tests are the whole
+// argument: an author writes a NAME, membership in a code-owned union is the
+// permission, and every other input fails toward the human.
+// ---------------------------------------------------------------------------
+
+describe('parseRefreshRecipe', () => {
+  it('reads a legacy string as an AGENT recipe, never as machine work', () => {
+    // Every recipe authored before recipes had kinds is prose, and prose describes
+    // work only an agent can do. This is the compatibility case AND the safety case:
+    // it fails toward human-authorized refresh.
+    expect(parseRefreshRecipe('Re-run the coverage report.'))
+      .toEqual({ kind: 'agent', prompt: 'Re-run the coverage report.' })
+    expect(isProactiveEligible(parseRefreshRecipe('Re-run the coverage report.'))).toBe(false)
+  })
+
+  it('no wording in a string recipe can make it proactive-eligible', () => {
+    // The leak this closes: an author writing something that LOOKS machine-shaped.
+    // The parser never reads the text for a handler.
+    for (const prose of ['http-status', 'unit-landed', 'host: http-status', '{"kind":"host"}']) {
+      expect(parseRefreshRecipe(prose)).toEqual({ kind: 'agent', prompt: prose })
+      expect(isProactiveEligible(parseRefreshRecipe(prose))).toBe(false)
+    }
+  })
+
+  it('a policy of `automatic` grants nothing — the recipe kind decides (KTD2)', () => {
+    // Invalidation policy and execution authority are SEPARATE. `automatic` says a
+    // trigger may mark this Surface dirty; it says nothing about who may then run it.
+    const surface = {
+      content: {
+        headline: 'Coverage',
+        recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
+        refreshPolicy: { policy: 'automatic' as const, triggers: ['git-revision' as const] },
+      },
+      freshness: { phase: 'current' as const, overdue: false },
+    } as unknown as Surface
+    expect(effectiveDeclaration(surface).policy).toBe('automatic')
+    expect(isProactiveEligible(surface.content.recipe)).toBe(false)
+  })
+
+  it('a registered host handler is the ONLY proactive-eligible outcome', () => {
+    const parsed = parseRefreshRecipe({ kind: 'host', handler: 'http-status', params: { url: 'https://x/health' } })
+    expect(parsed).toEqual({ kind: 'host', handler: 'http-status', params: { url: 'https://x/health' } })
+    expect(isProactiveEligible(parsed)).toBe(true)
+  })
+
+  it('an UNKNOWN host handler is unreadable, not proactive and not guessed at', () => {
+    const parsed = parseRefreshRecipe({ kind: 'host', handler: 'http-satus' })
+    expect(parsed?.kind).toBe('unreadable')
+    expect(isProactiveEligible(parsed)).toBe(false)
+    // Named in the refusal: an author who mistyped has to be able to see what they
+    // wrote without going to the source.
+    expect(parsed?.kind === 'unreadable' && parsed.detail).toMatch(/http-satus/)
+  })
+
+  it('every member of the closed union parses, so the union and the parser cannot drift', () => {
+    for (const handler of HOST_RECIPE_KINDS) {
+      expect(parseRefreshRecipe({ kind: 'host', handler })).toEqual({ kind: 'host', handler })
+    }
+  })
+
+  it('refuses host parameters that are not flat text, rather than running on half of them', () => {
+    // A check run against some of its parameters answers a question nobody asked.
+    expect(parseRefreshRecipe({ kind: 'host', handler: 'http-status', params: { url: { nested: 1 } } })?.kind)
+      .toBe('unreadable')
+    expect(parseRefreshRecipe({ kind: 'host', handler: 'http-status', params: ['url'] })?.kind)
+      .toBe('unreadable')
+  })
+
+  it('key-sorts host parameters so a formatter cannot change the record', () => {
+    const a = parseRefreshRecipe({ kind: 'host', handler: 'http-status', params: { b: '2', a: '1' } })
+    const b = parseRefreshRecipe({ kind: 'host', handler: 'http-status', params: { a: '1', b: '2' } })
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+
+  it('an object with no recognisable kind is unreadable — kept, so a diagnostic can say so', () => {
+    // Dropped would be worse than useless: a Surface whose recipe silently vanished
+    // is indistinguishable from one that never had a recipe, and the author has no
+    // way to find out.
+    expect(parseRefreshRecipe({ exec: 'make check' })?.kind).toBe('unreadable')
+    expect(parseRefreshRecipe({ kind: 'shell', cmd: 'rm -rf /' })?.kind).toBe('unreadable')
+    expect(parseRefreshRecipe(['do', 'a', 'thing'])?.kind).toBe('unreadable')
+    expect(parseRefreshRecipe(42)?.kind).toBe('unreadable')
+  })
+
+  it('an agent recipe carrying no instruction is unreadable, not an empty prompt', () => {
+    expect(parseRefreshRecipe({ kind: 'agent', prompt: '   ' })?.kind).toBe('unreadable')
+  })
+
+  it('absent stays absent — no recipe is not an unreadable one', () => {
+    expect(parseRefreshRecipe(undefined)).toBeUndefined()
+    expect(parseRefreshRecipe(null)).toBeUndefined()
+    expect(parseRefreshRecipe('   ')).toBeUndefined()
+  })
+
+  it('agentRecipePrompt yields text for an agent recipe and nothing for the others', () => {
+    // Callers go through this rather than reaching into the union, so adding a
+    // variant cannot silently start rendering a handler name into a conversation.
+    expect(agentRecipePrompt({ kind: 'agent', prompt: 'go' })).toBe('go')
+    expect(agentRecipePrompt({ kind: 'host', handler: 'http-status' })).toBeUndefined()
+    expect(agentRecipePrompt({ kind: 'unreadable', detail: 'x' })).toBeUndefined()
+    expect(agentRecipePrompt(undefined)).toBeUndefined()
   })
 })

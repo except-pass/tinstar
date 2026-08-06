@@ -58,7 +58,7 @@ Each entry is a **point** — the primitive the Slate is built from:
 | `content` | no | file | the surface body: an **A2UI component tree** (see below) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` — attach the point to a decision or another surface by id |
-| `refresh` | no | file | the self-contained instruction a fresh author re-runs to regenerate this surface (see "the vacuum test" below) |
+| `refresh` | no | file | the ONE recipe that rebuilds this whole surface. A string is prose only *you* can run; `{ "kind": "host", "handler": … }` is a machine check the host runs itself (see "who runs your recipe" below) |
 | `claims` | no | file | what would **prove this surface wrong** — the host checks these itself, with no agent session. Declare at least one on every surface you author; see "Declare at least one claim" below |
 | `group` | no | file | **workbench set id** — give the *same* string to 2+ **question** points and they render side by side, one per column (see below). Open-point entries only; ignored on a `kind: "surface"` anchor |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if you omit it |
@@ -244,13 +244,42 @@ spinner. Prefer it over a bare long call you have to watch. (The underlying mech
 just a progress-surface file; you can author one by hand the same way if you want custom
 progress.)
 
-## Make surfaces refreshable by a fresh author (the vacuum test)
+## Who runs your recipe, and when
 
-A surface's `refresh` recipe is its **authoring contract**: when it's self-contained, refreshing the surface spawns a *fresh, context-free* author (a headless child in the run's workdir) that re-runs the recipe and rewrites the file — off your (the main agent's) critical path. So write every living surface's recipe to pass the **vacuum test**: name its **source** (a PR, files, a query), its **derivation** (what to do with the source), and its **output** (what to rewrite). `"regenerate this surface"` fails — it assumes context a fresh author won't have. A surface whose only source is *this session* (e.g. "explain the session") is session-derived: it stays with you and needs no self-contained recipe. Capture the recipe at create time so the surface is born handoff-able.
+**A surface has one recipe, it replaces the whole surface, and the recipe's KIND decides who may run it.**
+
+- **A string is an `agent` recipe** — prose, delivered to *you*, and only when the user
+  deliberately navigates to, clicks, or explicitly refreshes the surface. Nothing
+  ambient runs it: not a commit, not a deadline, not the dashboard being left open.
+- **An object naming a host check** — `{ "kind": "host", "handler": "http-status",
+  "params": { "url": "…" } }` — is machine work the host runs by itself, cheaply and
+  on its own schedule. `handler` must be one the host implements (`http-status`,
+  `unit-landed`); a name it does not know is refused and quoted back at you.
+- **Anything else** is kept as *unreadable* and reported, so a mistyped recipe says so
+  rather than leaving a surface that quietly never updates.
+
+Prose can never become machine work however you word it, and `"policy": "automatic"`
+does not change who runs anything — policy says when a surface is marked **dirty**,
+which is cheap; running the recipe is a separate question with a separate answer.
+
+**What this means for how you write.** Your surface will sit dirty until the user
+reaches for it, so write it to stay useful in the meantime: the card keeps showing what
+it last knew, with an honest "known at / last checked" stamp beside it. Write the recipe
+to pass the **vacuum test** — name its **source** (a PR, files, a query), its
+**derivation** (what to do with the source), and its **output** (what to rewrite).
+`"regenerate this surface"` fails: it assumes context you will not have when the user
+finally opens the card a week later. A surface whose only source is *this session*
+(e.g. "explain the session") is session-derived and needs no self-contained recipe.
+Capture the recipe at create time so the surface is born handoff-able.
+
+**Sweep after you ship rather than waiting to be refreshed.** Since nothing refreshes
+your surfaces on a timer any more, a card you leave wrong stays wrong until somebody
+opens it. Re-author what you know changed — that is your push; refresh is the user's
+pull.
 
 ## Declare at least one claim
 
-A `refresh` recipe says *how to rebuild this card*. A **claim** says *what would prove it wrong* — and the host can check a claim on its own, with no session, no prompt and no worker. Most checks find nothing moved, which is exactly why they are worth running often.
+A `refresh` recipe says *how to rebuild this card*. A **claim** says *what would prove it wrong* — and the host can check a claim on its own, with no session and no prompt. Most checks find nothing moved, which is exactly why they are worth running often. A claim on a card with a **host** recipe may also fill in a claim-bound rail; on a card with an agent recipe it marks the card dirty and leaves your prose alone, so one card never says two things at two different ages.
 
 ```json
 "claims": [

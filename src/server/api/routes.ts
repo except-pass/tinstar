@@ -67,7 +67,6 @@ import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
-import { resolveActor, statusFor } from './surfaceRoutes'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
 import { SurfaceService } from '../surfaces/surface-service'
@@ -107,7 +106,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
-import { handleSurfaceRoutes } from './surfaceRoutes'
+import { handleSurfaceRoutes, handleRefreshIntent } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 import {
@@ -5061,59 +5060,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const point = ctx.docStore.getSlatePoint(runId, pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
 
-    // U6: the durable path. When the refresh engine is running and this point has a
+    // THE DURABLE PATH. When the refresh engine is running and this point has a
     // canonical Surface behind it, the request becomes a JOB rather than a prompt —
-    // it survives the owner exiting and a server restart, it is bounded by the
-    // worker cap, and its result has to pass the observation barrier before the
-    // Surface may claim current.
+    // it survives the owner exiting and a server restart, and its result has to pass
+    // the observation barrier before the Surface may claim current.
     //
-    // The legacy nudge below is the fallback, not the plan's "temporary kill
-    // switch" — that is `refresh.autonomousWorkers`, which lives inside the
-    // coordinator and still produces a durable job. This branch is only for a run
-    // with no canonical record at all.
+    // The nudge below is for a run with NO canonical record at all. It delivers to
+    // the run's own live agent and creates nothing (plan U1, KTD3): the one-shot
+    // author fast path that used to sit here spawned a fresh headless `claude -p`
+    // per refresh, which is a refresh-created process by another name.
     const coordinator = ctx.refreshCoordinator
     const canonical = ctx.docStore.surfaceForRunAlias(runId, pid)
     if (coordinator && canonical) {
-      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
-      const call = { actor: resolveActor(req) }
-      // U3 owns current → queued; U6 owns the job that services it. A Surface
-      // already queued or refreshing is left alone by `refreshRequest`, and asking
-      // for a job anyway is right: the coordinator adopts the existing one rather
-      // than making a second.
-      const requested = await service.refreshRequest(canonical.id, {}, call)
-      const alreadyWorking = !requested.ok
-        && (requested.error.reason === 'already-queued' || requested.error.reason === 'already-refreshing')
-      if (!requested.ok && !alreadyWorking) {
-        fail(res, statusFor(requested.error), requested.error.message, {
-          details: requested.error.reason ? { reason: requested.error.reason } : undefined,
-        })
-        return true
-      }
-      const job = await coordinator.requestFor(canonical.id)
-      // `delivered` is reported alongside so the existing client spinner keeps its
-      // contract: a queued job IS delivery — the host has taken responsibility for
-      // it — and the freshness badge now carries the detail the spinner could not.
-      ok(res, { delivered: true, queued: !!job, jobId: job?.id, surfaceId: canonical.id })
+      // RESOLVE THE ALIAS AND DELEGATE — that is the whole of this branch (KTD4).
+      // It used to drive the `current → queued` transition itself and then ask for a
+      // job, which meant two places knew how a refresh starts and could disagree;
+      // most visibly when the second one declined, leaving a Surface badged `queued`
+      // with nothing behind it. The canonical handler owns the intent vocabulary, the
+      // human-principal check, the bulk-check narrowing, and the join, so this route
+      // and `/api/surfaces/:id/refresh` cannot drift apart.
+      const raw = await readBody(req).then(t => { try { return JSON.parse(t || '{}') } catch { return {} } })
+      const svc = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      await handleRefreshIntent(ctx, req, res, corsHeaders, canonical.id, raw, svc)
       return true
     }
 
-    // Source-derived (carries a self-contained recipe) → spawn a fresh one-shot author OFF
-    // the main agent's path (feat: multi-agent Slate). Recipe-less / session-derived surfaces
-    // fall through to the unchanged main-agent nudge below — which also covers the backlog.
-    if (point.refresh && ctx.sessionConfig?.slate.author.enabled) {
-      const { dispatched } = dispatchSurfaceAuthor({
-        sessionsDir: ctx.sessionConfig.dirs.sessions,
-        config: ctx.sessionConfig.slate.author,
-        runId,
-        prompt: slateRefreshPromptText(point, serverBase()),
-        label: point.id,
-        // Inject credentials explicitly — the child gets a scoped env and has no
-        // login shell to re-export anything. Same source managed sessions use.
-        secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
-      })
-      if (dispatched) { ok(res, { dispatched: true }); return true }
-      // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
-    }
+    // No canonical record: nudge the run's OWN live agent, the same way reply and
+    // answer do. Best-effort, and `delivered: false` is not an error.
     const delivered = await deliverSlatePrompt(
       ctx,
       runId,

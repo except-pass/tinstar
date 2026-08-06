@@ -486,3 +486,191 @@ export function migrationDiagnosticsJson(d: MigrationDiagnostics): unknown {
       : {}),
   }
 }
+
+// ---------------------------------------------------------------------------
+// Refresh diagnostics (plan U7, R1-R19).
+//
+// WHAT AN OPERATOR NEEDS TO SEE, and it is not "is refresh working". It is whether
+// the thing this architecture was built to prevent has come back. The retired design
+// failed quietly and expensively: 110 of 121 completed refreshes changed nothing and
+// one session accumulated 43 tmux panes, and nothing on any screen said so. So these
+// counts are chosen to make the failure mode legible BEFORE somebody notices their
+// machine is busy — how many Surfaces are dirty and waiting, how much machine work is
+// actually running, how often a provider budget deferred something, and how many
+// checks came back unable to answer.
+//
+// THE INVARIANT IS THE POINT. `refreshCreatedSessions` has an expected value of zero
+// and any other value is CORRUPTION, not a metric to watch trend upward. A refresh
+// may not create a managed session; a record saying one did means either a job
+// written by the removed architecture survived reconciliation, or something
+// reintroduced the capability.
+// ---------------------------------------------------------------------------
+
+/** What one look at the refresh engine's state found. */
+export interface RefreshDiagnostics {
+  at: number
+  /** Surfaces the host believes may no longer reflect their sources. */
+  dirty: number
+  /** Dirty Surfaces whose recipe the HOST can run by itself — the ones that will
+   *  come back on their own. The remainder are waiting for a person. */
+  dirtyHostMaintained: number
+  /** Dirty Surfaces waiting for a human to reach them. A number that only grows is
+   *  not a bug: it is a Slate nobody has visited. */
+  dirtyAwaitingHuman: number
+  /** Attempts in flight, by executor. */
+  activeHostAttempts: number
+  activeOwnerAttempts: number
+  /** Surfaces whose LAST COMPLETED CHECK ended each way. `unavailable` growing while
+   *  `failed` does not usually means agents are exiting, not that anything broke. */
+  checks: Record<'succeeded' | 'failed' | 'unavailable' | 'superseded' | 'never', number>
+  /** Jobs the boot reconciled out of the removed background-worker architecture.
+   *  Terminal history, not live fleet — see {@link LEGACY_WORKER_RECONCILED}. */
+  legacyReconciled: number
+  /**
+   * Managed sessions any refresh record claims to have created.
+   *
+   * EXPECTED ZERO, ALWAYS. Not a gauge to watch: a refresh cannot create a session,
+   * so a nonzero value is a corrupt record or a reintroduced capability, and it is
+   * reported as corruption rather than as load.
+   */
+  refreshCreatedSessions: number
+  /** Every corruption this pass found, in words. Empty is the healthy answer. */
+  corruption: string[]
+}
+
+/** The job fields this reads. Declared structurally so the diagnostics module does
+ *  not import the job store — it inspects records, including ones written by a build
+ *  that no longer exists. */
+export interface RefreshJobLike {
+  id: string
+  surfaceId: string
+  state: string
+  execution?: string
+  intentAt?: number
+  dispatch?: { kind?: string; target?: string } | undefined
+  result?: { ok: boolean; message?: string } | undefined
+}
+
+/** The Surface fields this reads. */
+export interface RefreshSurfaceLike {
+  id: string
+  /** Truthy when the Surface is in the recovery store. Typed loosely because the
+   *  canonical record carries a deletion RECORD here rather than a flag, and this
+   *  module only asks whether there is one. */
+  readonly deleted?: unknown
+  content: { readonly recipe?: { readonly kind: string } | undefined }
+  freshness: {
+    readonly phase: string
+    readonly lastCheck?: { readonly outcome: string } | null | undefined
+  }
+}
+
+/** The dispatch value the removed architecture wrote. Recognised so a survivor is
+ *  reported as corruption instead of counted as ordinary history. */
+const RETIRED_BACKGROUND_DISPATCH = 'worker'
+
+export function collectRefreshDiagnostics(input: {
+  surfaces: readonly RefreshSurfaceLike[]
+  jobs: readonly RefreshJobLike[]
+  now?: number
+}): RefreshDiagnostics {
+  const at = input.now ?? Date.now()
+  const checks: RefreshDiagnostics['checks'] = {
+    succeeded: 0, failed: 0, unavailable: 0, superseded: 0, never: 0,
+  }
+  let dirty = 0
+  let dirtyHostMaintained = 0
+  let dirtyAwaitingHuman = 0
+
+  for (const s of input.surfaces) {
+    if (s.deleted) continue
+    const outcome = s.freshness.lastCheck?.outcome
+    if (outcome === 'succeeded' || outcome === 'failed'
+      || outcome === 'unavailable' || outcome === 'superseded') checks[outcome]++
+    else checks.never++
+    if (s.freshness.phase === 'current') continue
+    dirty++
+    if (s.content.recipe?.kind === 'host') dirtyHostMaintained++
+    // A Surface with no runnable recipe is not "awaiting a human" in the sense that
+    // matters — nobody's visit will rebuild it either — so it is counted in `dirty`
+    // and nowhere else. Rolling it in here would make the number that measures unseen
+    // work grow for a reason no human action can shrink.
+    else if (s.content.recipe?.kind === 'agent') dirtyAwaitingHuman++
+  }
+
+  let activeHostAttempts = 0
+  let activeOwnerAttempts = 0
+  let legacyReconciled = 0
+  let refreshCreatedSessions = 0
+  const corruption: string[] = []
+
+  for (const job of input.jobs) {
+    const active = job.state === 'queued' || job.state === 'running'
+    if (active) {
+      if (job.execution === 'host') activeHostAttempts++
+      else activeOwnerAttempts++
+    }
+    if (job.result?.message?.includes('background-worker architecture')) legacyReconciled++
+
+    // THE INVARIANT. A dispatch naming a background session means a refresh created
+    // one, which this architecture makes impossible — so seeing it is evidence about
+    // the BUILD, not about load.
+    if (job.dispatch?.kind === RETIRED_BACKGROUND_DISPATCH) {
+      refreshCreatedSessions++
+      if (active) {
+        corruption.push(
+          `job ${job.id} is still ${job.state} and names a background session `
+          + `(${job.dispatch.target ?? 'unnamed'}); refresh cannot create one, so this record `
+          + 'survived reconciliation or the capability was reintroduced',
+        )
+      }
+    }
+    // An owner attempt with no human stamp had nobody's permission. Terminal ones are
+    // history from a build that predates the stamp; an ACTIVE one is happening now.
+    if (active && job.execution === 'owner' && job.intentAt === undefined) {
+      corruption.push(
+        `job ${job.id} is ${job.state} against surface ${job.surfaceId} with no record of a human `
+        + 'asking for it; agent work requires a discrete human action',
+      )
+    }
+  }
+
+  return {
+    at, dirty, dirtyHostMaintained, dirtyAwaitingHuman,
+    activeHostAttempts, activeOwnerAttempts,
+    checks, legacyReconciled, refreshCreatedSessions, corruption,
+  }
+}
+
+/** The human-readable dump. Corruption first, because it is the only part that means
+ *  somebody has to do something. */
+export function renderRefreshDiagnostics(d: RefreshDiagnostics): string {
+  const out: string[] = []
+  out.push('Refresh engine')
+  out.push(`  ran            ${new Date(d.at).toISOString()}`)
+  if (d.corruption.length === 0) {
+    out.push('  ✓ no refresh-created sessions, and every active agent attempt was asked for by a human')
+  } else {
+    out.push(`  ✗ CORRUPTION — ${d.corruption.length} finding(s):`)
+    for (const line of d.corruption) out.push(`      ${line}`)
+  }
+  out.push('')
+  out.push(`  dirty                ${d.dirty}`)
+  out.push(`    host-maintained    ${d.dirtyHostMaintained}   (these come back on their own)`)
+  out.push(`    awaiting a human   ${d.dirtyAwaitingHuman}   (these refresh when somebody opens them)`)
+  out.push(`  active host checks   ${d.activeHostAttempts}`)
+  out.push(`  active agent work    ${d.activeOwnerAttempts}`)
+  out.push('')
+  out.push('  last completed check, by outcome')
+  out.push(`    succeeded    ${d.checks.succeeded}`)
+  out.push(`    failed       ${d.checks.failed}`)
+  out.push(`    unavailable  ${d.checks.unavailable}   (nothing could look — often an agent that exited)`)
+  out.push(`    superseded   ${d.checks.superseded}   (it looked, and the world had already moved)`)
+  out.push(`    never        ${d.checks.never}`)
+  if (d.legacyReconciled > 0) {
+    out.push('')
+    out.push(`  ${d.legacyReconciled} job(s) reconciled out of the removed background-worker architecture.`)
+    out.push('  Terminal history, not a live fleet — their Surfaces kept their content and went dirty.')
+  }
+  return out.join('\n')
+}

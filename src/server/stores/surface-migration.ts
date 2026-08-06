@@ -35,6 +35,7 @@
 // reviewer should observe zero runtime change from this file.
 
 import type {
+  SurfaceRefreshRecipe,
   Point,
   PointAuthor,
   PointStatus,
@@ -45,6 +46,14 @@ import type {
 } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 import { derivePointStatus } from './slate'
+import { parseRefreshRecipe } from '../surfaces/surface-trigger-matcher'
+
+/** A legacy point's `refresh` value as a typed recipe. Records written before
+ *  recipes had kinds hold a bare prose string, which parses to `agent` — the
+ *  human-authorized path, which is the safe direction for a migration to fail in. */
+function recipeOf(raw: unknown): SurfaceRefreshRecipe | undefined {
+  return parseRefreshRecipe(raw)
+}
 import { buildTopologyIndex, deriveLegacySurfaceId, deriveRunIncarnation } from './surfaces'
 
 /**
@@ -404,7 +413,13 @@ function buildSurface(p: BuildParams, prior?: Surface): Surface {
       ...(p.resolvedAt != null ? { resolvedAt: p.resolvedAt } : {}),
       ...(p.dismissedAt != null ? { dismissedAt: p.dismissedAt } : {}),
     },
-    freshness: prior?.freshness ?? { phase: 'current', overdue: false },
+    // The evidence pair is part of the DEFAULT, not just of the create path: this
+    // candidate is compared against the stored record before it is installed, and a
+    // candidate missing fields the stored record carries would report a change on
+    // every boot and burn a revision on every migrated Surface, forever.
+    freshness: prior?.freshness ?? {
+      phase: 'current', overdue: false, lastKnownAt: p.createdAt, lastCheck: null,
+    },
     aliases: [ownAlias, ...foreign],
     ...(p.compatibilityOnly ? { compatibilityOnly: true as const } : {}),
     rev: prior ? prior.rev + 1 : 1,
@@ -817,8 +832,11 @@ export function migrateLegacySlate(input: SurfaceMigrationInput): SurfaceMigrati
           headline: p.headline,
           ...(p.content ? { body: p.content } : {}),
           // The legacy file-owned `refresh` prompt IS the canonical author-declared
-          // recipe — the same field under its canonical name (R13).
-          ...(p.refresh ? { recipe: p.refresh } : {}),
+          // recipe — the same field under its canonical name (R13) — but it is now
+          // TYPED, and a legacy value is prose. Parsed rather than assigned, so a
+          // record written before recipes had kinds migrates to `agent` (the
+          // human-authorized path) rather than to something the host might run.
+          ...(recipeOf(p.refresh) ? { recipe: recipeOf(p.refresh)! } : {}),
         },
         author: p.author,
         // Preserved explicitly (not left to fall back on `createdAt`) so a user's

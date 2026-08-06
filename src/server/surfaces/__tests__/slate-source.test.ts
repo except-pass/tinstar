@@ -89,7 +89,7 @@ describe('watermarks', () => {
     const b = slateEntryWatermark({ headline: 'h', author: 'agent' })
     expect(a).toBe(b)
     expect(slateEntryWatermark({ headline: 'h', author: 'user' })).not.toBe(a)
-    expect(slateEntryWatermark({ headline: 'h', recipe: 'r', author: 'agent' })).not.toBe(a)
+    expect(slateEntryWatermark({ headline: 'h', recipe: { kind: 'agent' as const, prompt: 'r' }, author: 'agent' })).not.toBe(a)
   })
 
   // A claim DECLARATION is author meaning — it says what would prove this surface
@@ -320,10 +320,10 @@ describe('the egress adapter', () => {
     seed([{ id: 'blockers', headline: 'Two blockers' }])
     const r = await new SlateFileAdapter().write({
       surface: bound() as never,
-      content: { headline: 'One blocker', recipe: 'rebuild me' },
+      content: { headline: 'One blocker', recipe: { kind: 'agent' as const, prompt: 'rebuild me' } },
     })
 
-    expect(r.ok && r.watermark).toBe(slateEntryWatermark({ headline: 'One blocker', recipe: 'rebuild me', author: 'agent' }))
+    expect(r.ok && r.watermark).toBe(slateEntryWatermark({ headline: 'One blocker', recipe: { kind: 'agent' as const, prompt: 'rebuild me' }, author: 'agent' }))
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -571,7 +571,7 @@ describe('registered on the service', () => {
       id: 'sf-1',
       spaceId: 'spc-a',
       home: { kind: 'canvas', spaceId: 'spc-a' },
-      content: { headline: 'Coverage', recipe: 'Re-run coverage.', refreshPolicy: policy as never },
+      content: { headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' }, refreshPolicy: policy as never },
       contentAuthority: 'source-binding',
       author: 'agent',
       source: {
@@ -580,7 +580,7 @@ describe('registered on the service', () => {
         worktree: dir,
         generation: 1,
         watermark: slateEntryWatermark({
-          headline: 'Coverage', recipe: 'Re-run coverage.',
+          headline: 'Coverage', recipe: { kind: 'agent' as const, prompt: 'Re-run coverage.' },
           refreshPolicy: policy as never, author: 'agent',
         }),
         state: 'present',

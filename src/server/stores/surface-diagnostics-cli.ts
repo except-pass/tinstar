@@ -13,13 +13,40 @@
 // `npm run dev:backend` uses, keeps it honest — it exercises the real source, not
 // a stale build.
 
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
 import {
   collectMigrationDiagnostics,
+  collectRefreshDiagnostics,
   migrationDiagnosticsJson,
   renderMigrationDiagnostics,
+  renderRefreshDiagnostics,
+  type RefreshJobLike,
 } from './surface-diagnostics'
+import { REFRESH_JOBS_FILE } from '../surfaces/surface-refresh-jobs'
+import { getConfigRoot } from '../configRoot'
+
+/**
+ * Read the refresh job table the way an INSPECTOR must: tolerantly, and without the
+ * store.
+ *
+ * Deliberately not `SurfaceRefreshJobStore.open`, which would RECONCILE what it finds
+ * — terminalizing exactly the legacy records this dump exists to show an operator, and
+ * rewriting the file it was asked to read. A diagnostics command that mutates its
+ * subject is worse than no diagnostics command.
+ */
+function readRefreshJobs(dir: string): RefreshJobLike[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, REFRESH_JOBS_FILE), 'utf8'))
+    const jobs = (parsed as { jobs?: unknown })?.jobs
+    return Array.isArray(jobs) ? jobs as RefreshJobLike[] : []
+  } catch {
+    // No table yet, or one that will not parse. Either way there is no refresh work
+    // to report, which is a finding rather than a failure.
+    return []
+  }
+}
 
 const USAGE = `
 Surface migration diagnostics — a read-only rehearsal of the legacy Slate →
@@ -34,9 +61,11 @@ canonical Surface migration. Writes nothing, takes no lock, creates no files.
   --no-color            plain text; also implied when output is not a terminal
   -h, --help            this text
 
-  exit codes: 0 nothing is broken · 1 the sidecar is faulted or the docstore is
-  unreadable · 2 bad usage. Quarantined entries do NOT fail the command — they are
-  a finding to read, not a crash.
+  exit codes: 0 nothing is broken · 1 the sidecar is faulted, the docstore is
+  unreadable, or the refresh engine reports CORRUPTION (a record claiming a refresh
+  created a managed session, or agent work nobody asked for) · 2 bad usage.
+  Quarantined entries do NOT fail the command — they are a finding to read, not a
+  crash.
 `
 
 export interface CliOptions {
@@ -116,13 +145,24 @@ export function runDiagnosticsCli(
     ...(docstorePath ? { docstorePath: here(docstorePath) } : {}),
     ...(sidecarDir ? { sidecarDir: here(sidecarDir) } : {}),
   })
+  // THE REFRESH ENGINE'S OWN STATE, read from the same store the rehearsal loaded so
+  // the two halves of the dump describe one host. Its corruption findings are the
+  // reason this command has a nonzero exit at all — a refresh-created session is not
+  // something an operator should have to notice in a paragraph.
+  const refresh = collectRefreshDiagnostics({
+    surfaces: diagnostics.sidecar.outcome.records,
+    jobs: readRefreshJobs(sidecarDir ? here(sidecarDir) : getConfigRoot()),
+    now: diagnostics.at,
+  })
   io.out(
     json
-      ? JSON.stringify(migrationDiagnosticsJson(diagnostics), null, 2)
-      : renderMigrationDiagnostics(diagnostics, { color, allRuns: all }),
+      ? JSON.stringify({ ...(migrationDiagnosticsJson(diagnostics) as object), refresh }, null, 2)
+      : `${renderMigrationDiagnostics(diagnostics, { color, allRuns: all })}\n\n${renderRefreshDiagnostics(refresh)}`,
   )
   const broken =
-    diagnostics.sidecar.outcome.health === 'faulted-read-only' || !diagnostics.legacy.ok
+    diagnostics.sidecar.outcome.health === 'faulted-read-only'
+    || !diagnostics.legacy.ok
+    || refresh.corruption.length > 0
   return broken ? 1 : 0
 }
 

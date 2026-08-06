@@ -21,9 +21,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   collectMigrationDiagnostics,
+  collectRefreshDiagnostics,
   migrationDiagnosticsJson,
   readLegacyDocstore,
   renderMigrationDiagnostics,
+  renderRefreshDiagnostics,
 } from '../surface-diagnostics'
 import { parseDiagnosticsArgs, runDiagnosticsCli } from '../surface-diagnostics-cli'
 import { SURFACE_SIDECAR_SCHEMA_VERSION } from '../surface-persistence'
@@ -501,5 +503,150 @@ describe('the command', () => {
       ) as { legacy: { runs: number; points: number } }
       expect(json.legacy).toMatchObject({ runs: 1, points: 1 })
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Refresh diagnostics (plan U7).
+//
+// The counts exist so an operator can see the failure mode BEFORE noticing their
+// machine is busy: how much is dirty and waiting, how much machine work is really
+// running, and — the one that is not a metric — whether any record claims a refresh
+// created a session.
+// ---------------------------------------------------------------------------
+
+describe('collectRefreshDiagnostics', () => {
+  const surface = (id: string, over: {
+    phase?: string
+    recipe?: 'agent' | 'host' | null
+    outcome?: string
+  } = {}) => ({
+    id,
+    content: {
+      recipe: over.recipe === null ? undefined
+        : { kind: over.recipe ?? 'agent' },
+    },
+    freshness: {
+      phase: over.phase ?? 'current',
+      lastCheck: over.outcome ? { outcome: over.outcome } : null,
+    },
+  })
+
+  const job = (id: string, over: Partial<{
+    state: string; execution: string; intentAt: number
+    dispatch: { kind?: string; target?: string }
+    result: { ok: boolean; message?: string }
+  }> = {}) => ({
+    id, surfaceId: `sf-${id}`, state: 'completed', ...over,
+  })
+
+  it('separates dirty work that comes back on its own from dirty work waiting for a person', () => {
+    // THE NUMBER THAT MATTERS TO AN OPERATOR. A growing "awaiting a human" count is
+    // not a fault — it is a Slate nobody has opened — and reading it as backlog would
+    // send somebody looking for a broken engine.
+    const d = collectRefreshDiagnostics({
+      surfaces: [
+        surface('a', { phase: 'possibly-stale', recipe: 'host' }),
+        surface('b', { phase: 'possibly-stale', recipe: 'agent' }),
+        surface('c', { phase: 'possibly-stale', recipe: 'agent' }),
+        surface('d'),
+      ],
+      jobs: [],
+      now: 1_000,
+    })
+    expect(d.dirty).toBe(3)
+    expect(d.dirtyHostMaintained).toBe(1)
+    expect(d.dirtyAwaitingHuman).toBe(2)
+  })
+
+  it('does not count a recipe-LESS dirty Surface as awaiting a human', () => {
+    // Nobody's visit will rebuild it either, so folding it in would make the number
+    // that measures unseen work grow for a reason no human action can shrink.
+    const d = collectRefreshDiagnostics({
+      surfaces: [surface('a', { phase: 'possibly-stale', recipe: null })], jobs: [], now: 1,
+    })
+    expect(d.dirty).toBe(1)
+    expect(d.dirtyAwaitingHuman).toBe(0)
+  })
+
+  it('distinguishes DIRTY from FAILED-TO-CHECK, which are different problems', () => {
+    const d = collectRefreshDiagnostics({
+      surfaces: [
+        surface('a', { phase: 'possibly-stale', outcome: 'succeeded' }),
+        surface('b', { phase: 'failed', outcome: 'failed' }),
+        surface('c', { phase: 'possibly-stale', outcome: 'unavailable' }),
+        surface('d', { phase: 'possibly-stale', outcome: 'superseded' }),
+        surface('e'),
+      ],
+      jobs: [],
+      now: 1,
+    })
+    expect(d.checks).toEqual({ succeeded: 1, failed: 1, unavailable: 1, superseded: 1, never: 1 })
+  })
+
+  it('reports zero refresh-created sessions and no corruption on a healthy host', () => {
+    const d = collectRefreshDiagnostics({
+      surfaces: [surface('a')],
+      jobs: [job('1', { state: 'running', execution: 'owner', intentAt: 500 })],
+      now: 1,
+    })
+    expect(d.refreshCreatedSessions).toBe(0)
+    expect(d.corruption).toEqual([])
+    expect(d.activeOwnerAttempts).toBe(1)
+  })
+
+  it('reports an ACTIVE background dispatch as CORRUPTION, not as load', () => {
+    // Refresh cannot create a managed session, so a record saying one exists is
+    // evidence about the BUILD. A gauge would invite somebody to watch it trend.
+    const d = collectRefreshDiagnostics({
+      surfaces: [surface('a')],
+      jobs: [job('1', { state: 'running', dispatch: { kind: 'worker', target: 'refresh-job-1' } })],
+      now: 1,
+    })
+    expect(d.refreshCreatedSessions).toBe(1)
+    expect(d.corruption).toHaveLength(1)
+    expect(d.corruption[0]).toMatch(/refresh cannot create one/)
+    expect(d.corruption[0]).toMatch(/refresh-job-1/)
+  })
+
+  it('shows a RECONCILED legacy job as terminal history rather than a live fleet member', () => {
+    const d = collectRefreshDiagnostics({
+      surfaces: [surface('a')],
+      jobs: [job('1', {
+        state: 'failed',
+        dispatch: { kind: 'worker', target: 'refresh-job-1' },
+        result: { ok: false, message: 'left behind by the removed background-worker architecture' },
+      })],
+      now: 1,
+    })
+    expect(d.legacyReconciled).toBe(1)
+    // Counted as a past session, and NOT as corruption: it is terminal, which is
+    // exactly what reconciliation was supposed to make it.
+    expect(d.refreshCreatedSessions).toBe(1)
+    expect(d.corruption).toEqual([])
+    expect(renderRefreshDiagnostics(d)).toMatch(/Terminal history, not a live fleet/)
+  })
+
+  it('reports an active agent attempt nobody asked for as corruption', () => {
+    const d = collectRefreshDiagnostics({
+      surfaces: [surface('a')],
+      jobs: [job('1', { state: 'queued', execution: 'owner' })],
+      now: 1,
+    })
+    expect(d.corruption).toHaveLength(1)
+    expect(d.corruption[0]).toMatch(/no record of a human asking for it/)
+  })
+
+  it('the render leads with corruption, because it is the only part that needs action', () => {
+    const healthy = renderRefreshDiagnostics(collectRefreshDiagnostics({
+      surfaces: [surface('a')], jobs: [], now: 1,
+    }))
+    expect(healthy).toMatch(/✓ no refresh-created sessions/)
+    const broken = renderRefreshDiagnostics(collectRefreshDiagnostics({
+      surfaces: [surface('a')],
+      jobs: [job('1', { state: 'running', dispatch: { kind: 'worker' } })],
+      now: 1,
+    }))
+    expect(broken.indexOf('CORRUPTION')).toBeLessThan(broken.indexOf('dirty'))
   })
 })

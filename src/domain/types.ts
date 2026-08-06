@@ -572,10 +572,14 @@ export interface SlateSurface {
   /** File-owned A2UI body. Absent for a surface assembled purely from store state
    *  (e.g. a bare open-point). */
   body?: A2uiContent
-  /** File-owned refresh recipe (plan U3/R5): the prompt the agent re-runs to
-   *  regenerate this surface. Absent when the surface carries no recipe (refresh
-   *  still nudges). Carried from the file through the store onto `run.slate`. */
-  refresh?: string
+  /** The surface's ONE parsed refresh recipe (R1, KTD1), carried from the file
+   *  through the store onto `run.slate`. Absent when the surface carries none.
+   *
+   *  TYPED RATHER THAN THE AUTHOR'S RAW STRING, because the panel has to tell an
+   *  agent recipe — which only a human's deliberate interaction may run — from a
+   *  host one the host keeps warm by itself, and from an unreadable one that says
+   *  so. See {@link SurfaceRefreshRecipe}. */
+  refresh?: SurfaceRefreshRecipe
   /** File-owned WORKBENCH set id (S4). Open-points sharing a non-empty `group` are
    *  pulled out of the vertical list and rendered as one horizontal workbench band —
    *  one question per column, each answering independently through its own point's
@@ -702,10 +706,11 @@ export interface Point {
   headline: string
   /** File-owned: the point's A2UI body (absent for a bare headline point). */
   content?: A2uiContent
-  /** File-owned refresh recipe (plan U3/R5): the prompt POST /slate/surfaces/:pid/refresh
-   *  delivers verbatim to regenerate this surface. Optional; a recipe-less surface
-   *  still gets a bare nudge. Merged like the other file-owned fields (KTD3). */
-  refresh?: string
+  /** The point's ONE parsed refresh recipe (R1, KTD1). Optional; a recipe-less
+   *  point still gets a bare nudge. Merged like the other file-owned fields (KTD3).
+   *  Parsed at the file door — see `parseRefreshRecipe` — so no reader of a Point
+   *  has to re-decide what kind of work its recipe is. */
+  refresh?: SurfaceRefreshRecipe
   /** File-owned WORKBENCH set id (S4): points sharing a non-empty `group` render
    *  side-by-side as a multi-question workbench (one question per column) instead
    *  of as rows in the vertical open-points list. Optional and purely presentational
@@ -937,10 +942,115 @@ export interface SurfaceRefreshDeclaration {
   signals?: string[]
 }
 
+/**
+ * Every machine handler a `host` recipe may name (R7, KTD1).
+ *
+ * CLOSED, AND THE CLOSURE IS THE AUTHORITY. Proactive refresh — work the host may
+ * run without a human asking — is granted by membership in this union and nothing
+ * else. An author cannot label arbitrary work cheap, because the only thing they
+ * can write is a NAME, and a name outside this list resolves to
+ * {@link SurfaceRefreshRecipe}'s `unreadable` variant rather than to anything the
+ * host will execute.
+ *
+ * Each member must be machine-only, read-only, and bounded: no model call, no
+ * managed session, no terminal, no delegation to an agent. The handlers that
+ * implement them live in `src/server/surfaces/host-refresh-registry.ts`, which is
+ * constructed without any dependency that could reach those capabilities.
+ */
+export const HOST_RECIPE_KINDS = ['http-status', 'unit-landed'] as const
+
+export type SurfaceHostRecipeKind = typeof HOST_RECIPE_KINDS[number]
+
+/**
+ * A Surface's ONE refresh recipe, and therefore who is allowed to run it
+ * (R1/R2/R6/R7, KTD1/KTD2).
+ *
+ * THE DISCRIMINATOR IS THE PERMISSION. Scheduling asks this value — not the
+ * author's `refreshPolicy`, not the trigger that fired, not the browser — whether
+ * the host may execute without a human. That separation is KTD2: a trigger may mark
+ * ANY Surface dirty, and only the parsed kind decides what happens next. An
+ * `automatic` policy on an agent recipe therefore grants nothing.
+ *
+ *  · `agent` — rebuilt by the Surface's existing foreground collaborator, and only
+ *    when a human deliberately navigates to or interacts with the dirty Surface
+ *    (R11). This is what a legacy string recipe parses as, which is the safe
+ *    direction to fail in: an author who wrote prose gets human-authorized refresh,
+ *    never proactive execution.
+ *  · `host` — a registered machine handler from {@link HOST_RECIPE_KINDS}. The only
+ *    proactive-eligible variant.
+ *  · `unreadable` — the author wrote a recipe object the host cannot parse. It is
+ *    kept rather than dropped so diagnostics can SAY SO; it is never executed by
+ *    anybody, because guessing a handler from unparseable text is exactly the leak
+ *    the closed union exists to prevent.
+ */
+export type SurfaceRefreshRecipe =
+  | {
+    kind: 'agent'
+    /** The self-contained instruction delivered to the foreground agent. */
+    prompt: string
+  }
+  | {
+    kind: 'host'
+    handler: SurfaceHostRecipeKind
+    /** Validated string parameters for the handler. Strings only: a parameter is a
+     *  URL or a document path, and a nested structure is a place for something
+     *  executable to hide. */
+    params?: Record<string, string>
+  }
+  | {
+    kind: 'unreadable'
+    /** One sentence a diagnostic or a card can render, saying what was wrong. */
+    detail: string
+  }
+
 /** The execution phase of a Surface's freshness lifecycle (R18). Kept SEPARATE
  *  from {@link PointStatus}: a resolved discussion says nothing about whether the
  *  content still reflects its source. */
 export type SurfaceFreshnessPhase = 'current' | 'possibly-stale' | 'queued' | 'refreshing' | 'failed'
+
+/**
+ * How a completed check ended (R15-R18, KTD5).
+ *
+ * FOUR OUTCOMES BECAUSE THREE OF THEM ARE NOT "IT BROKE". `failed` means the
+ * executor ran and could not produce or commit a result; `unavailable` means there
+ * was no authorized way to run it at all (no live foreground agent, no reachable
+ * source); `superseded` means it ran fine and the world moved underneath it, which
+ * is a completed check with a non-current outcome rather than an error. Collapsing
+ * them would make "Jira is down" and "your agent has exited" render identically,
+ * and they call for different things from the reader.
+ */
+export type SurfaceCheckOutcome = 'succeeded' | 'failed' | 'unavailable' | 'superseded'
+
+/** Which executor ran the check. `host` is a machine handler; `owner` is the
+ *  Surface's existing foreground agent. There is no third. */
+export type SurfaceCheckExecution = 'host' | 'owner'
+
+/**
+ * The last COMPLETED check of a Surface — what was checked, when, and how it ended.
+ *
+ * SEPARATE FROM THE CONTENT'S OWN AGE, and that separation is the point of KTD5. A
+ * Surface shows two facts: what is known (its content, dated by
+ * {@link SurfaceFreshness.lastKnownAt}) and when the host last looked (this). A
+ * successful check that changed nothing moves only this one — which is exactly the
+ * common case, and the case a single timestamp could not tell apart from a rebuild.
+ *
+ * ONLY TERMINAL TRANSITIONS WRITE HERE. Queueing, budget deferral, and an attempt
+ * that is still running leave the previous completed check exactly where it was: a
+ * check that has not finished has not answered anything, and overwriting the last
+ * one that did would destroy the evidence while producing none.
+ */
+export interface SurfaceLastCheck {
+  startedAt: number
+  finishedAt: number
+  execution: SurfaceCheckExecution
+  /** Why this check ran, in one renderable sentence. */
+  reason: string
+  /** The host observation generation the check was computed against. */
+  targetGeneration: number
+  outcome: SurfaceCheckOutcome
+  /** What went wrong, or what changed. Absent on an uneventful success. */
+  detail?: string
+}
 
 /** Why the host believes a Surface may no longer reflect its sources (R15). */
 export interface SurfaceStaleReason {
@@ -973,8 +1083,40 @@ export interface SurfaceFreshness {
    *  against an older generation than the source now has is superseded rather
    *  than allowed to claim current (KTD10). */
   observedGeneration?: number
-  /** Epoch ms of the last successful verification. */
+  /** Epoch ms of the last successful verification.
+   *
+   *  RETAINED as the store's own "content last arrived or was rebuilt" stamp, which
+   *  is what the barrier and `deriveDueAt` compare against. What a READER should be
+   *  shown is {@link lastKnownAt} and {@link lastCheck}, which say the two different
+   *  things this one field was being asked to say at once. */
   verifiedAt?: number
+  /**
+   * Epoch ms the VISIBLE CONTENT became known (R3, KTD5).
+   *
+   * MOVES ONLY ON AN ACCEPTED CONTENT REPLACEMENT. A successful check that found
+   * nothing to change leaves this alone and advances {@link lastCheck} instead —
+   * which is the difference between "this answer is from 09:12" and "we confirmed at
+   * 10:47 that the 09:12 answer still holds". Both are true and a reader needs both.
+   *
+   * Optional on the TYPE and GUARANTEED ON THE RECORD: every persisted canonical
+   * Surface carries one, backfilled by `surface-migration.ts` from the best evidence
+   * a legacy record has (`verifiedAt`, then `amendedAt`, then `createdAt`). Making it
+   * non-optional in TypeScript would have bought nothing the migration does not
+   * already guarantee, at the cost of touching every Surface literal in the tree.
+   */
+  lastKnownAt?: number
+  /**
+   * The last COMPLETED check, or `null` when the host has never finished one (R3,
+   * KTD5/KTD11).
+   *
+   * EXPLICITLY NULLABLE RATHER THAN OMITTED, and that is not a style choice. SSE
+   * deltas drop undefined keys — see
+   * `docs/solutions/integration-issues/sse-delta-drops-undefined-keys-stale-client-state.md`
+   * — so a writer that cleared this by omitting it would leave every connected
+   * client rendering a failure the server has already recovered from. Writers emit
+   * `null`; readers treat `null` and absent alike as "never checked".
+   */
+  lastCheck?: SurfaceLastCheck | null
   /** Why this Surface left `current`. Retained through `queued` and `refreshing`
    *  so the reason a refresh is happening survives into the UI, and cleared only
    *  by a successful verification barrier. */
@@ -1206,9 +1348,14 @@ export interface SurfaceContent {
   /** A2UI body from the bounded component catalog (R7). Absent for a Surface that
    *  is a bare headline plus thread. */
   body?: A2uiContent
-  /** Author-declared refresh recipe (R13): the self-contained instruction that
-   *  rebuilds this Surface. Absent means refresh degrades to a bare nudge. */
-  recipe?: string
+  /** The ONE recipe that rebuilds this whole Surface (R1/R2, KTD1).
+   *
+   *  One per Surface, whatever the recipe consults, and it produces one candidate
+   *  replacement for the entire Surface — independently refreshed regions are
+   *  separate Surfaces the Slate composes. Absent means refresh degrades to a bare
+   *  nudge. See {@link SurfaceRefreshRecipe} for why the variant, not the author's
+   *  policy, decides who may run it. */
+  recipe?: SurfaceRefreshRecipe
   /** Author-declared freshness contract (R13/R14, plan U6). Absent means the host
    *  applies its defaults — see `effectiveDeclaration` in
    *  `src/server/surfaces/surface-trigger-matcher.ts`. */

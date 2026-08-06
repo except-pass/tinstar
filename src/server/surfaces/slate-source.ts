@@ -28,11 +28,32 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join, sep } from 'node:path'
 import type {
   A2uiContent, PointAuthor, SurfaceClaim, SurfaceContent, SurfaceProposal, SurfaceRefreshDeclaration,
+  SurfaceRefreshRecipe,
 } from '../../domain/types'
 import {
-  parseProposal, parseRefreshDeclaration, parseSurfaceClaim, parseSurfaceClaims,
+  parseProposal, parseRefreshDeclaration, parseRefreshRecipe, parseSurfaceClaim, parseSurfaceClaims,
 } from './surface-trigger-matcher'
 import type { SurfaceSourceAdapter } from './surface-service'
+
+/**
+ * One parsed recipe as the value an author's file would hold.
+ *
+ * THE INVERSE OF `parseRefreshRecipe`, and it has to round-trip: the reconciler
+ * writes an entry back and then re-reads it, so a serialization the parser reads
+ * differently would show up as an author edit on the very next epoch, forever.
+ *
+ * `unreadable` writes back the ORIGINAL nothing — the host never understood what the
+ * author meant, so it has nothing to say about what they should have written, and
+ * replacing their words with a host diagnostic would destroy the only copy of what
+ * they actually wrote.
+ */
+export function refreshRecipeToFileValue(recipe: SurfaceRefreshRecipe): unknown {
+  if (recipe.kind === 'agent') return recipe.prompt
+  if (recipe.kind === 'host') {
+    return { kind: 'host', handler: recipe.handler, ...(recipe.params ? { params: recipe.params } : {}) }
+  }
+  return undefined
+}
 
 /** The adapter name stamped on a Surface reconciled from a Slate source file. */
 export const SLATE_FILE_ADAPTER = 'slate-file'
@@ -111,7 +132,7 @@ export function parseSlateFileLocator(locator: string): { file: string; localId:
 export function slateEntryWatermark(fields: {
   headline: string
   body?: A2uiContent
-  recipe?: string
+  recipe?: SurfaceRefreshRecipe
   refreshPolicy?: SurfaceRefreshDeclaration
   claims?: SurfaceClaim[]
   proposal?: SurfaceProposal
@@ -175,7 +196,7 @@ const DEFAULT_FS: SlateSourceFs = {
  *  the entry it is about to replace — the ingress side computes the same value from
  *  the same fields through {@link slateEntryWatermark}. */
 function authoredFieldsOf(raw: unknown): {
-  headline: string; body?: A2uiContent; recipe?: string
+  headline: string; body?: A2uiContent; recipe?: SurfaceRefreshRecipe
   refreshPolicy?: SurfaceRefreshDeclaration; claims?: SurfaceClaim[]
   proposal?: SurfaceProposal; author: PointAuthor
 } | null {
@@ -184,6 +205,7 @@ function authoredFieldsOf(raw: unknown): {
   if (typeof r.headline !== 'string' || !r.headline) return null
   const author: PointAuthor = r.author === 'user' || r.author === 'process' ? r.author : 'agent'
   const declaration = parseRefreshDeclaration(r.refreshPolicy)
+  const recipe = parseRefreshRecipe(r.refresh)
   // The REFUSALS half is deliberately dropped here. This function exists to
   // reproduce the watermark of an entry the ingress side already read, and a refusal
   // is host knowledge that is not in the watermark basis — reading it on this side
@@ -196,7 +218,11 @@ function authoredFieldsOf(raw: unknown): {
   return {
     headline: r.headline,
     ...(r.content !== undefined ? { body: r.content as A2uiContent } : {}),
-    ...(typeof r.refresh === 'string' && r.refresh ? { recipe: r.refresh } : {}),
+    // Parsed rather than read raw, for the same reason the declaration below is:
+    // the watermark this computes has to match the one INGRESS computes from the
+    // same bytes, and ingress parses. Hashing the raw value would move the watermark
+    // on every epoch for any recipe the parser normalizes at all.
+    ...(recipe ? { recipe } : {}),
     // Parsed rather than passed through, so the watermark this computes matches the
     // one INGRESS computes from the same file. Hashing the raw declaration would let
     // a field the parser drops move the watermark on every epoch, forever.
@@ -303,8 +329,13 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     next.headline = input.content.headline
     if (input.content.body === undefined) delete next.content
     else next.content = input.content.body
+    // Written back in the AUTHOR'S OWN SHAPE, not the host's: an agent recipe goes
+    // back as the prose string the author wrote, and a host one as the object they
+    // wrote. Serializing the internal union instead would rewrite every existing
+    // string recipe into `{"kind":"agent","prompt":...}` in somebody's repository
+    // the first time an API edit touched the surface.
     if (input.content.recipe === undefined) delete next.refresh
-    else next.refresh = input.content.recipe
+    else next.refresh = refreshRecipeToFileValue(input.content.recipe)
     // The declaration travels with the recipe (U6): they are one contract, and
     // writing back a recipe without the triggers that fire it would leave the file
     // describing a surface the host refreshes on different terms.
