@@ -49,7 +49,6 @@
   <script>
     var params = new URLSearchParams(location.search)
     var session = params.get('session') || ''
-    var port = params.get('port') || ''
     var termEl = document.getElementById('term')
     var errorOverlay = document.getElementById('error-overlay')
     var errorMsg = document.getElementById('error-msg')
@@ -83,20 +82,17 @@
       var apiBase = ''
       try { apiBase = (window.parent && window.parent.__TINSTAR_API_BASE__) || '' } catch(e) {}
 
-      if (session) {
-        termEl.src = apiBase + '/s/' + session + '/'
-      } else if (port) {
-        // localhost won't work when the desktop app and backend are on different
-        // machines; derive the host from apiBase when present.
-        var host = 'localhost'
-        if (apiBase) {
-          try { host = new URL(apiBase).hostname } catch(e) {}
-        }
-        termEl.src = 'http://' + host + ':' + port + '/'
-      } else {
-        showError('No session or port specified')
+      // The session proxy is the ONLY path to a terminal. Deriving a host and
+      // hitting the ttyd port directly cannot work any more: terminals bind
+      // loopback, so that port is unreachable from a remote browser and gated
+      // on a header only the proxy injects. An empty session is the case that
+      // used to slip through — a composer whose session id has not resolved
+      // yet renders `session=`, which is falsy.
+      if (!session) {
+        showError('No session specified')
         return
       }
+      termEl.src = apiBase + '/s/' + session + '/'
 
       // If the iframe doesn't fire 'load' within 8s, something is wrong
       loadTimer = setTimeout(function() {

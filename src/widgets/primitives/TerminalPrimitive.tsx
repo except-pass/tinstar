@@ -2,16 +2,17 @@ import { forwardRef } from 'react'
 
 export interface TerminalPrimitiveProps {
   sessionId: string
-  /** Optional fixed port fallback when there's no managed session id. */
-  port?: number
   zoom?: number
 }
 
 export const TerminalPrimitive = forwardRef<HTMLIFrameElement, TerminalPrimitiveProps>(
-  function TerminalPrimitive({ sessionId, port, zoom = 1 }, ref) {
-    const qs = sessionId ? `session=${encodeURIComponent(sessionId)}` : port ? `port=${port}` : ''
+  function TerminalPrimitive({ sessionId, zoom = 1 }, ref) {
+    // Session-scoped only. The port fallback this used to carry produced a
+    // bare-port URL, which a remote browser cannot reach at all now that
+    // terminals bind loopback — the session proxy is the only path.
+    const qs = sessionId ? `session=${encodeURIComponent(sessionId)}` : ''
     const needsScale = zoom > 1
-    const label = sessionId || (port ? `:${port}` : 'terminal')
+    const label = sessionId || 'terminal'
     return (
       <div className="flex flex-col h-full w-full overflow-hidden bg-black">
         {/* Drag handle header — the only place the widget can be grabbed, since the

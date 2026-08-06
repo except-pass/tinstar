@@ -8,8 +8,10 @@ describe('TerminalPrimitive', () => {
     const frame = container.querySelector('iframe')!
     expect(frame.getAttribute('src')).toBe('/terminal-wrapper.html?session=S-1')
   })
-  it('falls back to port when no session id', () => {
-    const { container } = render(<TerminalPrimitive sessionId="" port={7681} />)
-    expect(container.querySelector('iframe')!.getAttribute('src')).toBe('/terminal-wrapper.html?port=7681')
+  it('never emits a port parameter, so the wrapper cannot build a bare-port URL', () => {
+    const { container } = render(<TerminalPrimitive sessionId="" />)
+    const src = container.querySelector('iframe')!.getAttribute('src')!
+    expect(src).toBe('/terminal-wrapper.html?')
+    expect(src).not.toContain('port=')
   })
 })

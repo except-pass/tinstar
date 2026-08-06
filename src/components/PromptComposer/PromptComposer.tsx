@@ -964,7 +964,12 @@ export function PromptComposer({
   composerFocusTrigger,
 }: PromptComposerProps) {
   const TABS = ['recap', 'terminal'] as const
-  const fallbackTab: 'recap' | 'terminal' = defaultTab ?? (port ? 'terminal' : 'recap')
+  // A terminal needs BOTH: the port is what says this run has one, and the
+  // session id is what addresses it through the proxy. Gating on the port
+  // alone is how an unresolved session id used to reach the wrapper as an
+  // empty string and fall through to a bare-port URL.
+  const hasTerminal = Boolean(port && sessionId)
+  const fallbackTab: 'recap' | 'terminal' = defaultTab ?? (hasTerminal ? 'terminal' : 'recap')
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(fallbackTab)
   const activeTab = controlledTab
     ?? (activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? fallbackTab) : internalActiveTab)
@@ -995,7 +1000,7 @@ export function PromptComposer({
           <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
             {([
               { key: 'recap' as const, label: 'Recap' },
-              { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
+              { key: 'terminal' as const, label: hasTerminal ? 'Terminal' : 'Logs' },
             ]).map(({ key, label }) => (
               <button
                 key={key}
@@ -1016,9 +1021,9 @@ export function PromptComposer({
       )}
 
       {/* Content */}
-      {activeTab === 'terminal' && port ? (
+      {activeTab === 'terminal' && hasTerminal && sessionId ? (
         <TerminalFrame
-          src={`/terminal-wrapper.html?session=${encodeURIComponent(sessionId ?? '')}&port=${port}`}
+          src={`/terminal-wrapper.html?session=${encodeURIComponent(sessionId)}`}
           tick={termTick}
           focused={terminalFocused}
           accent={accent}
@@ -1065,7 +1070,7 @@ export function PromptComposer({
       )}
 
       {/* Prompt composer — visible on Recap (always) and Terminal (when port). */}
-      {sessionId && (activeTab === 'recap' || (activeTab === 'terminal' && port)) && (
+      {sessionId && (activeTab === 'recap' || (activeTab === 'terminal' && hasTerminal)) && (
         <ComposerInput
           sessionId={sessionId}
           accent={accent}
