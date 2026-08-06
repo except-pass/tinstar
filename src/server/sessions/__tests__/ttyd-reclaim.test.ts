@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { log } from '../../logger'
+import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
 import {
   allTtydIncumbentsStrict,
   clearTtydStartCancellationReasonForTests,
   findPort,
+  healthCheck,
   releasePort,
   setTerminalBindAddress,
   terminalBindAddress,
@@ -1199,6 +1202,67 @@ function firstNonLoopbackIPv4(): string | null {
   return null
 }
 
+/** tmux exits non-zero for an absent session; that is the ordinary case here. */
+function tmuxQuietly(args: string[]): void {
+  try {
+    execFileSync('tmux', args, { stdio: 'ignore' })
+  } catch { /* no such session */ }
+}
+
+/**
+ * Status, or 'error' when the request never completes. ttyd's refusal reads
+ * differently depending on the client: curl sees `407`, Node's fetch sees the
+ * connection torn down and throws. Both are "not ok", which is all the
+ * readiness probe needs — but a test asserting the literal 407 would be
+ * asserting curl's view of the world from inside Node.
+ */
+async function statusOf(
+  port: number,
+  headers: Record<string, string>,
+): Promise<number | 'error'> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/`, { headers })
+    return res.status
+  } catch {
+    return 'error'
+  }
+}
+
+/**
+ * Raw handshake bytes, not a WebSocket client: ttyd's refusal is a closed
+ * connection rather than a status line, and a client library would surface
+ * that as an opaque error instead of the wire truth.
+ */
+function rawUpgrade(
+  port: number,
+  headers: Record<string, string>,
+): Promise<string> {
+  return new Promise((resolve) => {
+    const lines = [
+      'GET /ws HTTP/1.1',
+      `Host: 127.0.0.1:${port}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Version: 13',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      'Sec-WebSocket-Protocol: tty',
+      ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+      '', '',
+    ].join('\r\n')
+    let buf = ''
+    const sock = connect({ host: '127.0.0.1', port, timeout: 4_000 }, () => {
+      sock.write(lines)
+    })
+    sock.on('data', chunk => {
+      buf += chunk.toString()
+      if (buf.includes('\r\n\r\n')) { sock.destroy(); resolve(buf) }
+    })
+    sock.on('timeout', () => { sock.destroy(); resolve(buf || 'TIMEOUT') })
+    sock.on('close', () => resolve(buf || 'CLOSED'))
+    sock.on('error', () => { sock.destroy(); resolve(buf || 'CLOSED') })
+  })
+}
+
 function connectFails(host: string, port: number): Promise<string> {
   return new Promise((resolve) => {
     const sock = connect({ host, port, timeout: 1_500 })
@@ -1342,6 +1406,109 @@ describe('terminal bind address — every spawned ttyd is loopback-only', () => 
       releasePort(port)
     }
   }, 20_000)
+})
+
+describe('terminal auth header — every Tinstar hop presents it', () => {
+  const opts = {
+    sessionName: 'hdr',
+    tmuxName: 'tinstar-hdr',
+    port: 6321,
+  }
+
+  it('spawns ttyd with the auth-header flag', () => {
+    const argv = ttydSpawnArgv(opts)
+    expect(argv[argv.indexOf('-H') + 1]).toBe(TERMINAL_AUTH_HEADER)
+  })
+
+  it('keeps the argv shape both incumbent parsers read', () => {
+    const argv = ttydSpawnArgv(opts)
+    const line = ['ttyd', ...argv].join(' ')
+    expect(tmuxTargetFromArgs(line)).toBe(opts.tmuxName)
+    expect(ttydBindAddressFromArgs(line)).toBe('127.0.0.1')
+  })
+
+  it('presents the header on the readiness probe', async () => {
+    // KTD14: -H gates ALL of ttyd's HTTP, not just the upgrade. A probe without
+    // the header reads 407 — not ok — so every session would fail readiness and
+    // no terminal would ever publish, while a test asserting only the upgrade
+    // path stayed green.
+    const seen: Array<Record<string, string>> = []
+    const server = createServer((req, res) => {
+      seen.push(req.headers as Record<string, string>)
+      if (!req.headers[TERMINAL_AUTH_HEADER.toLowerCase()]) {
+        res.writeHead(407)
+        res.end()
+        return
+      }
+      res.writeHead(200)
+      res.end('ok')
+    })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      await expect(healthCheck(port, { timeout: 2_000, interval: 100 }))
+        .resolves.toBe(true)
+      expect(seen[0]?.[TERMINAL_AUTH_HEADER.toLowerCase()]).toBeTruthy()
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(r => { server.close(() => r()) })
+    }
+  })
+
+  it('reports unhealthy against a gate it cannot satisfy', async () => {
+    // The negative half: prove the gate is live rather than vacuous by serving
+    // 407 to everything, including a correctly-headered probe.
+    const server = createServer((_req, res) => { res.writeHead(407); res.end() })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      await expect(healthCheck(port, { timeout: 600, interval: 100 }))
+        .resolves.toBe(false)
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(r => { server.close(() => r()) })
+    }
+  })
+
+  const liveHeaderIt = ttydInstalled() ? it : it.skip
+
+  liveHeaderIt('refuses a direct upgrade without the header, against a real ttyd', async () => {
+    // Whether -H covers the WebSocket upgrade at all is not documented — ttyd's
+    // help calls it an auth-proxy header and says nothing about upgrades. Only
+    // a live process can answer it, so this scenario never runs against a mock.
+    const port = await findPort({ label: 'ttyd-header-proof', start: 41_411, count: 40 })
+    const tmuxName = 'tinstar-header-proof'
+    // A live tmux target, because ttyd stops serving once its command exits —
+    // the bind proof upstream only needs a socket, this one needs responses.
+    tmuxQuietly(['kill-session', '-t', tmuxName])
+    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, 'sleep 120'])
+    const argv = ttydSpawnArgv({ sessionName: 'header-proof', tmuxName, port })
+    const child = spawn('ttyd', argv, { stdio: 'ignore' })
+    try {
+      await waitForListener(port)
+
+      // Plain HTTP: gated. Not 200 either way is the load-bearing half.
+      expect(await statusOf(port, {})).not.toBe(200)
+      expect(await statusOf(port, { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE })).toBe(200)
+
+      // The upgrade, which is the half nobody had measured.
+      const bare = await rawUpgrade(port, {})
+      expect(bare).not.toContain('101')
+      const withHeader = await rawUpgrade(port, {
+        [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE,
+      })
+      expect(withHeader).toContain('101 Switching Protocols')
+      expect(withHeader).toContain('tty')
+
+      // And the probe Tinstar actually uses reaches it.
+      await expect(healthCheck(port, { timeout: 3_000, interval: 100 }))
+        .resolves.toBe(true)
+    } finally {
+      child.kill('SIGKILL')
+      tmuxQuietly(['kill-session', '-t', tmuxName])
+      releasePort(port)
+    }
+  }, 25_000)
 })
 
 describe('inherited terminal bind — parsing an incumbent back out of ps args', () => {

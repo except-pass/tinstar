@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 import { PassThrough } from 'node:stream'
 import httpProxy from 'http-proxy'
 import {
   SESSION_PROXY_HOST,
+  TERMINAL_AUTH_HEADER,
+  createSessionRequestHandler,
   createSessionUpgradeHandler,
   handleSessionProxyError,
   isUpgradeOriginAllowed,
@@ -44,14 +46,21 @@ function listen(server: Server): Promise<number> {
  * proxy rather than being short-circuited.
  */
 function startFakeTerminal() {
-  const seen: { upgradePaths: string[], httpPaths: string[] } = { upgradePaths: [], httpPaths: [] }
+  const seen: {
+    upgradePaths: string[]
+    httpPaths: string[]
+    httpHeaders: IncomingHttpHeaders[]
+    upgradeHeaders: IncomingHttpHeaders[]
+  } = { upgradePaths: [], httpPaths: [], httpHeaders: [], upgradeHeaders: [] }
   const server = track(createServer((req, res) => {
     seen.httpPaths.push(req.url ?? '')
+    seen.httpHeaders.push(req.headers)
     res.writeHead(200, { 'Content-Type': 'text/plain' })
     res.end(`terminal:${req.url}`)
   }))
   server.on('upgrade', (req, socket) => {
     seen.upgradePaths.push(req.url ?? '')
+    seen.upgradeHeaders.push(req.headers)
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
   })
   return { server, seen, port: listen(server) }
@@ -235,6 +244,98 @@ describe('handleSessionProxyError', () => {
     const res = { writeHead: vi.fn(), end: vi.fn(), headersSent: true, writableEnded: false }
     handleSessionProxyError(new Error('boom'), res as never, vi.fn())
     expect(res.writeHead).not.toHaveBeenCalled()
+  })
+})
+
+describe('terminal auth header — the gate on a direct hit', () => {
+  it('injects the header on the http pass', async () => {
+    const terminal = startFakeTerminal()
+    const terminalPort = await terminal.port
+    const proxy = httpProxy.createProxyServer({})
+    const handle = createSessionRequestHandler({
+      getRun: () => ({ port: terminalPort }),
+      proxyWeb: (req, res, options) => proxy.web(req, res, options),
+    })
+    const server = track(createServer((req, res) => {
+      if (!handle(req, res)) { res.writeHead(404); res.end('missed') }
+    }))
+    const port = await listen(server)
+
+    const res = await fetch(`http://127.0.0.1:${port}/s/run-1/token`)
+    expect(res.status).toBe(200)
+    expect(terminal.seen.httpHeaders[0]?.[TERMINAL_AUTH_HEADER.toLowerCase()])
+      .toBeTruthy()
+  })
+
+  it('injects the header on the upgrade pass', async () => {
+    const terminal = startFakeTerminal()
+    const terminalPort = await terminal.port
+    const proxy = httpProxy.createProxyServer({ ws: true })
+    const upgrade = createSessionUpgradeHandler({
+      getRun: () => ({ port: terminalPort }),
+      allowedOrigins: () => [],
+      proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
+    })
+    const server = track(createServer((_req, res) => { res.end() }))
+    server.on('upgrade', upgrade)
+    const port = await listen(server)
+
+    expect(await handshake(port, '/s/run-1/ws')).toContain('101')
+    expect(terminal.seen.upgradeHeaders[0]?.[TERMINAL_AUTH_HEADER.toLowerCase()])
+      .toBeTruthy()
+  })
+
+  it('strips provider identity headers before the terminal sees them', async () => {
+    // KTD10: identity headers are recorded, never trusted. Forwarding one to a
+    // terminal would hand a forged claim to a process that has no way to judge
+    // it — and after loopback binding any local process can forge one.
+    const terminal = startFakeTerminal()
+    const terminalPort = await terminal.port
+    const proxy = httpProxy.createProxyServer({})
+    const handle = createSessionRequestHandler({
+      getRun: () => ({ port: terminalPort }),
+      proxyWeb: (req, res, options) => proxy.web(req, res, options),
+    })
+    const server = track(createServer((req, res) => {
+      if (!handle(req, res)) { res.writeHead(404); res.end('missed') }
+    }))
+    const port = await listen(server)
+
+    await fetch(`http://127.0.0.1:${port}/s/run-1/`, {
+      headers: {
+        'Tailscale-User-Login': 'someone@example.com',
+        'Tailscale-User-Name': 'Someone',
+      },
+    })
+    expect(terminal.seen.httpHeaders[0]?.['tailscale-user-login']).toBeUndefined()
+    expect(terminal.seen.httpHeaders[0]?.['tailscale-user-name']).toBeUndefined()
+  })
+
+  it('strips provider identity headers on the upgrade pass too', async () => {
+    const terminal = startFakeTerminal()
+    const terminalPort = await terminal.port
+    const proxy = httpProxy.createProxyServer({ ws: true })
+    const upgrade = createSessionUpgradeHandler({
+      getRun: () => ({ port: terminalPort }),
+      allowedOrigins: () => [],
+      proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
+    })
+    const server = track(createServer((_req, res) => { res.end() }))
+    server.on('upgrade', upgrade)
+    const port = await listen(server)
+
+    await handshake(port, '/s/run-1/ws', { 'Tailscale-User-Login': 'someone@example.com' })
+    expect(terminal.seen.upgradeHeaders[0]?.['tailscale-user-login']).toBeUndefined()
+  })
+
+  it('leaves the session-proxy branch alone for a non-session URL', () => {
+    const proxyWeb = vi.fn()
+    const handle = createSessionRequestHandler({
+      getRun: () => ({ port: 7681 }),
+      proxyWeb,
+    })
+    expect(handle({ url: '/api/runs', headers: {} } as never, {} as never)).toBe(false)
+    expect(proxyWeb).not.toHaveBeenCalled()
   })
 })
 

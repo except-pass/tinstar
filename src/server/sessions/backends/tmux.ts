@@ -23,6 +23,7 @@ import {
 } from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { LOOPBACK_BIND_ADDRESS } from '../../bind'
+import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
 import { log } from '../../logger'
 import {
   defaultProviderRegistry,
@@ -2121,11 +2122,17 @@ export interface StartTtydAttemptDeps {
  * readiness probes and the /s/{name} proxy all key on). ttyd's help documents
  * only interface names and socket paths for `-i`, but an IP literal binds
  * exactly that address — verified on ttyd 1.7.4.
+ *
+ * `-H` closes the remaining hole loopback leaves: any local process could still
+ * open a writable shell by hitting the port directly. It gates ALL of ttyd's
+ * HTTP, upgrade included, so every Tinstar hop must present the header — see
+ * {@link healthCheck}, which is the one that would otherwise fail silently.
  */
 export function ttydSpawnArgv(opts: StartTtydOptions): string[] {
   return [
     '-W',
     '-i', terminalBindAddress(),
+    '-H', TERMINAL_AUTH_HEADER,
     '-p', String(opts.port),
     '-t', 'titleFixed=Tinstar',
     '-t', 'theme={"background":"#000000"}',
@@ -2775,9 +2782,16 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
     const controller = new AbortController()
     const abortTimer = setTimeout(() => controller.abort(), remaining)
     try {
+      // The header is not optional here. `-H` gates every ttyd request, so an
+      // unauthenticated probe reads 407 — not ok — and the session never
+      // reports ready. A test that only asserts the upgrade path stays green
+      // through that, which is why this hop is called out in KTD14.
       const response = await fetch(
         `http://localhost:${port}/`,
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          headers: { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE },
+        },
       )
       if (response.ok) return true
     } catch {

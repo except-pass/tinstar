@@ -32,10 +32,10 @@ import {
 import { openListeners, resolveBindTargets } from './bind'
 import { decideStaticServe } from './staticServe'
 import {
+  createSessionRequestHandler,
   createSessionUpgradeHandler,
   handleSessionProxyError,
   loopbackOriginsForPort,
-  resolveSessionProxyTarget,
 } from './sessionProxy'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -117,21 +117,7 @@ export function startServer(opts: ServerOptions) {
     const url = req.url ?? '/'
 
     // 1. Session proxy — runs BEFORE static files
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
-    if (sessionMatch) {
-      const sessionName = sessionMatch[1]!
-      const target = resolveSessionProxyTarget(ctx.docStore.getRun(sessionName))
-      if (!target) {
-        if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
-          res.end(`Session "${sessionName}" not found or has no port`)
-        }
-        return
-      }
-      // Strip the /s/{name} prefix before proxying
-      req.url = sessionMatch[2] || '/'
-      proxy.web(req, res, { target: target.url })
-      return
-    }
+    if (sessionRequestHandler(req, res)) return
 
     // 2. API requests
     try {
@@ -186,6 +172,16 @@ export function startServer(opts: ServerOptions) {
     // decision.kind === 'not-found'
     if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
   }
+
+  const sessionRequestHandler = createSessionRequestHandler({
+    getRun: name => ctx.docStore.getRun(name),
+    proxyWeb: (req, res, options) => proxy.web(req, res, options),
+    onNoTarget: (sessionName, res) => {
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
+        res.end(`Session "${sessionName}" not found or has no port`)
+      }
+    },
+  })
 
   const upgradeHandler = createSessionUpgradeHandler({
     getRun: name => ctx.docStore.getRun(name),

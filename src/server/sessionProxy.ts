@@ -8,6 +8,59 @@ import type { Duplex } from 'node:stream'
  */
 export const SESSION_PROXY_HOST = '127.0.0.1'
 
+/**
+ * The header ttyd is told to require (`-H`). Its job is narrow and worth
+ * stating exactly: it stops a **direct** hit on the terminal port. It does not
+ * close the browser path, because a hostile page reaches the proxied hop and
+ * this proxy injects the header on its behalf — that case is the `Origin`
+ * refusal's job.
+ *
+ * Verified against ttyd 1.7.4, not read off the help text: `-H` gates every
+ * HTTP request (a plain GET returns 407 without it), and it gates the
+ * WebSocket upgrade too — a raw handshake without the header gets an empty
+ * reply and a closed connection, with the header it gets 101 and the `tty`
+ * subprotocol. Every Tinstar path that speaks to a terminal must present it,
+ * including the readiness probe.
+ */
+export const TERMINAL_AUTH_HEADER = 'X-Tinstar-Proxy'
+
+/** ttyd checks for the header's presence; the value is ours to choose. */
+export const TERMINAL_AUTH_VALUE = 'tinstar-session-proxy'
+
+/**
+ * Identity headers a reach provider stamps on the inbound edge. They are
+ * recorded, never treated as attested (KTD10): after loopback binding every
+ * request appears local, so any local process can forge one. Dropping them at
+ * this hop keeps a forged claim from reaching a terminal, which has no way to
+ * judge it.
+ */
+export const PROVIDER_IDENTITY_HEADERS = [
+  'tailscale-user-login',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+] as const
+
+/** Options every hop to a terminal is made with — one source for both passes. */
+export function terminalProxyOptions(
+  target: SessionProxyTarget,
+): { target: string; headers: Record<string, string> } {
+  return { target: target.url, headers: { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE } }
+}
+
+/** Mutates the request in place; returns the header names actually dropped. */
+export function stripProviderIdentityHeaders(
+  headers: Record<string, unknown>,
+): string[] {
+  const dropped: string[] = []
+  for (const name of PROVIDER_IDENTITY_HEADERS) {
+    if (headers[name] !== undefined) {
+      delete headers[name]
+      dropped.push(name)
+    }
+  }
+  return dropped
+}
+
 export interface SessionProxyTarget {
   host: string
   port: number
@@ -96,11 +149,57 @@ export function handleSessionProxyError(
   res.destroy()
 }
 
+export interface SessionRequestDeps {
+  getRun(sessionName: string): { port?: number | null } | null | undefined
+  proxyWeb(
+    req: IncomingMessage,
+    res: ServerResponse,
+    options: { target: string; headers: Record<string, string> },
+  ): void
+  /** Called when there is no session or no port; the caller has already stopped. */
+  onNoTarget?(sessionName: string, res: ServerResponse): void
+}
+
+/**
+ * The HTTP half of the session proxy, extracted for the same reason the
+ * upgrade half was: importing `standalone.ts` from a test hangs on its
+ * sessions/NATS import chain, so anything only reachable there is untestable.
+ *
+ * Returns false when the URL is not a session path, leaving the caller's other
+ * routes untouched.
+ */
+export function createSessionRequestHandler(deps: SessionRequestDeps) {
+  return function handleSessionRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): boolean {
+    const sessionMatch = (req.url ?? '/').match(/^\/s\/([^/]+)(\/.*)?$/)
+    if (!sessionMatch) return false
+
+    const sessionName = sessionMatch[1]!
+    const target = resolveSessionProxyTarget(deps.getRun(sessionName))
+    if (!target) {
+      deps.onNoTarget?.(sessionName, res)
+      return true
+    }
+
+    stripProviderIdentityHeaders(req.headers as Record<string, unknown>)
+    req.url = sessionMatch[2] || '/'
+    deps.proxyWeb(req, res, terminalProxyOptions(target))
+    return true
+  }
+}
+
 export interface SessionUpgradeDeps {
   getRun(sessionName: string): { port?: number | null } | null | undefined
   /** Read fresh on every upgrade so a later runtime registration is picked up. */
   allowedOrigins(): readonly string[]
-  proxyWs(req: IncomingMessage, socket: Duplex, head: Buffer, options: { target: string }): void
+  proxyWs(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    options: { target: string; headers: Record<string, string> },
+  ): void
   onRefused?(detail: { reason: string, origin?: string, url: string }): void
   onClientSocketError?(detail: { error: string, url: string }): void
 }
@@ -138,7 +237,8 @@ export function createSessionUpgradeHandler(deps: SessionUpgradeDeps) {
       deps.onClientSocketError?.({ error: err.message, url })
     })
 
+    stripProviderIdentityHeaders(req.headers as Record<string, unknown>)
     req.url = sessionMatch[2] || '/'
-    deps.proxyWs(req, socket, head, { target: target.url })
+    deps.proxyWs(req, socket, head, terminalProxyOptions(target))
   }
 }
