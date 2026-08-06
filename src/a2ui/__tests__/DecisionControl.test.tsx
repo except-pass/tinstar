@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import type { A2uiComponent } from '../../domain/types'
 import { DecisionControl, NoticeFormProvider, type NoticeFormState } from '../controlComponents'
 
@@ -161,5 +161,25 @@ describe('DecisionControl · silent × permanent emphasis', () => {
   it('leaves every other chip unflared — this is the only cross-field inference', () => {
     renderDecision(withRisk('silent', 'permanent'))
     expect(screen.getByTestId('decision-rating-severity').getAttribute('data-flare')).toBeNull()
+  })
+
+  it('flares only the matching risk row when two risks share one permanent horizon', () => {
+    // Two risks, only one silent: proves flareFor is evaluated per-risk (not
+    // hoisted out of the loop, and not "any silent risk flares every risk").
+    renderDecision({
+      component: 'Decision', id: 'd',
+      options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      risks: [
+        { label: 'silent one', discoverability: 'silent', severity: 'severe' },
+        { label: 'subtle one', discoverability: 'subtle', severity: 'severe' },
+      ],
+      horizon: { span: 'permanent', until: 'x' },
+    })
+    const rows = screen.getAllByTestId('decision-risk')
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]!).getByTestId('decision-rating-discoverability').getAttribute('data-flare')).toBe('true')
+    expect(within(rows[1]!).getByTestId('decision-rating-discoverability').getAttribute('data-flare')).toBeNull()
+    // The card-level span chip still flares: one matching risk is enough.
+    expect(screen.getByTestId('decision-rating-span').getAttribute('data-flare')).toBe('true')
   })
 })
