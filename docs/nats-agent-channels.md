@@ -63,6 +63,31 @@ The MCP server `instructions` string (set at spawn time) tells Claude:
 - The team protocol (what to do with messages from each subject)
 - How to signal completion (which subject to publish to when done)
 
+### Runtime requirement: bun
+
+The channel server is launched with `bun x <channel-server-package>` from the
+generated `sessions/<name>/nats-mcp.json` (see `generateNatsMcpConfig` in
+`src/server/sessions/backends/tmux.ts`). **bun is therefore a hard dependency of
+this whole feature** — install it with `curl -fsSL https://bun.sh/install | bash`.
+
+The config spawns bun by **absolute path** (`nats.bunPath`, default
+`~/.bun/bin/bun`), so a bun installed elsewhere on `$PATH` does not satisfy it —
+point `nats.bunPath` in `~/.config/tinstar/config.json` at the real binary
+instead.
+
+A missing bun fails silently and late: nats-server and Tinstar's own traffic
+observer stay healthy (`/api/nats-traffic/status` reports `connection: up`), so
+nothing looks wrong until an agent tries to send and finds its MCP already dead.
+The signature is in the agent's own MCP log
+(`~/.cache/claude-cli-nodejs/<proj>/mcp-logs-nats/*.jsonl`):
+
+```
+Connection failed (ENOENT): no such file or directory, posix_spawn '<bunPath>'
+```
+
+`npx tinstar` preflight warns about this, and `tinstar doctor` reports it —
+as a hard failure once any session already has NATS wired up.
+
 ---
 
 ## Channel Management

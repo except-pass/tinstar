@@ -6,9 +6,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createInterface } from 'node:readline'
 import { getConfigRoot } from './configRoot.js'
+import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
 
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
+const YELLOW = '\x1b[33m'
 const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const RESET = '\x1b[0m'
@@ -23,6 +25,13 @@ function check(label, fn) {
     console.log(`  ${DIM}→ ${err.message}${RESET}`)
     return false
   }
+}
+
+// Non-fatal counterpart to check() — for a dependency an opt-in feature needs.
+// Prints and moves on; it must never gate the server starting.
+function warn(label, ...details) {
+  console.log(`${YELLOW}⚠${RESET} ${label}`)
+  for (const d of details) console.log(`  ${DIM}→ ${d}${RESET}`)
 }
 
 async function ask(question) {
@@ -258,6 +267,17 @@ async function main() {
     execSync('which lsof', { encoding: 'utf-8' })
     return null
   })
+
+  // bun — runtime for the per-session NATS channel MCP server. NATS is opt-in
+  // per session, so a miss is a warning rather than a hard stop: everything
+  // except agent-to-agent messaging still works. Probed by the absolute
+  // configured path, which is how nats-mcp.json actually spawns it.
+  const bun = probeBun()
+  if (bun.ok) {
+    check('bun installed', () => `${bun.version} — NATS channels`)
+  } else {
+    warn(`bun ${bun.reason} at ${bun.path}`, describeMissingBun(bun), BUN_INSTALL_HINT)
+  }
 
   if (!allPassed) {
     console.log(`\n${DIM}Fix the issues above and re-run: npx tinstar${RESET}\n`)

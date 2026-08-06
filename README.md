@@ -137,8 +137,10 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **Claude Code** — installed and authenticated (`claude auth login`)
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
+  - Debian/Ubuntu's `apt install ttyd` also enables a standalone `ttyd.service` at boot, which serves a login shell on a fixed port. Tinstar does not use it — it spawns its own ttyd per session — so disable it: `sudo systemctl disable --now ttyd.service`. `tinstar doctor` warns when it finds it enabled.
 - **lsof** — verifies that each web terminal serves the intended session (`brew install lsof` / `apt install lsof`)
 - **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
+- **bun** — *only for multi-agent NATS channels* — runs the per-session channel MCP server (`curl -fsSL https://bun.sh/install | bash`). Sessions launch it by absolute path from `nats.bunPath` (default `~/.bun/bin/bun`), so a bun elsewhere on `$PATH` is not enough. Without it, NATS itself looks healthy but every agent's channel MCP dies at spawn.
 - **jq** and **curl** — used by the [statusline hook](#the-statusline-hook) that feeds the context meter and quota HUD (`brew install jq` / `apt install jq`; curl is usually preinstalled)
 
 ## Ports
