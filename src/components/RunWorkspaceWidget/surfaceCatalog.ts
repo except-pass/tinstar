@@ -63,6 +63,32 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       'plan/state and rewrite this surface". Write it to .tinstar/slate/checklist.json ' +
       '(id, headline, A2UI content, refresh recipe).',
   },
+  {
+    id: 'decision',
+    name: 'Decision',
+    description: 'One open decision: options with their tradeoffs, risks, cost to undo, and how long it matters.',
+    prompt:
+      'Author a "Decision" surface for the open decision under discussion, using the ' +
+      '`Decision` A2UI component plus a `Submit` sibling. Give it at least two options, ' +
+      'each `{ id, label, gain, cost, wrongIf }` — `cost` must name a CONCRETE loss ' +
+      '("adds complexity" does not count) and `wrongIf` is the condition that would flip ' +
+      'the call. Add `risks: [{ label, severity, likelihood, discoverability, note }]` — ' +
+      'severity is annoying|costly|severe, likelihood is unlikely|possible|likely, ' +
+      'discoverability is obvious|subtle|silent. All three run fine → alarming, so ' +
+      '"silent" means nothing would alert us. Add ' +
+      '`reversal: { action, damage, note }` — action is trivial|cheap|costly|one-way ' +
+      '(how long to undo the ACTION) and damage is minutes|hours|days|weeks+ (how long ' +
+      'to undo the DAMAGE); they are frequently different numbers. Add ' +
+      '`horizon: { span, until }` — span is until-next-commit|until-this-ships|' +
+      'while-the-code-lives|permanent, and `until` completes "this matters until…". ' +
+      'Use permanent when something survives an undo: rows written, mail sent, an API ' +
+      'published, a person who already saw it. The card always renders a comment box at ' +
+      'its foot (default label "Anything else?"); optionally set `comment: { label, ' +
+      'placeholder }` to customize it, but do NOT add a TextInput — the Decision card ' +
+      'already owns the surface\'s one text field. Write it to .tinstar/slate/decision.json ' +
+      '(id, headline, A2UI content). Do not set a `refresh` recipe: refreshing would ' +
+      're-derive the very question the user is mid-answer on and rewrite it under them.',
+  },
 ]
 
 /** Score how well `query` matches `target`. 0 = no match. Higher = better.

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { SURFACE_CATALOG, fuzzyScore, searchSurfaceCatalog } from '../surfaceCatalog'
+import {
+  SEVERITY_SCALE, LIKELIHOOD_SCALE, DISCOVERABILITY_SCALE,
+  REVERSAL_ACTION_SCALE, REVERSAL_DAMAGE_SCALE, HORIZON_SCALE,
+} from '../../../a2ui/controls'
 
 describe('surfaceCatalog', () => {
   it('seeds the expected templates, PR review included (U5)', () => {
@@ -45,5 +49,30 @@ describe('surfaceCatalog', () => {
     it('a non-match returns nothing (freeform still available to the caller)', () => {
       expect(searchSurfaceCatalog('zzqx')).toEqual([])
     })
+  })
+})
+
+describe('decision template', () => {
+  it('is in the catalog', () => {
+    expect(SURFACE_CATALOG.some(t => t.id === 'decision')).toBe(true)
+  })
+
+  it('is findable by fuzzy search', () => {
+    expect(searchSurfaceCatalog('decision')[0]?.id).toBe('decision')
+    expect(searchSurfaceCatalog('dec').map(t => t.id)).toContain('decision')
+  })
+
+  it('names every scale value in its prompt so the agent cannot invent one', () => {
+    const { prompt } = SURFACE_CATALOG.find(t => t.id === 'decision')!
+    // Derived from the exported scale constants, not a hand-copied word list —
+    // a scale renamed in controls.ts (e.g. severe → critical) fails HERE instead
+    // of leaving the prompt silently teaching a word the parser no longer accepts.
+    const allValues: readonly string[] = [
+      ...SEVERITY_SCALE, ...LIKELIHOOD_SCALE, ...DISCOVERABILITY_SCALE,
+      ...REVERSAL_ACTION_SCALE, ...REVERSAL_DAMAGE_SCALE, ...HORIZON_SCALE,
+    ]
+    for (const v of allValues) {
+      expect(prompt).toContain(v)
+    }
   })
 })
