@@ -73,6 +73,7 @@ afterEach(async () => {
 })
 
 interface TestCtx {
+  docStore: DocumentStore
   fetch(path: string, init?: RequestInit): Promise<Response>
   activeSpaceId: string
   close(): Promise<void>
@@ -91,6 +92,7 @@ function createTestServer(root: string): TestCtx {
     r()
   }))
   return {
+    docStore: ctx.docStore,
     activeSpaceId: FIXTURE_SPACE_ID,
     async fetch(path: string, init?: RequestInit): Promise<Response> {
       await ready
@@ -104,6 +106,27 @@ function createTestServer(root: string): TestCtx {
 }
 
 describe('POST /api/plugin-widgets', () => {
+
+  it('inherits scope when spawned by a session', async () => {
+    testCtx.docStore.upsertRun('run-one', {
+      id: 'run-one', status: 'running', background: false, blocked: false,
+      sessionId: 'session-one', scope: { project: 'tinstar', worktree: 'feature-one' },
+      initiative: '', epic: '', task: '', repo: 'tinstar', worktree: 'feature-one',
+      touchedFiles: [], recapEntries: [], rawLogs: '', port: null, backend: 'tmux',
+      taskId: '', worktreeId: '', createdAt: new Date().toISOString(), spaceId: FIXTURE_SPACE_ID,
+    })
+    const res = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: FIXTURE_SPACE_ID, sessionId: 'session-one',
+        position: { x: 0, y: 0 }, size: { width: 360, height: 280 },
+      }),
+    })
+    const body = await res.json() as { data: { scope: unknown; sessionId?: string } }
+    expect(body.data.sessionId).toBe('session-one')
+    expect(body.data.scope).toEqual({ project: 'tinstar', worktree: 'feature-one' })
+  })
 
   it('creates an instance and returns it', async () => {
     const res = await testCtx.fetch('/api/plugin-widgets', {

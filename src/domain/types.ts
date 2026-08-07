@@ -18,6 +18,13 @@ export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' 
 export type RunStatus = SessionStatus
 export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
 
+/** Host-owned organizational metadata shared by every canvas widget. */
+export interface OrganizationalScope {
+  project?: string
+  /** Valid only when `project` is also present. */
+  worktree?: string
+}
+
 /**
  * Session time-usage bands, in paint-priority order — earlier wins when
  * observations overlap. Lives here rather than under `src/server/` because both
@@ -105,6 +112,7 @@ export interface RunData {
    */
   blocked: boolean
   sessionId: string
+  scope?: OrganizationalScope
   taskId: string
   initiative: string
   epic: string
@@ -243,7 +251,7 @@ export interface EntitySettings {
 
 export interface ResolvedSettings {
   resolved: EntitySettings
-  sources: Partial<Record<keyof EntitySettings, { type: GroupingDimension; name: string }>>
+  sources: Partial<Record<keyof EntitySettings, { type: LegacyEntityDimension; name: string }>>
   local: EntitySettings
 }
 
@@ -323,6 +331,7 @@ export interface EditorWidget {
   id: string
   spaceId?: string
   sessionId: string
+  scope?: OrganizationalScope
   filePath: string
   task: string
   epic: string
@@ -367,6 +376,7 @@ export interface BrowserWidget {
   id: string
   spaceId?: string
   sessionId?: string          // optional — browser widgets can be standalone (no session)
+  scope?: OrganizationalScope
   url: string
   title?: string
   color?: string
@@ -406,6 +416,7 @@ export interface ImageWidget {
   id: string
   spaceId?: string
   sessionId: string
+  scope?: OrganizationalScope
   filePath: string
   task: string
   epic: string
@@ -1747,6 +1758,8 @@ export interface PluginWidgetInstance {
   pluginId: string                                              // matches manifest.name
   widgetType: string                                            // matches manifest.contributes.widgets[].type
   spaceId: string
+  sessionId?: string                                            // spawning session; scope inheritance only
+  scope?: OrganizationalScope
   position: { x: number; y: number }
   size: { width: number; height: number }
   data: unknown                                                 // plugin-controlled; capped at 64KB serialized
@@ -1766,9 +1779,13 @@ export interface TopicMetadata {
 
 // --- Grouping ---
 
-export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
+export type LegacyEntityDimension = 'initiative' | 'epic' | 'task' | 'worktree'
 
-export const ALL_DIMENSIONS: GroupingDimension[] = ['initiative', 'epic', 'task', 'worktree']
+/** Any hierarchy node dimension still present in persisted data. The active
+ * organizer exposes only Project and Worktree via ALL_DIMENSIONS. */
+export type GroupingDimension = LegacyEntityDimension | 'project'
+
+export const ALL_DIMENSIONS: GroupingDimension[] = ['project', 'worktree']
 
 // --- Tree structures ---
 
@@ -1787,6 +1804,8 @@ export interface TreeNode {
   percentDone?: number | null
   status?: string
   externalUrl?: string | null
+  /** Leaf organizational metadata used to build the Project/Worktree tree. */
+  scope?: OrganizationalScope
 }
 
 export interface TreemapNode {
@@ -1838,7 +1857,7 @@ export interface RunSummaryViewModel {
 export interface GroupRollupViewModel {
   id: string
   label: string
-  type: GroupingDimension
+  type: LegacyEntityDimension | GroupingDimension
   runCount: number
   activeCount: number
   completedCount: number

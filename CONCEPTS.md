@@ -10,7 +10,7 @@ An agent session that Tinstar spawns, tracks, and renders on the dashboard — b
 A managed session can only rely on the environment values the backend explicitly injects (its own session name, the dashboard URL, secrets, telemetry vars) — not on the server's own startup configuration. Its NATS channel connectivity is provisioned per-session as config the backend generates, not as injected environment variables.
 
 ### Hand
-A managed session spawned as the child of another, inheriting the parent's worktree, task assignment, and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
+A managed session spawned as the child of another, inheriting the parent's Project/Worktree scope and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
 *Avoid:* subagent (a subagent is a lighter, one-shot helper that is not a managed session).
 
 ### Background session
@@ -21,6 +21,12 @@ A managed session flagged at creation (or by later demotion) to stay off the can
 A run a user has toggled off the canvas via the per-run eyeball — a per-browser view preference on a normal, fully-alive session, not a change to the session itself. The run stays in the hierarchy (dimmed) so it can be re-shown, and is skipped by canvas cycling. Distinct from a Background session: hidden is a client-side, per-browser view choice; background is a server-side flag on the session's nature.
 
 A hidden run's state is keyed to the run's identity and is dropped when the run is removed, so re-creating a run under a reused name does not inherit a prior hide.
+
+### Organizational scope
+The host-owned Project and optional Worktree membership used to organize any canvas widget. A Worktree belongs to one Project, so Worktree scope always implies its Project ancestry; a widget with neither is Unscoped. Scope determines the live hierarchy and the result of the explicit Organize action, but never filters widget contents or moves a widget merely because its scope changed.
+
+### Organize
+The one-shot whole-canvas action that projects current organizational scope into visible Project and Worktree containers while arranging Unscoped widgets as standalone peers. It carries forward Reset Layout's packing behavior and preserves snapped constellations. Hierarchy changes accumulate without moving canvas widgets until the user invokes Organize.
 
 ### Agent skill
 A documented capability — a `SKILL.md` with name/description frontmatter — installed into a harness's skills directory to teach an agent how to perform a Tinstar workflow. Skills are instructions only (no slash commands), and are symlinked or copied into any harness directory that has a skills folder.

@@ -43,7 +43,7 @@ const REQUEST: MessageRouteRequest = {
   version: MESSAGE_ROUTE_PROTOCOL_VERSION,
   requestId: 'req-7',
   sender: { sessionId: 'sender', incarnation: 'sender-v2' },
-  destination: { subject: 'tinstar.space.init.epic.task.receiver' },
+  destination: { subject: 'tinstar.space.project.worktree.receiver' },
   text: 'Please inspect the boundary.',
 }
 

@@ -76,15 +76,16 @@ Run Claude Code and Codex side by side; define reusable launch configs for any a
 
 ## Organize Your Work
 
-By default, work nests as **Initiative → Epic → Task → Run**. The left sidebar shows that nesting as a live tree, always in sync with the canvas — click a card and its ancestors expand and highlight; double-click and the canvas flies to it. This is flexible — rename the three upper tiers per space (e.g. Project / Feature / Story) in the **Entity Labels** tab of Space Settings.
+Every canvas widget can carry a lightweight organizational scope: **Project → Worktree**. The left sidebar derives a live tree from that scope. Sessions created for a project or worktree are placed correctly from the start, and widgets or hands spawned by a session inherit its full scope.
 
 The hierarchy isn't bureaucracy — it's the backbone that keeps a growing fleet legible:
 
 - **The canvas and sidebar stay navigable.** You move by structure instead of hunting through a flat list of twenty sessions.
-- **Agents inherit context.** A session created under a task belongs to that task; multi-agent NATS channels are scoped along the same hierarchy (`tinstar.<space>.<init>.<epic>.<task>.<agent>`), so agents can talk to siblings and ancestors automatically.
-- **"Doneness at a glance" scales.** Containers group related work, so you read progress at the level of an epic, not one session at a time.
+- **Placement is cheap.** Drag a hierarchy entry onto a Project or Worktree to assign its scope. The hierarchy updates immediately without moving the canvas widget.
+- **Agents inherit context.** Multi-agent NATS channels follow the same hierarchy (`tinstar.<space>.<project>.<worktree>.<agent>`), so worktree peers share a broadcast channel.
+- **Layout stays intentional.** One explicit **Organize** action projects current scope into Project/Worktree containers using the existing reset-layout packing behavior. Unscoped widgets remain standalone peers.
 
-Beyond the default tiers: nest sessions into recursive **group** containers, attach an **external URL** to any entity, and use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty containers off with `H` to cut clutter.
+Use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty scope targets off with `H` to cut clutter.
 
 ## The inbox
 

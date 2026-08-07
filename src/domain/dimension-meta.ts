@@ -7,16 +7,14 @@ export interface DimensionMeta {
 }
 
 export const DEFAULT_LEVELS: LevelLabel[] = [
-  { icon: '🚀', label: 'Initiative' },
-  { icon: '🏔️', label: 'Epic' },
-  { icon: '🗂️', label: 'Task' },
+  { icon: 'folder', label: 'Project' },
+  { icon: 'account_tree', label: 'Worktree' },
 ]
 
 export const DIMENSION_REGISTRY: DimensionMeta[] = [
-  { key: 'initiative', label: 'Initiative', icon: '🚀' },
-  { key: 'epic', label: 'Epic', icon: '🏔️' },
-  { key: 'task', label: 'Task', icon: '🗂️' },
-  { key: 'worktree', label: 'Worktree', icon: '🌿' },
+  { key: 'project', label: 'Project', icon: 'folder' },
+  { key: 'worktree', label: 'Worktree', icon: 'account_tree' },
+  { key: 'unscoped', label: 'Unscoped', icon: 'filter_none' },
   { key: 'run', label: 'Run', icon: '▶' },
 ]
 

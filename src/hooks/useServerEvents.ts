@@ -346,6 +346,9 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
       // the SSE payload, so the spread would inherit the stale name forever and
       // the run could never fall back to showing its id again.
       name: next.name,
+      // Scope can be cleared by dragging a widget to Unscoped. JSON omits the
+      // undefined field, so do not inherit the previous scope through spread.
+      scope: next.scope,
       // Same undefined-drop hazard as `attention`/`name`: when the Slate watcher
       // clears a run's surfaces it stores `slate: undefined`, which JSON.stringify
       // omits from the SSE payload, so the spread would inherit the stale Slate

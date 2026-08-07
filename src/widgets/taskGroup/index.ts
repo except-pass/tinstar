@@ -4,7 +4,7 @@ import { TaskGroupWidget } from './TaskGroupWidget'
 // All grouping dimension types use the same TaskGroupWidget.
 // toWidgetType() returns the node type string unchanged for non-run types,
 // so each dimension type must be registered explicitly.
-for (const type of ['initiative', 'epic', 'task', 'worktree'] as const) {
+for (const type of ['project', 'worktree'] as const) {
   registerWidgetComponent({
     type,
     component: TaskGroupWidget,

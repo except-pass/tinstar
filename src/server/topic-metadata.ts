@@ -34,11 +34,13 @@ export function deriveHierarchicalName(
     return parsed.session ? `DM → ${parsed.session}` : null
   }
   if (parsed.kind !== 'broadcast') return null
-  const taskToken = parsed.task
-  const tasks = docStore.getAllTasks().filter(t => sanitizeSubjectToken(t.name) === taskToken)
-  const task = tasks[0]
-  if (!task) return `Task: ${taskToken}` // fallback if no entity match
-  return `Task: ${task.name}`
+  if (parsed.project.includes('*') || parsed.project.includes('>')
+    || parsed.worktree.includes('*') || parsed.worktree.includes('>')) return null
+  const worktree = docStore.getAllWorktrees().find(candidate =>
+    sanitizeSubjectToken(candidate.repo) === parsed.project
+    && sanitizeSubjectToken(candidate.branch || candidate.name) === parsed.worktree,
+  )
+  return `Worktree: ${worktree?.branch || worktree?.name || parsed.worktree}`
 }
 
 export function bootstrapHierarchicalTopicMetadata(

@@ -49,7 +49,7 @@ describe('CreateSessionDialog optimistic creation', () => {
       />,
     )
 
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/state'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/cli-templates'))
 
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'optimistic-run' } })
     fireEvent.change(screen.getByPlaceholderText('Initial message to send to Claude...'), {
@@ -83,7 +83,7 @@ describe('CreateSessionDialog optimistic creation', () => {
       />,
     )
 
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/state'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/cli-templates'))
 
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'failed-run' } })
     fireEvent.change(screen.getByPlaceholderText('Initial message to send to Claude...'), {
@@ -110,7 +110,7 @@ describe('CreateSessionDialog optimistic creation', () => {
       />,
     )
 
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/state'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/cli-templates'))
 
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'already-there' } })
     fireEvent.click(screen.getByTestId('create-session-submit'))

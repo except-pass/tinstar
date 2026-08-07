@@ -1,7 +1,7 @@
 # All-Hands: <one-line goal>
 
 **Status:** briefing | implementing | reviewing | complete
-**Room:** `tinstar.<init>.<epic>.<task>.allhands`
+**Room:** `tinstar.room.<room-name>`
 **Worktree:** `<path>`
 
 ## Goal (3 lines max)
@@ -25,5 +25,5 @@
 ## Active rules for the implementer
 
 - After each commit: post `committed: <files> — <subject>` to the room
-- @-mention any hand at `tinstar.<init>.<epic>.<task>.allhands.<hand-name>`
+- @-mention a hand at its direct `tinstar.<space>.<project>.<worktree>.<session>` subject
 - Do NOT ship while any hand has an open `block` without explicit user approval

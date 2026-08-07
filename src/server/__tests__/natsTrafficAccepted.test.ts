@@ -10,7 +10,7 @@ describe('NatsTrafficBridge accepted outbound projection', () => {
     const bridge = new NatsTrafficBridge(sse)
 
     bridge.recordAcceptedOutbound(
-      'tinstar.space.init.epic.task.receiver',
+      'tinstar.space.project.worktree.receiver',
       'accepted message',
       'sender',
     )
@@ -18,7 +18,7 @@ describe('NatsTrafficBridge accepted outbound projection', () => {
     expect(sse.broadcastEvent).toHaveBeenCalledWith(
       'nats_traffic',
       expect.objectContaining({
-        subject: 'tinstar.space.init.epic.task.receiver',
+        subject: 'tinstar.space.project.worktree.receiver',
         data: 'accepted message',
         direction: 'outbound',
         sender: 'sender',

@@ -20,9 +20,9 @@ describe('optimistic session projection', () => {
       id: 'fresh-run',
       prompt: 'start here',
       project: 'tinstar',
+      worktree: 'fresh-run',
       worktreeMode: 'new',
       color: '#00ff88',
-      taskId: 'task-1',
     }, 'space-1', '2026-08-07T12:00:00.000Z')
 
     expect(run).toMatchObject({
@@ -33,7 +33,8 @@ describe('optimistic session projection', () => {
       port: null,
       repo: 'tinstar',
       worktree: 'fresh-run',
-      taskId: 'task-1',
+      scope: { project: 'tinstar', worktree: 'fresh-run' },
+      taskId: '',
       spaceId: 'space-1',
       createdAt: '2026-08-07T12:00:00.000Z',
     })

@@ -1,504 +1,75 @@
 # NATS Agent Channels
 
-Multi-agent communication via NATS pub/sub.
+Managed agents communicate through Project/Worktree-scoped NATS subjects.
 
-## TL;DR — Subject Scheme
+## Subject scheme
 
-```
-tinstar.<space>.<init>.<epic>.<task>           ← task broadcast (like a Slack channel)
-tinstar.<space>.<init>.<epic>.<task>.<agent>   ← direct DM to specific agent
-tinstar.room.<room-id>                          ← ad-hoc breakout rooms
-```
-
-**Each agent auto-subscribes to (two-tier model):**
-```
-tinstar.work-space.init-001.epic-xyz.task-abc       ← task broadcast (all agents see)
-tinstar.work-space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I see)
+```text
+tinstar.<space>.<project>.<worktree>           # Worktree broadcast
+tinstar.<space>.<project>.<worktree>.<session> # direct session inbox
+tinstar.room.<room-id>                          # ad-hoc breakout room
 ```
 
-**Sending through the managed `reply` tool:**
-| Target | Address |
-|--------|------------|
-| One agent (DM) | `tinstar.<space>.<init>.<epic>.<task>.<agent>` |
-| All on task (broadcast) | `tinstar.<space>.<init>.<epic>.<task>` |
-| Breakout room | `tinstar.room.<room-id>` |
+Tokens are lowercased and sanitized to letters, digits, `_`, and `-`. Missing
+scope positions are represented by `_`.
 
----
+A session with both Project and Worktree scope subscribes to its Worktree
+broadcast and direct inbox. Project-only and Unscoped sessions subscribe only
+to their direct inbox; Tinstar does not grant a Project-wide or Space-wide
+wildcard implicitly.
 
-## What This Is
+## Scope inheritance
 
-A system for wiring managed agents together through a provider-neutral Tinstar
-router carried over NATS. The router accepts a send only after it has resolved
-the current live recipients and committed their delivery obligations durably.
+New sessions derive their NATS path from the same Project/Worktree scope used
+by the dashboard hierarchy. A hand spawned from another session inherits the
+parent's complete scope by default. If a run is moved to another scope through
+`PATCH /api/widgets/:id/scope`, Tinstar updates its persisted subscriptions and
+hot-applies the add/remove diff to the running channel server.
 
-The milestone test:
-```
-Will → Clawson → Agent A1 → Agent A2 → Clawson → Will
-```
-A deterministic, known pipeline. Two agents, introduced to each other, passing work down the chain.
+## Sending
 
----
+Use the managed `reply` tool from inside an agent session:
 
-## Core Concept: The NATS Channel Server
-
-Each Tinstar session gets a **NATS channel server** — a small MCP server subprocess that:
-
-1. Subscribes to one or more NATS subjects
-2. Bridges incoming messages into the Claude session as `<channel>` tags (via `notifications/claude/channel`)
-3. Exposes a **reply tool** that asks Tinstar to accept an addressed message
-
-Claude's view of an incoming message:
-```xml
-<channel source="nats" subject="tinstar.team.backend" from="a1">
-  auth module refactor complete, see /tmp/result.patch
-</channel>
+```text
+reply(to="tinstar.<space>.<project>.<worktree>", text="Status check")
+reply(to="tinstar.<space>.<project>.<worktree>.<session>", text="Question")
 ```
 
-Claude reads it, acts on it, and uses the reply tool to send to another subject.
-Other providers use the same reply contract even when their inbound delivery
-adapter is terminal-based rather than a Claude development channel.
+The Tinstar router authenticates the sender, resolves live recipients, records
+accepted delivery obligations durably, then returns an accepted, partial, or
+error receipt. Raw publication to the private router subject is not a supported
+send path.
 
-The MCP server `instructions` string (set at spawn time) tells Claude:
-- What subjects it's on and why
-- The team protocol (what to do with messages from each subject)
-- How to signal completion (which subject to publish to when done)
+## Subscription management
 
-### Runtime requirement: bun
+Subscriptions are persisted with the session and hot-managed over the channel
+server's Unix control socket.
 
-The channel server is launched with `bun x <channel-server-package>` from the
-generated `sessions/<name>/nats-mcp.json` (see `generateNatsMcpConfig` in
-`src/server/sessions/backends/tmux.ts`). **bun is therefore a hard dependency of
-this whole feature** — install it with `curl -fsSL https://bun.sh/install | bash`.
-
-The config spawns bun by **absolute path** (`nats.bunPath`, default
-`~/.bun/bin/bun`), so a bun installed elsewhere on `$PATH` does not satisfy it —
-point `nats.bunPath` in `~/.config/tinstar/config.json` at the real binary
-instead.
-
-A missing bun fails silently and late: nats-server and Tinstar's own traffic
-observer stay healthy (`/api/nats-traffic/status` reports `connection: up`), so
-nothing looks wrong until an agent tries to send and finds its MCP already dead.
-The signature is in the agent's own MCP log
-(`~/.cache/claude-cli-nodejs/<proj>/mcp-logs-nats/*.jsonl`):
-
-```
-Connection failed (ENOENT): no such file or directory, posix_spawn '<bunPath>'
+```text
+POST   /api/sessions/:name/subscriptions
+DELETE /api/sessions/:name/subscriptions
+GET    /api/sessions/:name/subscriptions
 ```
 
-`npx tinstar` preflight warns about this, and `tinstar doctor` reports it —
-as a hard failure once any session already has NATS wired up.
+The POST and DELETE bodies are `{ "subject": "..." }`. Use these endpoints for
+explicit rooms or specialist channels; ordinary Project/Worktree subscriptions
+are automatic.
 
----
+## Breakout rooms
 
-## Channel Management
+Breakout rooms are independent of organizational scope:
 
-### Lifecycle
-
-- Spawned by Tinstar when a session is created with `natsEnabled: true`
-- Killed when the session stops
-- Tracked in session state alongside the tmux process
-
-### Subscriptions
-
-Each session starts with a default subject: `tinstar.agent.<name>`
-
-Subscriptions are **hot-manageable** — no restart required. Tinstar communicates changes to the running channel server via a Unix socket at `/tmp/tinstar-nats-<name>.sock`.
-
-### Tinstar API
-
-```
-POST   /api/sessions/:name/subscriptions     { "subject": "tinstar.team.backend" }
-DELETE /api/sessions/:name/subscriptions/:subject
-GET    /api/sessions/:name/subscriptions     → ["tinstar.agent.a1", "tinstar.team.backend"]
+```text
+tinstar.room.<room-id>
 ```
 
-### Architecture Boundary
-
-NATS carries two deliberately separate paths:
-
-- Provider adapters subscribe to managed `tinstar.*` subjects for inbound
-  delivery. The adapter owns the provider-specific final mile.
-- The Tinstar backend owns a private, config-root-scoped request/reply subject.
-  The managed `reply` tool sends an authenticated `{payload, auth}` envelope;
-  `payload` contains `{sender, destination, text, requestId}` and `auth` is the
-  launch-scoped HMAC. Tinstar verifies it before consulting the live set or
-  writing the ledger, then returns a signed accepted, partial, or error receipt.
-  Raw publication to the router subject is ignored because it cannot receive an
-  acceptance receipt.
-
-The router subject is derived from a persistent private instance identity, so it
-survives rebuilds and restarts without colliding with another Tinstar instance
-on a shared broker. A process-global owner serializes replacement during Vite
-hot reload; shutdown drains the current responder. The per-session MCP config
-is private (`0600`) and lives outside the workspace.
-
-The authentication boundary protects against other clients that can publish or
-subscribe on the shared NATS broker. It does not isolate mutually hostile
-processes running as the same operating-system user: such a process can inspect
-another session's environment or private config files. Tinstar therefore treats
-co-resident managed agents as trusted peers. Deploy untrusted agents under
-separate OS users or containers; broker authentication alone cannot create that
-local isolation boundary.
-
-Tinstar's default `nats.channelServerPackage` is pinned to the reviewed companion
-revision. Operators may override it for local development, but a replacement
-must implement the same authenticated request/reply protocol.
-
-### Session State
-
-```json
-{
-  "name": "a1",
-  "nats": {
-    "enabled": true,
-    "subscriptions": ["tinstar.agent.a1", "tinstar.team.backend"]
-  }
-}
-```
-
-### Introductions (Team Formation)
-
-Agents don't have global visibility. At spawn time, each agent's `instructions` string tells it only what it needs to know:
-- Which subjects to expect messages from
-- What those messages mean
-- Where to send results
-
-A1 knows about A2's subject. A2 knows nothing about A1 — just "process what arrives." Neither knows about anyone else. Controlled introduction, not a free-for-all.
-
----
-
-## Status Monitoring
-
-Two paths for checking on a running agent:
-
-**In-band** (through the channel): Send `{"type": "status"}` to an agent's
-direct subject. The agent receives it through its provider adapter and responds
-through the durable reply tool. Good for semantic status ("working on X, ~60%
-done").
-
-**Out-of-band** (around the side): Tinstar peek / `tmux capture-pane`. Raw terminal output. Good for: ground truth, diagnosing stuck agents, works even when agent can't respond.
-
-For long-running tasks, a coordinator can subscribe to a completion subject and
-notify the user when the chain completes.
-
----
-
-## Topics (NATS Subject Scheme)
-
-### Key Constraint
-
-Entity types (initiative, epic, task) are **not hardcoded** — they're configurable per workspace via `labelConfig` (1–3 levels, user-defined labels). The subject scheme must be entity-ID-based, not level-name-based.
-
-### Two Subject Spaces
-
-```
-tinstar.<level3-id>.<level2-id>.<level1-id>.<agent-name>   ← entity hierarchy
-tinstar.room.<room-id>                                      ← breakout rooms
-```
-
-These two spaces are siblings under `tinstar.` — structured hierarchy on the left, ad hoc cross-entity rooms on the right.
-
-### Entity Hierarchy
-
-One canonical hierarchical path per agent. Tinstar builds it at session creation from whatever entity IDs are attached to the run.
-
-**Example** (3-level workspace, initiative → epic → task):
-```
-tinstar.init-001.epic-xyz.task-abc.a1
-```
-
-**Example** (1-level workspace, task only):
-```
-tinstar.task-abc.a1
-```
-
-NATS `>` wildcard doesn't care about depth — variable-level hierarchies work fine.
-
-### What Each Agent Subscribes To
-
-At creation, the channel server subscribes to **two subjects** (two-tier model):
-
-```
-tinstar.space.init-001.epic-xyz.task-abc       ← task broadcast (like Slack #channel)
-tinstar.space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I receive)
-```
-
-This enables both broadcast and private messaging:
-- Messages to the task channel → everyone on the task sees them
-- Messages to an agent's direct channel → only that agent sees them (DM)
-
-#### Task-less agents are DM-only
-
-Agents that aren't seated in a specific task — the marshal, the remote-control
-agent, ad-hoc standalone sessions — resolve only to a space (or epic/initiative).
-They get a **DM-only inbox**: their own exact direct subject with `_` filling the
-unresolved levels, e.g.
-
-```
-tinstar.my-space._._._.lone-wolf      ← a space-only agent's DM inbox
-```
-
-They deliberately do **not** get a level wildcard such as `tinstar.my-space.>`.
-That wildcard would funnel every task broadcast in the subtree into an un-seated
-agent — a scope leak. The DM subject above is byte-identical to what the
-publisher builds for that agent, so senders can still reach it directly, and if
-the agent is later reassigned to a task its subscriptions hot-swap to the
-two-tier task model. A supervisor that genuinely needs broad visibility must opt
-in explicitly by passing a `subscriptions` list at session-creation time
-(`computeNatsSubscriptions` only ever produces the safe default). See
-`src/server/sessions/nats-subscriptions.ts`.
-
-### Publishing Patterns
-
-| Target | Publish to |
-|---|---|
-| DM to one agent | `tinstar.space.init-001.epic-xyz.task-abc.a1` |
-| All agents on a task | `tinstar.space.init-001.epic-xyz.task-abc` |
-| Parent-child room | `tinstar.room.f7e2a91c` |
-
-**Note:** The task broadcast channel has NO trailing wildcard or agent name — it's an exact subject that all task agents subscribe to. DMs append the agent name as an additional token.
-
-### Breakout Rooms
-
-Private parent-child communication channels, created automatically at spawn time.
-
-```
-tinstar.room.<8-char-uuid>
-```
-
-- **Created automatically** when `POST /api/sessions/:id/spawn` is called
-- One room per parent-child pair (flat — grandchildren don't inherit parent rooms)
-- Parent is hot-subscribed via control socket; child gets it in initial subscriptions
-- Room subject is injected into the child's system prompt for immediate use
-- No task hierarchy dependency — works across projects, worktrees, and repos
-- Stored on both Run records in the `breakoutRooms` field
-
-**Ad-hoc breakout rooms** can still be created manually by publishing to any `tinstar.room.*` subject and having agents subscribe via the subscription management API.
-
-### Control Socket Orphan Recovery
-
-The parent's control socket (`/tmp/tinstar-nats-<name>.sock`) is how Tinstar hot-subscribes the parent to a new breakout room. The external `nats-channel-mcp` package binds that socket with `unlinkSync(path); listen(path)` — so if the MCP server restarts (or a duplicate instance starts with the same name), the original listener ends up bound to an inode that's no longer on disk. The kernel still reports LISTEN, but `connect()` hits `ECONNREFUSED`. Static subscriptions from startup keep working; dynamic subscribe is silently dead.
-
-Spawn pre-flights the parent subscribe and classifies failures:
-
-| Code | Meaning | What happens |
-|---|---|---|
-| `NATS_SOCKET_UNREACHABLE` (ENOENT) | Parent session isn't running | Registry update persists, will apply on next start |
-| `NATS_SOCKET_ORPHANED` (ECONNREFUSED + file present) | Parent is alive but control socket is orphaned | **Fallback:** child's effective "room" becomes the parent's persistent direct subject (already subscribed at startup). Parent hears the child there. Session record persists `natsControlOrphanedAt`; SSE event `managed_session.nats_orphaned` fires; session restart recommended to recover dynamic subscribe. |
-| `NATS_SOCKET_ERROR` | Unexpected | Logged at error, spawn still proceeds with fallback |
-
-Spawn response reports the fallback explicitly:
-
-```json
-{
-  "session": "my-child",
-  "room": "tinstar.work-space.foo.bar.my-parent",   // effective room
-  "breakoutRoom": "tinstar.room.abc12345",          // what we would have used
-  "breakoutFallback": true,
-  "fallbackReason": "NATS_SOCKET_ORPHANED",
-  "restartRecommended": true,
-  "natsWarning": { "code": "...", "message": "..." }
-}
-```
-
-The `natsControlOrphanedAt` timestamp is cleared when the session restarts — the new channel-server gets a fresh control socket.
-
-### NATS Wildcard Reference
-
-NATS has two wildcards with **very different behavior**:
-
-| Wildcard | Matches | Example |
-|----------|---------|---------|
-| `*` | Exactly ONE token | `task.*` matches `task.agent1` but NOT `task.agent1.sub` |
-| `>` | One or MORE tokens | `task.>` matches `task.agent1` AND `task.agent1.sub.deep` |
-
-**When to use which:**
-
-- **`*` (single token)** — Use for task-level broadcasts where you want to reach all direct children (sessions) but not their descendants. Session names are single tokens (no dots), so `task.*` safely matches all sessions on a task.
-
-- **`>` (multi-level)** — Use for hierarchical subscriptions where you want to catch EVERYTHING below a certain level. This is the "catch-all" for a subtree.
-
-**Common mistake:** Using `*` when you meant `>`. If you're not receiving messages you expected, check your wildcard.
-
-```bash
-# These are NOT equivalent:
-nats sub "tinstar.init-001.*"      # Only direct children of init-001
-nats sub "tinstar.init-001.>"      # Everything under init-001 (epics, tasks, agents)
-```
-
-### Wildcard Monitoring
-
-```bash
-nats sub "tinstar.>"               # everything in the workspace
-nats sub "tinstar.init-001.>"      # all agents in an initiative
-nats sub "tinstar.room.>"          # all breakout rooms
-```
-
-### Ad Hoc Operational Subjects
-
-Added via subscription API as needed, not part of the hierarchy:
-- `tinstar.chain.<chainId>` — pipeline coordination
-- `tinstar.done.<chainId>` — completion signals for Clawson to catch
-
----
-
-## Dynamic Subscription Maintenance (Entity Moves)
-
-Entities can be moved in Tinstar — a task reassigned to a different epic, a run moved to a different task, an epic moved to a different initiative. When this happens, affected sessions must update their NATS subscriptions to reflect the new hierarchy position.
-
-### Trigger
-
-The NATS bridge listens on the EventBus for entity mutation events. This requires Tinstar to emit typed move events that don't currently exist:
-- `task.parent_changed` — task moved to a different epic
-- `epic.parent_changed` — epic moved to a different initiative
-- `run.task_changed` — run reassigned to a different task
-
-These need to be added to the EventBus alongside the existing entity PATCH flow.
-
-### Re-subscription Logic
-
-When a move event fires, for each affected session:
-1. Compute **old** subscription set from current session state
-2. Compute **new** subscription set from updated entity hierarchy
-3. Diff → `toAdd`, `toRemove`
-4. Send add/remove commands to channel server via Unix socket
-5. Update session state
-
-The channel server receives only "subscribe X" / "unsubscribe Y" — it has no knowledge of why.
-
-### Cascade
-
-A move at a higher level affects all sessions below it:
-- Run moved → 1 session affected
-- Task moved → all runs on that task affected
-- Epic moved → all runs in all tasks of that epic affected
-- Initiative moved → cascade to everything below
-
-The bridge must walk the hierarchy downward from the moved entity to find all affected sessions and trigger re-subscription for each.
-
-### Breakout Room Subscriptions Are Unaffected
-
-Breakout room subscriptions (`tinstar.room.*`) are ad hoc and not tied to the entity hierarchy. Entity moves don't touch them.
-
----
-
-## Build Order
-
-Tinstar integration is plumbing and convenience. The core technology — agents communicating via NATS channel servers — is provable with zero Tinstar changes.
-
-**Phase 1: PoC (standalone `claude` sessions, no Tinstar)**
-Write the channel server, wire up two bare `claude` processes, prove the chain works.
-
-**Phase 2: Clawson integration**
-Subscribe to done subjects, dispatch tasks, report completions to Will.
-
-**Phase 3: Tinstar integration**
-Lifecycle management, entity-aware subscriptions, subscription API, UI representation.
-
----
-
-## Phase 1: PoC — Proof of Concept
-
-### What's Needed
-
-- NATS server running on localhost:4222 (`nats-server` binary)
-- `nats-channel-server` script (to write — see below)
-- Two `claude` CLI processes, each with `.mcp.json` configured
-- `nats` CLI for Clawson to publish and subscribe
-
-### The Test
-
-Each agent is given an outrageous name in its `instructions`. They introduce themselves in sequence. Clawson sees both names and reports to Will.
-
-**Agents:**
-- A1: **Montgomery Wafflesworth-Pudding**
-- A2: **Countess Beets McGillicuddy**
-
-**Chain:**
-```
-Clawson publishes "introduce yourself" to tinstar.agent.a1
-→ A1 receives it as <channel> tag
-→ A1 replies: "I am Montgomery Wafflesworth-Pudding"
-→ A1 reply tool publishes to tinstar.agent.a2: "a1 said hello, now you go"
-→ A2 receives it as <channel> tag
-→ A2 replies: "I am Countess Beets McGillicuddy"
-→ A2 reply tool publishes to tinstar.done.chain-001
-→ Clawson receives done event, reports both names to Will in Telegram
-```
-
-**Pass criteria:** Will sees both outrageous names in the correct order. No scripted outputs — agents must actually receive and act on the NATS messages.
-
-### `.mcp.json` for Each Agent
-
-> **Shipped implementation note:** the PoC below writes a `.mcp.json` into each
-> agent's working directory. The production code instead writes a per-session
-> `nats-mcp.json` into the session's own config dir (outside any git tree) and
-> passes it via `claude --mcp-config <path>` — so nothing lands in the user's
-> repo. Per-session values (`--name`, `--topics-file`, `--control-socket`) are
-> baked in as literals. See `generateNatsMcpConfig` in
-> `src/server/sessions/backends/tmux.ts`.
-
-```json
-{
-  "mcpServers": {
-    "nats": {
-      "command": "node",
-      "args": [
-        "/path/to/nats-channel-server.js",
-        "--name", "a1",
-        "--subscribe", "tinstar.agent.a1",
-        "--nats", "nats://localhost:4222"
-      ]
-    }
-  }
-}
-```
-
-### Launch (research preview flag required)
-
-```bash
-# Agent sessions
-claude --dangerously-load-development-channels server:nats
-
-# Clawson dispatches
-nats pub tinstar.agent.a1 "introduce yourself, then forward to a2"
-
-# Clawson watches for completion
-nats sub "tinstar.done.>"
-```
-
----
-
-## `nats-channel-server` — What to Build
-
-Single script, ~100 lines. Parameters:
-- `--name <agent-name>` — used in channel `source` attribute and instructions
-- `--subscribe <subject>` — initial NATS subject to subscribe to
-- `--nats <url>` — NATS server URL (default: `nats://localhost:4222`)
-- `--instructions <string>` — injected into MCP server instructions for Claude
-
-Implements:
-- MCP `claude/channel` capability (registers notification listener)
-- NATS subscribe → `notifications/claude/channel` bridge
-- `reply` MCP tool: `{ to: string, text: string }` → publishes to NATS
-- Unix socket at `/tmp/tinstar-nats-<name>.sock` for hot subscription management (Phase 3)
-
----
-
-## Phase 3: Tinstar Integration (Later)
-
-- Session creation accepts `natsEnabled: true`
-- Spawns/kills channel server with session lifecycle
-- Entity path computed from `taskId`/`epicId`/`initiativeId` → automatic subscription set
-- Subscription management API (`POST/DELETE /api/sessions/:name/subscriptions`)
-- Session state tracks current subscriptions
-- EventBus listens for entity moves → triggers re-subscription cascade
-
----
-
-## Open Questions
-
-- Permission relay: should agents be able to approve each other's tool calls?
-- ~~JetStream: do we need durable message delivery for v1?~~ Resolved: opt-in via `config.nats.jetstream` (off by default). Buffered messages survive sub-1h pauses; explicit `replay` MCP tool covers longer lookback. See `nats-channel-mcp` README "JetStream Mode" section.
-- How does the Tinstar UI represent agent-to-agent message flow?
-- Should Clawson's NATS subscription be persistent (always-on) or on-demand?
+They require no registration. A room exists as soon as a participant subscribes
+or publishes to it. Spawned hands use a breakout room for their parent-child
+link when available, with the parent's direct subject as the fallback.
+
+## Runtime requirement
+
+The channel server is launched from the configured
+`nats.channelServerPackage` using `nats.bunPath`. Run `tinstar doctor` when NATS
+appears healthy at the broker but an agent's managed `reply` tool is missing;
+an absent or misconfigured Bun executable is a common cause.
