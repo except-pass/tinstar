@@ -16,7 +16,7 @@ tags:
 applies_when:
   - "Authoring or editing a Slate surface JSON file under a run workdir's .tinstar/slate/"
   - "Building A2UI content for a surface and needing the host component vocabulary"
-  - "A surface silently fails to appear (invalid content dropped by parseA2uiContent)"
+  - "A directly authored surface fails to appear (invalid content dropped by parseA2uiContent)"
   - "Deciding surface kind (diagram vs open-point) via the anchor field"
   - "Validating authored surface files before shipping"
 ---
@@ -25,7 +25,9 @@ applies_when:
 
 ## Context
 
-Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how the surface's `kind` gets chosen you have to read `document-store.ts` (`projectRunToSlate`). And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. Worse, every validation gate in that chain fails *silently* — a wrong shape produces no error, just a missing panel. This reference collapses those six reads into one authoritative page: the file schema, the A2UI vocabulary, and the `kind` rule, in one place.
+Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how the surface's `kind` gets chosen you have to read `document-store.ts` (`projectRunToSlate`). And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. This reference collapses those six reads into one authoritative page: the file schema, the A2UI vocabulary, and the `kind` rule, in one place.
+
+There are now two authoring paths with different failure behavior. A direct file written by an agent can still be dropped at validation and leave only a log. **Add surface** is host-assigned: Tinstar first saves a visible card, tells the author its exact file, id, and attempt token, then moves that card to ready or failed. The saved card—not process dispatch—is the acceptance receipt.
 
 ## Guidance
 
@@ -35,12 +37,12 @@ Write JSON files to `<run-workdir>/.tinstar/slate/*.json`. The dir is resolved a
 
 A file may hold **one object or an array of objects** — the watcher accepts either (`Array.isArray(parsed) ? parsed : [parsed]`). All `*.json` in the dir are read in sorted-filename order and flattened into one point list.
 
-The watcher watches the dir (inotify plus a ~3s poll backstop), validates each entry through the same funnel notices use, and projects the result onto `run.slate`, which reaches the client over SSE. Latency from write to render is well under the poll cadence.
+The watcher watches the dir (inotify plus a ~3s poll backstop), validates each entry through the same funnel notices use, and reconciles it into the canonical Surface store. `run.slate` is a derived browser projection of those saved Surfaces and reaches the client over SSE. Latency from write to render is well under the poll cadence.
 
-**Failure model (matters because it's silent):**
+**Failure model:**
 - A **file-level** fault (zero-byte, unreadable, unparseable JSON, or a JSON value that is neither array nor object) is treated as a *torn write*: the watcher **retains the last-valid projection** and logs once. It does not clear the surface.
-- An **entry-level** fault (missing `headline`, or a `content` that fails A2UI validation) **drops that one entry** and keeps the rest.
-- An empty dir or an explicit empty array **clears** the run's Slate (retract).
+- An **entry-level** fault (missing `headline`, or a `content` that fails A2UI validation) drops that direct entry and keeps the rest. If it names the exact file and id of an active Add surface attempt, the saved card instead becomes a visible, retryable failure.
+- An empty dir or an explicit empty array marks file bindings as missing; it does **not** delete saved Surfaces or their threads.
 - Oversized files (>32 KiB by default) are skipped unread; symlinks are ignored (an `lstat` reports `isFile:false`), so a symlink can't smuggle a file in from outside the worktree.
 
 ### The file field table
@@ -51,6 +53,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 |-------|------|----------|-------|
 | `headline` | string (non-empty) | **Yes** | The one-line title. A missing/empty headline drops the whole entry. |
 | `id` | string (non-empty) | No | Stable identity for merge-by-id. Reuse the same `id` across writes to amend a surface without clobbering its store-owned thread/status. |
+| `attemptToken` | string (non-empty) | Only for host-assigned Add surface work | Tinstar supplies this with an exact file and `id`. Copy it exactly. It prevents a late or retried authoring attempt from overwriting the current card. Do not invent one for direct file authoring. |
 | `author` | `'agent' \| 'user' \| 'process'` | No | Any other value drops the entry. Use **`'agent'`** for agent-authored surfaces. (See "Why This Matters" — mislabeling has behavioral consequences around self-prompting and staleness.) |
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
@@ -117,14 +120,14 @@ To author a standalone diagram surface, set `anchor: { kind: 'surface' }`. To au
 
 ## Why This Matters
 
-Every gate in the pipeline fails **silently** — no throw, no error surfaced to the author:
+Direct file authoring remains deliberately conservative:
 
 - A wrong file shape (bad JSON, neither array-nor-object, an oversized file) is treated as a *torn write* and the watcher keeps showing the **old** projection. Your new surface simply never appears, and the run looks unchanged.
 - A missing `headline` or invalid A2UI `content` **drops that entry** while keeping its siblings — so a file can partially render, hiding which entry failed.
 - An unknown `component` string degrades to a fallback rather than erroring.
 - An unsafe `Link` url quietly downgrades to plain text.
 
-Because nothing tells you *why* a surface didn't render, authoring blind costs a full write-watch-inspect round-trip per mistake — and the failure mode (a stale or absent panel) looks identical to "the watcher hasn't picked it up yet." Getting the file shape, the A2UI envelope, and the `kind` rule right on the *first* write is the difference between one iteration and several.
+That makes getting the file shape, the A2UI envelope, and the `kind` rule right on the first write important for direct authoring. Add surface has a stronger contract: the card appears as soon as its saved shell is accepted, shows authoring while content is pending, and becomes ready or failed in place. Retry keeps the same card identity and position; only the newest attempt token may complete it.
 
 The `author` field also carries behavioral weight: it's threaded through to staleness handling (a `process`-authored surface whose writer goes silent gets marked stalled by a server sweep) and provenance. Using `'agent'` for agent-authored panels keeps a surface from being treated as a live-process spinner or from feeding back into the run's own prompting loop.
 
@@ -134,7 +137,7 @@ Reach for this reference any time you:
 - Author or edit a `.tinstar/slate/*.json` file for a run.
 - Build an "Explain"-style or composed surface that an agent emits into the Slate.
 - Add a surface template to a catalog of reusable Slate surfaces.
-- Debug a surface that isn't appearing (walk the silent-failure list above).
+- Debug a directly authored surface that isn't appearing, or a host-assigned card that failed.
 
 ## Examples
 

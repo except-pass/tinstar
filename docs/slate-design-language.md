@@ -101,7 +101,9 @@ The run's goal, and the only surface the **user** writes. Same shell as every ot
 - **Stale** — amber past 15m, "⚠ updated 47m ago".
 - **Unreachable** — a note, not an error: "Sent — but that session isn't reachable right now."
 - **Hidden** — dimmed to 50%, revealed only via the header toggle.
-- **Empty** — an invitation, never a dead end: the composer itself renders **inline**, right where the surfaces would be, under a one-liner ("Nothing on the Slate yet — describe a surface, or ✦ Explain the session."). An inline composer has nothing to close back to, so it drops its Cancel, its drop shadow, and its Esc / outside-click self-close; a successful submit clears the form and says "Sent — the agent is authoring it" rather than sitting there looking dead. While it holds a draft the header's ✕ stands down — collapsing the column would destroy typed text.
+- **Empty** — an invitation, never a dead end: the composer itself renders **inline**, right where the surfaces would be, under a one-liner ("Nothing on the Slate yet — describe a surface, or ✦ Explain the session."). An inline composer has nothing to close back to, so it drops its Cancel, its drop shadow, and its Esc / outside-click self-close. Submitting first saves the real card, then clears the form; the card itself shows authoring, failure with Retry/Remove, or the finished result. While the composer holds a draft the header's ✕ stands down — collapsing the column would destroy typed text.
+
+- **Add surface acceptance** — the card is the receipt. It appears from saved state before authoring is dispatched, keeps one identity and grid position through authoring/failure/retry/ready, and cannot be hidden by an active search while unfinished. A failed card remains actionable; it never disappears into logs.
 
 ## Workbench — a question SERIES, laid out sideways
 A set of related open-points (same file-owned `group`, 2+ **live** members) leaves the vertical list and becomes one horizontal band inside it. The band is layout, not a new surface kind: every column is an ordinary point with its own answer form.

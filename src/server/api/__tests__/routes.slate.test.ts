@@ -566,22 +566,29 @@ describe('POST /api/runs/:id/slate/compose', () => {
   const compose = (srv: Harness, payload: unknown) =>
     srv.fetch(`/api/runs/${RUN}/slate/compose`, { method: 'POST', body: JSON.stringify(payload) })
 
-  it('delivers the composed authoring prompt (prompt + freeform interpolated)', withServer(async srv => {
+  it('saves the card before delivering the resolved template and exact destination', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN }) // reachable
     sendPrompt.mockClear()
 
-    const res = await compose(srv, { prompt: 'Build a PR review surface', freeform: 'focus on the migration' })
+    const res = await compose(srv, { templateId: 'pr-review', freeform: 'focus on the migration' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    const body = await res.json() as {
+      ok: boolean
+      data: { delivered: boolean; slateSurface: { rev?: number } }
+    }
     expect(body.ok).toBe(true)
     expect(body.data.delivered).toBe(true)
+    expect(body.data.slateSurface.rev).toBeTypeOf('number')
     expect(sendPrompt).toHaveBeenCalledTimes(1)
     expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
     const prompt = sendPrompt.mock.calls[0]![2] as string
-    expect(prompt).toContain('Build a PR review surface') // template prompt interpolated
+    expect(prompt).toContain('two-column "PR review"') // server-resolved template prompt
     expect(prompt).toContain('focus on the migration')    // freeform interpolated
     expect(prompt).toContain('.tinstar/slate/')           // authoring-to-file instruction
+    expect(prompt).toContain('attemptToken')
+    const card = srv.docStore.getRun(RUN)!.slate![0]!
+    expect(card).toMatchObject({ presentation: 'compose-card', creation: { phase: 'authoring' } })
   }))
 
   it('a freeform-only body delivers the freeform text', withServer(async srv => {
@@ -594,22 +601,53 @@ describe('POST /api/runs/:id/slate/compose', () => {
     expect(sendPrompt.mock.calls[0]![2]).toContain('a checklist of deploy steps')
   }))
 
-  it('an empty body (no prompt, no freeform) is INVALID_PARAMS, nothing delivered', withServer(async srv => {
+  it('an empty body (no template, no freeform) is INVALID_PARAMS, nothing delivered', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN })
-    const res = await compose(srv, { prompt: '   ', freeform: '' })
+    const res = await compose(srv, { templateId: '   ', freeform: '' })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
     expect(sendPrompt).not.toHaveBeenCalled()
   }))
 
-  it('an unreachable session returns delivered:false + 200 (persists nothing)', withServer(async srv => {
+  it('an unreachable session returns a visible failed card', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue(null) // session gone
-    const res = await compose(srv, { prompt: 'Author a Dataflow surface' })
+    const res = await compose(srv, { templateId: 'dataflow' })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
+    expect(srv.docStore.getRun(RUN)!.slate![0]!.creation?.phase).toBe('failed')
+  }))
+
+  it('replays one submission as one card and retries failure in the same slot', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null)
+    const headers = { 'Idempotency-Key': 'same-compose-request' }
+    const first = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
+      method: 'POST', headers, body: JSON.stringify({ templateId: 'open-points' }),
+    })
+    const firstBody = await first.json() as { data: { localId: string; surface: { id: string } } }
+    const replay = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
+      method: 'POST', headers, body: JSON.stringify({ templateId: 'open-points' }),
+    })
+    expect(replay.status).toBe(200)
+    expect(srv.docStore.getRun(RUN)!.slate).toHaveLength(1)
+
+    const failed = srv.docStore.surfaceForRunAlias(RUN, firstBody.data.localId)!
+    expect(failed.creation?.phase).toBe('failed')
+    getSession.mockReturnValue({ name: RUN })
+    const retried = await srv.fetch(
+      `/api/runs/${RUN}/slate/surfaces/${firstBody.data.localId}/retry`,
+      { method: 'POST', headers: { 'Idempotency-Key': 'retry-1' } },
+    )
+    expect(retried.status).toBe(200)
+    const current = srv.docStore.surfaceForRunAlias(RUN, firstBody.data.localId)!
+    expect(current.id).toBe(firstBody.data.surface.id)
+    expect(current.order).toBe(failed.order)
+    expect(current.creation).toMatchObject({ phase: 'authoring', attempt: 2 })
+    expect(current.creation?.token).not.toBe(failed.creation?.token)
+    expect(sendPrompt.mock.calls.at(-1)?.[2]).toContain(current.creation!.token)
   }))
 })
 
@@ -674,7 +712,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
     getSession.mockReturnValue({ name: RUN })
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
-      method: 'POST', body: JSON.stringify({ prompt: 'Build a PR review surface' }),
+      method: 'POST', body: JSON.stringify({ templateId: 'pr-review' }),
     })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)

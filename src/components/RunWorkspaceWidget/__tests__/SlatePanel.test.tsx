@@ -21,7 +21,19 @@ import { getHiddenSlateSurfaces, addHiddenSlateSurface, getMinimizedSlateSurface
 
 /** A resolved refresh/compose response envelope, matching the server shape. */
 function okDelivered(delivered: boolean) {
-  return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { delivered } }) } as unknown as Response)
+  return Promise.resolve({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      data: {
+        delivered,
+        slateSurface: {
+          id: 'accepted', author: 'agent', kind: 'open-point', headline: 'Accepted',
+          createdAt: 1, amendedAt: 1,
+        },
+      },
+    }),
+  } as unknown as Response)
 }
 
 /** Build an A2UI content envelope from a flat component list. */
@@ -100,6 +112,86 @@ describe('SlatePanel (U5)', () => {
     // order 1 (createdAt 1 before 5) then order 2.
     expect(ids).toEqual(['slate-surface-b', 'slate-surface-a', 'slate-surface-c'])
     expect(rendered).not.toBeNull()
+  })
+})
+
+describe('SlatePanel compose card lifecycle', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  const composed = (phase: 'authoring' | 'failed' | 'ready'): SlateSurface => surface('compose-1', 'finished body', {
+    kind: 'open-point',
+    presentation: 'compose-card',
+    headline: phase === 'ready' ? 'No open points' : 'Open points',
+    creation: {
+      phase, label: 'Open points', attempt: 1, token: 'attempt-1',
+      startedAt: 1, deadlineAt: 10_000,
+      ...(phase === 'failed' ? { failure: { code: 'author-failed', message: 'The author stopped.', at: 2 } } : {}),
+    },
+  })
+
+  it('renders the saved authoring card immediately and keeps it visible through an active search', () => {
+    const ref = createRef<SlatePanelHandle>()
+    render(<SlatePanel ref={ref} runId="run-1" surfaces={[composed('authoring')]} />)
+    expect(screen.getByTestId('surface-authoring-compose-1')).toBeTruthy()
+    act(() => ref.current!.focusSearch())
+    fireEvent.change(screen.getByTestId('slate-search'), { target: { value: 'something else' } })
+    expect(screen.getByTestId('surface-authoring-compose-1')).toBeTruthy()
+  })
+
+  it('renders the card returned by Add before the run projection catches up', async () => {
+    const accepted = composed('authoring')
+    apiFetch.mockImplementation(() => Promise.resolve({
+      ok: true,
+      json: async () => ({ ok: true, data: { delivered: true, slateSurface: accepted } }),
+    } as unknown as Response))
+    render(<SlatePanel runId="run-1" surfaces={[]} open />)
+    fireEvent.click(screen.getByTestId('composer-template-open-points'))
+    fireEvent.click(screen.getByTestId('composer-submit'))
+
+    await waitFor(() => expect(screen.getByTestId('surface-authoring-compose-1')).toBeTruthy())
+  })
+
+  it('shows a useful failed state whose retry targets the same local card', async () => {
+    render(<SlatePanel runId="run-1" surfaces={[composed('failed')]} />)
+    expect(screen.getByText('The author stopped.')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('surface-retry-compose-1'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(
+      '/api/runs/run-1/slate/surfaces/compose-1/retry',
+      expect.objectContaining({ method: 'POST' }),
+    ))
+    fireEvent.click(screen.getByTestId('surface-remove-compose-1'))
+    expect([...getHiddenSlateSurfaces()]).toContain('compose-1')
+  })
+
+  it('reuses the retry key after an ambiguous response', async () => {
+    apiFetch
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        json: async () => ({ ok: true, data: { slateSurface: composed('authoring') } }),
+      } as unknown as Response))
+    render(<SlatePanel runId="run-1" surfaces={[composed('failed')]} />)
+    fireEvent.click(screen.getByTestId('surface-retry-compose-1'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect((screen.getByTestId('surface-retry-compose-1') as HTMLButtonElement).disabled).toBe(false))
+
+    fireEvent.click(screen.getByTestId('surface-retry-compose-1'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
+    const firstHeaders = (apiFetch.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    const secondHeaders = (apiFetch.mock.calls[1]![1] as RequestInit).headers as Record<string, string>
+    expect(secondHeaders['Idempotency-Key']).toBe(firstHeaders['Idempotency-Key'])
+  })
+
+  it('keeps the completed open-points result as one card instead of folding it into the grouped list', () => {
+    render(<SlatePanel runId="run-1" surfaces={[composed('ready')]} />)
+    expect(screen.getByTestId('slate-surface-compose-1')).toBeTruthy()
+    expect(screen.queryByTestId('open-points-surface')).toBeNull()
+    expect(screen.getByText('finished body')).toBeTruthy()
   })
 })
 

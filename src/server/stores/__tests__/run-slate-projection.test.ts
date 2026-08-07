@@ -72,6 +72,19 @@ describe('isUnwitnessed — both empty claim states collapse (KTD4)', () => {
 })
 
 describe('slateSurfaceFromCanonical — unwitnessed on the projected surface', () => {
+  it('projects a compose card lifecycle without changing its run-local identity or position', () => {
+    const creation = {
+      phase: 'authoring' as const, label: 'Open points', attempt: 1, token: 'attempt-1',
+      startedAt: 1_000, deadlineAt: 31_000, request: { templateId: 'open-points' },
+    }
+    const projected = slateSurfaceFromCanonical(surface({}, {
+      order: 900, creation, presentation: 'compose-card',
+    }), 'compose-1')
+    expect(projected).toMatchObject({
+      id: 'compose-1', order: 900, creation, presentation: 'compose-card',
+    })
+  })
+
   // AE3. A claimless surface reports unwitnessed rather than passing for verified.
   it('projects `unwitnessed` for a claimless surface', () => {
     expect(slateSurfaceFromCanonical(surface({}), 'p1').unwitnessed).toBe(true)

@@ -41,6 +41,9 @@ import type {
   SurfaceCompatAlias,
   SurfaceContent,
   SurfaceContentAuthority,
+  SurfaceCreation,
+  SurfaceCreationFailureCode,
+  SurfaceCreationRequest,
   SurfaceContext,
   SurfaceContributor,
   SurfaceDeleteDisposition,
@@ -77,6 +80,7 @@ import type {
   SurfaceTopologyPlan,
 } from '../stores/surfaces'
 import { newSurfaceId } from '../stores/surfaces'
+import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 // The migration's placeholder adapter and reserved root alias id. Imported rather
 // than restated: `observeSource` decides whether a source adapter may take a binding
 // over by comparing against the exact string migration stamps, and two copies of it
@@ -98,6 +102,10 @@ import {
  *  union so a receipt, a log line, and a CLI subcommand cannot drift apart. */
 export type SurfaceOperation =
   | 'create'
+  | 'reserve-compose'
+  | 'retry-compose'
+  | 'complete-compose'
+  | 'fail-compose'
   /** U2's source INGRESS: one reconciled observation of an authoritative source. */
   | 'observe-source'
   /** U2's source ingress, negative case: an epoch that could see the source did
@@ -158,6 +166,20 @@ export type SurfaceErrorReason =
    *  already moved past (KTD10). Not an error in the worker — the world changed
    *  under it — and the Surface is left pending for one successor. */
   | 'superseded'
+
+export interface SurfaceCompositionReservation {
+  id: string
+  spaceId: string
+  home: SurfaceHome
+  runId: string
+  localId: string
+  label: string
+  request: SurfaceCreationRequest
+  token: string
+  deadlineAt: number
+  source: SurfaceSourceBinding
+  createdAt?: number
+}
 
 /** How a request failed, in the shape a caller can act on.
  *
@@ -1576,6 +1598,226 @@ export class SurfaceService {
       ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
     }, { at: now })
     return this.commitPlan('create', plan, ctx, [input.id, ...homeIds(input.home)])
+  }
+
+  /**
+   * Save the card that acknowledges an accepted Slate compose request.
+   *
+   * This is intentionally a host-only typed operation. The bridge chooses the
+   * immutable identity, run alias, source destination, and correlation token; an
+   * HTTP request may describe what it wants but may not choose where the result
+   * lands. The record is committed before any author is dispatched.
+   */
+  async reserveComposition(
+    input: SurfaceCompositionReservation,
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    // Host timing is deliberately outside the request fingerprint. A network retry
+    // reconstructs `deadlineAt` from a later wall clock, but it is still the same
+    // accepted compose request and must find the first durable receipt.
+    const flight = this.preflight('reserve-compose', input.runId, {
+      id: input.id,
+      spaceId: input.spaceId,
+      home: input.home,
+      runId: input.runId,
+      localId: input.localId,
+      label: input.label,
+      request: input.request,
+      token: input.token,
+      source: input.source,
+    }, ctx)
+    if (flight.done) return flight.done
+    if (!input.id || !input.runId || !input.localId) return invalid('compose identity is incomplete')
+    if (!input.label.trim()) return invalid('compose label must be non-empty')
+    if (!input.token || input.token.length > 200) return invalid('compose token must contain at most 200 characters')
+    if (!Number.isFinite(input.deadlineAt)) return invalid('compose deadlineAt must be a finite number')
+
+    const now = ctx.at ?? Date.now()
+    const createdAt = input.createdAt ?? now
+    const creation: SurfaceCreation = {
+      phase: 'authoring',
+      label: input.label,
+      attempt: 1,
+      token: input.token,
+      startedAt: now,
+      deadlineAt: input.deadlineAt,
+      request: input.request,
+    }
+    const plan = this.docStore.planSurfaceCreate({
+      id: input.id,
+      creation,
+      presentation: 'compose-card',
+      spaceId: input.spaceId,
+      home: input.home,
+      order: createdAt,
+      content: { headline: input.label },
+      contentAuthority: 'source-binding',
+      source: input.source,
+      provenance: { runId: input.runId },
+      author: authorFor(ctx.actor),
+      aliases: [{ bucket: { kind: 'run', runId: input.runId }, localId: input.localId, visible: true }],
+      createdAt,
+    }, { at: now })
+    if (plan.applied) {
+      const candidate = plan.plan.records.find(surface => surface.id === input.id)
+      if (!candidate) return invalid('compose reservation did not produce a visible Surface')
+      try {
+        const projected = slateSurfaceFromCanonical(candidate, input.localId)
+        if (projected.id !== input.localId || projected.presentation !== 'compose-card') {
+          return invalid('compose reservation cannot be projected into the run Slate')
+        }
+      } catch {
+        return invalid('compose reservation cannot be projected into the run Slate')
+      }
+    }
+    return this.commitPlan(
+      'reserve-compose', plan, ctx, [input.id, ...homeIds(input.home)], flight.fingerprint,
+    )
+  }
+
+  /** Start another authoring attempt on the same failed card. */
+  async retryComposition(
+    id: string,
+    input: { token: string; deadlineAt: number; expectedRev: number; request?: SurfaceCreationRequest },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('retry-compose', id, input, ctx)
+    if (flight.done) return flight.done
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    if (!prior.creation || prior.presentation !== 'compose-card') return invalid(`Surface ${id} was not compose-created`)
+    if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    if (prior.creation.phase !== 'failed') return this.conflictOn([prior], 'superseded')
+    if (!input.token || input.token.length > 200 || input.token === prior.creation.token) {
+      return invalid('retry token must be a new value containing at most 200 characters')
+    }
+    if (!Number.isFinite(input.deadlineAt)) return invalid('compose deadlineAt must be a finite number')
+    const now = ctx.at ?? Date.now()
+    const source = prior.source
+      ? { ...prior.source, state: 'missing' as const, missingSince: undefined, divergedWatermark: undefined }
+      : undefined
+    if (source) {
+      delete source.missingSince
+      delete source.divergedWatermark
+    }
+    const next: Surface = {
+      ...prior,
+      creation: {
+        phase: 'authoring',
+        label: prior.creation.label,
+        attempt: prior.creation.attempt + 1,
+        token: input.token,
+        startedAt: now,
+        deadlineAt: input.deadlineAt,
+        request: input.request ?? prior.creation.request ?? {},
+      },
+      ...(source ? { source } : {}),
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('retry-compose', prior, next, ctx, flight.fingerprint)
+  }
+
+  /** Accept authored content only for the card's latest still-running attempt. */
+  async completeComposition(
+    id: string,
+    input: {
+      token: string
+      expectedRev: number
+      content: SurfaceContent
+      author?: PointAuthor
+      source?: SurfaceSourceBinding
+      claimRefusals?: string[]
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('complete-compose', id, input, ctx)
+    if (flight.done) return flight.done
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    if (!prior.creation || prior.presentation !== 'compose-card') return invalid(`Surface ${id} was not compose-created`)
+    if (input.token !== prior.creation.token) return this.conflictOn([prior], 'superseded')
+    if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    const content = parseContent(input.content, true)
+    if (typeof content === 'string') return invalid(content)
+    if (!content) return invalid('content is required')
+    if (prior.creation.phase === 'ready' && surfaceContentDigest(prior.content) === surfaceContentDigest(content)) {
+      return this.unchanged('complete-compose', prior)
+    }
+    if (prior.creation.phase !== 'authoring') return this.conflictOn([prior], 'superseded')
+    const now = ctx.at ?? Date.now()
+    const freshness = input.source
+      ? {
+          ...prior.freshness,
+          phase: 'current' as const,
+          overdue: false,
+          observedGeneration: input.source.generation,
+          verifiedAt: now,
+        }
+      : undefined
+    if (freshness) {
+      if (input.claimRefusals?.length) freshness.claimRefusals = input.claimRefusals
+      else delete freshness.claimRefusals
+    }
+    const next: Surface = {
+      ...prior,
+      content,
+      ...(input.author ? { author: input.author } : {}),
+      ...(input.source ? { source: input.source } : {}),
+      ...(freshness ? { freshness } : {}),
+      creation: {
+        phase: 'ready',
+        label: prior.creation.label,
+        attempt: prior.creation.attempt,
+        token: prior.creation.token,
+        startedAt: prior.creation.startedAt,
+        deadlineAt: prior.creation.deadlineAt,
+      },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('complete-compose', prior, next, ctx, flight.fingerprint)
+  }
+
+  /** End the latest attempt visibly. Repeating the same terminal write is a no-op. */
+  async failComposition(
+    id: string,
+    input: {
+      token: string
+      expectedRev: number
+      code: SurfaceCreationFailureCode
+      message: string
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('fail-compose', id, input, ctx)
+    if (flight.done) return flight.done
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    if (!prior.creation || prior.presentation !== 'compose-card') return invalid(`Surface ${id} was not compose-created`)
+    if (input.token !== prior.creation.token) return this.conflictOn([prior], 'superseded')
+    if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    if (!input.message.trim() || input.message.length > 400) {
+      return invalid('compose failure message must contain at most 400 characters')
+    }
+    if (prior.creation.phase === 'ready') return this.conflictOn([prior], 'superseded')
+    if (prior.creation.phase === 'failed'
+      && prior.creation.failure?.code === input.code
+      && prior.creation.failure.message === input.message) {
+      return this.unchanged('fail-compose', prior)
+    }
+    const now = ctx.at ?? Date.now()
+    const next: Surface = {
+      ...prior,
+      creation: {
+        ...prior.creation,
+        phase: 'failed',
+        failure: { code: input.code, message: input.message, at: now },
+      },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('fail-compose', prior, next, ctx, flight.fingerprint)
   }
 
   /** A successful no-op, shaped exactly like a mutation so a caller need not branch.
