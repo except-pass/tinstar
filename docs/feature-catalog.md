@@ -31,28 +31,23 @@ Complete inventory of every feature and behavior in the Tinstar canvas workspace
 
 ---
 
-## Grouping Controls
+## Project and Worktree Organization
 
-Draggable dimension pills that control the tree nesting hierarchy for both the sidebar and canvas.
+Every session and widget has one optional organizational scope. The hierarchy is fixed and lightweight: **Project -> Worktree**, with an **Unscoped** area for widgets that have neither. A Worktree always belongs to one Project.
 
 ### Behavior
-- **Active pills**: Cyan pills showing current dimensions (e.g., Initiative, Epic, Task)
-- **Remove dimension**: Click "×" on a pill to remove that nesting level (min 1 required — last pill has no × button)
-- **Add dimension**: Click ghost "+ Dimension" button to add a nesting level (max 4)
-- **Drag-to-reorder**: Pointer-based drag on pills swaps order when crossing neighbor midpoint
-- **Default dimensions**: `['initiative', 'epic', 'task']`
-- **Tree restructure**: Changing dimensions immediately restructures both sidebar and canvas
-
-### Visual
-- Active pills: `bg-primary/20 text-primary border-primary/40`, rounded-full
-- Inactive buttons: `bg-surface-raised text-slate-500 border-white/10`, rounded-full
-- Dragging pill: opacity-70, cursor-grabbing
+- New sessions receive their selected Project and Worktree scope.
+- Widgets and Hands spawned by a session inherit its full scope.
+- Standalone palette widgets start Unscoped.
+- Dragging a hierarchy entry into a Project, Worktree, or Unscoped area changes only its scope; it does not move canvas geometry.
+- One **Organize** action repacks the canvas using the same behavior as Reset Layout.
+- Scope is organization, not a content filter.
 
 ---
 
 ## Group Containers (N-Level Nesting)
 
-Group containers are recursive nesting boxes driven by the active grouping dimensions. Each dimension creates one level of containers. Runs are always leaf nodes at the deepest level.
+Project and Worktree containers reflect the fixed organizational hierarchy. Sessions and every widget type are leaves. Unscoped leaves remain standalone canvas peers and never receive an Unscoped canvas container.
 
 ### Behavior
 - **Auto-expand**: Container grows automatically when a child is dragged or resized outside its bounds
@@ -61,38 +56,8 @@ Group containers are recursive nesting boxes driven by the active grouping dimen
 - **Shrink to fit**: Double-click a container to snap it to its minimum size (recursive bottom-up shrink)
 - **Group drag**: Dragging a container header moves it and all descendants (children, grandchildren, etc.) by the same delta
 
-### Entity Context Menu (⋮ Kebab)
-- **Trigger**: Hover-revealed ⋮ button on sidebar nodes and canvas group container headers
-- **Menu items**: Start Session (blue), Settings..., Rename, Add Child, Delete (red with inline confirmation)
-- **Delete confirmation**: First click shows "Delete {name}? Children will be ungrouped." with Delete/Cancel buttons
-- **Worktree nodes**: Hide "Start Session" and "Settings..." items (not applicable)
-- **Positioning**: Fixed position below the anchor button, aligned left
-- **Close behavior**: Click-outside or Escape key
-- **Replaces**: Individual ✏/+/× buttons on sidebar and canvas (backward-compatible fallback when `onMenuOpen` not provided)
-
-### Entity Settings & Inheritance
-- **Dialog**: Modal opened via "Settings..." in entity context menu
-- **Inheritance chain**: Task > Epic > Initiative (closest-ancestor-wins)
-- **Settings**: Project, Worktree (none/new/existing), Skip Permissions, CLI Template
-- **Visual language**:
-  - **Cyan**: Local override (set on this entity)
-  - **Amber pill**: Inherited from ancestor (shows source entity name)
-  - **Gray italic**: Not set at any level
-- **Opt-in overrides**: Checkbox to enable local override, then value controls appear
-- **Immediate save**: Every change PATCHes immediately (no save button)
-- **Deep merge**: PATCH requests merge `settings` sub-object; `null` values clear overrides
-- **API**: `GET /api/{initiatives|epics|tasks}/:id/settings` returns `{ resolved, sources, local }`
-- **Prefill**: "Start Session" from context menu fetches resolved settings and pre-fills CreateSessionDialog
-
-### Entity Deletion
-- **Canvas**: Via context menu → Delete with confirmation
-- **Sidebar**: Via context menu → Delete with confirmation
-- **API**: `DELETE /api/{initiatives|epics|tasks|worktrees}/:id` — removes the entity from DocumentStore
-- **Orphan behavior**: Children of deleted entities become orphans — they appear under the "Ungrouped" separator in the sidebar and float to root level on the canvas
-- **No cascade**: Only the targeted entity is deleted; children, grandchildren, and runs are preserved
-
 ### Depth-Based Visual Styling
-- Type icons: 🚀 initiative, 📦 epic, ✅ task, 🌿 worktree
+- Type icons: Project folder, Worktree branch, session run, and widget-specific icons
 - Border opacity by depth: `[0.15, 0.12, 0.08, 0.05]`
 - Background opacity by depth: `[0.02, 0.015, 0.01, 0.005]`
 - Header: 32px tall, type icon + label in uppercase primary/50 text
@@ -144,7 +109,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - Terminal icon in bordered box
 - Run ID (uppercase, neon text)
 - Status badge with animated dot (pulses for active status)
-- Breadcrumb: Initiative > Epic > Task
+- Breadcrumb: Project > Worktree
 - Right side: Worktree and Repo metadata
 - Status colors (SSOT: `SessionStatus` in `src/types.ts`):
   - creating: blue (#818cf8), pulsing glow
@@ -211,26 +176,23 @@ Session-bindable widget that streams live NATS traffic. Snap it to a session to 
 ## Hierarchy Sidebar
 
 ### Tree Display
-- Hierarchical: Initiative → Epic → Task → Run
+- Hierarchical: Project -> Worktree -> sessions and widgets, plus Unscoped
 - Depth-based indentation: 16px per level
-- Node icons: 🚀 initiative, 📦 epic, ✅ task, 🌿 worktree, ▶ run
+- Every active-space canvas widget appears as a leaf
 
 ### Interactions
 - **Click node**: Select it; toggle expand/collapse if it has children
 - **Double-click run node**: Center canvas viewport on that run (zoom-to-fit)
-- **Hover node**: Highlight background, reveal ⋮ kebab menu button
-- **Kebab menu (⋮)**: Context menu with Start Session, Settings, Rename, Add Child, Delete
-- **Root "+" button**: Adds a node of the first active dimension type
+- **Hover node**: Highlight the row
+- **Organize button**: Repack canvas geometry to match the hierarchy
 
 ### Drag-and-Drop Reordering
-- **Drag start**: Click-hold + 4px movement on a non-run node starts drag
+- **Drag start**: Click-hold + movement on a session or widget starts drag
 - **Floating drag card**: Shows entity icon + label at cursor position (opacity 0.85)
-- **Drop targets**: Insert before/after (cyan line indicator) or nest inside (ring highlight)
-- **Nest detection**: Cursor shifted right of indent zone or hovering center of row
+- **Drop targets**: Project, Worktree, and Unscoped rows
 - **Auto-expand**: Hovering over collapsed group for 500ms expands it
 - **Edge scrolling**: Approaching top/bottom of panel auto-scrolls
-- **Constraints**: Cannot drop into self or descendants
-- **Reparent**: Drop triggers PATCH to update parent FK (e.g. epic.initiativeId, task.epicId)
+- **Scope mutation**: Drop updates the widget scope immediately; canvas geometry stays put until Organize
 
 ### Canvas → Sidebar Sync
 - **Click a canvas widget**: Selects the corresponding run in the hierarchy and expands all ancestor nodes
@@ -254,7 +216,7 @@ Session-bindable widget that streams live NATS traffic. Snap it to a session to 
 
 ## Spaces
 
-Named containers that isolate document store data (initiatives, epics, tasks, worktrees, runs). Users maintain separate working contexts — e.g., real project work vs. test data — without losing state when switching.
+Named containers that isolate runs and widgets. Users maintain separate working contexts without losing state when switching.
 
 ### Data Model
 - **Space entity**: `id`, `name`, `createdAt` — flat, no nesting or hierarchy
@@ -356,13 +318,8 @@ POST   /api/spaces/:id/activate # Set as active space
 - **Project picker**: Dropdown of registered projects (from `GET /api/projects`)
 - **Worktree mode**: None / New / Existing — "New" creates a fresh git worktree, "Existing" lets you pick one
 - **Initial prompt**: Optional text sent to Claude on session start
-- **Task assignment**: Optional dropdown to assign session to a task
 - **Skip permissions**: Toggle to pass `--dangerously-skip-permissions` to Claude
 - **Submit**: `Ctrl/Cmd+Enter` keyboard shortcut
-
-### CreateEntityDialog
-- Generic modal for creating initiatives, epics, tasks, and worktrees
-- Parent relationship selection based on entity type
 
 ### SettingsDialog
 - Project management: view, add, and remove registered projects
@@ -404,7 +361,9 @@ POST   /api/spaces/:id/activate # Set as active space
 
 ---
 
-## Entity CRUD API
+## Legacy Entity CRUD API
+
+The legacy Initiative/Epic/Task records and endpoints remain internal compatibility surfaces, but they no longer drive workspace organization or appear in the active UI.
 
 ### Creation Routes
 | Route | Method | Description |
@@ -423,10 +382,10 @@ POST   /api/spaces/:id/activate # Set as active space
 
 ## Data Model
 
-- **Hierarchy**: Initiative → Epic → Task → Run
+- **Organization**: optional Project -> Worktree scope on every run and widget
 - Each run has: touched files, recap entries, raw logs
 - **SessionStatus (SSOT)**: `'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'` — single type in `src/types.ts`, aliased as `RunStatus` and `SessionState`
-- **Run ↔ Task resolution**: `run.taskId` → task → `task.epicId` → epic → `task.initiativeId` → initiative (resolved by `TaxonomyRepository.resolveDimension`)
+- **Scope invariant**: Worktree requires Project; `{}` means Unscoped
 
 ---
 

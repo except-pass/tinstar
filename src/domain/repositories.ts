@@ -1,4 +1,4 @@
-import type { Run, Initiative, Epic, Task, Worktree, RunStatus, GroupingDimension } from './types'
+import type { Run, Initiative, Epic, Task, Worktree, RunStatus, LegacyEntityDimension } from './types'
 import { mockInitiatives, mockEpics, mockTasks, mockWorktrees, mockRuns } from './mock-data'
 
 // --- RunRepository ---
@@ -140,7 +140,7 @@ export class TaxonomyRepository {
   }
 
   /** Resolve a dimension value for a run */
-  resolveDimension(run: Run, dimension: GroupingDimension): { id: string; label: string; color?: string } | undefined {
+  resolveDimension(run: Run, dimension: LegacyEntityDimension): { id: string; label: string; color?: string } | undefined {
     switch (dimension) {
       case 'initiative': {
         const initiative = this.getInitiativeForRun(run)

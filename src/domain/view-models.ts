@@ -1,6 +1,6 @@
 import type {
   Run,
-  GroupingDimension,
+  LegacyEntityDimension,
   TreeNode,
   RunSummaryViewModel,
 } from './types'
@@ -47,7 +47,7 @@ export function toRunSummary(
  * and run summaries — all from the given dimensions.
  */
 export function buildWorkspaceView(
-  dimensions: GroupingDimension[],
+  dimensions: LegacyEntityDimension[],
   runRepo: RunRepository,
   taxRepo: TaxonomyRepository,
 ): {

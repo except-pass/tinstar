@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
-import type { GroupingDimension, Run, TreeNode } from '../../domain/types'
+import type { Run, TreeNode } from '../../domain/types'
 import { buildGroupTree } from '../../domain/grouping'
 import { TaxonomyRepository } from '../../domain/repositories'
 
@@ -122,10 +122,6 @@ function makeRun(over: Partial<Run> = {}): Run {
   } as Run
 }
 
-function taxonomyNode(id: string, type: GroupingDimension, label: string): TreeNode {
-  return { id: `${type}-${id}`, label, type, entityId: id, children: [], runCount: 0, activeCount: 0 }
-}
-
 /** Stands in for WorkspaceShell: owns the runs, derives the tree from them via
  *  the real grouping code, and applies optimistic updates the way
  *  applyOptimistic does (upsertById REPLACES the run object wholesale). */
@@ -147,7 +143,6 @@ function Harness({ initialRuns, extraNodes = [] }: { initialRuns: Run[]; extraNo
       onCreateSpace={vi.fn()}
       onRenameSpace={vi.fn()}
       onDeleteSpace={vi.fn()}
-      onAdd={vi.fn()}
       onDelete={vi.fn()}
       onRename={(entityId, type, newName) =>
         dispatchRename(entityId, type, newName, {
@@ -322,36 +317,5 @@ describe('HierarchySidebar — rename optimism (R11)', () => {
     expect(addOptimistic).not.toHaveBeenCalled()
     // The PATCH still fires; it simply 404s harmlessly.
     expect(apiFetch).toHaveBeenCalledWith(`/api/runs/${RUN_ID}`, expect.objectContaining({ method: 'PATCH' }))
-  })
-})
-
-describe('dispatchRename — taxonomy entities keep their own endpoints', () => {
-  it('routes a task rename to /api/tasks/:id, not the run route', () => {
-    render(<Harness initialRuns={[]} extraNodes={[taxonomyNode('tsk-1', 'task', 'Old task name')]} />)
-    rename('task-tsk-1', 'New task name')
-
-    expect(patchCalls()).toHaveLength(1)
-    const [url, init] = patchCalls()[0]!
-    expect(url).toBe('/api/tasks/tsk-1')
-    expect(url).not.toContain('/api/runs/')
-    expect(JSON.parse(init!.body as string)).toEqual({ name: 'New task name' })
-  })
-
-  it.each([
-    ['initiative', '/api/initiatives/x'],
-    ['epic', '/api/epics/x'],
-    ['task', '/api/tasks/x'],
-    ['worktree', '/api/worktrees/x'],
-  ] as const)('routes %s renames to %s', (type, url) => {
-    dispatchRename('x', type, 'New name')
-    expect(apiFetch).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'PATCH' }))
-  })
-
-  it('still refuses to commit an empty name for a taxonomy entity', () => {
-    render(<Harness initialRuns={[]} extraNodes={[taxonomyNode('tsk-1', 'task', 'Old task name')]} />)
-    rename('task-tsk-1', '   ')
-
-    // A nameless task is meaningless — unlike a run, which falls back to its id.
-    expect(apiFetch).not.toHaveBeenCalled()
   })
 })

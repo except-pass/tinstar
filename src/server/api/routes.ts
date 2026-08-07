@@ -2,7 +2,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, ren
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
@@ -231,60 +231,21 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   return snappedOk && membersOk && revOk
 }
 
-/** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
+/** Build a direct session subject from Project/Worktree organizational scope. */
 function buildNatsSubject(
   sessionName: string,
   docStore: DocumentStore,
-  taskId?: string,
-  epicId?: string,
-  initiativeId?: string,
+  project?: string,
+  worktree?: string,
 ): string {
   const BLANK = '_'
-  const sanitize = sanitizeSubjectToken
-
-  // Resolve hierarchy
-  let initId = initiativeId
-  let epId = epicId
-  let spaceId: string | undefined
-
-  if (taskId) {
-    const task = docStore.getTask(taskId)
-    if (task) {
-      epId = epId || task.epicId
-      initId = initId || task.initiativeId
-      spaceId = task.spaceId
-    }
-  }
-  if (epId && !initId) {
-    const epic = docStore.getEpic(epId)
-    if (epic) {
-      initId = epic.initiativeId
-      spaceId = spaceId || epic.spaceId
-    }
-  }
-  if (initId && !spaceId) {
-    const init = docStore.getInitiative(initId)
-    if (init) {
-      spaceId = init.spaceId
-    }
-  }
-
-  const space = spaceId ? docStore.getSpace(spaceId) : null
-  const initiative = initId ? docStore.getInitiative(initId) : null
-  const epic = epId ? docStore.getEpic(epId) : null
-  const task = taskId ? docStore.getTask(taskId) : null
-
-  const spaceName = space ? sanitize(space.name) : BLANK
-  const initName = initiative ? sanitize(initiative.name) : BLANK
-  const epicName = epic ? sanitize(epic.name) : BLANK
-  const taskName = task ? sanitize(task.name) : BLANK
+  const space = docStore.activeSpaceId ? docStore.getSpace(docStore.activeSpaceId) : null
 
   return buildAgentSubject({
-    space: spaceName,
-    init: initName,
-    epic: epicName,
-    task: taskName,
-    session: sanitize(sessionName),
+    space: sanitizeSubjectToken(space?.name ?? BLANK) || BLANK,
+    project: sanitizeSubjectToken(project ?? BLANK) || BLANK,
+    worktree: sanitizeSubjectToken(worktree ?? BLANK) || BLANK,
+    session: sanitizeSubjectToken(sessionName),
   })
 }
 import { discoverHands, getHandByName, type Hand } from '../hands'
@@ -1485,35 +1446,9 @@ async function createReservedSession(
     ?? (epicId ? docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
     ?? (initiativeId ? docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
-  // Compute NATS subscriptions
+  // Explicit subscriptions are accepted as-is. Automatic subscriptions are
+  // computed after worktree resolution so their hierarchy uses the real branch.
   let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
-  const natsCtx = {
-    sessionName: name,
-    spaceId: docStore.activeSpaceId || null,
-    taskId: taskId || null,
-    epicId: epicId || null,
-    initiativeId: initiativeId || null,
-  }
-  if (
-    !nats
-    && provider.terminal.capabilities.nats.state === 'supported'
-    && (taskId || epicId || initiativeId || natsCtx.spaceId)
-  ) {
-    // NATS on by default whenever there's *any* hierarchy to root a subject in —
-    // including a bare space. Previously the gate omitted spaceId, so a
-    // standalone session (created with just an active space and no explicit
-    // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
-    // off and never joined the bus. computeNatsSubscriptions yields a DM-only
-    // inbox for the task-less case (not a space wildcard — see that fn). Passing
-    // `nats:{enabled:false}` explicitly still opts out, since this branch only
-    // runs when `nats` is absent.
-    //
-    // Gated by the registered provider capability: generic/Codex remain off,
-    // while a future provider can opt in without entering this shared branch.
-    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
-  } else if (nats?.enabled && !nats.subscriptions?.length) {
-    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
-  }
 
   // Acquire worktree resources only after all validation and pure projection
   // work above has completed. From this point onward every possible failure is
@@ -1542,6 +1477,21 @@ async function createReservedSession(
   }
 
   const isWorktree = !!(worktreePath || worktree)
+  const natsCtx = {
+    sessionName: name,
+    spaceId: docStore.activeSpaceId || null,
+    project: project || null,
+    worktree: isWorktree ? (branch ?? name) : null,
+  }
+  if (
+    !nats
+    && provider.terminal.capabilities.nats.state === 'supported'
+    && (project || natsCtx.spaceId)
+  ) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  } else if (nats?.enabled && !nats.subscriptions?.length) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  }
 
   // Register a Worktree entity so it appears in hierarchy/grouping. Keep both
   // the old value and the exact provisional object: rollback restores/deletes
@@ -1673,10 +1623,11 @@ async function createReservedSession(
 
   // Advertise the agent's DM inbox, derived from the computed subscriptions so
   // it's exactly what the agent subscribes to: subscriptions[1] is the DM for a
-  // task-seated agent ([0] is the broadcast channel); for a task-less agent the
-  // list holds only the DM at [0]. This mirrors the reparent (newSubs[1] ?? [0])
+  // Worktree-scoped agent ([0] is the broadcast channel); for a Project-only or
+  // Unscoped agent the list holds only the DM at [0]. This mirrors the scope
+  // mutation (newSubs[1] ?? [0])
   // and restore paths. Recomputing via the space-blind buildNatsSubject diverged
-  // for task-less space-only sessions — it can't see activeSpaceId, so it
+  // for sessions outside a Worktree — it can't see activeSpaceId, so it
   // advertised a '_'-rooted subject the agent never listens on (roborev #998).
   const natsSubject = resolvedNats?.enabled
     ? (resolvedNats.subscriptions[1] ?? resolvedNats.subscriptions[0])
@@ -1690,6 +1641,10 @@ async function createReservedSession(
       background,
       blocked: false,
       sessionId: name,
+      scope: {
+        ...(project ? { project } : {}),
+        ...(project && isWorktree ? { worktree: branch ?? name } : {}),
+      },
       initiative: initiativeId ?? '',
       epic: epicId ?? '',
       task: taskId ?? '',
@@ -2054,6 +2009,7 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
     id: widgetId,
     spaceId: spaceId || undefined,
     ...(sessionId ? { sessionId } : {}),
+    ...(run ? { scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined } } : {}),
     url: widgetUrl,
     color: widgetColor,
     ...(title ? { title } : {}),
@@ -3274,6 +3230,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         id: widgetId,
         spaceId: editorSpaceId,
         sessionId,
+        scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined },
         filePath: absoluteFilePath,
         task: task?.name ?? '',
         epic: epic?.name ?? '',
@@ -3350,6 +3307,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         id: shortId('image'),
         spaceId: ctx.docStore.activeSpaceId || undefined,
         sessionId,
+        scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined },
         filePath: absoluteFilePath,
         task: task?.name ?? '',
         epic: epic?.name ?? '',
@@ -4341,17 +4299,130 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PATCH /api/widgets/:id/scope — one host-owned scope mutation for every widget kind.
+  {
+    const scopeMatch = method === 'PATCH' && url.match(/^\/api\/widgets\/([^/]+)\/scope$/)
+    if (scopeMatch) {
+      const id = decodeURIComponent(scopeMatch[1]!)
+      readBody(req).then(async body => {
+        let parsed: { project?: string | null; worktree?: string | null }
+        try { parsed = JSON.parse(body) as typeof parsed }
+        catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+        if (!parsed || typeof parsed !== 'object') {
+          fail(res, 'BAD_REQUEST', 'Scope must be an object')
+          return
+        }
+        const project = typeof parsed.project === 'string' ? parsed.project.trim() : ''
+        const worktree = typeof parsed.worktree === 'string' ? parsed.worktree.trim() : ''
+        if (worktree && !project) {
+          fail(res, 'BAD_REQUEST', 'A Worktree scope requires a Project')
+          return
+        }
+        const projectsFile = ctx.sessionConfig?.files.projects
+        if (project && (!projectsFile || !getProject(projectsFile, project))) {
+          fail(res, 'NOT_FOUND', `Project '${project}' not found`)
+          return
+        }
+        if (worktree) {
+          const registered = ctx.docStore.getAllWorktrees().some(candidate =>
+            candidate.repo === project
+              && (candidate.branch === worktree || candidate.name === worktree || candidate.id === worktree),
+          )
+          // Session-created scopes remain valid drop targets even when their worktree
+          // record has not yet been reconciled into the registry.
+          const occupied = ctx.docStore.getAllRuns().some(candidate => {
+            const candidateProject = candidate.scope?.project?.trim() || candidate.repo?.trim()
+            const candidateWorktree = candidate.scope?.worktree?.trim() || candidate.worktree?.trim()
+            return candidateProject === project && candidateWorktree === worktree
+          })
+          const valid = registered || occupied
+          if (!valid) {
+            fail(res, 'NOT_FOUND', `Worktree '${worktree}' not found in Project '${project}'`)
+            return
+          }
+        }
+        const scope = {
+          ...(project ? { project } : {}),
+          ...(worktree ? { worktree } : {}),
+        }
+
+        const run = ctx.docStore.getRun(id)
+        if (run) {
+          let nextRun = { ...run, scope, repo: project, worktree }
+          const sessDir = ctx.sessionConfig?.dirs.sessions
+          const session = sessDir ? getSession(sessDir, run.sessionId) : null
+          if (run.natsEnabled && session?.nats?.enabled && sessDir) {
+            const oldSubs = session.nats.subscriptions ?? []
+            const newSubs = computeNatsSubscriptions({
+              sessionName: run.sessionId,
+              spaceId: run.spaceId,
+              project: project || null,
+              worktree: worktree || null,
+            }, ctx.docStore)
+            const { add, remove } = diffSubscriptions(oldSubs, newSubs)
+            for (const subject of remove) {
+              const warning = await trySendNatsSocketCommand(run.sessionId, { action: 'unsubscribe', subject })
+              if (warning) log.warn('nats', `${run.sessionId}: ${warning.message}`)
+            }
+            for (const subject of add) {
+              const warning = await trySendNatsSocketCommand(run.sessionId, { action: 'subscribe', subject })
+              if (warning) log.warn('nats', `${run.sessionId}: ${warning.message}`)
+            }
+            updateSession(sessDir, run.sessionId, {
+              nats: { ...session.nats, subscriptions: newSubs },
+            })
+            registerSaloonSubs(ctx.natsTraffic, run.sessionId, newSubs)
+            nextRun = {
+              ...nextRun,
+              natsSubject: newSubs[1] ?? newSubs[0],
+              natsSubscriptions: newSubs,
+            }
+          }
+          ctx.docStore.upsertRun(id, nextRun)
+          ok(res, { id, scope })
+          return
+        }
+        const editor = ctx.docStore.getAllEditorWidgets().find(widget => widget.id === id)
+        if (editor) {
+          ctx.docStore.upsertEditorWidget(id, { ...editor, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const browser = ctx.docStore.getAllBrowserWidgets().find(widget => widget.id === id)
+        if (browser) {
+          ctx.docStore.upsertBrowserWidget(id, { ...browser, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const image = ctx.docStore.getAllImageWidgets().find(widget => widget.id === id)
+        if (image) {
+          ctx.docStore.upsertImageWidget(id, { ...image, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const plugin = ctx.docStore.getAllPluginWidgets().find(widget => widget.id === id)
+        if (plugin) {
+          ctx.docStore.upsertPluginWidget(id, { ...plugin, scope, updatedAt: new Date().toISOString() })
+          ok(res, { id, scope })
+          return
+        }
+        fail(res, 'NOT_FOUND', `Widget '${id}' not found`)
+      }).catch(error => fail(res, 'INTERNAL', (error as Error).message))
+      return true
+    }
+  }
+
   // POST /api/plugin-widgets
   if (method === 'POST' && url === '/api/plugin-widgets') {
     readBody(req).then(body => {
       const parsed = JSON.parse(body) as {
-        pluginId?: string; widgetType?: string; spaceId?: string;
+        pluginId?: string; widgetType?: string; spaceId?: string; sessionId?: string;
         position?: { x: number; y: number };
         size?: { width: number; height: number };
         data?: unknown;
         attach?: { to: string; anchors: string };
       }
-      const { pluginId, widgetType, spaceId, position, size, data } = parsed
+      const { pluginId, widgetType, spaceId, sessionId, position, size, data } = parsed
 
       // Parse attach early so we can report malformed input before heavier checks.
       const attach = parseAttach(parsed.attach)
@@ -4418,11 +4489,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       const now = new Date().toISOString()
+      const spawningRun = sessionId
+        ? ctx.docStore.getAllRuns().find(run => run.sessionId === sessionId)
+        : undefined
+      if (sessionId && !spawningRun) {
+        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
+        return
+      }
       const instance: PluginWidgetInstance = {
         id: widgetId,
         pluginId,
         widgetType,
         spaceId,
+        ...(sessionId ? { sessionId } : {}),
+        scope: spawningRun?.scope ?? (spawningRun
+          ? { project: spawningRun.repo || undefined, worktree: spawningRun.worktree || undefined }
+          : {}),
         position: finalPosition,
         size,
         data: data ?? null,
@@ -5321,7 +5403,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const newSubs = computeNatsSubscriptions({
             sessionName: existing.sessionId,
             spaceId: existing.spaceId,
-            taskId: patchWithoutAttention.taskId,
+            project: existing.scope?.project ?? existing.repo ?? null,
+            worktree: existing.scope?.worktree ?? existing.worktree ?? null,
           }, ctx.docStore)
 
           const { add, remove } = diffSubscriptions(oldSubs, newSubs)
@@ -6587,9 +6670,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 // Resolve NATS from the tombstone's task context (fresh epoch —
                 // the dead session's old subject tree is gone). computeNatsSubscriptions
                 // degrades to a DM-only inbox if the task no longer exists.
-                const natsCtx = { sessionName: name, spaceId: ctx.docStore.activeSpaceId || null, taskId: tombstone.taskId || null, epicId: null, initiativeId: null }
+                const natsCtx = {
+                  sessionName: name,
+                  spaceId: ctx.docStore.activeSpaceId || null,
+                  project: tombstone.project || null,
+                  worktree: null,
+                }
                 const nats: { enabled: boolean; subscriptions: string[] } | null =
-                  (tombstone.taskId || natsCtx.spaceId)
+                  (tombstone.project || natsCtx.spaceId)
                     ? { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
                     : null
                 reviveResolvedNats = nats
@@ -7021,14 +7109,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fullPrompt = `${introMessage}\n\n---\n\n${promptOverride}`
       }
 
-      // Resolve the parent's run to get taskId for NATS subject computation
+      // Resolve the parent's run so organizational scope and legacy display
+      // metadata can be inherited by the hand.
       const parentRun = ctx.docStore.getAllRuns().find(r => r.sessionId === parentName)
       const taskId = parentRun?.taskId
+      const effectiveRepo = repoOverride ?? parentSession.project
 
       // Inherit workspace from parent session, unless overridden
       const workspace = worktreePathOverride
         ? { path: worktreePathOverride, worktree: true, branch: null, basePath: null }
         : parentSession.workspace
+      const overrideWorktree = worktreePathOverride
+        ? (await detectBranch(worktreePathOverride)) ?? basename(worktreePathOverride)
+        : null
+      const effectiveScope = worktreePathOverride
+        ? (effectiveRepo ? { project: effectiveRepo, worktree: overrideWorktree! } : {})
+        : (parentRun?.scope ?? {
+            ...(effectiveRepo ? { project: effectiveRepo } : {}),
+            ...(parentRun?.worktree ? { worktree: parentRun.worktree } : {}),
+          })
 
       // Build NATS subscriptions for the spawned session. Parent NATS is an
       // inherited convenience, not an explicit child request, so capability-
@@ -7038,9 +7137,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const natsCtx = {
           sessionName: spawnedName,
           spaceId: ctx.docStore.activeSpaceId || null,
-          taskId: taskId || null,
-          epicId: parentRun?.epic || null,
-          initiativeId: parentRun?.initiative || null,
+          project: effectiveScope.project ?? null,
+          worktree: effectiveScope.worktree ?? null,
         }
         const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
         natsConfig = { enabled: true, subscriptions }
@@ -7062,9 +7160,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ? buildNatsSubject(
             parentName,
             ctx.docStore,
-            parentRun?.taskId,
-            parentRun?.epic || undefined,
-            parentRun?.initiative || undefined,
+            parentRun?.scope?.project ?? parentRun?.repo,
+            parentRun?.scope?.worktree ?? parentRun?.worktree,
           )
         : undefined
 
@@ -7196,9 +7293,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
-      // Resolve effective repo (override or inherit)
-      const effectiveRepo = repoOverride ?? parentSession.project
-
       const spawnReservation = reserveSessionName(
         sessDir,
         cfg.sessions.prefix,
@@ -7305,7 +7399,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Build NATS subject for the run
         const natsSubject = natsConfig?.enabled
-          ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
+          ? buildNatsSubject(
+              spawnedName,
+              ctx.docStore,
+              effectiveScope.project,
+              effectiveScope.worktree,
+            )
           : undefined
 
         // Create a run entity linked to the same task and worktree as the parent (unless overridden)
@@ -7320,11 +7419,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           background,
           blocked: false,
           sessionId: spawnedName,
+          scope: effectiveScope,
           initiative: parentRun?.initiative ?? '',
           epic: parentRun?.epic ?? '',
           task: taskId ?? '',
           repo: effectiveRepo ?? '',
-          worktree: worktreePathOverride ?? parentRun?.worktree ?? '',
+          worktree: effectiveScope.worktree ?? '',
           touchedFiles: [],
           recapEntries: [],
           rawLogs: '',

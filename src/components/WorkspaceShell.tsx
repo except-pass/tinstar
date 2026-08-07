@@ -1,30 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
-import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
+import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, OrganizationalScope, Run, TreeNode } from '../domain/types'
+import { findNodeLabel } from '../domain/view-models'
+import { buildScopeTree, flattenUnscopedForCanvas, normalizedScope } from '../domain/scopeTree'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
-import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev, visibleCycleQueue } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { isBackgroundHidden, backgroundHiddenRunIds, pruneRunNodes } from '../domain/background-visibility'
 import { getPref, setPref, PREFS_STORAGE_KEY } from '../lib/uiPrefs'
-import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
-import { CreateSessionDialog } from './CreateSessionDialog'
+import { CreateSessionDialog, type SessionPrefill } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
-import { EntityMenu } from './EntityMenu'
-import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ConstellationProvider } from '../hotkeys/ConstellationContext'
 import { PinsBridge } from '../core/pluginApi/PinsBridge'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
-import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
+import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
 import type { FocusNode } from '../hotkeys/FocusPathContext'
-import { NoTasksToast } from './NoTasksToast'
 import { DownloadPushToast } from './DownloadPushToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
@@ -37,15 +33,8 @@ import { useConfig, useConfigPatch } from '../context/ConfigContext'
 import { pluginsReady } from '../widgets'
 import { FocusModeToggle } from './FocusModeToggle'
 import { focusCycleQueue, isBuiltInRunWorkspace, resolveFocusTarget, runsInFocusSpace } from '../focusMode/focusTarget'
+import { parseProjects, sortByOrder, type Project } from '../lib/projects'
 
-
-/** Taxonomy entities each own a name; the endpoint that owns it is keyed by type. */
-const TAXONOMY_RENAME_ENDPOINTS: Record<string, string> = {
-  initiative: '/api/initiatives',
-  epic: '/api/epics',
-  task: '/api/tasks',
-  worktree: '/api/worktrees',
-}
 
 /**
  * Rename dispatch behind the sidebar's inline edit.
@@ -96,13 +85,7 @@ export function dispatchRename(
     })
     return
   }
-  const endpoint = TAXONOMY_RENAME_ENDPOINTS[type]
-  if (!endpoint) return
-  void apiFetch(`${endpoint}/${entityId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: newName }),
-  })
+  // Project and Worktree registry names are identity, not inline labels.
 }
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -148,44 +131,33 @@ function WorkspaceShellInner() {
     () => levelMeta.map(m => m.internalType),
     [levelMeta],
   )
-
-  // One-time migration: promote tinstar-dimensions localStorage → space.labelConfig
+  const [projects, setProjects] = useState<Project[]>([])
   useEffect(() => {
-    if (!activeSpaceId) return
-    const activeSpace = spaces.find(s => s.id === activeSpaceId)
-    if (!activeSpace || activeSpace.labelConfig) return  // already migrated
+    let cancelled = false
+    const load = () => apiFetch('/api/projects')
+      .then(response => response.json())
+      .then(payload => {
+        if (!cancelled) setProjects(sortByOrder(parseProjects(payload.data ?? payload)))
+      })
+      .catch(() => {})
+    void load()
+    window.addEventListener('tinstar:projects_changed', load)
+    return () => {
+      cancelled = true
+      window.removeEventListener('tinstar:projects_changed', load)
+    }
+  }, [])
 
-    const stored = localStorage.getItem('tinstar-dimensions')
-    let count = 3
-    try {
-      const parsed = JSON.parse(stored ?? '[]') as string[]
-      if (parsed.length >= 1 && parsed.length <= 3) count = parsed.length
-    } catch { /* ignore */ }
-
-    // Use bottom-N defaults matching the stored count
-    const levels: LevelLabel[] = DEFAULT_LEVELS.slice(DEFAULT_LEVELS.length - count)
-
-    apiFetch(`/api/spaces/${activeSpaceId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ labelConfig: { levels } }),
-    }).then(r => {
-      if (r.ok) localStorage.removeItem('tinstar-dimensions')
-      else console.warn('[tinstar] labelConfig migration failed; will retry on next load')
-    }).catch(() => {
-      console.warn('[tinstar] labelConfig migration failed; will retry on next load')
-    })
-  }, [activeSpaceId, spaces])
-
-  const { sidebarTree: rawSidebarTree, runSummaries } = useMemo(
-    () => buildWorkspaceView(dimensions, runRepo, taxRepo),
-    [dimensions, runRepo, taxRepo],
+  const activeRunCount = useMemo(
+    () => runRepo.getAll().filter(run => !run.spaceId || run.spaceId === activeSpaceId).length,
+    [runRepo, activeSpaceId],
   )
 
   // Filter out empty entity containers when showEmptyEntities is false
   const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
     return nodes.reduce<TreeNode[]>((acc, node) => {
-      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+      const isScopeContainer = node.type === 'project' || node.type === 'worktree' || node.type === 'unscoped'
+      if (!isScopeContainer) {
         acc.push(node)
         return acc
       }
@@ -208,11 +180,6 @@ function WorkspaceShellInner() {
   // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
   // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
   const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden, removeHidden: removeRunHidden } = useHiddenRuns()
-
-  const sidebarTree = useMemo(
-    () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
-    [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
-  )
 
   // Background-session reveal toggle (R8–R10). U5 wires the pref + state; U6
   // builds the sidebar button that flips it. Same uiPrefs-backed state pattern
@@ -242,11 +209,6 @@ function WorkspaceShellInner() {
     () => backgroundHiddenRunIds(runRepo.getAll(), showBackgroundSessions),
     [runRepo, showBackgroundSessions],
   )
-  const backgroundPrunedTree = useMemo(
-    () => backgroundHiddenIds.size === 0 ? sidebarTree : pruneRunNodes(sidebarTree, backgroundHiddenIds),
-    [sidebarTree, backgroundHiddenIds],
-  )
-
   // U6 (R8/R9): background marking + count for the sidebar header toggle.
   // backgroundRunIds marks every background run — only rows that survive the
   // prune (toggle-revealed or attention breakthrough) actually render, and
@@ -272,9 +234,41 @@ function WorkspaceShellInner() {
     return map
   }, [runRepo])
 
+  const runBySessionId = useMemo(() => {
+    const map = new Map<string, Run>()
+    for (const run of runRepo.getAll()) map.set(run.sessionId, run)
+    return map
+  }, [runRepo])
+
+  const runScope = useCallback((run: Run): OrganizationalScope => normalizedScope(
+    run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined },
+  ), [])
+  const scopeForSession = useCallback((sessionId: string | undefined): OrganizationalScope => {
+    if (!sessionId) return {}
+    const run = runBySessionId.get(sessionId)
+    return run ? runScope(run) : {}
+  }, [runBySessionId, runScope])
+
+  const syntheticRunNodes: TreeNode[] = useMemo(() => runRepo.getAll()
+    .filter(run => !run.spaceId || run.spaceId === activeSpaceId)
+    .map(run => ({
+    id: `run-${run.id}`,
+    label: run.name || run.id,
+    type: 'run',
+    entityId: run.id,
+    children: [],
+    runCount: 1,
+    activeCount: run.status === 'running' ? 1 : 0,
+    color: run.color,
+    status: run.status,
+    backend: run.backend,
+    agentIcon: run.agentIcon,
+    scope: runScope(run),
+  })), [runRepo, runScope, activeSpaceId])
+
   const syntheticEditorNodes: TreeNode[] = useMemo(
     () =>
-      editorWidgets.map(w => ({
+      editorWidgets.filter(w => !w.spaceId || w.spaceId === activeSpaceId).map(w => ({
         id: w.id,
         label: w.filePath.split('/').pop() ?? w.filePath,
         type: 'file-editor',
@@ -283,8 +277,9 @@ function WorkspaceShellInner() {
         runCount: 0,
         activeCount: 0,
         color: w.color,
+        scope: normalizedScope(w.scope ?? { project: w.repo || undefined, worktree: w.worktree || undefined }),
       })),
-    [editorWidgets],
+    [editorWidgets, activeSpaceId],
   )
 
   const editorWidgetMap = useMemo(() => {
@@ -295,7 +290,7 @@ function WorkspaceShellInner() {
 
   const syntheticBrowserNodes: TreeNode[] = useMemo(
     () =>
-      browserWidgets.map(w => ({
+      browserWidgets.filter(w => !w.spaceId || w.spaceId === activeSpaceId).map(w => ({
         id: w.id,
         label: w.title ?? (() => { try { return w.url ? new URL(w.url.startsWith('http') ? w.url : `http://${w.url}`).host : 'Browser' } catch { return 'Browser' } })(),
         type: 'browser-widget',
@@ -304,8 +299,9 @@ function WorkspaceShellInner() {
         runCount: 0,
         activeCount: 0,
         color: w.color,
+        scope: normalizedScope(w.scope ?? scopeForSession(w.sessionId)),
       })),
-    [browserWidgets],
+    [browserWidgets, scopeForSession, activeSpaceId],
   )
 
   const browserWidgetMap = useMemo(() => {
@@ -316,7 +312,7 @@ function WorkspaceShellInner() {
 
   const syntheticImageNodes: TreeNode[] = useMemo(
     () =>
-      imageWidgets.map(w => ({
+      imageWidgets.filter(w => !w.spaceId || w.spaceId === activeSpaceId).map(w => ({
         id: w.id,
         label: w.filePath.split('/').pop() ?? w.filePath,
         type: 'image-viewer' as const,
@@ -324,8 +320,9 @@ function WorkspaceShellInner() {
         children: [],
         runCount: 0,
         activeCount: 0,
+        scope: normalizedScope(w.scope ?? { project: w.repo || undefined, worktree: w.worktree || undefined }),
       })),
-    [imageWidgets],
+    [imageWidgets, activeSpaceId],
   )
 
   const imageWidgetMap = useMemo(() => {
@@ -336,7 +333,7 @@ function WorkspaceShellInner() {
 
   const syntheticPluginWidgetNodes: TreeNode[] = useMemo(
     () =>
-      pluginWidgets.map(w => ({
+      pluginWidgets.filter(w => w.spaceId === activeSpaceId).map(w => ({
         id: w.id,
         label: w.widgetType,   // palette has the proper label; using type is fine for V5.1
         type: w.widgetType,    // matches what the plugin registered via api.widgets.register({ type })
@@ -344,8 +341,9 @@ function WorkspaceShellInner() {
         children: [],
         runCount: 0,
         activeCount: 0,
+        scope: normalizedScope(w.scope),
       })),
-    [pluginWidgets],
+    [pluginWidgets, activeSpaceId],
   )
 
   const pluginWidgetMap = useMemo(() => {
@@ -358,75 +356,27 @@ function WorkspaceShellInner() {
   // render them as work widgets (closeable ×, no entity-style kebab menu).
   const pluginWidgetIdSet = useMemo(() => new Set(pluginWidgets.map(w => w.id)), [pluginWidgets])
 
-  const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticPluginWidgetNodes]
-    if (allSynthetic.length === 0) return backgroundPrunedTree
+  const rawSidebarTree = useMemo(() => buildScopeTree(
+    [...syntheticRunNodes, ...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticPluginWidgetNodes],
+    projects.filter(project => !project.hidden).map(project => project.name),
+    taxRepo.getWorktrees().filter(worktree => !worktree.spaceId || worktree.spaceId === activeSpaceId),
+  ), [syntheticRunNodes, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, projects, taxRepo, activeSpaceId])
 
-    // Map taskNodeId → synthetic nodes to nest inside it
-    const byTaskNode = new Map<string, TreeNode[]>()
-    const orphans: TreeNode[] = []
+  const sidebarTree = useMemo(
+    () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
+    [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
+  )
 
-    for (const node of syntheticEditorNodes) {
-      const widget = editorWidgets.find(w => w.id === node.entityId)
-      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
-      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
-      if (taskNodeId) {
-        const list = byTaskNode.get(taskNodeId) ?? []
-        list.push(node)
-        byTaskNode.set(taskNodeId, list)
-      } else {
-        orphans.push(node)
-      }
-    }
-
-    for (const node of syntheticBrowserNodes) {
-      const widget = browserWidgets.find(w => w.id === node.entityId)
-      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
-      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
-      if (taskNodeId) {
-        const list = byTaskNode.get(taskNodeId) ?? []
-        list.push(node)
-        byTaskNode.set(taskNodeId, list)
-      } else {
-        orphans.push(node)
-      }
-    }
-
-    for (const node of syntheticImageNodes) {
-      const widget = imageWidgets.find(w => w.id === node.entityId)
-      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
-      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
-      if (taskNodeId) {
-        const existing = byTaskNode.get(taskNodeId) ?? []
-        byTaskNode.set(taskNodeId, [...existing, node])
-      } else {
-        orphans.push(node)
-      }
-    }
-
-    // Add plugin widgets as orphans (top-level, no entity anchor)
-    for (const node of syntheticPluginWidgetNodes) {
-      orphans.push(node)
-    }
-
-    if (byTaskNode.size === 0) return [...backgroundPrunedTree, ...orphans]
-
-    function inject(nodes: TreeNode[]): TreeNode[] {
-      return nodes.map(node => {
-        const toInject = byTaskNode.get(node.id)
-        const injectedChildren = inject(node.children)
-        if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
-        return { ...node, children: [...injectedChildren, ...toInject] }
-      })
-    }
-
-    return [...inject(backgroundPrunedTree), ...orphans]
-  }, [backgroundPrunedTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  const canvasTree = useMemo(
+    () => backgroundHiddenIds.size === 0 ? sidebarTree : pruneRunNodes(sidebarTree, backgroundHiddenIds),
+    [sidebarTree, backgroundHiddenIds],
+  )
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
   const visibleCanvasTree = useMemo(() => {
-    if (hiddenRunIds.size === 0) return canvasTree
+    const canvasRoots = flattenUnscopedForCanvas(canvasTree)
+    if (hiddenRunIds.size === 0) return canvasRoots
     const prune = (nodes: TreeNode[]): TreeNode[] => {
       const out: TreeNode[] = []
       for (const node of nodes) {
@@ -441,7 +391,7 @@ function WorkspaceShellInner() {
       }
       return out
     }
-    return prune(canvasTree)
+    return prune(canvasRoots)
   }, [canvasTree, hiddenRunIds])
 
   const allNodeIds = useMemo(() => {
@@ -464,24 +414,15 @@ function WorkspaceShellInner() {
   focusModeRef.current = focusMode
   const [focusedRunBySpace, setFocusedRunBySpace] = useState<Record<string, string>>({})
   const [widgetsPaletteExpanded, setWidgetsPaletteExpanded] = useState(true)
-  const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [entityMenu, setEntityMenu] = useState<{
-    entityId: string; entityType: GroupingDimension; entityName: string; anchorRect: DOMRect
-  } | null>(null)
-  const [entitySettingsDialog, setEntitySettingsDialog] = useState<{
-    entityId: string; entityType: GroupingDimension; entityName: string
-  } | null>(null)
-  const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
+  const [sessionPrefill, setSessionPrefill] = useState<SessionPrefill | null>(null)
   // When an add-widget flow opens the session dialog, this holds the callback to
   // run with the created sessionId so the canvas can place the resulting run.
   const [pendingSessionOnCreated, setPendingSessionOnCreated] = useState<((sessionId: string) => void) | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { select, toggleSelect, deselect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
-  const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
-  const arrangeSwimlanesRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -591,118 +532,36 @@ function WorkspaceShellInner() {
       apiFetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
-    const endpointMap: Record<string, string> = {
-      initiative: '/api/initiatives',
-      epic: '/api/epics',
-      task: '/api/tasks',
-      worktree: '/api/worktrees',
-    }
-    const endpoint = endpointMap[type]
-    if (!endpoint) return
-    fetch(`${endpoint}/${entityId}`, { method: 'DELETE' })
+    // Project and Worktree rows are organizational targets, not deletable
+    // canvas widgets. Their lifecycle is owned by Project settings and git.
   }, [pluginWidgetMap, removeRunHidden])
 
-  const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
-    if (type === 'run') return
-    if (!showEmptyEntities) {
-      setShowEmptyEntities(true)
-      patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
-        console.warn('[workspace] showEmptyEntities patch failed:', err)
-      })
-    }
-    const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
-    const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
-    setCreateDialog({ parentId, parentType, childType: type })
-  }, [dimensions, showEmptyEntities])
-
-  const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
-    const endpointMap: Record<string, string> = {
-      initiative: '/api/initiatives',
-      epic: '/api/epics',
-      task: '/api/tasks',
-      run: '/api/runs',
-    }
-    const endpoint = endpointMap[entityType]
-    if (!endpoint) return
-
-    // Build patch based on entity type and target parent
-    const patch: Record<string, string | null> = {}
-    if (entityType === 'epic') {
-      // Epics can be reparented to an initiative
-      patch.initiativeId = newParentType === 'initiative' ? newParentId : null
-    } else if (entityType === 'task') {
-      // Tasks can be reparented to an epic or initiative
-      if (newParentType === 'epic') {
-        patch.epicId = newParentId
-      } else if (newParentType === 'initiative') {
-        patch.epicId = null
-        patch.initiativeId = newParentId
-      } else {
-        patch.epicId = null
-        patch.initiativeId = null
+  const handleReparent = useCallback((entityId: string, _entityType: string, newParentId: string | null, newParentType: string | null) => {
+    const findTarget = (nodes: TreeNode[]): TreeNode | undefined => {
+      for (const node of nodes) {
+        if (node.type === newParentType && node.entityId === (newParentId ?? '')) return node
+        const nested = findTarget(node.children)
+        if (nested) return nested
       }
-    } else if (entityType === 'run') {
-      // Runs can be reparented to a task
-      patch.taskId = newParentType === 'task' ? newParentId : null
+      return undefined
     }
-
-    fetch(`${endpoint}/${entityId}`, {
+    const scope = newParentType === 'unscoped' || !newParentType
+      ? {}
+      : normalizedScope(findTarget(canvasTree)?.scope)
+    void apiFetch(`/api/widgets/${encodeURIComponent(entityId)}/scope`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
+      body: JSON.stringify(scope),
     })
-  }, [])
-
-  const handleMenuOpen = useCallback((entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => {
-    setEntityMenu({ entityId, entityType, entityName, anchorRect })
-  }, [])
-
-  const handleMenuStartSession = useCallback(async () => {
-    if (!entityMenu) return
-    // Resolve settings for the entity and pre-fill the session dialog
-    const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
-    const endpoint = typeMap[entityMenu.entityType]
-    if (!endpoint) {
-      setShowSessionDialog(true)
-      return
-    }
-    try {
-      const res = await apiFetch(`/api/${endpoint}/${entityMenu.entityId}/settings`)
-      const data = await res.json()
-      const entityLinks: Record<string, string | undefined> = {}
-      if (entityMenu.entityType === 'task') entityLinks.taskId = entityMenu.entityId
-      else if (entityMenu.entityType === 'epic') entityLinks.epicId = entityMenu.entityId
-      else if (entityMenu.entityType === 'initiative') entityLinks.initiativeId = entityMenu.entityId
-      if (data.ok) {
-        const resolved = data.data.resolved
-        setSessionPrefill({
-          ...resolved,
-          worktreeMode: resolved.worktree,
-          runColor: resolved.defaultRunColor,
-          ...entityLinks,
-        })
-      } else {
-        setSessionPrefill(entityLinks)
-      }
-    } catch { /* ignore */ }
-    setShowSessionDialog(true)
-  }, [entityMenu])
+  }, [canvasTree])
 
   // Open the session create dialog on behalf of the add-widget flow, capturing a
   // callback to fire with the created sessionId once the POST succeeds.
-  const handleRequestCreateSession = useCallback((prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => {
+  const handleRequestCreateSession = useCallback((prefill: SessionPrefill, onCreated: (sessionId: string) => void) => {
     setSessionPrefill(prefill)
     setPendingSessionOnCreated(() => onCreated)
     setShowSessionDialog(true)
   }, [])
-
-  const handleMenuRename = useCallback(() => {
-    if (entityMenu) {
-      const nodeId = `${entityMenu.entityType}-${entityMenu.entityId}`
-      select(nodeId, entityMenu.entityType)
-      setRenamingNodeId(nodeId)
-    }
-  }, [entityMenu, select])
 
   // Global hotkeys: session cycling
   const allRuns = useMemo(() => Array.from(runMap.values()), [runMap])
@@ -731,7 +590,7 @@ function WorkspaceShellInner() {
     setFocusRunId(null)
   }, [selectedRunPruneEligible, deselect])
 
-  // Derive focus node for any selected entity (run, task, epic, initiative)
+  // Derive focus for selectable work widgets. Scope rows only organize.
   const selectedFocusNode = useMemo<FocusNode | null>(() => {
     const { selectedType, selectedIds } = selectionState
     if (!selectedType || selectedIds.size === 0) return null
@@ -741,11 +600,6 @@ function WorkspaceShellInner() {
     if (selectedType === 'run') {
       const rawId = firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
       return { id: rawId, type: 'run-workspace', label: rawId }
-    }
-
-    if (selectedType === 'task' || selectedType === 'epic' || selectedType === 'initiative') {
-      const label = findNodeLabel(canvasTree, firstNodeId) ?? selectedType
-      return { id: firstNodeId, type: selectedType, label }
     }
 
     if (selectedType === 'file-editor') {
@@ -776,22 +630,6 @@ function WorkspaceShellInner() {
       pushFocus(selectedFocusNode)
     }
   }, [selectedFocusNode, pushFocus, clearFocus])
-
-  // Register action handler for selected task/epic/initiative
-  useEffect(() => {
-    if (!selectedFocusNode || selectedFocusNode.type === 'run-workspace' || selectedFocusNode.type === 'file-editor') return
-    const { id, type, label } = selectedFocusNode
-    const dash = id.indexOf('-')
-    if (dash === -1) return
-    const entityId = id.slice(dash + 1)
-    const entityType = type as GroupingDimension
-    registerActionHandler(id, (action) => {
-      if (action === 'settings') {
-        setEntitySettingsDialog({ entityId, entityType, entityName: label })
-      }
-    })
-    return () => { deregisterActionHandler(id) }
-  }, [selectedFocusNode])
 
   // Open settings dialog when the WidgetsPalette "Open Settings → Plugins" link fires
   useEffect(() => {
@@ -964,54 +802,10 @@ function WorkspaceShellInner() {
     onCycleAllNext: cycleAllNext,
     onCycleAllPrev: cycleAllPrev,
     onSessionQuick: useCallback(async () => {
-      // S opens session dialog — if a task is selected, pre-fill with task settings
-      const { selectedType, selectedIds } = selectionState
-      const firstNodeId = [...selectedIds][0] ?? null
-      if (!firstNodeId || selectedType !== 'task') {
-        setSessionPrefill(null)
-        setShowSessionDialog(true)
-        return
-      }
-      const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
-      try {
-        const res = await apiFetch(`/api/tasks/${rawId}/settings`)
-        const data = await res.json()
-        if (data.ok) {
-          const resolved = data.data.resolved
-          setSessionPrefill({
-            ...resolved,
-            worktreeMode: resolved.worktree,
-            runColor: resolved.defaultRunColor,
-            taskId: rawId,
-            sources: data.data.sources,
-          })
-        } else {
-          setSessionPrefill({ taskId: rawId })
-        }
-      } catch {
-        setSessionPrefill({ taskId: rawId })
-      }
+      setSessionPrefill(null)
       setShowSessionDialog(true)
-    }, [selectionState]),
-    onCreateChild: useCallback(() => {
-      const { selectedType, selectedIds } = selectionState
-      const firstNodeId = [...selectedIds][0] ?? null
-      if (!firstNodeId || !selectedType) return
-      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
-      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
-      // Determine child type from the hierarchy
-      const typeIdx = dimensions.indexOf(selectedType as 'task' | 'epic' | 'initiative')
-      if (typeIdx < 0 || typeIdx >= dimensions.length - 1) return // can't add child below leaf
-      const childType = dimensions[typeIdx + 1]
-      if (!childType) return
-      if (!showEmptyEntities) {
-        setShowEmptyEntities(true)
-        patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
-          console.warn('[workspace] showEmptyEntities patch failed:', err)
-        })
-      }
-      setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
-    }, [selectionState, dimensions, showEmptyEntities]),
+    }, []),
+    onCreateChild: useCallback(() => {}, []),
     onToggleEmptyEntities: useCallback(() => {
       const next = !showEmptyEntities
       setShowEmptyEntities(next)
@@ -1019,25 +813,11 @@ function WorkspaceShellInner() {
         console.warn('[workspace] showEmptyEntities patch failed:', err)
       })
     }, [showEmptyEntities]),
-    onEntitySettings: useCallback(() => {
-      const { selectedType, selectedIds } = selectionState
-      const firstNodeId = [...selectedIds][0] ?? null
-      if (!firstNodeId || !selectedType) return
-      // Only open settings for entity types (initiative, epic, task), not runs
-      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
-      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
-      const entityType = selectedType as GroupingDimension
-      // Look up entity name from the taxonomy
-      const entity = entityType === 'task' ? taxRepo.getTaskById(rawId)
-        : entityType === 'epic' ? taxRepo.getEpicById(rawId)
-        : entityType === 'initiative' ? taxRepo.getInitiativeById(rawId)
-        : null
-      setEntitySettingsDialog({ entityId: rawId, entityType, entityName: entity?.name ?? rawId })
-    }, [selectionState, taxRepo]),
+    onEntitySettings: useCallback(() => {}, []),
     onPaletteOpen: () => setPaletteOpen(true),
   })
 
-  // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
+  // Sidebar double-click passes node.id directly (for example "run-vpp").
   const handleFocusNode = useCallback((nodeId: string) => {
     if (focusMode && nodeId.startsWith('run-')) {
       const runId = nodeId.slice(4)
@@ -1053,14 +833,6 @@ function WorkspaceShellInner() {
 
   const handleFocusHandled = useCallback(() => {
     setFocusRunId(null)
-  }, [])
-
-  const handleTaskUpdate = useCallback((taskId: string, patch: { externalUrl?: string | null }) => {
-    void apiFetch(`/api/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
   }, [])
 
   // Click on canvas widget → select in hierarchy + expand ancestors in Canvas.
@@ -1162,7 +934,7 @@ function WorkspaceShellInner() {
                     >
                       + Session
                     </button>
-                    <span className="text-2xs font-mono text-slate-500 flex-shrink-0 whitespace-nowrap">{runSummaries.size} runs</span>
+                    <span className="text-2xs font-mono text-slate-500 flex-shrink-0 whitespace-nowrap">{activeRunCount} runs</span>
                     <button
                       className="w-6 h-6 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors flex-shrink-0"
                       onClick={() => setShowSettings(true)}
@@ -1202,15 +974,11 @@ function WorkspaceShellInner() {
                         onCreateSpace={handleCreateSpace}
                         onRenameSpace={handleRenameSpace}
                         onDeleteSpace={handleDeleteSpace}
-                        onAdd={handleAdd}
                         onRename={handleRename}
                         onDelete={handleDelete}
                         onFocusRun={handleFocusNode}
-                        onMenuOpen={handleMenuOpen}
                         onReparent={handleReparent}
-                        onArrangeGrid={() => arrangeGridRef.current?.()}
-                        onArrangeReset={() => arrangeResetRef.current?.()}
-                        onArrangeSwimlanes={() => arrangeSwimlanesRef.current?.()}
+                        onOrganize={() => arrangeResetRef.current?.()}
                         onCollapse={() => setSidebarCollapsed(true)}
                         renamingNodeId={renamingNodeId}
                         onRenameComplete={() => setRenamingNodeId(null)}
@@ -1256,16 +1024,12 @@ function WorkspaceShellInner() {
                     onSelectRun={handleSelectRun}
                     onFocusRun={handleCanvasFocusRun}
                     onDeleteEntity={handleDelete}
-                    onMenuOpen={handleMenuOpen}
                     onRequestCreateSession={handleRequestCreateSession}
-                    onTaskUpdate={handleTaskUpdate}
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     onPluginWidgetCreated={(instance) => addOptimistic('pluginWidget', instance)}
-                    arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
-                    arrangeSwimlanesRef={arrangeSwimlanesRef}
                     forceMarshalOpen={forceMarshalOpen}
                   />
                   {!focusMode && <PaletteDragGhost />}
@@ -1283,17 +1047,6 @@ function WorkspaceShellInner() {
                   )}
                 </div>
 
-              {createDialog && (
-                <CreateEntityDialog
-                  dialog={createDialog}
-                  onClose={() => setCreateDialog(null)}
-                  onOptimisticCreate={addOptimistic}
-                  onCreated={(entityId, entityType, entityName) => {
-                    setEntitySettingsDialog({ entityId, entityType, entityName })
-                  }}
-                />
-              )}
-
               {showSessionDialog && (
                 <CreateSessionDialog
                   onClose={() => { setShowSessionDialog(false); setSessionPrefill(null); setPendingSessionOnCreated(null) }}
@@ -1310,48 +1063,6 @@ function WorkspaceShellInner() {
                 />
               )}
 
-              {entityMenu && (
-                <EntityMenu
-                  entityId={entityMenu.entityId}
-                  entityType={entityMenu.entityType}
-                  entityName={entityMenu.entityName}
-                  anchorRect={entityMenu.anchorRect}
-                  onStartSession={handleMenuStartSession}
-                  onSettings={() => {
-                    setEntitySettingsDialog({
-                      entityId: entityMenu.entityId,
-                      entityType: entityMenu.entityType,
-                      entityName: entityMenu.entityName,
-                    })
-                    setEntityMenu(null)
-                  }}
-                  onRename={() => {
-                    handleMenuRename()
-                    setEntityMenu(null)
-                  }}
-                  onAddChild={() => {
-                    // Add a child of the next dimension level below this entity
-                    const idx = dimensions.indexOf(entityMenu.entityType as 'task' | 'epic' | 'initiative')
-                    const childType = idx >= 0 && idx < dimensions.length - 1 ? (dimensions[idx + 1] ?? 'run') : 'run'
-                    handleAdd(entityMenu.entityId, childType)
-                    setEntityMenu(null)
-                  }}
-                  onDelete={() => {
-                    handleDelete(entityMenu.entityId, entityMenu.entityType)
-                    setEntityMenu(null)
-                  }}
-                  onClose={() => setEntityMenu(null)}
-                />
-              )}
-
-              {entitySettingsDialog && (
-                <EntitySettingsDialog
-                  entityId={entitySettingsDialog.entityId}
-                  entityType={entitySettingsDialog.entityType}
-                  entityName={entitySettingsDialog.entityName}
-                  onClose={() => setEntitySettingsDialog(null)}
-                />
-              )}
             </div>
           </TaxonomyProvider>
         </ConstellationProvider>
@@ -1362,10 +1073,6 @@ function WorkspaceShellInner() {
           </div>
         </TaxonomyProvider>
       )}
-      <NoTasksToast
-        taskCount={taxRepo.getTasks().length}
-        runCount={runRepo.getAll().length}
-      />
       <DownloadPushToast />
       <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </>

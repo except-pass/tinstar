@@ -26,9 +26,9 @@ The UI must be snappy and responsive. It should feel like playing a video game â
 
 ## Multi-Agent / NATS
 
-Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<init>.<epic>.<task>.<agent>`
+Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<project>.<worktree>[.<session>]`
 
-- Each agent auto-subscribes to task broadcast (`*`) and ancestor wildcards (`>`)
+- Worktree-scoped agents subscribe to their Worktree broadcast and direct session subject; Project-only and Unscoped agents receive direct messages only.
 - Use `reply` MCP tool to publish messages
 - See **[docs/nats-agent-channels.md](docs/nats-agent-channels.md)** for full details
 

@@ -40,20 +40,25 @@ describe('joinParticipants', () => {
 })
 
 describe('deriveHierarchicalName', () => {
-  it('returns "Task: <name>" for a broadcast subject ending in a real task', () => {
+  it('returns "Worktree: <name>" for a broadcast subject ending in a registered worktree', () => {
     const ds = new DocumentStore()
     ds.upsertSpace('s1', { id: 's1', name: 'Work Space', createdAt: '' })
     ds.activeSpaceId = 's1'
-    ds.upsertInitiative('i1', { id: 'i1', name: 'Init', color: '#000', status: 'active', summary: '', spaceId: 's1' })
-    ds.upsertEpic('e1', { id: 'e1', name: 'Epic', initiativeId: 'i1', status: 'active', summary: '', spaceId: 's1' })
-    ds.upsertTask('t1', { id: 't1', name: 'Tinstar Improvement', epicId: 'e1', initiativeId: 'i1', status: 'active', spaceId: 's1' })
-    expect(deriveHierarchicalName('tinstar.work-space.init.epic.tinstar-improvement', ds, 'broadcast'))
-      .toBe('Task: Tinstar Improvement')
+    ds.upsertWorktree('w1', { id: 'w1', name: 'feature-one', branch: 'feature-one', repo: 'Project One', worktreePath: '/tmp/feature-one', spaceId: 's1' })
+    expect(deriveHierarchicalName('tinstar.work-space.project-one.feature-one', ds, 'broadcast'))
+      .toBe('Worktree: feature-one')
+  })
+
+  it('uses the git branch when the worktree display name differs', () => {
+    const ds = new DocumentStore()
+    ds.upsertWorktree('w1', { id: 'w1', name: 'Friendly session', branch: 'feature/scope', repo: 'Project One', worktreePath: '/tmp/feature-scope' })
+    expect(deriveHierarchicalName('tinstar.work-space.project-one.feature-scope', ds, 'broadcast'))
+      .toBe('Worktree: feature/scope')
   })
 
   it('returns "DM → <session>" for a DM subject', () => {
     const ds = new DocumentStore()
-    expect(deriveHierarchicalName('tinstar.work-space.init.epic.task.natsviz', ds, 'dm'))
+    expect(deriveHierarchicalName('tinstar.work-space.project-one.feature-one.natsviz', ds, 'dm'))
       .toBe('DM → natsviz')
   })
 
@@ -64,7 +69,7 @@ describe('deriveHierarchicalName', () => {
 
   it('returns null for wildcard subjects', () => {
     const ds = new DocumentStore()
-    expect(deriveHierarchicalName('tinstar.work-space.init.>', ds, 'broadcast')).toBe(null)
+    expect(deriveHierarchicalName('tinstar.work-space.project-one.>', ds, 'broadcast')).toBe(null)
     expect(deriveHierarchicalName('tinstar.work-space.>', ds, 'broadcast')).toBe(null)
   })
 })

@@ -34,9 +34,9 @@ That telemetry rail is the thesis in miniature. It shows cost, tokens, and cache
 
 ## The hierarchy view
 
-Work nests: **Initiative → Epic → Task → Run**. The left sidebar shows that nesting as a live tree, always in sync with the canvas — click a card and its ancestors expand and highlight; double-click and the canvas flies to it. You can reorder with the keyboard, nest with Tab, add children from a kebab menu. The point is that the *organizational structure of your work* — which agent belongs to which task belongs to which goal — lives on screen as a navigable map, not in your memory as a thing you hope you've kept straight.
+Work stays organized by the structure that already exists: **Project -> Worktree**. The left sidebar shows every session and widget in that live tree, plus an Unscoped area for loose widgets. Sessions pass their scope to the widgets and Hands they create. Drag an entry into a Project or Worktree to change its scope without disturbing the canvas; press Organize only when you want the windows repacked. The point is that the *shape of your workspace* lives on screen as a navigable map without requiring a second task database to maintain.
 
-![The hierarchy sidebar: an Initiative → Epic → Task → Run tree, each row carrying an avatar, a status dot, and a child count, with the selected run highlighted and snapped widgets shown as slotted nodes.](images/hierarchy-tree.png)
+![The hierarchy sidebar organizing sessions and widgets by Project and Worktree.](images/hierarchy-tree.png)
 
 *The shape of the work, as a navigable map. The same tree the agents live in is the one you click through.*
 

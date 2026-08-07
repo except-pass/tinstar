@@ -2,7 +2,6 @@ import { useRef, useState, useCallback } from 'react'
 import type { TreeNode, GroupingDimension } from '../domain/types'
 
 const DRAG_THRESHOLD = 4
-const NEST_INDENT_PX = 24
 const AUTO_EXPAND_DELAY = 500
 const EDGE_SCROLL_ZONE = 40
 const EDGE_SCROLL_SPEED = 8
@@ -45,22 +44,14 @@ function isDescendant(tree: TreeNode[], ancestorId: string, candidateId: string)
   return hasChild(ancestor)
 }
 
-/** Get the parent node ID for a given node in the tree */
-function getParentId(tree: TreeNode[], targetId: string, parentId: string | null = null): string | null {
+function findNode(tree: TreeNode[], id: string): TreeNode | null {
   for (const node of tree) {
-    if (node.id === targetId) return parentId
-    const found = getParentId(node.children, targetId, node.id)
-    if (found !== undefined && found !== null) return found
-    // Check if found in children (need to handle null return for not-found vs null for root)
-    for (const c of node.children) {
-      if (c.id === targetId) return node.id
-    }
-    const deep = getParentId(node.children, targetId, node.id)
-    if (deep !== null) return deep
+    if (node.id === id) return node
+    const child = findNode(node.children, id)
+    if (child) return child
   }
   return null
 }
-
 
 export function useSidebarDrag(
   tree: TreeNode[],
@@ -86,6 +77,7 @@ export function useSidebarDrag(
   }, [])
 
   const handleDragStart = useCallback((nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => {
+    if (nodeType === 'project' || nodeType === 'worktree' || nodeType === 'unscoped') return
     const state: DragState = { nodeId, nodeType, label, startY: clientY, startX: clientX, currentY: clientY }
     dragRef.current = state
     // Don't set visual drag state until threshold is met
@@ -121,23 +113,9 @@ export function useSidebarDrag(
       const rect = row.getBoundingClientRect()
       if (clientY < rect.top || clientY > rect.bottom) continue
 
-      // Determine position based on cursor location within the row
-      const relY = clientY - rect.top
-      const rowHeight = rect.height
-      const relX = clientX - rect.left
       const nodeType = row.dataset.dragNodeType!
-
-      // If cursor is horizontally shifted right (indent zone) and node can have children
-      if (relX > NEST_INDENT_PX && nodeType !== 'run') {
+      if (nodeType === 'project' || nodeType === 'worktree' || nodeType === 'unscoped') {
         target = { nodeId, position: 'inside' }
-      } else if (relY < rowHeight * 0.33) {
-        target = { nodeId, position: 'before' }
-      } else if (relY > rowHeight * 0.67) {
-        target = { nodeId, position: 'after' }
-      } else if (nodeType !== 'run') {
-        target = { nodeId, position: 'inside' }
-      } else {
-        target = { nodeId, position: 'after' }
       }
       break
     }
@@ -178,31 +156,10 @@ export function useSidebarDrag(
     clearAutoExpand()
 
     if (drag && dropTarget && dragState) {
-      // Parse the dragged node ID to get entity info
-      const dragDash = drag.nodeId.indexOf('-')
-      const dragType = drag.nodeId.slice(0, dragDash)
-      const dragEntityId = drag.nodeId.slice(dragDash + 1)
-
-      // Parse target node ID
-      const targetDash = dropTarget.nodeId.indexOf('-')
-      const targetType = dropTarget.nodeId.slice(0, targetDash)
-      const targetEntityId = dropTarget.nodeId.slice(targetDash + 1)
-
-      if (dropTarget.position === 'inside') {
-        // Reparent into target
-        onReparent(dragEntityId, dragType, targetEntityId, targetType)
-      } else {
-        // before/after: reparent to same parent as the target
-        const parentId = getParentId(tree, dropTarget.nodeId)
-        if (parentId) {
-          const parentDash = parentId.indexOf('-')
-          const parentType = parentId.slice(0, parentDash)
-          const parentEntityId = parentId.slice(parentDash + 1)
-          onReparent(dragEntityId, dragType, parentEntityId, parentType)
-        } else {
-          // Target is at root level — unparent (orphan)
-          onReparent(dragEntityId, dragType, null, null)
-        }
+      const draggedNode = findNode(tree, drag.nodeId)
+      const targetNode = findNode(tree, dropTarget.nodeId)
+      if (draggedNode && targetNode) {
+        onReparent(draggedNode.entityId, draggedNode.type, targetNode.entityId || null, targetNode.type)
       }
     }
 

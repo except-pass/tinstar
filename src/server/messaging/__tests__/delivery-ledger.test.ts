@@ -98,7 +98,7 @@ function input(
   return {
     requestId,
     sender: { sessionId: 'sender', incarnation: 'sender-incarnation' },
-    destination: { subject: 'tinstar.space.init.epic.task' },
+    destination: { subject: 'tinstar.space.project.worktree' },
     text: 'Please inspect the lifecycle race.',
     recipients: [
       {

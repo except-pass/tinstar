@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -13,6 +13,7 @@ import type { BusEvent } from '../../types'
 const RUN_ID = 'vpppm-general-pourpose-2dc86'
 
 interface Harness {
+  root: string
   docStore: DocumentStore
   fetch(path: string, init?: RequestInit): Promise<Response>
   close(): Promise<void>
@@ -54,6 +55,7 @@ function createTestServer(root: string): Harness {
     resolve()
   }))
   return {
+    root,
     docStore,
     async fetch(path, init) {
       await ready
@@ -224,6 +226,51 @@ describe('PATCH /api/runs/:id — friendly name', () => {
     await withServer(async srv => {
       const res = await srv.fetch('/api/runs/nope', { method: 'PATCH', body: JSON.stringify({ name: 'x' }) })
       expect(res.status).toBe(404)
+    })
+  })
+})
+
+describe('PATCH /api/widgets/:id/scope', () => {
+  it('assigns Project → Worktree scope, then clears back to Unscoped', async () => {
+    await withServer(async srv => {
+      writeFileSync(join(srv.root, 'projects.json'), JSON.stringify({ tinstar: srv.root }))
+      srv.docStore.upsertWorktree('feature-one', {
+        id: 'feature-one', name: 'feature-one', branch: 'feature-one', repo: 'tinstar',
+        worktreePath: join(srv.root, 'feature-one'), spaceId: 'space-1',
+      })
+      seedRun(srv.docStore, { repo: '', worktree: '', scope: undefined })
+
+      const assigned = await srv.fetch(`/api/widgets/${RUN_ID}/scope`, {
+        method: 'PATCH',
+        body: JSON.stringify({ project: 'tinstar', worktree: 'feature-one' }),
+      })
+      expect(assigned.status).toBe(200)
+      expect(srv.docStore.getRun(RUN_ID)).toMatchObject({
+        scope: { project: 'tinstar', worktree: 'feature-one' },
+        repo: 'tinstar',
+        worktree: 'feature-one',
+      })
+
+      const cleared = await srv.fetch(`/api/widgets/${RUN_ID}/scope`, {
+        method: 'PATCH', body: JSON.stringify({}),
+      })
+      expect(cleared.status).toBe(200)
+      expect(srv.docStore.getRun(RUN_ID)?.scope).toEqual({})
+    })
+  })
+
+  it('rejects Worktree without Project and unknown scope targets', async () => {
+    await withServer(async srv => {
+      seedRun(srv.docStore)
+      const missingParent = await srv.fetch(`/api/widgets/${RUN_ID}/scope`, {
+        method: 'PATCH', body: JSON.stringify({ worktree: 'feature-one' }),
+      })
+      expect(missingParent.status).toBe(400)
+
+      const unknownProject = await srv.fetch(`/api/widgets/${RUN_ID}/scope`, {
+        method: 'PATCH', body: JSON.stringify({ project: 'missing' }),
+      })
+      expect(unknownProject.status).toBe(404)
     })
   })
 })

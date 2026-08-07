@@ -19,20 +19,19 @@ TINSTAR_URL="${TINSTAR_DASHBOARD_URL:-http://localhost:5273}"
 
 ### List all sessions
 ```bash
-curl -s "$TINSTAR_URL/api/sessions" | jq '.data[] | {name, state, backend, task: .task}'
+curl -s "$TINSTAR_URL/api/sessions" | jq '.data[] | {name, state, backend, project: .project, worktree: .workspace.branch}'
 ```
 
-### Get full state (runs, tasks, initiatives, epics)
+### Get full state (runs and organizational scope)
 ```bash
 curl -s "$TINSTAR_URL/api/state" | jq '{
-  runs: [.runs[] | {id, status, task, sessionId}],
-  tasks: [.tasks[] | {id, name}]
+  runs: [.runs[] | {id, status, scope, sessionId}]
 }'
 ```
 
 ### List sessions with their run status
 ```bash
-curl -s "$TINSTAR_URL/api/state" | jq '[.runs[] | select(.status == "running") | {id, task, sessionId}]'
+curl -s "$TINSTAR_URL/api/state" | jq '[.runs[] | select(.status == "running") | {id, scope, sessionId}]'
 ```
 
 ### Is a session actually working, or stuck on a prompt?
@@ -126,15 +125,15 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
   -d '{
     "name": "my-agent",
     "project": "my-project",
-    "prompt": "Initial task description",
-    "taskId": "task-id-to-attach-to"
+    "worktree": true,
+    "prompt": "Initial work description"
   }'
 ```
 
 ## Typical Workflow
 
 1. **Discover** what's running: `GET /api/state`
-2. **Find** the session you want by name or task
+2. **Find** the session you want by name, Project, or Worktree
 3. **Send** a prompt or instruction: `POST /api/sessions/{name}/prompt`
 4. **Monitor** via SSE: `GET /api/events` (streams `managed_session.*` events)
 5. **Coordinate** by sending follow-up prompts based on run status
@@ -142,6 +141,24 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
 ## Canvas Widgets
 
 Agents can spawn three types of widgets onto the canvas. All widget types appear immediately for the human watching the canvas.
+
+Every widget has an optional organizational scope. A Worktree always belongs to
+exactly one Project; omit both fields for Unscoped. Widgets spawned by a session
+inherit its scope automatically. To move any existing run, editor, browser,
+image, graveyard, or plugin widget in the hierarchy:
+
+```bash
+curl -s -X PATCH "$TINSTAR_URL/api/widgets/<widget-id>/scope" \
+  -H "Content-Type: application/json" \
+  -d '{"project":"my-project","worktree":"feature-branch"}'
+
+# Clear to Unscoped
+curl -s -X PATCH "$TINSTAR_URL/api/widgets/<widget-id>/scope" \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+Changing scope updates the hierarchy immediately but does not move the widget.
+The human uses the single **Organize** action when they want the canvas repacked.
 
 ### Browser Widgets
 
@@ -225,7 +242,7 @@ curl -s -X POST "$TINSTAR_URL/api/editor-widgets" \
 curl -s -X DELETE "$TINSTAR_URL/api/editor-widgets/{id}"
 ```
 
-Response includes the widget `id`. The widget is labelled with the run's task, epic, and initiative so the human knows which agent opened it.
+Response includes the widget `id`. The widget inherits the spawning run's Project/Worktree scope.
 
 ### Image Widgets
 

@@ -12,9 +12,6 @@ export interface SessionPrefill {
   skipPermissions?: boolean
   cliTemplate?: string
   runColor?: string
-  taskId?: string
-  epicId?: string
-  initiativeId?: string
   /** Session-view widget type for the created run (run.view). Set when spawning
    *  a session-backed plugin view; absent for a default run-workspace session. */
   view?: string
@@ -29,8 +26,6 @@ interface Props {
 }
 
 type WorktreeMode = 'none' | 'new' | 'existing'
-
-interface EntityOption { id: string; name: string }
 
 function generateName(): string {
   const adj = ['swift', 'bold', 'keen', 'calm', 'warm', 'cool', 'bright', 'sharp', 'quick', 'deft']
@@ -73,10 +68,6 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [skipPermissions, _setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
   const [runColor, setRunColor] = useState(() => prefill?.runColor ?? pickRandomPaletteColor())
-  const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
-  const [taskSearch, setTaskSearch] = useState('')
-  const taskSearchRef = useRef<HTMLInputElement>(null)
-  const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
@@ -88,7 +79,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     nameRef.current?.focus()
   }, [])
 
-  // Fetch projects list and entities
+  // Fetch projects and agent templates.
   useEffect(() => {
     apiFetch('/api/projects')
       .then(r => r.ok ? r.json() : null)
@@ -112,17 +103,6 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       })
       .catch(() => {})
 
-    apiFetch('/api/state')
-      .then(r => r.ok ? r.json() : null)
-      .then(state => {
-        if (!state) return
-        setEntities({
-          initiatives: (state.initiatives ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-          epics: (state.epics ?? []).map((e: { id: string; name: string }) => ({ id: e.id, name: e.name })),
-          tasks: (state.tasks ?? []).map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })),
-        })
-      })
-      .catch(() => {})
   }, [])
 
   // Fetch existing worktrees when project is selected and mode is 'existing'
@@ -158,10 +138,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
     if (prompt.trim()) body.prompt = prompt.trim()
-    if (taskId) body.taskId = taskId
     if (runColor) body.color = runColor
-    if (prefill?.epicId) body.epicId = prefill.epicId
-    if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
     if (prefill?.view) body.view = prefill.view
 
     // Keep the modal open until the create actually succeeds. A failed create
@@ -194,7 +171,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [submitting, effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
+  }, [submitting, effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, runColor, prefill?.view, onClose, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -418,76 +395,6 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
             )}
           </div>
         )}
-
-        {/* Attach to entity */}
-        {entities.tasks.length > 0 && (
-          <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Attach to Task</label>
-            <div className="border border-white/10 rounded overflow-hidden">
-              <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 bg-surface-base">
-                <span className="material-symbols-outlined text-sm text-slate-500" aria-hidden>search</span>
-                <input
-                  ref={taskSearchRef}
-                  type="text"
-                  value={taskSearch}
-                  onChange={e => setTaskSearch(e.target.value)}
-                  placeholder="Search tasks…"
-                  className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
-                  data-testid="task-search-input"
-                  aria-label="Search tasks"
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                {taskSearch && (
-                  <button
-                    className="text-slate-500 hover:text-primary text-xs leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
-                    onClick={() => { setTaskSearch(''); taskSearchRef.current?.focus() }}
-                    aria-label="Clear search"
-                    data-testid="task-search-clear"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-              <div className="max-h-40 overflow-y-auto bg-surface-base" data-testid="task-list">
-                {(() => {
-                  const q = taskSearch.trim().toLowerCase()
-                  const filtered = q
-                    ? entities.tasks.filter(t => t.name.toLowerCase().includes(q))
-                    : entities.tasks
-                  const options: Array<{ id: string; name: string }> = [{ id: '', name: 'None (unattached)' }, ...filtered]
-                  return (
-                    <>
-                      {options.map(t => {
-                        const selected = t.id === taskId
-                        return (
-                          <button
-                            key={t.id || '__none__'}
-                            onClick={() => setTaskId(t.id)}
-                            className={[
-                              'w-full text-left px-3 py-1.5 text-xs transition-colors flex flex-col gap-0.5',
-                              selected
-                                ? 'bg-primary/20 text-primary'
-                                : 'text-slate-300 hover:bg-white/5',
-                              t.id === '' ? 'italic text-slate-400' : '',
-                            ].join(' ')}
-                            data-testid={`task-option-${t.id || 'none'}`}
-                          >
-                            <span className="truncate">{t.name}</span>
-                          </button>
-                        )
-                      })}
-                      {q && filtered.length === 0 && (
-                        <div className="text-xs text-slate-500 italic px-3 py-2">No matches</div>
-                      )}
-                    </>
-                  )
-                })()}
-              </div>
-            </div>
-          </div>
-        )}
-
 
         {/* Run color */}
         <div className="mb-3">

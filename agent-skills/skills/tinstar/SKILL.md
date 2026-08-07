@@ -29,8 +29,8 @@ Session names **cannot contain dots** — tmux reads `.` as a pane separator and
 ## Essential endpoints
 
 ```bash
-curl -s "$TINSTAR_URL/api/state" | jq .                              # Full state (sessions, runs, tasks, epics)
-curl -s "$TINSTAR_URL/api/state" | jq '.runs[] | {id, name, status, task}'  # Runs with their friendly names
+curl -s "$TINSTAR_URL/api/state" | jq .                              # Full state (sessions, runs, widgets, scopes)
+curl -s "$TINSTAR_URL/api/state" | jq '.runs[] | {id, name, status, scope}' # Runs with organizational scope
 curl -s "$TINSTAR_URL/api/hands" | jq .                              # Installed hands
 curl -s "$TINSTAR_URL/api/cli-templates" | jq .                      # Agent templates
 curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # Non-NATS prompt
@@ -45,7 +45,7 @@ summary of what it covered and the handle needed to revive it. Before starting w
 check whether a past session already covered the same ground — then dig it up and ask it.
 
 ```bash
-# 1. Search the graveyard by topic (matches the covers-summary, name, task).
+# 1. Search the graveyard by topic (matches the covers-summary and name).
 curl -s "$TINSTAR_URL/api/graveyard?q=influx%20backfill" | jq '.data[] | {convId, sessionName, coversSummary}'
 
 # 2. Necro one — revives the REAL agent (best-effort: works while Claude Code still
@@ -103,7 +103,7 @@ curl -s -X POST "$TINSTAR_URL/api/editor-widgets" \
   }'
 ```
 
-- `sessionId`: session **name**, not UUID. Widget inherits the session's workspace, color, and taxonomy.
+- `sessionId`: session **name**, not UUID. Widget inherits the session's workspace, color, and Project/Worktree scope.
 - `filePath`: relative to the session's workspace root, or absolute.
 
 Delete: `DELETE /api/editor-widgets/:id`.
@@ -132,7 +132,7 @@ Canvas stretchplan (only when explicitly requested): browser widget at `8932/p/<
 
 ## Breakout rooms
 
-Cross-cutting NATS channels any session can join regardless of task hierarchy — useful for ad-hoc collaboration. Subscriptions are hot-managed; no restart required.
+Cross-cutting NATS channels any session can join regardless of organizational scope — useful for ad-hoc collaboration. Subscriptions are hot-managed; no restart required.
 
 Subject: `tinstar.breakout.<room-name>`. No pre-registration — the room exists as soon as someone publishes to it.
 
@@ -165,10 +165,10 @@ Speak in a room with the `reply` MCP tool: `reply(to="tinstar.breakout.harness",
 ## NATS subject scheme
 
 ```
-tinstar.<space>.<initiative>.<epic>.<task>.<session>
+tinstar.<space>.<project>.<worktree>.<session>
 ```
 
-Each session auto-subscribes to its task broadcast (`*` at the task level) and ancestor wildcards (`>`). Use the `reply` MCP tool to publish — from inside a running agent session it's the only sanctioned way to speak on NATS.
+A Worktree-scoped session subscribes to `tinstar.<space>.<project>.<worktree>` and its direct session subject. Project-only and Unscoped sessions receive only their direct subject. Use the `reply` MCP tool to publish.
 
 Full scheme lives in `docs/nats-agent-channels.md` in the Tinstar repo.
 
