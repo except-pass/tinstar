@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
+import { RunRepository } from '../domain/repositories'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
@@ -37,6 +38,13 @@ import { useConfig, useConfigPatch } from '../context/ConfigContext'
 import { pluginsReady } from '../widgets'
 import { FocusModeToggle } from './FocusModeToggle'
 import { focusCycleQueue, isBuiltInRunWorkspace, resolveFocusTarget, runsInFocusSpace } from '../focusMode/focusTarget'
+import { pushPromptHistory } from '../hooks/usePromptHistory'
+import {
+  buildOptimisticSessionRun,
+  mergeOptimisticSessionRuns,
+  reconcileOptimisticSessionFailure,
+  type OptimisticSessionIntent,
+} from './optimisticSession'
 
 
 /** Taxonomy entities each own a name; the endpoint that owns it is keyed by type. */
@@ -128,7 +136,24 @@ const FOCUS_STATE_MESSAGES = {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected, loading } = useBackendState()
+  const { runRepo: serverRunRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected, loading } = useBackendState()
+  const [optimisticSessionRuns, setOptimisticSessionRuns] = useState<Run[]>([])
+  const runRepo = useMemo(
+    () => new RunRepository(mergeOptimisticSessionRuns(serverRunRepo.getAll(), optimisticSessionRuns)),
+    [serverRunRepo, optimisticSessionRuns],
+  )
+
+  // The server emits a backend-backed run before the create response returns.
+  // Retire only projections that have reached that authoritative state; failed
+  // launches stay visible and inspectable instead of disappearing on snapshot.
+  useEffect(() => {
+    const liveIds = new Set(serverRunRepo.getAll().filter(run => run.backend).map(run => run.id))
+    if (liveIds.size === 0) return
+    setOptimisticSessionRuns(current => {
+      const next = current.filter(run => !liveIds.has(run.id))
+      return next.length === current.length ? current : next
+    })
+  }, [serverRunRepo])
 
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
@@ -271,6 +296,11 @@ function WorkspaceShellInner() {
     }
     return map
   }, [runRepo])
+  // Async session-create callbacks outlive the dialog render that launched
+  // them. Read the latest run here so a lost HTTP response cannot overwrite a
+  // real server run that already arrived over SSE.
+  const runMapRef = useRef(runMap)
+  runMapRef.current = runMap
 
   const syntheticEditorNodes: TreeNode[] = useMemo(
     () =>
@@ -689,12 +719,45 @@ function WorkspaceShellInner() {
   }, [entityMenu])
 
   // Open the session create dialog on behalf of the add-widget flow, capturing a
-  // callback to fire with the created sessionId once the POST succeeds.
+  // callback to fire only after the session has been provisioned successfully.
   const handleRequestCreateSession = useCallback((prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => {
     setSessionPrefill(prefill)
     setPendingSessionOnCreated(() => onCreated)
     setShowSessionDialog(true)
   }, [])
+
+  const existingSessionIds = useMemo(
+    () => new Set(
+      serverRunRepo.getAll()
+        // A rejected client-only launch stays on the canvas for prompt/error
+        // recovery, but it does not own a server name and may be retried.
+        .filter(run => run.backend || run.status !== 'needs_attention')
+        .map(run => run.id),
+    ),
+    [serverRunRepo],
+  )
+
+  const handleOptimisticSessionStart = useCallback((intent: OptimisticSessionIntent) => {
+    const optimisticRun = buildOptimisticSessionRun(intent, activeSpaceId || undefined)
+    setOptimisticSessionRuns(current => [
+      ...current.filter(run => run.id !== optimisticRun.id),
+      optimisticRun,
+    ])
+    addOptimistic('run', optimisticRun)
+    if (intent.prompt) pushPromptHistory(intent.id, intent.prompt)
+  }, [activeSpaceId, addOptimistic])
+
+  const handleOptimisticSessionFailure = useCallback((intent: OptimisticSessionIntent, message: string) => {
+    const current = runMapRef.current.get(intent.id)
+    const failed = reconcileOptimisticSessionFailure(current, intent, message, activeSpaceId || undefined)
+    if (failed) {
+      setOptimisticSessionRuns(runs => [
+        ...runs.filter(run => run.id !== failed.id),
+        failed,
+      ])
+      addOptimistic('run', failed)
+    }
+  }, [activeSpaceId, addOptimistic])
 
   const handleMenuRename = useCallback(() => {
     if (entityMenu) {
@@ -1298,7 +1361,10 @@ function WorkspaceShellInner() {
                 <CreateSessionDialog
                   onClose={() => { setShowSessionDialog(false); setSessionPrefill(null); setPendingSessionOnCreated(null) }}
                   prefill={sessionPrefill ?? undefined}
-                  onCreated={(sessionId) => { pendingSessionOnCreated?.(sessionId) }}
+                  existingSessionIds={existingSessionIds}
+                  onCreateStarted={handleOptimisticSessionStart}
+                  onCreateFailed={handleOptimisticSessionFailure}
+                  onCreated={(sessionId) => pendingSessionOnCreated?.(sessionId)}
                 />
               )}
 
