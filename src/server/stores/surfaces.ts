@@ -243,6 +243,8 @@ export interface SurfaceDeleteOpts extends SurfaceTopologyOpts {
  *  one that would change on every re-run. */
 export interface SurfaceInit {
   id?: string
+  creation?: Surface['creation']
+  presentation?: Surface['presentation']
   spaceId: string
   home: SurfaceHome
   content: SurfaceContent
@@ -1316,6 +1318,8 @@ export class SurfaceStore {
     }
     return {
       id,
+      ...(init.creation ? { creation: init.creation } : {}),
+      ...(init.presentation ? { presentation: init.presentation } : {}),
       spaceId: init.spaceId,
       home: init.home,
       ...(init.order != null ? { order: init.order } : {}),

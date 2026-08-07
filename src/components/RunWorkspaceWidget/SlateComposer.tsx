@@ -1,20 +1,22 @@
 // Slate v2 U4 — the surface composer.
 //
 // A small popover behind the header's "+ Add surface" button. It doesn't build a
-// surface itself: it composes an AUTHORING PROMPT and hands it to the run's agent
-// (POST …/slate/compose), which writes the actual .tinstar/slate/<slug>.json. The new
-// surface then arrives over the SSE `run` delta like any other.
+// surface itself: it asks the server to save the real card and hand an exact assigned
+// destination to the run's author. The response seeds that card immediately; the
+// normal SSE `run` projection then takes over.
 //
 // Two ways to say what you want, and they compose:
 //   · pick a TEMPLATE — a fuzzy search over SURFACE_CATALOG fills the reusable
 //     authoring `prompt` (PR review, Dataflow, Checklist, …), and
 //   · add FREEFORM — a textarea for anything the template doesn't cover (or the whole
 //     ask, template-free).
-// Submit needs at least one of the two. delivered:false (an unreachable run) is a note,
-// not an error — the compose reached the store either way; it lands when the run wakes.
+// Submit needs at least one of the two. Once the server accepts it, the saved card is
+// the receipt; authoring success or failure is shown on that card rather than here.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '../../apiClient'
-import { searchSurfaceCatalog, type SurfaceTemplate } from './surfaceCatalog'
+import { searchSurfaceCatalog, type SurfaceTemplate } from '../../slate/surfaceCatalog'
+import { randomUUID } from '../../uuid'
+import type { SlateSurface } from '../../domain/types'
 
 interface Props {
   runId: string
@@ -29,11 +31,14 @@ interface Props {
    *  Slate uses it to withhold its ✕ (which would collapse the column and destroy
    *  the draft) while there is something to lose. */
   onDraftChange?: (dirty: boolean) => void
+  /** Seeds the already-saved card while the normal run projection catches up. */
+  onAccepted?: (surface: SlateSurface) => void
 }
 
-export function SlateComposer({ runId, onClose, inline = false, onDraftChange }: Props) {
+export function SlateComposer({ runId, onClose, inline = false, onDraftChange, onAccepted }: Props) {
   const labelId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
+  const submissionRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const onCloseRef = useRef(onClose)
   useEffect(() => { onCloseRef.current = onClose }, [onClose])
 
@@ -46,7 +51,6 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange }:
   const [recipe, setRecipe] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [unreachable, setUnreachable] = useState(false)
   // Inline only: the popover's confirmation IS the popover vanishing, but an inline
   // composer stays put, so a successful submit needs its own acknowledgement.
   const [sent, setSent] = useState(false)
@@ -94,29 +98,30 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange }:
       return
     }
     setError(null)
-    setUnreachable(false)
     setSent(false)
     setSubmitting(true)
     try {
+      const request = {
+        ...(selected ? { templateId: selected.id } : {}),
+        ...(trimmed ? { freeform: trimmed } : {}),
+        ...(recipe.trim() ? { recipe: recipe.trim() } : {}),
+      }
+      const fingerprint = JSON.stringify(request)
+      if (submissionRef.current?.fingerprint !== fingerprint) {
+        submissionRef.current = { fingerprint, key: randomUUID() }
+      }
       const res = await apiFetch(`/api/runs/${runId}/slate/compose`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(selected ? { prompt: selected.prompt } : {}),
-          ...(trimmed ? { freeform: trimmed } : {}),
-          ...(recipe.trim() ? { recipe: recipe.trim() } : {}),
-        }),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': submissionRef.current.key },
+        body: fingerprint,
       })
       const body = (await res.json().catch(() => null)) as
-        | { ok?: boolean; data?: { delivered?: boolean }; error?: { message?: string } }
+        | { ok?: boolean; data?: { slateSurface?: SlateSurface }; error?: { message?: string } }
         | null
       if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `compose failed (${res.status})`)
-      // Delivered:false — the run is asleep. The compose reached the store; it lands
-      // when the run wakes. Say so instead of closing silently on a promise unkept.
-      if (body.data?.delivered === false) {
-        setUnreachable(true)
-        return
-      }
+      if (!body.data?.slateSurface) throw new Error('compose response did not include the saved card')
+      onAccepted?.(body.data.slateSurface)
+      submissionRef.current = null
       // Inline: there is no popover to vanish, so clear the form and SAY it went.
       // Without this a successful submit looks like a dead button for the seconds
       // it takes the author to write the file, and the obvious recovery (click it
@@ -129,13 +134,13 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange }:
         setSent(true)
         return
       }
-      onClose() // delivered — the surface will arrive over the SSE run delta.
-    } catch {
-      setError('Could not send your request. Try again.')
+      onClose() // accepted — the saved card now owns progress and failure feedback.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send your request. Try again.')
     } finally {
       setSubmitting(false)
     }
-  }, [submitting, selected, freeform, recipe, runId, onClose, inline])
+  }, [submitting, selected, freeform, recipe, runId, onClose, inline, onAccepted])
 
   return (
     <div
@@ -240,11 +245,6 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange }:
       {sent && !dirty && (
         <div data-testid="composer-sent" className="text-2xs text-ink-low">
           Sent — the agent is authoring it. It’ll appear here in a moment.
-        </div>
-      )}
-      {unreachable && (
-        <div data-testid="composer-unreachable" className="text-2xs text-ink-low">
-          Sent — but that session isn’t reachable right now. It’ll pick this up when it’s back.
         </div>
       )}
       {error && <div className="text-2xs text-hue-error">{error}</div>}

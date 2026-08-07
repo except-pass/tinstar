@@ -1,13 +1,13 @@
-// The Slate surface catalog (plan U4/U5) — a typed registry of reusable surface
+// The Slate's shared surface catalog — used by both the composer and the server.
 // templates the "+ Add surface" composer fuzzy-searches, so the user picks a starting
 // point instead of describing a surface from scratch each time.
 //
-// A template is just an authoring PROMPT the run's agent receives (POST /slate/compose);
-// the agent writes the actual `.tinstar/slate/<slug>.json`. The catalog is client-side
-// and additive — a new template is one entry here.
+// A template is an authoring prompt plus its saved human label. Keeping this module
+// React-free lets the server resolve a stable template id instead of trusting a full
+// prompt copied back from the browser.
 
 export interface SurfaceTemplate {
-  /** Stable id / slug (also the suggested .tinstar/slate/<id>.json filename). */
+  /** Stable catalog id. The host assigns the saved card and source filename. */
   id: string
   /** Human name shown in the composer and fuzzy-matched. */
   name: string
@@ -30,8 +30,7 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       'and render its plain description of what the code actually does. The value is the GAP ' +
       'between the two columns — do not reconcile them. ' +
       'Set a `refresh` recipe of "re-run the blind eval of this PR and rewrite this surface", ' +
-      'so refreshing regenerates column B. Write it to .tinstar/slate/pr-review.json ' +
-      '(id, headline, A2UI content with two columns, refresh recipe).',
+      'so refreshing regenerates column B.',
   },
   {
     id: 'dataflow',
@@ -41,17 +40,16 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       'Author a "Dataflow" surface: a diagram of the external resources this run touches ' +
       '(files, APIs, services, databases) and the directional reads/writes/mutations between ' +
       'them — nodes plus directed edges, with read/edit/create badges. ' +
-      'Set a `refresh` recipe of "re-derive this run’s dataflow and rewrite this surface". ' +
-      'Write it to .tinstar/slate/dataflow.json (id, headline, A2UI content, refresh recipe).',
+      'Set a `refresh` recipe of "re-derive this run’s dataflow and rewrite this surface".',
   },
   {
     id: 'open-points',
     name: 'Open points',
     description: 'The run’s current open questions and decisions as a threaded checklist.',
     prompt:
-      'Author the run’s current OPEN POINTS: each unresolved question or decision as a ' +
-      'point (a short headline, optional body). Write each as a JSON entry under ' +
-      '.tinstar/slate/ (id, headline, optional content). These render in the open-points list.',
+      'Author one "Open points" card containing the run’s current unresolved questions ' +
+      'and decisions as a concise A2UI list. If there are none, the visible headline or ' +
+      'body must say exactly "No open points". Produce exactly the one assigned entry.',
   },
   {
     id: 'checklist',
@@ -60,8 +58,7 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
     prompt:
       'Author a "Checklist" surface: the remaining steps for the current task as an A2UI list ' +
       'of items. Set a `refresh` recipe of "re-derive the remaining checklist from the current ' +
-      'plan/state and rewrite this surface". Write it to .tinstar/slate/checklist.json ' +
-      '(id, headline, A2UI content, refresh recipe).',
+      'plan/state and rewrite this surface".',
   },
   {
     id: 'decision',
@@ -85,8 +82,7 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       'published, a person who already saw it. The card always renders a comment box at ' +
       'its foot (default label "Anything else?"); optionally set `comment: { label, ' +
       'placeholder }` to customize it, but do NOT add a TextInput — the Decision card ' +
-      'already owns the surface\'s one text field. Write it to .tinstar/slate/decision.json ' +
-      '(id, headline, A2UI content). Do not set a `refresh` recipe: refreshing would ' +
+      'already owns the surface\'s one text field. Do not set a `refresh` recipe: refreshing would ' +
       're-derive the very question the user is mid-answer on and rewrite it under them.',
   },
 ]

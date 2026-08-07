@@ -559,6 +559,14 @@ export const OBJECTIVE_MAX = 600
  *  store-owned thread/point detail. */
 export interface SlateSurface {
   id: string
+  /** Canonical revision, used to reconcile an accepted API response with a later
+   *  run projection even when two writes share one millisecond timestamp. */
+  rev?: number
+  /** Saved lifecycle for a Surface created through the Slate composer. Absent for
+   *  directly authored and migrated Surfaces. */
+  creation?: SurfaceCreation
+  /** Keeps composer results in the card region before and after authoring. */
+  presentation?: SurfacePresentation
   /** Who authored the surface body — agent, the user, or a local process. */
   author: 'agent' | 'user' | 'process'
   /** Surface kind, drives which renderer the Slate panel picks. Derived by
@@ -1451,6 +1459,45 @@ export interface SurfaceDeletion {
  *  human agreed to. */
 export type SurfaceDeleteDisposition = 'reparent-children' | 'delete-subtree'
 
+/** The retryable input retained while a composed Surface is being authored or has
+ *  failed. It is deliberately separate from rendered content and is removed once
+ *  the result is ready. */
+export interface SurfaceCreationRequest {
+  templateId?: string
+  freeform?: string
+  recipe?: string
+}
+
+export type SurfaceCreationFailureCode =
+  | 'dispatch-failed'
+  | 'author-failed'
+  | 'timed-out'
+  | 'invalid-content'
+  | 'restarted'
+  | 'delivery-failed'
+
+export interface SurfaceCreationFailure {
+  code: SurfaceCreationFailureCode
+  /** Browser-safe explanation. Raw process output belongs in server logs. */
+  message: string
+  at: number
+}
+
+/** Durable state of one compose-created Surface. `token` correlates watched output
+ *  with the latest attempt; it is not an authorization credential. */
+export interface SurfaceCreation {
+  phase: 'authoring' | 'ready' | 'failed'
+  label: string
+  attempt: number
+  token: string
+  startedAt: number
+  deadlineAt: number
+  request?: SurfaceCreationRequest
+  failure?: SurfaceCreationFailure
+}
+
+export type SurfacePresentation = 'compose-card'
+
 /** The canonical work artifact (plan KTD1). One recursive primitive: leaves and
  *  parents share this record, these affordances, and this lifecycle.
  *
@@ -1461,6 +1508,10 @@ export type SurfaceDeleteDisposition = 'reparent-children' | 'delete-subtree'
  *  earlier Surface's thread under a new run that merely shares its name. */
 export interface Surface {
   id: string
+  /** Present only for Surfaces reserved through the Slate composer. */
+  creation?: SurfaceCreation
+  /** Saved rendering intent; unlike creation.phase this survives completion. */
+  presentation?: SurfacePresentation
   /** The space this Surface belongs to. IMMUTABLE once created, and the reason
    *  cross-space parentage is a REJECTABLE error rather than an impossible state:
    *  if space were derived by walking home links to Canvas, a cross-space move

@@ -63,6 +63,7 @@ function makeHarness(runs?: LiveRun[]) {
     epochs.push(e)
     return { observed: e.entries.length, created: 0, updated: 0, missing: 0, duplicates: [], refusals: [] }
   })
+  const onInvalidEntry = vi.fn(async () => {})
 
   let liveRuns: LiveRun[] = runs ?? [{ runId, workdir }]
   const setLiveRuns = (r: LiveRun[]) => { liveRuns = r }
@@ -77,12 +78,13 @@ function makeHarness(runs?: LiveRun[]) {
     listBoundRuns: () => boundRuns,
     runContext: () => context,
     applyEpoch,
+    onInvalidEntry,
     fs,
     timers,
   })
 
   return {
-    root, runId, workdir, slateDir, watcher, applyEpoch, epochs,
+    root, runId, workdir, slateDir, watcher, applyEpoch, onInvalidEntry, epochs,
     watchCbs, fireDebounce, setLiveRuns, setBoundRuns, setContext,
     getOpenWatches: () => openWatches,
     last: () => epochs[epochs.length - 1]!,
@@ -127,6 +129,19 @@ describe('SlateWatcher', () => {
       content: { headline: 'Ship it?', body: validContent },
     })
     expect(epoch.entries[0]!.watermark).toMatch(/^sha256:/)
+  })
+
+  it('reports a schema-invalid named attempt so its saved card can fail visibly', async () => {
+    writeSurfaces(harness.slateDir, 'compose.json', [{
+      id: 'compose-1', headline: 'Open points', attemptToken: 'attempt-1',
+      content: { root: 'missing', components: [] },
+    }])
+
+    await harness.watcher.pollOnce()
+
+    expect(harness.onInvalidEntry).toHaveBeenCalledWith({
+      runId: 'run-1', file: 'compose.json', localId: 'compose-1', attemptToken: 'attempt-1',
+    })
   })
 
   it('reads the author proposal off a file entry, host-stamping its time (fix 4)', async () => {

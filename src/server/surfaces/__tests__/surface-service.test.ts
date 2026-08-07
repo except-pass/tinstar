@@ -184,6 +184,66 @@ describe('create', () => {
   })
 })
 
+describe('compose creation lifecycle', () => {
+  const reservation = {
+    id: 'sf-compose-1',
+    spaceId: SPACE,
+    home: { kind: 'canvas' as const, spaceId: SPACE },
+    runId: 'run-1',
+    localId: 'compose-1',
+    label: 'Open points',
+    request: { templateId: 'open-points' },
+    token: 'attempt-1',
+    deadlineAt: 31_000,
+    source: { adapter: 'slate-file', locator: 'file:compose-1.json#compose-1', generation: 0, state: 'missing' as const },
+  }
+
+  it('reserves one durable card and replays the same idempotent request', async () => {
+    const h = harness()
+    const call = ctx({ idempotencyKey: 'compose-key' })
+    const first = unwrap(await h.svc.reserveComposition(reservation, call))
+    const again = unwrap(await h.svc.reserveComposition(reservation, call))
+    expect(first.surfaces[0]!.surface).toMatchObject({
+      id: reservation.id,
+      order: 1_000,
+      presentation: 'compose-card',
+      creation: { phase: 'authoring', attempt: 1, token: 'attempt-1' },
+    })
+    expect(again.replayed).toBe(true)
+    expect(h.docStore.getAllSurfaces()).toHaveLength(1)
+  })
+
+  it('keeps identity and order through failure, retry, and completion and refuses an old token', async () => {
+    const h = harness()
+    const created = unwrap(await h.svc.reserveComposition(reservation, ctx())).surfaces[0]!.surface
+    const failed = unwrap(await h.svc.failComposition(reservation.id, {
+      token: 'attempt-1', expectedRev: created.rev, code: 'author-failed', message: 'Could not create this card.',
+    }, ctx({ at: 2_000 }))).surfaces[0]!.surface
+    const retried = unwrap(await h.svc.retryComposition(reservation.id, {
+      token: 'attempt-2', expectedRev: failed.rev, deadlineAt: 32_000,
+    }, ctx({ at: 3_000 }))).surfaces[0]!.surface
+    expect(retried).toMatchObject({ id: created.id, order: created.order, creation: { phase: 'authoring', attempt: 2 } })
+
+    const stale = await h.svc.completeComposition(reservation.id, {
+      token: 'attempt-1', expectedRev: retried.rev, content: { headline: 'stale' },
+    }, ctx({ at: 4_000 }))
+    expect(err(stale).reason).toBe('superseded')
+
+    const ready = unwrap(await h.svc.completeComposition(reservation.id, {
+      token: 'attempt-2', expectedRev: retried.rev, content: { headline: 'No open points' },
+    }, ctx({ at: 5_000 }))).surfaces[0]!.surface
+    expect(ready).toMatchObject({
+      id: created.id,
+      order: created.order,
+      presentation: 'compose-card',
+      content: { headline: 'No open points' },
+      creation: { phase: 'ready', attempt: 2, token: 'attempt-2' },
+    })
+    expect(ready.creation).not.toHaveProperty('request')
+    expect(ready.creation).not.toHaveProperty('failure')
+  })
+})
+
 describe('update-content', () => {
   it('changes nothing and returns the current record on a stale revision', async () => {
     const h = harness()
@@ -1317,6 +1377,39 @@ describe('durable integration', () => {
     third.sse.destroy()
   })
 
+  it('persists the compose lifecycle through failure, retry, completion, and restart', async () => {
+    const first = live()
+    const base = {
+      id: 'sf-compose-1', spaceId: SPACE, home: { kind: 'canvas' as const, spaceId: SPACE },
+      runId: 'run-1', localId: 'compose-1', label: 'Open points',
+      request: { templateId: 'open-points' }, token: 'attempt-1', deadlineAt: 31_000,
+      source: {
+        adapter: 'slate-file', locator: 'file:compose-1.json#compose-1', generation: 0, state: 'missing' as const,
+      },
+    }
+    const authoring = unwrap(await first.svc.reserveComposition(base, ctx())).surfaces[0]!.surface
+    const failed = unwrap(await first.svc.failComposition(base.id, {
+      token: 'attempt-1', expectedRev: authoring.rev, code: 'author-failed', message: 'Could not create this card.',
+    }, ctx({ at: 2_000 }))).surfaces[0]!.surface
+    const retrying = unwrap(await first.svc.retryComposition(base.id, {
+      token: 'attempt-2', expectedRev: failed.rev, deadlineAt: 32_000,
+    }, ctx({ at: 3_000 }))).surfaces[0]!.surface
+    unwrap(await first.svc.completeComposition(base.id, {
+      token: 'attempt-2', expectedRev: retrying.rev, content: { headline: 'No open points' },
+    }, ctx({ at: 4_000 })))
+    first.sse.destroy()
+
+    const second = live()
+    const reloaded = second.docStore.getSurface(base.id)!
+    expect(reloaded).toMatchObject({
+      id: base.id, order: authoring.order, presentation: 'compose-card',
+      content: { headline: 'No open points' },
+      creation: { phase: 'ready', attempt: 2, token: 'attempt-2' },
+    })
+    expect(reloaded.creation).not.toHaveProperty('request')
+    second.sse.destroy()
+  })
+
   it('a duplicate idempotency key re-applies nothing and emits no second batch', async () => {
     const h = live()
     await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'q' } }, ctx())
@@ -1559,6 +1652,10 @@ describe('parity coverage', () => {
   it('has a service method for every operation in the union', () => {
     const methods: Record<SurfaceMutation['op'], keyof SurfaceService> = {
       'create': 'create',
+      'reserve-compose': 'reserveComposition',
+      'retry-compose': 'retryComposition',
+      'complete-compose': 'completeComposition',
+      'fail-compose': 'failComposition',
       'observe-source': 'observeSource',
       'mark-source-missing': 'markSourceMissing',
       'update-content': 'updateContent',

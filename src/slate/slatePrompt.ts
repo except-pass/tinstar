@@ -186,7 +186,12 @@ export function slateObjectivePromptText(objective: string, _origin?: string): s
  *  text; at least one is present (the route rejects an empty body). `_origin` is unused
  *  (authoring is file-based) but kept for signature parity. */
 export function slateComposePromptText(
-  parts: { prompt?: string; freeform?: string; recipe?: string },
+  parts: {
+    prompt?: string
+    freeform?: string
+    recipe?: string
+    destination: { file: string; localId: string; attemptToken: string }
+  },
   _origin: string,
 ): string {
   const head = parts.prompt ? `Author a Slate surface. ${parts.prompt}` : 'Author a Slate surface.'
@@ -200,9 +205,13 @@ export function slateComposePromptText(
     `Set this surface's refresh recipe (how it stays fresh — name its source, derivation, and output) to: ${oneLine(parts.recipe)}`,
   )
   lines.push(
+    `Write exactly one JSON object to .tinstar/slate/${oneLine(parts.destination.file)}.`,
+    `It must use id ${JSON.stringify(oneLine(parts.destination.localId))} and include ` +
+      `attemptToken ${JSON.stringify(oneLine(parts.destination.attemptToken))}.`,
     parts.recipe
-      ? 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and the refresh recipe above.'
-      : 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
+      ? 'Include a headline, A2UI content, and the refresh recipe above.'
+      : 'Include a headline, A2UI content, and an optional refresh recipe.',
+    'Do not choose another filename, id, or attempt token. The saved card accepts only this destination.',
     '',
     GUARDRAIL,
   )

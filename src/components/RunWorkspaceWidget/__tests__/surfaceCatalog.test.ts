@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SURFACE_CATALOG, fuzzyScore, searchSurfaceCatalog } from '../surfaceCatalog'
+import { SURFACE_CATALOG, fuzzyScore, searchSurfaceCatalog } from '../../../slate/surfaceCatalog'
 import {
   SEVERITY_SCALE, LIKELIHOOD_SCALE, DISCOVERABILITY_SCALE,
   REVERSAL_ACTION_SCALE, REVERSAL_DAMAGE_SCALE, HORIZON_SCALE,
@@ -15,6 +15,7 @@ describe('surfaceCatalog', () => {
     expect(pr.prompt).toMatch(/intent/i)
     expect(pr.prompt).toMatch(/blind/i)
     expect(pr.prompt).toMatch(/refresh` recipe/i)
+    expect(SURFACE_CATALOG.every(template => !template.prompt.includes('.tinstar/slate/'))).toBe(true)
   })
 
   describe('fuzzyScore', () => {

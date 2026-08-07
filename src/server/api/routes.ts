@@ -6,7 +6,7 @@ import { join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import { getMetricsText, register as turnLengthRegister } from '../observability/turn-length'
@@ -65,12 +65,15 @@ import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
+import { SURFACE_CATALOG } from '../../slate/surfaceCatalog'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
+import type { SurfaceComposeCoordinator } from '../surfaces/surface-compose-coordinator'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
 import { SurfaceService } from '../surfaces/surface-service'
-import { slateSourceAdapters } from '../surfaces/slate-source'
+import { parseSlateFileLocator, slateSourceAdapters } from '../surfaces/slate-source'
+import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
@@ -1773,6 +1776,8 @@ export interface RouteContext {
   /** The durable refresh engine (plan U6). Absent when sessions are disabled, in
    *  which case the run-scoped refresh route falls back to the legacy nudge. */
   refreshCoordinator?: SurfaceRefreshCoordinator
+  /** Settles compose process exits, deadlines, and restart recovery. */
+  composeCoordinator?: SurfaceComposeCoordinator
 }
 
 function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
@@ -5097,31 +5102,112 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // POST /api/runs/:id/slate/compose — deliver an authoring prompt to the run's agent
-  // so it composes a NEW surface (plan U4, KTD4/KTD6). Body: { prompt?, freeform? } —
-  // `prompt` from a catalog template, `freeform` from the user's own words; at least
-  // one must be non-blank (an empty body is INVALID_PARAMS). Persists NOTHING: the agent
-  // authors the surface by writing its `.tinstar/slate/<slug>.json`, reusing the Slate's
-  // one file-in model. Best-effort delivery via the same sendPrompt path; delivered:false
-  // on an unreachable session is NOT an error. Anchored regex, matched BEFORE the greedy
-  // PATCH /api/runs/ handler.
+  // POST /api/runs/:id/slate/surfaces/:pid/retry — restart authoring on the same
+  // failed card with a new current token and the saved request.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/surfaces\/[^/]+\/retry$/.test(url.split('?')[0] ?? '')) {
+    const parts = (url.split('?')[0] ?? url).split('/')
+    const runId = decodeURIComponent(parts[3]!)
+    const localId = decodeURIComponent(parts[6]!)
+    const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+    const prior = ctx.docStore.surfaceForRunAlias(runId, localId)
+    if (!prior?.creation || prior.presentation !== 'compose-card') {
+      fail(res, 'NOT_FOUND', 'compose card not found'); return true
+    }
+    const key = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : randomUUID()
+    const token = `attempt-${createHash('sha256').update(`${prior.id}\0${key}`).digest('hex').slice(0, 24)}`
+    // Lost-response replay: the first retry already moved the card and dispatched.
+    if (prior.creation.phase === 'authoring' && prior.creation.token === token) {
+      ok(res, { surface: prior, slateSurface: slateSurfaceFromCanonical(prior, localId), localId, replayed: true }); return true
+    }
+    if (prior.creation.phase !== 'failed') {
+      fail(res, 'CONFLICT', 'only a failed compose card can be retried'); return true
+    }
+    const now = Date.now()
+    const retried = await service.retryComposition(prior.id, {
+      token,
+      expectedRev: prior.rev,
+      deadlineAt: now + (ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000),
+    }, { actor: slateActor(), idempotencyKey: key, at: now })
+    if (!retried.ok) {
+      fail(res, 'CONFLICT', retried.error.message); return true
+    }
+    const current = retried.data.surfaces[0]!.surface
+    const request = current.creation?.request ?? {}
+    const template = request.templateId ? SURFACE_CATALOG.find(item => item.id === request.templateId) : undefined
+    const destination = current.source ? parseSlateFileLocator(current.source.locator) : null
+    if (!destination || !current.creation) {
+      await service.failComposition(current.id, {
+        token, expectedRev: current.rev, code: 'dispatch-failed',
+        message: 'This card no longer has a valid authoring destination.',
+      }, { actor: slateActor() })
+      const failed = ctx.docStore.getSurface(current.id) ?? current
+      ok(res, { surface: failed, slateSurface: slateSurfaceFromCanonical(failed, localId), localId, dispatched: false }); return true
+    }
+    const composePrompt = slateComposePromptText({
+      prompt: template?.prompt,
+      freeform: request.freeform,
+      recipe: request.recipe,
+      destination: { file: destination.file, localId, attemptToken: token },
+    }, serverBase())
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
+    if (ctx.sessionConfig?.slate.author.enabled && requestGeneration !== null) {
+      const lease = acquirePersistedSessionBackendLease(ctx, runId, requestGeneration)
+      if (lease) {
+        try {
+          const author = dispatchSurfaceAuthor({
+            sessionsDir: ctx.sessionConfig.dirs.sessions,
+            config: ctx.sessionConfig.slate.author,
+            runId,
+            prompt: composePrompt,
+            label: localId,
+            secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
+          })
+          if (author.dispatched) {
+            ctx.composeCoordinator?.watch(current.id, token, author.completion)
+            ok(res, { surface: current, slateSurface: slateSurfaceFromCanonical(current, localId), localId, dispatched: true }); return true
+          }
+        } finally {
+          lease.release()
+        }
+      }
+    }
+    const delivered = await deliverSlatePrompt(ctx, runId, composePrompt, requestGeneration)
+    if (!delivered) {
+      const latest = ctx.docStore.getSurface(current.id)
+      if (latest) await service.failComposition(latest.id, {
+        token, expectedRev: latest.rev, code: 'delivery-failed',
+        message: 'The author was unavailable. Retry when this session is reachable.',
+      }, { actor: slateActor() })
+    }
+    const settled = ctx.docStore.getSurface(current.id) ?? current
+    ok(res, { surface: settled, slateSurface: slateSurfaceFromCanonical(settled, localId), localId, delivered })
+    return true
+  }
+
+  // POST /api/runs/:id/slate/compose — reserve the real card first, then author into
+  // its exact source destination. The visible saved card is the acceptance receipt.
   if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/compose$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/compose'.length))
     const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
-      let parsed: { prompt?: unknown; freeform?: unknown; recipe?: unknown }
+      let parsed: { templateId?: unknown; freeform?: unknown; recipe?: unknown }
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
-      const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim() : ''
+      const templateId = typeof parsed.templateId === 'string' ? parsed.templateId.trim() : ''
+      const template = templateId ? SURFACE_CATALOG.find(item => item.id === templateId) : undefined
+      if (templateId && !template) {
+        fail(res, 'INVALID_PARAMS', `unknown surface template ${JSON.stringify(templateId)}`); return
+      }
+      const prompt = template?.prompt ?? ''
       const freeform = typeof parsed.freeform === 'string' ? parsed.freeform.trim() : ''
       // Optional user-supplied refresh recipe (create-time capture) — makes the new
       // surface handoff-able to a one-shot author at birth.
       const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
       if (!prompt && !freeform) {
-        fail(res, 'INVALID_PARAMS', 'compose requires a prompt or freeform text'); return
+        fail(res, 'INVALID_PARAMS', 'compose requires a template or freeform text'); return
       }
       // Bound the delivered text — the siblings cap their inputs; an unbounded
       // freeform would blast an oversized prompt into the agent's session.
@@ -5129,14 +5215,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (prompt.length + freeform.length + recipe.length > SLATE_COMPOSE_MAX) {
         fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
       }
-      // The compose instruction IS a recipe for a NEW surface, so it's source-derived:
-      // offload to a one-shot author when enabled, else the unchanged main-agent nudge.
-      const composePrompt = slateComposePromptText({ prompt, freeform, recipe }, serverBase())
+      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      const bridge = new RunSlateBridge(ctx.docStore, service)
+      const worktree = getSession(ctx.sessionConfig?.dirs.sessions ?? '', runId)?.workspace?.path
+        || ctx.docStore.getRun(runId)?.worktree
+      const idempotencyKey = typeof req.headers['idempotency-key'] === 'string'
+        ? req.headers['idempotency-key']
+        : randomUUID()
+      const label = template?.name || freeform.replace(/\s+/g, ' ').slice(0, 80) || 'New surface'
+      const reserved = await bridge.reserveComposition(runId, {
+        label,
+        request: {
+          ...(template ? { templateId: template.id } : {}),
+          ...(freeform ? { freeform } : {}),
+          ...(recipe ? { recipe } : {}),
+        },
+        ...(worktree ? { worktree } : {}),
+        timeoutMs: ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000,
+      }, { actor: slateActor(), idempotencyKey })
+      if (!reserved.reservation) {
+        fail(res, 'CONFLICT', `could not reserve the surface: ${reserved.reason ?? 'unknown error'}`); return
+      }
+      const card = reserved.reservation
+      if (card.replayed) {
+        ok(res, {
+          surface: card.surface,
+          slateSurface: slateSurfaceFromCanonical(card.surface, card.localId),
+          localId: card.localId,
+          replayed: true,
+        }); return
+      }
+      const composePrompt = slateComposePromptText({
+        prompt, freeform, recipe,
+        destination: { file: card.file, localId: card.localId, attemptToken: card.token },
+      }, serverBase())
       if (ctx.sessionConfig?.slate.author.enabled && requestGeneration !== null) {
         const authorLease = acquirePersistedSessionBackendLease(ctx, runId, requestGeneration)
         if (authorLease) {
           try {
-            const { dispatched } = dispatchSurfaceAuthor({
+            const author = dispatchSurfaceAuthor({
               sessionsDir: ctx.sessionConfig.dirs.sessions,
               config: ctx.sessionConfig.slate.author,
               runId,
@@ -5144,14 +5261,37 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               label: 'compose',
               secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
             })
-            if (dispatched) { ok(res, { dispatched: true }); return }
+            if (author.dispatched) {
+              ctx.composeCoordinator?.watch(card.surface.id, card.token, author.completion)
+              ok(res, {
+                surface: card.surface,
+                slateSurface: slateSurfaceFromCanonical(card.surface, card.localId),
+                localId: card.localId,
+                dispatched: true,
+              }); return
+            }
           } finally {
             authorLease.release()
           }
         }
       }
       const delivered = await deliverSlatePrompt(ctx, runId, composePrompt, requestGeneration)
-      ok(res, { delivered })
+      if (!delivered) {
+        const current = ctx.docStore.getSurface(card.surface.id)
+        if (current) await service.failComposition(current.id, {
+          token: card.token,
+          expectedRev: current.rev,
+          code: 'delivery-failed',
+          message: 'The author was unavailable. Retry when this session is reachable.',
+        }, { actor: slateActor() })
+      }
+      const settled = ctx.docStore.getSurface(card.surface.id) ?? card.surface
+      ok(res, {
+        surface: settled,
+        slateSurface: slateSurfaceFromCanonical(settled, card.localId),
+        localId: card.localId,
+        delivered,
+      })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
