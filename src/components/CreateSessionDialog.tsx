@@ -4,10 +4,11 @@ import { isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
 import { type Project, parseProjects } from '../lib/projects'
 import { ProjectPickerOptions } from './ProjectPickerOptions'
+import type { OptimisticSessionIntent, WorktreeMode } from './optimisticSession'
 
 export interface SessionPrefill {
   project?: string
-  worktreeMode?: 'none' | 'new' | 'existing'
+  worktreeMode?: WorktreeMode
   defaultWorktreePath?: string
   skipPermissions?: boolean
   cliTemplate?: string
@@ -24,11 +25,16 @@ export interface SessionPrefill {
 interface Props {
   onClose: () => void
   prefill?: SessionPrefill
+  /** Existing ids are checked synchronously so an optimistic upsert cannot
+   *  replace a live run while the server is still rejecting the collision. */
+  existingSessionIds?: ReadonlySet<string>
+  /** Fired synchronously on submit, before session provisioning settles. */
+  onCreateStarted?: (intent: OptimisticSessionIntent) => void
+  /** Associates an asynchronous provisioning failure with its visible run. */
+  onCreateFailed?: (intent: OptimisticSessionIntent, message: string) => void
   /** Fired on a successful /api/sessions create with the new session's id (== a run's sessionId). */
   onCreated?: (sessionId: string) => void
 }
-
-type WorktreeMode = 'none' | 'new' | 'existing'
 
 interface EntityOption { id: string; name: string }
 
@@ -58,7 +64,7 @@ function InheritedFrom({ source }: { source?: { type: string; name: string } }) 
   )
 }
 
-export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
+export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCreateStarted, onCreateFailed, onCreated }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
@@ -81,6 +87,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [newProjectPath, setNewProjectPath] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const sources = prefill?.sources ?? {}
 
@@ -148,7 +155,12 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const effectiveName = name || placeholder
 
   const handleSubmit = useCallback(async () => {
-    if (submitting) return
+    if (submittingRef.current) return
+    if (existingSessionIds?.has(effectiveName)) {
+      setError(`Session '${effectiveName}' already exists`)
+      return
+    }
+    const trimmedPrompt = prompt.trim()
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -157,19 +169,34 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
-    if (prompt.trim()) body.prompt = prompt.trim()
+    if (trimmedPrompt) body.prompt = trimmedPrompt
     if (taskId) body.taskId = taskId
     if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
     if (prefill?.view) body.view = prefill.view
 
-    // Keep the modal open until the create actually succeeds. A failed create
-    // (e.g. a blocked branch name) used to close optimistically and destroy the
-    // user's filled-in settings; now the error shows inline and the form stays
-    // put so they can fix the name and retry.
+    const intent: OptimisticSessionIntent = {
+      id: effectiveName,
+      prompt: trimmedPrompt || undefined,
+      color: runColor || undefined,
+      project: project || undefined,
+      taskId: taskId || undefined,
+      epicId: prefill?.epicId,
+      initiativeId: prefill?.initiativeId,
+      worktreeMode,
+      worktreePath: worktreeMode === 'existing' ? worktreePath || undefined : undefined,
+      view: prefill?.view,
+    }
+
+    // Paint and close before the network request. The visible run owns any
+    // later error, so the user's starting prompt is never trapped in a modal
+    // that disappears after a failed ttyd/worktree launch.
+    submittingRef.current = true
     setSubmitting(true)
     setError(null)
+    onCreateStarted?.(intent)
+    onClose()
     try {
       const r = await apiFetch('/api/sessions', {
         method: 'POST',
@@ -178,9 +205,9 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       })
       const data = await r.json()
       if (!data.ok) {
-        console.error('Failed to create session:', data.error?.message ?? data)
-        setError(data.error?.message ?? 'unknown error')
-        setSubmitting(false)
+        const message = data.error?.message ?? 'unknown error'
+        console.error('Failed to create session:', message)
+        onCreateFailed?.(intent, message)
         return
       }
       // The created session's `name` is the identifier that equals a run's
@@ -188,13 +215,11 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       // omits it for any reason.
       const createdId = (data.data?.name as string | undefined) ?? effectiveName
       onCreated?.(createdId)
-      onClose()
     } catch (err) {
       console.error('Failed to create session:', err)
-      setError((err as Error).message)
-      setSubmitting(false)
+      onCreateFailed?.(intent, (err as Error).message)
     }
-  }, [submitting, effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, existingSessionIds, onClose, onCreateStarted, onCreateFailed, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
