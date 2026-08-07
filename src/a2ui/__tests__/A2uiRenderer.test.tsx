@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import type { A2uiContent } from '../../domain/types'
+import type { A2uiComponent, A2uiContent } from '../../domain/types'
 import {
   A2uiRenderer,
   A2uiErrorBoundary,
@@ -830,5 +830,24 @@ describe('extractReadableText', () => {
   it('returns empty string for a nullish or primitive value without throwing', () => {
     expect(extractReadableText(null)).toBe('')
     expect(extractReadableText(42)).toBe('')
+  })
+})
+
+describe('Decision catalog entry', () => {
+  it('is a supported component type', () => {
+    expect(isSupported('Decision')).toBe(true)
+  })
+
+  it('charges its options and risks to the per-surface node budget', () => {
+    const node: A2uiComponent = {
+      component: 'Decision', id: 'd',
+      options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      risks: [{ label: 'r1' }, { label: 'r2' }],
+    }
+    expect(CATALOG.Decision!.cost!(node)).toBeGreaterThanOrEqual(4)
+  })
+
+  it('charges nothing for a decision that degrades whole', () => {
+    expect(CATALOG.Decision!.cost!({ component: 'Decision', options: [] })).toBe(0)
   })
 })

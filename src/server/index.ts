@@ -53,6 +53,7 @@ import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
 import { SurfaceService } from './surfaces/surface-service'
 import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
+import { SurfaceComposeCoordinator } from './surfaces/surface-compose-coordinator'
 import { buildRefreshCoordinator, headRevision } from './surfaces/refresh-wiring'
 import { slateSourceAdapters } from './surfaces/slate-source'
 import { boundSlateRuns, reconcileSlateEpoch } from './surfaces/source-reconciler'
@@ -812,6 +813,7 @@ export function initBackend(): RouteContext {
   })
   let slateWatcher: SlateWatcher | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
+  let composeCoordinator: SurfaceComposeCoordinator | undefined
   let natsBackendCleanup: Promise<void> | null = null
   const stopNatsBackendResources = (): Promise<void> => {
     if (natsBackendCleanup) return natsBackendCleanup
@@ -1595,8 +1597,28 @@ export function initBackend(): RouteContext {
         applyEpoch: epoch => reconcileSlateEpoch(slateService, epoch, {
           actor: { kind: 'job', id: 'slate-watcher', label: 'Slate watcher' },
         }),
+        onInvalidEntry: ({ runId, file, localId, attemptToken }) =>
+          composeCoordinator?.rejectInvalidOutput(runId, file, localId, attemptToken),
       })
+
+      composeCoordinator = new SurfaceComposeCoordinator(
+        docStore,
+        slateService,
+        runId => slateWatcher!.reconcileNow(runId),
+      )
       slateWatcher.start()
+      // Populate the watcher's worktree map and re-observe assigned files before
+      // deciding that attempts stranded by a restart have failed.
+      void slateWatcher.pollOnce()
+        .then(() => composeCoordinator!.recover())
+        .then(result => {
+          if (result.failed.length) log.info('slate-author', `restart failed ${result.failed.length} interrupted compose attempt(s)`)
+        })
+        .catch(err => log.warn('slate-author', `restart recovery failed: ${(err as Error).message}`))
+      setInterval(() => {
+        void composeCoordinator?.sweep()
+          .catch(err => log.warn('slate-author', `deadline sweep failed: ${(err as Error).message}`))
+      }, 5_000)
 
       // The durable refresh engine (plan U6). Its own SurfaceService for the same
       // reason the watcher has one: no per-call state to share, and no interleaving
@@ -1672,7 +1694,7 @@ export function initBackend(): RouteContext {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     simulatorTestApiEnabled: fastSim,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
-    providerObservationStores, refreshCoordinator,
+    providerObservationStores, refreshCoordinator, composeCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     providerRegistry,
     get natsTraffic() { return natsTraffic },

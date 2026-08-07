@@ -10,21 +10,22 @@
 // agent the human is already talking to.
 //
 // `dispatchSurfaceAuthor` REMAINS for COMPOSE, deliberately, and only for it.
-// Compose creates a Surface that does not exist yet, at a human's explicit request:
-// there is no record to hold an attempt, no generation to compare, and nothing for a
-// barrier to supersede. It is not a refresh path and must never be reached from one.
+// Compose starts from a saved card created at a human's explicit request. Its attempt
+// token and deadline let the host reject stale output and end failed work visibly. It
+// is not a refresh path and must never be reached from one.
 //
 // THE COMPOSE FAST PATH. A compose request spawns a fresh, headless `claude -p` child
-// in the run's workdir that authors a NEW .tinstar/slate/<slug>.json. The SlateWatcher
-// then projects it like any other write. The run's main agent is never involved — that
-// is the point of the path.
+// in the run's workdir that fills the host-assigned .tinstar/slate entry. The SlateWatcher
+// then fills the assigned card after its attempt token matches. When this fast path is
+// disabled or unavailable, the route can deliver the same exact-destination prompt to
+// the run's main agent.
 //
 // Deliberately ISOLATED and KILL-SWITCHABLE (one file behind one seam):
 //   - The compose route calls the single seam `dispatchSurfaceAuthor`.
 //   - `slate.author.enabled: false` disables it entirely — the caller falls back to the
 //     main-agent `deliverSlatePrompt` — with no code revert.
-//   - Fire-and-forget: we do NOT await the child. Completion = the file appears. A wandering
-//     child is bounded by a hard timeout.
+//   - The request does not await the child. The watcher decides success from the file;
+//     the coordinator uses process exit and the saved deadline only to settle failures.
 //
 // SECURITY (semi-trusted). Compose carries file-authored text: it is framed with
 // `slateComposePromptText`'s standing GUARDRAIL + `oneLine()` sanitization and passed as a
@@ -41,6 +42,20 @@ export interface SlateAuthorConfig {
   enabled: boolean
   model: string
   timeoutMs: number
+}
+
+export interface SurfaceAuthorOutcome {
+  code: number | null
+  signal: NodeJS.Signals | null
+  error?: string
+  timedOut: boolean
+}
+
+export interface SurfaceAuthorDispatch {
+  dispatched: boolean
+  /** Settles when the launched author exits. A zero exit is not proof of content;
+   *  the watcher still decides readiness from the assigned file and token. */
+  completion?: Promise<SurfaceAuthorOutcome>
 }
 
 /**
@@ -108,6 +123,22 @@ export const SLATE_AUTHOR_CONTRACT = [
   '- Submit:    { id, component:"Submit", label? }   (sends THIS surface\'s answer back to the agent)',
   '           A surface has ONE answer: one text box, one Submit. Several questions = several FILE ENTRIES',
   '           sharing a "group" (see above), never several Submits in one entry.',
+  '- Decision: { id, component:"Decision", options:[ { id, label, gain, cost, wrongIf }, ... ] }   (2+ options',
+  '           required, one card per open decision). options[].gain/cost/wrongIf are short plain-text lines: what',
+  '           you get, what you give up, and the condition that would flip the call.',
+  '           risks?:[ { label, severity, likelihood, discoverability, note? }, ... ]   severity: annoying|costly|',
+  '           severe, likelihood: unlikely|possible|likely, discoverability: obvious|subtle|silent — all three run',
+  '           FINE -> ALARMING, so "silent" means nothing would alert you, not that it is fine.',
+  '           reversal?: { action, damage, note? }   action (trivial|cheap|costly|one-way) is how long to undo the',
+  '           ACTION; damage (minutes|hours|days|weeks+) is how long to undo the DAMAGE it already did — often a',
+  '           very different number from action.',
+  '           horizon?: { span, until }   span: until-next-commit|until-this-ships|while-the-code-lives|permanent.',
+  '           `until` is REQUIRED whenever span is set — what ends it, phrased to complete "this matters until…".',
+  '           comment?: { label?, placeholder? }   customizes the comment box the card ALWAYS renders at its foot',
+  '           (label defaults to "Anything else?" when omitted). You may customize it; you may not remove it.',
+  '           Needs a Submit sibling, same as Choice. Do NOT also add a TextInput: Decision renders its own',
+  '           comment box and already owns the surface\'s one text field — a sibling TextInput just writes the',
+  '           same field a second time.',
   'RULES: every id in a children[]/child MUST exist in components; `root` MUST name a component id. There is NO image',
   'or markdown component — use Text/List/Code (Mermaid for diagrams, Stepper for progress). INVALID content is',
   'SILENTLY DROPPED (no surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',
@@ -142,7 +173,7 @@ export function dispatchSurfaceAuthor(params: {
    * the author simply writing nothing. Pass what the child needs.
    */
   secrets?: Record<string, string>
-}): { dispatched: boolean } {
+}): SurfaceAuthorDispatch {
   const { sessionsDir, config, runId, prompt, label, secrets } = params
   if (!config.enabled) return { dispatched: false }
 
@@ -167,13 +198,31 @@ export function dispatchSurfaceAuthor(params: {
       // Credentials are INJECTED, not inherited (see `secrets` above).
       { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs, env: guestEnv(secrets ?? {}) },
     )
-    child.on('error', (err) =>
-      log.warn('slate-author', 'spawn failed', { runId, label, err: err.message }))
-    child.on('exit', (code, signal) =>
-      log.info('slate-author', 'author exited', { runId, label, code, signal }))
+    const startedAt = Date.now()
+    const completion = new Promise<SurfaceAuthorOutcome>((resolve) => {
+      let settled = false
+      child.on('error', (err) => {
+        log.warn('slate-author', 'spawn failed', { runId, label, err: err.message })
+        if (!settled) {
+          settled = true
+          resolve({ code: null, signal: null, error: err.message, timedOut: false })
+        }
+      })
+      child.on('exit', (code, signal) => {
+        log.info('slate-author', 'author exited', { runId, label, code, signal })
+        if (!settled) {
+          settled = true
+          resolve({
+            code,
+            signal,
+            timedOut: signal === 'SIGTERM' && Date.now() - startedAt >= Math.max(0, config.timeoutMs - 1_000),
+          })
+        }
+      })
+    })
     // Don't keep the server's event loop alive waiting on the child (fire-and-forget).
     child.unref()
-    return { dispatched: true }
+    return { dispatched: true, completion }
   } catch (err) {
     log.warn('slate-author', 'dispatch error', { runId, label, err: (err as Error).message })
     return { dispatched: false }

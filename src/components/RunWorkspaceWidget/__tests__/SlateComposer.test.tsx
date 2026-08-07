@@ -13,7 +13,19 @@ vi.mock('../../../apiClient', () => ({
 import { SlateComposer } from '../SlateComposer'
 
 function okDelivered(delivered = true) {
-  return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { delivered } }) } as unknown as Response)
+  return Promise.resolve({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      data: {
+        delivered,
+        slateSurface: {
+          id: 'compose-1', author: 'agent', kind: 'open-point',
+          headline: 'New surface', createdAt: 1, amendedAt: 1,
+        },
+      },
+    }),
+  } as unknown as Response)
 }
 
 describe('SlateComposer (U4)', () => {
@@ -31,7 +43,7 @@ describe('SlateComposer (U4)', () => {
     expect(first?.getAttribute('data-testid')).toBe('composer-template-pr-review')
   })
 
-  it('selecting a template + submit POSTs the template prompt and closes', async () => {
+  it('selecting a template + submit POSTs its stable id and closes', async () => {
     const onClose = vi.fn()
     render(<SlateComposer runId="run-1" onClose={onClose} />)
 
@@ -46,9 +58,36 @@ describe('SlateComposer (U4)', () => {
     )
     const [, init] = apiFetch.mock.calls.find((c) => c[0] === '/api/runs/run-1/slate/compose')!
     const payload = JSON.parse((init as RequestInit).body as string)
-    expect(payload.prompt).toContain('PR review')
+    expect(payload.templateId).toBe('pr-review')
+    expect((init as RequestInit).headers).toMatchObject({ 'Idempotency-Key': expect.any(String) })
     // Delivered → the composer closes (the surface arrives over the SSE run delta).
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('hands the saved card to the panel before closing', async () => {
+    const onAccepted = vi.fn()
+    render(<SlateComposer runId="run-1" onClose={vi.fn()} onAccepted={onAccepted} />)
+    fireEvent.click(screen.getByTestId('composer-template-open-points'))
+    fireEvent.click(screen.getByTestId('composer-submit'))
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(expect.objectContaining({ id: 'compose-1' })))
+  })
+
+  it('reuses the acceptance key after an ambiguous network failure', async () => {
+    apiFetch
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockImplementationOnce(() => okDelivered(true))
+    render(<SlateComposer runId="run-1" onClose={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('composer-template-open-points'))
+    fireEvent.click(screen.getByTestId('composer-submit'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect((screen.getByTestId('composer-submit') as HTMLButtonElement).disabled).toBe(false))
+
+    fireEvent.click(screen.getByTestId('composer-submit'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
+    const firstHeaders = (apiFetch.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    const secondHeaders = (apiFetch.mock.calls[1]![1] as RequestInit).headers as Record<string, string>
+    expect(secondHeaders['Idempotency-Key']).toBe(firstHeaders['Idempotency-Key'])
   })
 
   it('a freeform-only submit POSTs the freeform text (no prompt)', async () => {
@@ -60,7 +99,7 @@ describe('SlateComposer (U4)', () => {
     const [, init] = apiFetch.mock.calls[0]!
     const payload = JSON.parse((init as RequestInit).body as string)
     expect(payload.freeform).toBe('a deploy checklist')
-    expect(payload.prompt).toBeUndefined()
+    expect(payload.templateId).toBeUndefined()
   })
 
   it('an empty submit is disabled', () => {
@@ -81,7 +120,7 @@ describe('SlateComposer (U4)', () => {
     expect(payload.freeform).toBe('a PR review surface')
   })
 
-  it('shows "not reachable" and stays open on delivered:false', async () => {
+  it('closes after acceptance even when authoring could not be dispatched', async () => {
     const onClose = vi.fn()
     apiFetch.mockImplementation(() => okDelivered(false))
     render(<SlateComposer runId="run-1" onClose={onClose} />)
@@ -89,8 +128,7 @@ describe('SlateComposer (U4)', () => {
     fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: 'x' } })
     fireEvent.click(screen.getByTestId('composer-submit'))
 
-    await waitFor(() => expect(screen.getByTestId('composer-unreachable')).toBeTruthy())
-    expect(onClose).not.toHaveBeenCalled()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })
 

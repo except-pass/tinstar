@@ -62,6 +62,11 @@ A single interactive panel on the Slate — the unit an agent, user, or process 
 
 A Surface is also the atomic refresh boundary. A refreshable Surface has one recipe, one whole-Surface result, and one freshness record; independently refreshed content belongs on separate Surfaces composed by the Slate. Its last-known result remains real information even when dirty, provided the Surface shows when that result was known and when freshness was last checked.
 
+### Optimistic surface shell
+The visible card Tinstar creates as soon as it accepts an Add surface request, before asynchronous authoring has produced the body. It reserves the final Surface's identity and position, shows authoring progress, and becomes ready or failed in place. The shell is the creation receipt; dispatching an author without creating one is not visible success.
+
+Each attempt writes only to the host-assigned file and local ID and carries a host-issued attempt token. The watcher fills the reserved card only when that token is still current, so a late first attempt cannot overwrite a successful retry. The token correlates work; it is not a credential.
+
 ### Refresh recipe
 The single instruction that rebuilds one whole Surface, and the thing that decides who is allowed to run it. A **host** recipe names a machine check from a closed, code-owned list: it is read-only, bounded, cannot invoke a model or create a session, and the host may therefore run it on its own. An **agent** recipe is prose, delivered to the Surface's existing foreground collaborator, and runs only when a person deliberately reaches the Surface. Prose can never become a host recipe however it is worded — machine authority comes from naming a registered handler, which an author has no way to forge. A recipe the host cannot read is kept and reported rather than dropped, so a mistyped one says so instead of leaving a Surface that quietly never updates.
 

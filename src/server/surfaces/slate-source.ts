@@ -72,6 +72,9 @@ export interface SlateSourceEntry {
   localId: string
   /** Basename of the file it was read from — addressing, not identity. */
   file: string
+  /** Host-issued correlation marker for a reserved compose card. It is parsed out
+   *  of the envelope and never included in display content or its watermark. */
+  attemptToken?: string
   content: SurfaceContent
   author: PointAuthor
   /** File-seeded creation stamp, when the entry carries one. */

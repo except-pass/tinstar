@@ -9,8 +9,15 @@
 // disabled/static so nothing is ever half-wired.
 import { createContext, useContext, type ReactNode } from 'react'
 import type { A2uiComponent } from '../domain/types'
-import { parseChoice } from './controls'
+import { parseChoice, parseDecision, type DecisionRisk, type Rating } from './controls'
 import type { FollowUpPreset } from './followUps'
+
+/** Shared textarea styling for every free-text control (`TextInput`, and
+ *  `Decision`'s comment box) — a single literal class string so Tailwind's JIT
+ *  and `eslint-rules/valid-theme-classnames.js` see it whole, and so the two
+ *  controls can never drift apart in how a text field looks. */
+const TEXTAREA_CLASS =
+  'w-full rounded border border-neutral-600 bg-neutral-800 px-2 py-1 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-amber-500 focus:outline-none disabled:opacity-70'
 
 /** The host-owned form state for one notice. Held by the widget's NoticeCard
  *  (U3); the control components below read and mutate it through context. */
@@ -115,7 +122,7 @@ export function TextInputControl({ node }: { node: A2uiComponent }): ReactNode {
         placeholder={placeholder}
         disabled={disabled}
         onChange={e => form.setText(e.target.value)}
-        className="w-full rounded border border-neutral-600 bg-neutral-800 px-2 py-1 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-amber-500 focus:outline-none disabled:opacity-70"
+        className={TEXTAREA_CLASS}
       />
     </div>
   )
@@ -161,5 +168,215 @@ export function SubmitControl({ node }: { node: A2uiComponent }): ReactNode {
     >
       {form.submitting ? 'Submitting…' : label}
     </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Decision — one open decision, rendered as a card (Slate, 2026-08-06).
+//
+// A control, not a prose block: the radios and the tradeoff text come from ONE
+// options declaration, so what the user picks and what they read about it can
+// never drift. Selection is keyed by the Decision node's own id, exactly as a
+// Choice group is, so the two coexist on one surface without clobbering.
+// ---------------------------------------------------------------------------
+
+// One tone per heat step, LITERAL class strings so Tailwind's JIT emits them
+// (same discipline as catalog.tsx's STEP_NODE). The ramp is a single amber
+// INTENSITY, not a hue shift: the palette reserves red for a failed action, and
+// the only meaning color carries here is "this end is the dangerous one". The
+// label beside the chip is what distinguishes one dimension from another.
+const HEAT: readonly string[] = [
+  'border-hairline bg-surface-hover text-ink-low',
+  'border-hairline bg-surface-hover text-ink-mid',
+  'border-hue-discussing/22 bg-hue-discussing/10 text-hue-discussing',
+  'border-hue-discussing/40 bg-hue-discussing/20 text-hue-discussing',
+]
+
+// An unrecognised word is shown, never rated — so it gets the quietest tone and
+// no amber at all. Coercing it either way would lie about a risk (R8).
+const HEAT_UNKNOWN = 'border-hairline bg-surface-hover text-ink-low'
+
+// The one cross-field emphasis on the card: a risk nothing will alert on,
+// attached to a decision that never stops mattering. Brighter than heat 3, and
+// deliberately NOT a score — nothing is computed, sorted, or thresholded on it.
+const HEAT_FLARE = 'border-hue-discussing/60 bg-hue-discussing/25 text-hue-discussing'
+
+/** One `label VALUE` pair. Mono throughout — a rating is meta, not prose. `flare`
+ *  is a visual-only brightness bump (see DecisionControl's `flareFor`); the
+ *  `data-flare` attribute is not a second source of meaning for sighted users —
+ *  `data-heat` already carries the underlying rating unchanged, so nothing is
+ *  lost if flare is ignored. Reserving an sr-only word for it (as the option
+ *  gain/cost/wrong-if lines do) would announce a color-only judgment call as if
+ *  it were an independent fact, which is exactly the composite-score framing
+ *  this task is forbidden from introducing. */
+function RatingChip({ label, rating, flare = false }: { label: string; rating: Rating | null; flare?: boolean }): ReactNode {
+  if (!rating) return null
+  const tone = rating.heat === null ? HEAT_UNKNOWN : flare ? HEAT_FLARE : HEAT[rating.heat]
+  return (
+    <span
+      className="inline-flex items-baseline gap-1.5"
+      data-testid={`decision-rating-${label}`}
+      data-heat={rating.heat === null ? 'unknown' : String(rating.heat)}
+      {...(flare ? { 'data-flare': 'true' } : {})}
+    >
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">{label}</span>
+      <span className={`font-mono text-[10px] uppercase tracking-[0.08em] rounded-[3px] border px-1.5 py-px ${tone}`}>
+        {rating.value}
+      </span>
+    </span>
+  )
+}
+
+/** A section label — the mono caps meta ramp shared with Text's h4/h5. */
+function SectionLabel({ text }: { text: string }): ReactNode {
+  return <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-low mt-2 mb-1">{text}</div>
+}
+
+/** The truncation notice for a capped Decision section (options or risks) — the
+ *  same "say so out loud" posture as Stepper's overflow row (catalog.tsx). Unlike
+ *  Stepper, Decision has exactly ONE truncation cause (the hard row cap): there is
+ *  no scan window to run out of, so there is only ever this one message. This is
+ *  the component whose entire thesis is that a risk must never be quietly
+ *  dropped, so an entry past MAX_DECISION_OPTIONS/MAX_DECISION_RISKS says so. */
+function decisionOverflowNote(hidden: number): string {
+  const unit = hidden === 1 ? 'entry' : 'entries'
+  return `+${hidden} more ${unit} not shown`
+}
+
+/** Authored prose inside the card. `font-sans` is load-bearing: the run card
+ *  defaults to mono, so an unpinned sentence renders as terminal output. */
+function Prose({ text, testId }: { text: string; testId?: string }): ReactNode {
+  if (!text) return null
+  return <div className="font-sans text-[12.5px] leading-[1.5] text-ink-low" data-testid={testId}>{text}</div>
+}
+
+export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
+  const form = useNoticeForm()
+  const parsed = parseDecision(node)
+  if (!parsed) return <ControlFallback label="decision needs at least two options" />
+  const disabled = !form.interactive || form.answered || form.submitting
+  const choiceId = typeof node.id === 'string' && node.id ? node.id : ''
+  const selected = form.selectedFor(choiceId)
+  const {
+    options, hiddenOptions, risks, risksMalformed, hiddenRisks,
+    reversal, reversalMalformed, horizon, horizonMalformed, comment,
+  } = parsed
+  // Emphasis, not a score: the combination the reader most needs to catch.
+  const permanent = horizon?.span?.value === 'permanent'
+  const flareFor = (risk: DecisionRisk) => permanent && risk.discoverability?.value === 'silent'
+
+  return (
+    <div className="flex flex-col my-1" data-testid="decision">
+      <SectionLabel text="Options" />
+      <div className="flex flex-col gap-2" role="radiogroup">
+        {options.map(opt => (
+          <label key={opt.id} className={`flex items-start gap-2 ${disabled ? 'opacity-70' : 'cursor-pointer'}`}>
+            <input
+              type="radio"
+              name={`decision-${choiceId || 'default'}`}
+              value={opt.id}
+              checked={selected.has(opt.id)}
+              disabled={disabled}
+              onChange={() => form.toggleOption(choiceId, opt.id, 'single')}
+              className="mt-1 accent-amber-500"
+            />
+            <span className="min-w-0">
+              <span className="font-sans text-[13px] leading-[1.4] text-ink-high block">{opt.label}</span>
+              {/* The glyph is decorative (aria-hidden); an sr-only word carries the same
+                  distinction to assistive tech, matching StepperRail's status-text pattern
+                  (catalog.tsx) — without it, gain/cost/wrong-if read as three indistinguishable
+                  plain lines to a screen reader. */}
+              {opt.gain && (
+                <span className="font-sans text-[12.5px] leading-[1.5] text-ink-mid block">
+                  <span aria-hidden="true">{'+ '}</span>
+                  <span className="sr-only">{'gain: '}</span>
+                  {opt.gain}
+                </span>
+              )}
+              {opt.cost && (
+                <span className="font-sans text-[12.5px] leading-[1.5] text-ink-mid block">
+                  <span aria-hidden="true">{'− '}</span>
+                  <span className="sr-only">{'cost: '}</span>
+                  {opt.cost}
+                </span>
+              )}
+              {opt.wrongIf && (
+                <span className="font-sans text-[12.5px] leading-[1.5] text-ink-low block">
+                  <span aria-hidden="true">{'⚑ wrong if '}</span>
+                  <span className="sr-only">{'wrong if: '}</span>
+                  {opt.wrongIf}
+                </span>
+              )}
+            </span>
+          </label>
+        ))}
+        {/* Last row of the section, matching StepperRail's overflow placement —
+            inside the list, not a footnote beside it, so an author whose 9th
+            option got dropped learns it existed at all (FIX1). */}
+        {hiddenOptions > 0 && (
+          <div className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6" data-testid="decision-options-overflow">
+            {decisionOverflowNote(hiddenOptions)}
+          </div>
+        )}
+      </div>
+
+      {(risks.length > 0 || risksMalformed) && <SectionLabel text="Risks" />}
+      {risksMalformed && <span className="text-xs italic text-amber-300/80" data-testid="decision-risks-fallback">⚠ decision: no readable risks</span>}
+      {risks.map((risk, i) => (
+        <div key={`${i}-${risk.label}`} className="flex flex-col gap-0.5 mb-2" data-testid="decision-risk">
+          <div className="font-sans text-[13px] leading-[1.4] text-ink-high">{risk.label}</div>
+          <div className="flex flex-row flex-wrap gap-x-3 gap-y-1">
+            <RatingChip label="severity" rating={risk.severity} />
+            <RatingChip label="likelihood" rating={risk.likelihood} />
+            <RatingChip label="discoverability" rating={risk.discoverability} flare={flareFor(risk)} />
+          </div>
+          <Prose text={risk.note} />
+        </div>
+      ))}
+      {hiddenRisks > 0 && (
+        <div className="font-mono text-[11.5px] leading-[1.5] text-ink-low mb-2" data-testid="decision-risks-overflow">
+          {decisionOverflowNote(hiddenRisks)}
+        </div>
+      )}
+
+      {(reversal || reversalMalformed) && <SectionLabel text="Reversal" />}
+      {reversalMalformed && <span className="text-xs italic text-amber-300/80" data-testid="decision-reversal-fallback">⚠ decision: reversal needs how long to undo the action or the damage</span>}
+      {reversal && (
+        <div className="flex flex-col gap-0.5 mb-2">
+          <div className="flex flex-row flex-wrap gap-x-3 gap-y-1">
+            <RatingChip label="action" rating={reversal.action} />
+            <RatingChip label="damage" rating={reversal.damage} />
+          </div>
+          <Prose text={reversal.note} />
+        </div>
+      )}
+
+      {(horizon || horizonMalformed) && <SectionLabel text="Horizon" />}
+      {horizonMalformed && <span className="text-xs italic text-amber-300/80" data-testid="decision-horizon-fallback">⚠ decision: horizon needs a span and an `until`</span>}
+      {horizon && (
+        <div className="flex flex-col gap-0.5 mb-2">
+          <RatingChip label="span" rating={horizon.span} flare={risks.some(flareFor)} />
+          <Prose text={`until: ${horizon.until}`} testId="decision-until" />
+        </div>
+      )}
+
+      {/* The comment box is not optional (R7) — the user always has somewhere to
+          say the thing the options did not anticipate. It binds to the point's
+          single shared `text` field, which is why this needs no endpoint change.
+          Consequence: a sibling TextInput on the same surface would be a second
+          box writing this same string. */}
+      <div className="flex flex-col gap-1 mt-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">{comment.label}</span>
+        <textarea
+          rows={3}
+          value={form.text}
+          placeholder={comment.placeholder}
+          disabled={disabled}
+          onChange={e => form.setText(e.target.value)}
+          data-testid="decision-comment"
+          className={TEXTAREA_CLASS}
+        />
+      </div>
+    </div>
   )
 }

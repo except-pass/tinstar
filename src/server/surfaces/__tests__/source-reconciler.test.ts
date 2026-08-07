@@ -65,6 +65,70 @@ function harness() {
 }
 
 describe('the happy path', () => {
+  it('fills a reserved compose card only when the current attempt token matches', async () => {
+    const h = harness()
+    await h.svc.ensureRunRoot({ id: ROOT, spaceId: SPACE, runId: RUN, createdAt: 1_000 }, ctx())
+    const localId = 'compose-open-points'
+    const id = deriveLegacySurfaceId(INCARNATION, localId)
+    const reserved = await h.svc.reserveComposition({
+      id, spaceId: SPACE, home: { kind: 'surface', surfaceId: ROOT }, runId: RUN, localId,
+      label: 'Open points', request: { templateId: 'open-points' }, token: 'current-token', deadlineAt: 31_000,
+      source: {
+        adapter: SLATE_FILE_ADAPTER, locator: slateFileLocator(`${localId}.json`, localId),
+        worktree: WORKTREE, generation: 0, state: 'missing',
+      },
+    }, ctx())
+    expect(reserved.ok).toBe(true)
+
+    const stale = await h.run(epoch([entry(localId, 'wrong result', { attemptToken: 'old-token' })]))
+    expect(stale.refusals).toEqual([{ localId, reason: 'superseded' }])
+    expect(h.surface(localId)!.creation!.phase).toBe('authoring')
+
+    const accepted = await h.run(epoch([entry(localId, 'No open points', {
+      file: `${localId}.json`, attemptToken: 'current-token',
+    })]), 2_000)
+    expect(accepted).toMatchObject({ observed: 1, created: 0, updated: 1 })
+    expect(h.surface(localId)).toMatchObject({
+      id, author: 'agent', content: { headline: 'No open points' }, presentation: 'compose-card',
+      creation: { phase: 'ready', token: 'current-token' },
+      source: { state: 'present', generation: 1 },
+    })
+
+    const refreshed = await h.run(epoch([entry(localId, 'One open point', {
+      file: `${localId}.json`, attemptToken: 'current-token',
+    })]), 3_000)
+    expect(refreshed).toMatchObject({ observed: 1, created: 0, updated: 1 })
+    expect(h.surface(localId)).toMatchObject({
+      content: { headline: 'One open point' },
+      creation: { phase: 'ready', token: 'current-token' },
+      source: { generation: 2 },
+    })
+
+    const late = await h.run(epoch([entry(localId, 'old attempt came back', {
+      file: `${localId}.json`, attemptToken: 'old-token',
+    })]), 4_000)
+    expect(late.refusals).toEqual([{ localId, reason: 'superseded' }])
+    expect(h.surface(localId)!.content.headline).toBe('One open point')
+  })
+
+  it('refuses a reserved result that omits its attempt token without affecting direct file entries', async () => {
+    const h = harness()
+    await h.svc.ensureRunRoot({ id: ROOT, spaceId: SPACE, runId: RUN, createdAt: 1_000 }, ctx())
+    const localId = 'compose-card'
+    await h.svc.reserveComposition({
+      id: deriveLegacySurfaceId(INCARNATION, localId), spaceId: SPACE,
+      home: { kind: 'surface', surfaceId: ROOT }, runId: RUN, localId,
+      label: 'Card', request: { freeform: 'Make a card' }, token: 'token-1', deadlineAt: 31_000,
+      source: { adapter: SLATE_FILE_ADAPTER, locator: slateFileLocator('compose-card.json', localId), generation: 0, state: 'missing' },
+    }, ctx())
+    const out = await h.run(epoch([entry(localId, 'missing token'), entry('direct', 'ordinary file surface')]))
+    expect(out.refusals).toContainEqual({ localId, reason: 'missing-attempt-token' })
+    expect(h.surface(localId)!.creation).toMatchObject({
+      phase: 'failed', failure: { code: 'invalid-content' },
+    })
+    expect(h.surface('direct')!.content.headline).toBe('ordinary file surface')
+  })
+
   it('creates a run root and one bound Surface per entry, homed on the root', async () => {
     const h = harness()
     const out = await h.run(epoch([entry('blockers', 'Two blockers'), entry('plan', 'The plan')]))

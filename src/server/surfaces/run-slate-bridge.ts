@@ -21,13 +21,14 @@
 //
 // Server-only and React-free.
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { OBJECTIVE_POINT_ID, type A2uiContent, type Point, type Surface, type SurfacePrincipalRef } from '../../domain/types'
 import type { DocumentStore } from '../stores/document-store'
 import { runAliasOf } from '../stores/run-slate-projection'
 import { deriveLegacySurfaceId } from '../stores/surfaces'
 import type { SurfaceCallContext, SurfaceService } from './surface-service'
 import { resolveRunSurfaceContext } from './run-context'
+import { slateFileLocator, SLATE_FILE_ADAPTER } from './slate-source'
 
 /** What a bridge operation reports back. `point` is the resulting legacy view, or
  *  `undefined` when the operation could not be performed — the same shape the
@@ -45,6 +46,14 @@ export interface UserPointInput {
   id?: string
   headline: string
   content?: A2uiContent
+}
+
+export interface ReservedComposition {
+  surface: Surface
+  localId: string
+  file: string
+  token: string
+  replayed: boolean
 }
 
 export class RunSlateBridge {
@@ -141,6 +150,64 @@ export class RunSlateBridge {
       return { reason: updated.error.reason ?? updated.error.code }
     }
     return this.view(runId, localId)
+  }
+
+  /** Save the one card a compose request will fill, before authoring starts. */
+  async reserveComposition(
+    runId: string,
+    input: {
+      label: string
+      request: { templateId?: string; freeform?: string; recipe?: string }
+      worktree?: string
+      timeoutMs: number
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<{ reservation?: ReservedComposition; reason?: string }> {
+    const run = this.docStore.getRun(runId)
+    const context = run ? resolveRunSurfaceContext(run) : null
+    if (!run || !context) return { reason: 'no-run-context' }
+
+    // A repeated HTTP request with one idempotency key must derive the same host
+    // identity before the service can find its persisted receipt. With no key this
+    // is a genuinely new user action and gets fresh random correlation values.
+    const keyBasis = ctx.idempotencyKey
+      ? createHash('sha256').update(`${context.incarnation}\0${ctx.idempotencyKey}`).digest('hex').slice(0, 20)
+      : randomUUID().replaceAll('-', '').slice(0, 20)
+    const localId = `compose-${keyBasis}`
+    const token = `attempt-${createHash('sha256').update(`${context.incarnation}\0${keyBasis}\0attempt-1`).digest('hex').slice(0, 24)}`
+    const file = `${localId}.json`
+    const now = ctx.at ?? Date.now()
+    const rooted = await this.svc.ensureRunRoot({
+      id: context.rootSurfaceId,
+      spaceId: context.spaceId,
+      runId,
+      createdAt: Number.isFinite(Date.parse(run.createdAt)) ? Date.parse(run.createdAt) : now,
+    }, { actor: ctx.actor, at: now })
+    if (!rooted.ok) return { reason: rooted.error.reason ?? rooted.error.code }
+
+    const reserved = await this.svc.reserveComposition({
+      id: deriveLegacySurfaceId(context.incarnation, localId),
+      spaceId: context.spaceId,
+      home: { kind: 'surface', surfaceId: context.rootSurfaceId },
+      runId,
+      localId,
+      label: input.label,
+      request: input.request,
+      token,
+      deadlineAt: now + input.timeoutMs,
+      source: {
+        adapter: SLATE_FILE_ADAPTER,
+        locator: slateFileLocator(file, localId),
+        ...(input.worktree ? { worktree: input.worktree } : {}),
+        generation: 0,
+        state: 'missing',
+      },
+      createdAt: now,
+    }, ctx)
+    if (!reserved.ok) return { reason: reserved.error.reason ?? reserved.error.code }
+    const surface = reserved.data.surfaces.find(view => view.surface.id === deriveLegacySurfaceId(context.incarnation, localId))?.surface
+    if (!surface) return { reason: 'projection-failed' }
+    return { reservation: { surface, localId, file, token, replayed: reserved.data.replayed } }
   }
 
   /** Delete one point. Recoverable: under KTD15 this moves the Surface into the

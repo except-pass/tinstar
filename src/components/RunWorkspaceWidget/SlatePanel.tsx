@@ -49,6 +49,8 @@ import { useNow } from '../../hooks/useNow'
 import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
 import { surfaceHaystack } from './slateSearch'
 import { isEditable } from '../../hotkeys/isEditable'
+import { apiFetch } from '../../apiClient'
+import { randomUUID } from '../../uuid'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
  *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
@@ -203,6 +205,58 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   const [composerOpen, setComposerOpen] = useState(false)
   // The inline composer holds a draft the ✕ would silently destroy (S6 U5).
   const [composerDirty, setComposerDirty] = useState(false)
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
+  const retryingRef = useRef(new Set<string>())
+  const retryKeysRef = useRef(new Map<string, string>())
+  const [retryErrorIds, setRetryErrorIds] = useState<Set<string>>(new Set())
+  const [acceptedSurfaces, setAcceptedSurfaces] = useState<Map<string, SlateSurface>>(new Map())
+
+  const acceptSurface = useCallback((surface: SlateSurface) => {
+    setAcceptedSurfaces(prev => new Map(prev).set(surface.id, surface))
+  }, [])
+
+  // A response can beat the run SSE projection. Keep its saved card until the
+  // projection reaches the same or a later host timestamp, then drop the overlay.
+  useEffect(() => {
+    setAcceptedSurfaces(prev => {
+      let changed = false
+      const next = new Map(prev)
+      for (const surface of surfaces) {
+        const accepted = next.get(surface.id)
+        const caughtUp = accepted && surface.rev !== undefined && accepted.rev !== undefined
+          ? surface.rev >= accepted.rev
+          : accepted !== undefined && surface.amendedAt >= accepted.amendedAt
+        if (caughtUp) {
+          next.delete(surface.id)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+    const progressed = new Set(
+      surfaces.filter(surface => surface.creation?.phase !== 'failed').map(surface => surface.id),
+    )
+    if (progressed.size > 0) {
+      for (const id of progressed) retryKeysRef.current.delete(id)
+      setRetryErrorIds(prev => {
+        const next = new Set([...prev].filter(id => !progressed.has(id)))
+        return next.size === prev.size ? prev : next
+      })
+    }
+  }, [surfaces])
+
+  const projectedSurfaces = useMemo(() => {
+    if (acceptedSurfaces.size === 0) return surfaces
+    const byId = new Map(surfaces.map(surface => [surface.id, surface]))
+    for (const accepted of acceptedSurfaces.values()) {
+      const projected = byId.get(accepted.id)
+      const behind = !projected || (projected.rev !== undefined && accepted.rev !== undefined
+        ? projected.rev < accepted.rev
+        : projected.amendedAt < accepted.amendedAt)
+      if (behind) byId.set(accepted.id, accepted)
+    }
+    return [...byId.values()]
+  }, [surfaces, acceptedSurfaces])
 
   // A panel instance is normally pinned to one run, but re-seed if it is ever reused
   // for another — otherwise it would show run A's minimized set on run B. Guarded by
@@ -212,14 +266,19 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     if (seededRunId.current === runId) return
     seededRunId.current = runId
     setMinimized(getMinimizedSlateSurfaces(runId))
+    setAcceptedSurfaces(new Map())
+    retryingRef.current.clear()
+    retryKeysRef.current.clear()
+    setRetryingIds(new Set())
+    setRetryErrorIds(new Set())
   }, [runId])
 
   // The Objective (S2) is lifted OUT of the grid and pinned above it: it is the run's
   // goal, so it stays on screen while the surfaces below scroll, and it is excluded
   // from the search filter, the surface count, refresh-all, hide/minimize, and the
   // j/k focus ring — it's the user's own prose, not an authored, refreshable surface.
-  const objective = useMemo(() => surfaces.find((s) => s.kind === 'objective'), [surfaces])
-  const gridSurfaces = useMemo(() => surfaces.filter((s) => s.kind !== 'objective'), [surfaces])
+  const objective = useMemo(() => projectedSurfaces.find((s) => s.kind === 'objective'), [projectedSurfaces])
+  const gridSurfaces = useMemo(() => projectedSurfaces.filter((s) => s.kind !== 'objective'), [projectedSurfaces])
 
   // Sorted once, above the early return, so the refresh hook (which must run
   // unconditionally) can watch the same list the render uses.
@@ -260,6 +319,46 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
       return next
     })
   }, [])
+
+  const retryCreation = useCallback(async (id: string) => {
+    if (retryingRef.current.has(id)) return
+    retryingRef.current.add(id)
+    setRetryErrorIds(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    setRetryingIds(prev => new Set(prev).add(id))
+    try {
+      const key = retryKeysRef.current.get(id) ?? randomUUID()
+      retryKeysRef.current.set(id, key)
+      const response = await apiFetch(`/api/runs/${runId}/slate/surfaces/${encodeURIComponent(id)}/retry`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': key },
+      })
+      const body = await response.json().catch(() => null) as
+        | { ok?: boolean; data?: { slateSurface?: SlateSurface } }
+        | null
+      if (response.ok && body?.ok && body.data?.slateSurface) {
+        retryKeysRef.current.delete(id)
+        acceptSurface(body.data.slateSurface)
+      } else {
+        setRetryErrorIds(prev => new Set(prev).add(id))
+      }
+    } catch {
+      // The first request may have reached the server. Keep its idempotency key so
+      // another click recovers the same attempt instead of starting a second one.
+      setRetryErrorIds(prev => new Set(prev).add(id))
+    } finally {
+      retryingRef.current.delete(id)
+      setRetryingIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }, [runId, acceptSurface])
 
   const unhide = useCallback((id: string) => {
     removeHiddenSlateSurface(id)
@@ -326,10 +425,13 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
    *  (it would otherwise re-run on every SSE run delta). */
   const matched = useMemo(() => {
     if (!q) return sorted
-    return sorted.filter((s) => surfaceHaystack(s).includes(q))
+    return sorted.filter((s) => (s.creation != null && s.creation.phase !== 'ready') || surfaceHaystack(s).includes(q))
   }, [sorted, q])
 
-  const openPoints = useMemo(() => matched.filter((s) => s.kind === 'open-point'), [matched])
+  const openPoints = useMemo(
+    () => matched.filter((s) => s.kind === 'open-point' && s.presentation !== 'compose-card'),
+    [matched],
+  )
 
   /**
    * The rows j/k walks, in the order they appear on screen: each visible open point
@@ -507,10 +609,10 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   // Additive: no surfaces → render nothing (card layout unchanged) UNLESS the user
   // opened the Slate blank on purpose (`open`), in which case we render the header so
   // Explain / + Add are reachable to fill it.
-  if (surfaces.length === 0 && !open) return null
+  if (projectedSurfaces.length === 0 && !open) return null
 
   // The grouped open-points list renders once, at the first open-point's slot.
-  const firstOpenPointIdx = matched.findIndex((s) => s.kind === 'open-point')
+  const firstOpenPointIdx = matched.findIndex((s) => s.kind === 'open-point' && s.presentation !== 'compose-card')
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
   const columns = width && width >= SLATE_TWO_COL_MIN ? 2 : 1
@@ -633,7 +735,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               as soon as the draft is cleared or sent. An objective counts as holding
               the column open — the panel re-renders itself while `run.slate` is
               non-empty, so offering a Close that can't close would lie. */}
-          {surfaces.length === 0 && !composerDirty && onClose && (
+          {projectedSurfaces.length === 0 && !composerDirty && onClose && (
             <button
               data-testid="slate-close"
               onClick={onClose}
@@ -667,7 +769,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           non-empty path; a blank Slate carries the inline composer instead. */}
       {composerOpen && sorted.length > 0 && (
         <div className="absolute top-8 right-2 z-20 w-64 max-w-[calc(100%-1rem)]">
-          <SlateComposer runId={runId} onClose={() => setComposerOpen(false)} />
+          <SlateComposer runId={runId} onClose={() => setComposerOpen(false)} onAccepted={acceptSurface} />
         </div>
       )}
 
@@ -695,7 +797,13 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               Nothing {objective ? 'else ' : ''}on the Slate yet — describe a surface, or{' '}
               <span className="text-ink-mid">✦ Explain</span> the session.
             </div>
-            <SlateComposer runId={runId} inline onClose={() => {}} onDraftChange={setComposerDirty} />
+            <SlateComposer
+              runId={runId}
+              inline
+              onClose={() => {}}
+              onDraftChange={setComposerDirty}
+              onAccepted={acceptSurface}
+            />
           </div>
         )}
         {/* A search that matches nothing says so, rather than looking like an empty
@@ -708,7 +816,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
         {matched.map((surface, i) => {
           // Open-points collapse into one grouped list at the first one's slot;
           // it always spans the full width (R2). Per-point hiding lives inside.
-          if (surface.kind === 'open-point') {
+          if (surface.kind === 'open-point' && surface.presentation !== 'compose-card') {
             if (i !== firstOpenPointIdx) return null
             return (
               <div key="open-points" className="col-span-full min-w-0">
@@ -738,10 +846,13 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // Minimize is orthogonal to hide (S6 U3); a hidden surface isn't rendered
           // at all (or is rendered dimmed under "show hidden"), so hide wins.
           const isMinimized = minimized.has(surface.id) && !isHidden
+          const creationPhase = surface.creation?.phase
+          const creationPending = creationPhase === 'authoring'
+          const creationInteractive = !creationPending && creationPhase !== 'failed'
           // The card's control cluster: refresh (⟳), minimize (–/+), hide (✕), top-right.
           const controls = (
             <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
-              {!isHidden && (
+              {!isHidden && creationInteractive && (
                 <RefreshButton
                   id={surface.id}
                   refreshing={isRefreshing}
@@ -749,7 +860,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   onClick={() => refresh(surface)}
                 />
               )}
-              {!isHidden && (
+              {!isHidden && creationInteractive && (
                 <MinimizeToggle
                   id={surface.id}
                   minimized={isMinimized}
@@ -905,27 +1016,68 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               onPointerDown={() => selectSurface(surface.id)}
             >
               {controls}
-              {surface.kind === 'diagram' ? (
+              {creationPhase === 'authoring' ? (
+                <div data-testid={`surface-authoring-${surface.id}`} className="flex min-h-24 flex-col items-center justify-center gap-3 text-center">
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary/25 border-t-primary motion-reduce:animate-none" aria-hidden="true" />
+                  <div>
+                    <div className="font-sans text-sm text-ink-high">{surface.creation?.label}</div>
+                    <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">Creating this card…</div>
+                  </div>
+                </div>
+              ) : creationPhase === 'failed' ? (
+                <div data-testid={`surface-failed-${surface.id}`} className="flex min-h-24 flex-col justify-center gap-3 pr-6">
+                  <div>
+                    <div className="font-sans text-sm text-ink-high">{surface.creation?.label}</div>
+                    <div className="mt-1 font-sans text-[12px] leading-relaxed text-rose-300/90">
+                      {surface.creation?.failure?.message ?? 'This card could not be created.'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      data-testid={`surface-retry-${surface.id}`}
+                      type="button"
+                      disabled={retryingIds.has(surface.id)}
+                      onClick={() => void retryCreation(surface.id)}
+                      className="rounded border border-primary/40 px-2 py-1 font-mono text-[10px] uppercase tracking-wide text-primary disabled:opacity-50"
+                    >
+                      {retryingIds.has(surface.id) ? 'Retrying…' : 'Retry'}
+                    </button>
+                    <button
+                      data-testid={`surface-remove-${surface.id}`}
+                      type="button"
+                      onClick={() => hide(surface.id)}
+                      className="rounded border border-hairline px-2 py-1 font-mono text-[10px] uppercase tracking-wide text-ink-low"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {retryErrorIds.has(surface.id) && (
+                    <div className="font-sans text-[11px] text-rose-300/90">
+                      Retry could not be confirmed. Try again.
+                    </div>
+                  )}
+                </div>
+              ) : surface.kind === 'diagram' ? (
                 <DiagramSurface runId={runId} surface={surface} />
-              ) : (
-                /* Per-surface boundary: a throw or malformed body degrades THIS
-                   surface alone; siblings are untouched (R2, per-surface budget). */
+              ) : surface.body ? (
                 <A2uiErrorBoundary source={surface.body}>
                   <A2uiRenderer content={surface.body} />
                 </A2uiErrorBoundary>
+              ) : (
+                <div className="font-sans text-sm text-ink-high">{surface.headline}</div>
               )}
               {/* A claim this surface DECLARED that the host would not accept (U6).
                   Above the footer, because it is about the content just rendered
                   rather than about how fresh it is — and the content IS the new one:
                   a refused claim costs that claim, never the surface (KTD5). */}
-              <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />
+              {creationInteractive && <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />}
               {/* And a claim the host DID accept but could not resolve (U7). Below
                   the refusal because it is the weaker statement of the two: a
                   refusal is permanent until a person edits the file, an unresolved
                   witness may well resolve on the next sweep. */}
-              <ClaimProblemNote id={surface.id} freshness={surface.freshness} />
-              {note}
-              {footer}
+              {creationInteractive && <ClaimProblemNote id={surface.id} freshness={surface.freshness} />}
+              {creationInteractive && note}
+              {creationInteractive && footer}
             </div>
           )
         })}

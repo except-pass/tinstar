@@ -115,10 +115,20 @@ JSON object with:
 | `Choice` | `mode` (`single` \| `multi`), `options` (`{ id, label }[]`) | radios or checkboxes |
 | `TextInput` | `label?`, `placeholder?` | a free-text box |
 | `Submit` | `label?` | the submit button (a control surface needs one) |
+| `Decision` | `options` (`{ id, label, gain, cost, wrongIf }[]`, **2+ required**), `risks?`, `reversal?`, `horizon?`, `comment?` | One open decision as a card. `risks` is `{ label, severity, likelihood, discoverability, note? }[]` where severity is `annoying`\|`costly`\|`severe`, likelihood is `unlikely`\|`possible`\|`likely`, discoverability is `obvious`\|`subtle`\|`silent` — **all three run fine → alarming**, so `silent` means nothing would alert you. `reversal` is `{ action, damage, note? }`: `action` (`trivial`\|`cheap`\|`costly`\|`one-way`) is how long to undo the **action**, `damage` (`minutes`\|`hours`\|`days`\|`weeks+`) is how long to undo the **damage** — frequently different numbers. `horizon` is `{ span, until }` where span is `until-next-commit`\|`until-this-ships`\|`while-the-code-lives`\|`permanent`; `until` completes "this matters until…" and is **required** whenever span is set. `comment` is `{ label?, placeholder? }` and customizes the comment box the card **always** renders at its foot — the label defaults to `"Anything else?"` when omitted; you may customize it, you may not remove it. Needs a `Submit` sibling. **Do not add a `TextInput`** — the card renders its own comment box and owns the surface's single text field. An unknown scale word renders verbatim and uncolored rather than being coerced. Fewer than two options degrades whole; a bad risks/reversal/horizon block degrades alone. |
 
 Anything outside this set, or a malformed tree, **degrades** — the surface shows a
 "couldn't render" fallback instead of the body, and it never hangs or blanks a sibling
 surface (each surface has its own render budget and error boundary). Stick to the table.
+
+**Authoring a Decision card.** Use `permanent` for horizon when something survives an
+undo — rows already written, mail already sent, an API already published, a person who
+already saw it. Reverting the commit does not retract any of those, which is why horizon
+and reversal are separate axes: a decision can be one commit to undo and still matter
+forever. The `until` string is where you say out loud what survives. Name a **concrete**
+cost on each option — "adds complexity" is filler; say where the complexity lands. And do
+not compute a risk score: the scales are ordinal, an FMEA-style RPN multiplies labels, and
+the host deliberately renders no total.
 
 An entry whose `content` fails validation is **dropped** (the file's other entries still
 project); an entry with no `content` is a valid **bare headline point**.

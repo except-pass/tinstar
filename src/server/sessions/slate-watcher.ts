@@ -117,6 +117,14 @@ export interface SlateWatcherOpts {
   /** Apply one reconciled epoch. Async; the watcher awaits it so a slow durable
    *  commit cannot overlap the next epoch for the same run. */
   applyEpoch: (epoch: SlateSourceEpoch) => Promise<unknown>
+  /** Reports a parsed entry that names a reserved card but fails the normal schema
+   *  gate. Ordinary invalid entries remain on the existing retain-and-log path. */
+  onInvalidEntry?: (entry: {
+    runId: string
+    file: string
+    localId: string
+    attemptToken?: string
+  }) => Promise<void> | void
   /** Poll-floor cadence in ms (default 3000 — the status-watcher cadence). */
   intervalMs?: number
   /** Debounce window for coalescing fs.watch bursts in ms (default 100). */
@@ -156,7 +164,7 @@ function emptyRead(): SlateDirRead {
  * would re-identify every existing id-less surface exactly once, for nothing.
  */
 function toSourceEntry(
-  runId: string, file: string, input: PointInput, claimRefusals: string[] = [],
+  runId: string, file: string, input: PointInput, claimRefusals: string[] = [], attemptToken?: string,
 ): SlateSourceEntry {
   const author: PointAuthor = input.author ?? 'agent'
   const content = {
@@ -175,6 +183,7 @@ function toSourceEntry(
     file,
     content,
     author,
+    ...(attemptToken ? { attemptToken } : {}),
     ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
     watermark: slateEntryWatermark({ ...content, author }),
     // AFTER the watermark, and not inside it: what the host refused is host
@@ -601,12 +610,41 @@ export class SlateWatcher {
           continue
         }
         const input = toPointInput(rawEntry, this.parseContent)
-        if (input === null) { unusable(name); continue } // schema-invalid entry — drop it
+        if (input === null) {
+          unusable(name)
+          if (rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)) {
+            const raw = rawEntry as Record<string, unknown>
+            if (typeof raw.id === 'string' && raw.id.length > 0) {
+              const attemptToken = typeof raw.attemptToken === 'string'
+                && raw.attemptToken.length > 0
+                && raw.attemptToken.length <= 200
+                ? raw.attemptToken
+                : undefined
+              try {
+                await this.opts.onInvalidEntry?.({
+                  runId,
+                  file: name,
+                  localId: raw.id,
+                  ...(attemptToken ? { attemptToken } : {}),
+                })
+              } catch (err) {
+                log.warn('slate-watcher', `${runId}: could not settle invalid entry ${JSON.stringify(raw.id)}: ${(err as Error).message}`)
+              }
+            }
+          }
+          continue
+        }
         // NOT `unusable`: a refused claim costs that claim and never the surface
         // (KTD5), so the entry projects its NEW content and carries the refusal with
         // it. Marking the file unreadable here would retain the surface's PRIOR
         // content instead — the exact conflation KTD5 warns about.
-        entries.push(toSourceEntry(runId, name, input, claimRefusalsOf(rawEntry)))
+        const rawToken = rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)
+          ? (rawEntry as Record<string, unknown>).attemptToken
+          : undefined
+        const attemptToken = typeof rawToken === 'string' && rawToken.length > 0 && rawToken.length <= 200
+          ? rawToken
+          : undefined
+        entries.push(toSourceEntry(runId, name, input, claimRefusalsOf(rawEntry), attemptToken))
       }
     }
 

@@ -206,6 +206,9 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
   const body = bindClaimSteps(s.content.body, s.freshness.claimObservations, s.content.recipe)
   return {
     id: localId,
+    rev: s.rev,
+    ...(s.creation ? { creation: s.creation } : {}),
+    ...(s.presentation ? { presentation: s.presentation } : {}),
     author: s.author,
     kind: objective ? 'objective' : 'open-point',
     // The objective is FORCED to its pin sentinel rather than storing one, so
