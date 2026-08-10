@@ -136,7 +136,7 @@ describe('CreateSessionDialog optimistic creation', () => {
         onCreateStarted={onCreateStarted}
       />,
     )
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/state'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/cli-templates'))
 
     fireEvent.change(screen.getByPlaceholderText('Initial message to send to Claude...'), {
       target: { value: 'x'.repeat(OBJECTIVE_MAX + 1) },
