@@ -23,10 +23,26 @@ const {
   createWorktreeMock,
   dispatchSurfaceAuthorMock,
 } = vi.hoisted(() => ({
-  createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
+  createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({
+    port: 6123,
+    ttydPid: 4242,
+    managedInstructions: {
+      version: 'slate-first-live-authoring/v1',
+      mechanism: 'test-managed-instructions',
+      status: 'delivered',
+    },
+  })),
   findPortMock: vi.fn(async () => 6123),
   releasePortMock: vi.fn(),
-  startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
+  startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({
+    port: 6123,
+    ttydPid: 4242,
+    managedInstructions: {
+      version: 'slate-first-live-authoring/v1',
+      mechanism: 'test-managed-instructions',
+      status: 'delivered',
+    },
+  })),
   stopTmuxSessionMock: vi.fn(async () => undefined),
   sendPromptMock: vi.fn(async () => undefined),
   getTmuxSessionStateMock: vi.fn(
@@ -101,6 +117,11 @@ import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID, type Notice, type Run } from '../../
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
 import { natsControlSocketPath } from '../../sessions/backends/tmux'
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  CURSOR_PROVIDER,
+  GENERIC_PROVIDER,
+  ProviderAdapterRegistry,
   createDefaultProviderRegistry,
   type TerminalProviderAdapter,
 } from '../../providers/lifecycle'
@@ -110,12 +131,37 @@ const SPACE_ID = 'spc-create-fixture'
 const TASK_ID = 'task-create-fixture'
 
 function makeCtx(root: string): RouteContext {
+  const cursorManagedInstructions = CURSOR_PROVIDER.terminal.capabilities.managedInstructions
+  if (cursorManagedInstructions.state !== 'supported') throw new Error('Cursor fixture must support managed instructions')
+  const providerRegistry = new ProviderAdapterRegistry([
+    CLAUDE_PROVIDER,
+    CODEX_PROVIDER,
+    {
+      ...CURSOR_PROVIDER,
+      terminal: {
+        ...CURSOR_PROVIDER.terminal,
+        capabilities: {
+          ...CURSOR_PROVIDER.terminal.capabilities,
+          managedInstructions: {
+            state: 'supported',
+            detail: {
+              ...cursorManagedInstructions.detail,
+              // Route tests mock the terminal backend; keep the external CLI
+              // probe in explicit provider tests/manual verification.
+              validate: undefined,
+            },
+          },
+        },
+      },
+    },
+    GENERIC_PROVIDER,
+  ])
   const cfg = {
     sessions: { prefix: 'tinstar' },
     cliTemplates: [
       { id: 'Claude', name: 'Claude', adapter: 'claude', startCmd: 'claude --session-id {sessionId} -- {prompt}', resumeCmd: 'claude --resume {sessionId}' },
       { id: 'marshal', name: 'Marshal', adapter: 'claude', startCmd: 'claude --session-id {sessionId} -- {prompt}', resumeCmd: 'claude --resume {sessionId}' },
-      { id: 'Cursor Agent', name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' },
+      { id: 'Cursor Agent', name: 'Cursor Agent', adapter: 'cursor', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' },
       { id: 'Codex', name: 'Codex', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' },
     ],
     editor: 'vim',
@@ -142,6 +188,7 @@ function makeCtx(root: string): RouteContext {
   })
 
   return {
+    providerRegistry,
     sessionConfig: cfg,
     docStore,
     bus: { emit: vi.fn() },
@@ -282,6 +329,12 @@ describe('POST /api/sessions', () => {
     })
     const launch = createTmuxSessionMock.mock.calls.at(-1)![1] as { session: { initialPrompt?: string } }
     expect(launch.session.initialPrompt).toBe('Build the Slate first.')
+    expect(getSession(join(tmpRoot, 'sessions'), 'objective-worker')?.managedInstructions)
+      .toEqual({
+        version: 'slate-first-live-authoring/v1',
+        mechanism: 'test-managed-instructions',
+        status: 'delivered',
+      })
   })
 
   it('keeps a caller prompt as the Objective when a hand supplies persona prose', async () => {
@@ -459,6 +512,17 @@ describe('POST /api/sessions', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: {
+            state: 'supported',
+            detail: {
+              mechanism: 'task-forge-managed',
+              prepare: context => ({
+                version: context.version,
+                mechanism: 'task-forge-managed',
+                launchFlags: [],
+              }),
+            },
+          },
         },
         defaultTelemetry: false,
         transcript: null,
@@ -533,7 +597,15 @@ describe('POST /api/sessions', () => {
     let finishLaunch!: () => void
     createTmuxSessionMock.mockImplementationOnce(
       () => new Promise(resolve => {
-        finishLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+        finishLaunch = () => resolve({
+          port: 6123,
+          ttydPid: 4242,
+          managedInstructions: {
+            version: 'slate-first-live-authoring/v1',
+            mechanism: 'test-managed-instructions',
+            status: 'delivered',
+          },
+        })
       }),
     )
 
@@ -561,7 +633,15 @@ describe('POST /api/sessions', () => {
     let finishLaunch!: () => void
     createTmuxSessionMock.mockImplementationOnce(
       () => new Promise(resolve => {
-        finishLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+        finishLaunch = () => resolve({
+          port: 6123,
+          ttydPid: 4242,
+          managedInstructions: {
+            version: 'slate-first-live-authoring/v1',
+            mechanism: 'test-managed-instructions',
+            status: 'delivered',
+          },
+        })
       }),
     )
     const creating = testCtx.fetch('/api/sessions', {
@@ -740,7 +820,15 @@ describe('POST /api/sessions', () => {
     let finishStart!: () => void
     startTmuxSessionMock.mockImplementationOnce(
       () => new Promise(resolve => {
-        finishStart = () => resolve({ port: 6123, ttydPid: 4242 })
+        finishStart = () => resolve({
+          port: 6123,
+          ttydPid: 4242,
+          managedInstructions: {
+            version: 'slate-first-live-authoring/v1',
+            mechanism: 'test-managed-instructions',
+            status: 'delivered',
+          },
+        })
       }),
     )
     const starting = testCtx.fetch('/api/sessions/start-delete-race/start', {
@@ -1370,7 +1458,15 @@ describe('POST /api/sessions', () => {
     let finishFirstLaunch!: () => void
     createTmuxSessionMock.mockImplementationOnce(
       () => new Promise(resolve => {
-        finishFirstLaunch = () => resolve({ port: 6123, ttydPid: 4242 })
+        finishFirstLaunch = () => resolve({
+          port: 6123,
+          ttydPid: 4242,
+          managedInstructions: {
+            version: 'slate-first-live-authoring/v1',
+            mechanism: 'test-managed-instructions',
+            status: 'delivered',
+          },
+        })
       }),
     )
     const first = testCtx.fetch('/api/sessions', {
@@ -1654,6 +1750,8 @@ describe('POST /api/sessions', () => {
     expect(await revived.json()).toMatchObject({
       data: { sessionName: 'revive-race-necro-2' },
     })
+    expect(getSession(join(tmpRoot, 'sessions'), 'revive-race-necro-2')?.managedInstructions)
+      .toMatchObject({ version: 'slate-first-live-authoring/v1', status: 'delivered' })
 
     finishWorktree()
     expect((await directCreate).status).toBe(201)
@@ -1670,6 +1768,8 @@ describe('POST /api/sessions', () => {
     expect((await testCtx.fetch('/api/sessions/generic-resume/stop', { method: 'POST' })).status).toBe(200)
 
     updateSession(join(tmpRoot, 'sessions'), 'generic-resume', {
+      adapter: 'generic',
+      cliTemplate: null,
       nats: { enabled: true, subscriptions: ['legacy.subject'] },
     })
     const run = testCtx.docStore.getRun('generic-resume')!
@@ -1727,6 +1827,8 @@ describe('POST /api/sessions', () => {
     )).status).toBe(200)
 
     updateSession(join(tmpRoot, 'sessions'), 'generic-cleanup', {
+      adapter: 'generic',
+      cliTemplate: null,
       nats: { enabled: true, subscriptions: ['legacy.subject'] },
     })
     const run = testCtx.docStore.getRun('generic-cleanup')!
@@ -2240,7 +2342,7 @@ describe('POST /api/sessions', () => {
     expect(releasePortMock).not.toHaveBeenCalled()
   })
 
-  it('creates a session for a capability-light third provider registered at runtime', async () => {
+  it('rejects a new session for a provider without standing instructions', async () => {
     const forge: TerminalProviderAdapter = {
       provider: { id: 'forge', label: 'Forge CLI' },
       sessionLifecycle: 'terminal',
@@ -2248,6 +2350,7 @@ describe('POST /api/sessions', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'Forge has no standing instructions' },
         },
         defaultTelemetry: false,
         transcript: null,
@@ -2267,11 +2370,12 @@ describe('POST /api/sessions', () => {
       body: JSON.stringify({ name: 'forge-worker', cliTemplate: 'forge' }),
     })
 
-    expect(res.status).toBe(201)
-    expect(getSession(join(tmpRoot, 'sessions'), 'forge-worker')?.adapter).toBe('forge')
-    expect((createTmuxSessionMock.mock.calls.at(-1)![1] as {
-      provider: { provider: { id: string } }
-    }).provider.provider.id).toBe('forge')
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      error: { message: expect.stringContaining('Forge has no standing instructions') },
+    })
+    expect(getSession(join(tmpRoot, 'sessions'), 'forge-worker')).toBeNull()
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {
@@ -2408,6 +2512,8 @@ describe('POST /api/sessions', () => {
     expect(opts.appendSystemPrompt).toBeTruthy()
     expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
     expect(opts.appendSystemPrompt).not.toContain('Print a short introduction')
+    expect(getSession(join(tmpRoot, 'sessions'), 'marshal-restart')?.managedInstructions)
+      .toMatchObject({ version: 'slate-first-live-authoring/v1', status: 'delivered' })
   })
 
   it('retries an orphaned marshal restart after cleanup becomes confirmable', async () => {
@@ -2841,6 +2947,8 @@ describe('POST /api/sessions', () => {
     // The generated id is the concatenated form, untouched by the friendly name.
     expect(data.session).toContain('named-parent-marshal-')
     expect(childRun.id).toBe(data.session)
+    expect(getSession(join(tmpRoot, 'sessions'), data.session)?.managedInstructions)
+      .toMatchObject({ version: 'slate-first-live-authoring/v1', status: 'delivered' })
   })
 
   it('spawn without a name leaves the child run unnamed (falls back to its id)', async () => {

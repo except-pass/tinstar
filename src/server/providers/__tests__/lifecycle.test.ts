@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { CliTemplate } from '../../sessions/config'
 import { buildAgentCommand } from '../../sessions/backends/tmux'
@@ -6,6 +9,7 @@ import {
   ProviderAdapterRegistry,
   ProviderCapabilityError,
   createDefaultProviderRegistry,
+  prepareProviderManagedInstructions,
   providerTelemetryEnabled,
   requireProviderCapability,
   type TerminalProviderAdapter,
@@ -28,6 +32,7 @@ function capabilityLightProvider(id: string): TerminalProviderAdapter {
       capabilities: {
         nats: { state: 'unsupported', reason: `${id} has no NATS transport` },
         telemetry: { state: 'unsupported', reason: `${id} has no telemetry transport` },
+        managedInstructions: { state: 'unsupported', reason: `${id} has no standing instructions` },
       },
       defaultTelemetry: false,
       transcript: null,
@@ -59,6 +64,46 @@ describe('provider lifecycle registry', () => {
     expect(provider.provider.id).toBe('generic')
     expect(provider.sessionLifecycle).toBe('terminal')
     expect(provider.terminal.transcript).toBeNull()
+  })
+
+  it('resolves the built-in Cursor template to its own managed provider', () => {
+    const registry = createDefaultProviderRegistry()
+    const provider = registry.resolveTemplate(template(
+      'Cursor',
+      'cursor',
+      'agent --yolo -- {prompt}',
+      'agent --yolo resume',
+    ))
+
+    expect(provider.provider.id).toBe('cursor')
+    expect(provider.terminal.capabilities.managedInstructions.state).toBe('supported')
+  })
+
+  it('prepares a private Cursor plugin carrying the versioned contract', () => {
+    const registry = createDefaultProviderRegistry()
+    const sessionDir = mkdtempSync(join(tmpdir(), 'tinstar-cursor-instructions-'))
+    const prepared = prepareProviderManagedInstructions(registry.require('cursor'), {
+      sessionDir,
+      version: 'test-contract/v1',
+      content: "Use the Slate; don't make turn cards.",
+    })
+
+    expect(prepared.mechanism).toBe('cursor-local-plugin-rule')
+    expect(prepared.launchFlags).toEqual([
+      `--plugin-dir '${join(sessionDir, 'managed-instructions', 'cursor-slate-first')}'`,
+    ])
+    expect(readFileSync(join(prepared.artifactPath!, '.cursor-plugin', 'plugin.json'), 'utf8'))
+      .toContain('tinstar-slate-first')
+    expect(readFileSync(join(prepared.artifactPath!, 'rules', 'slate-first.mdc'), 'utf8'))
+      .toContain("Use the Slate; don't make turn cards.")
+  })
+
+  it('fails honestly when a generic provider is asked for standing instructions', () => {
+    const generic = createDefaultProviderRegistry().require('generic')
+
+    expect(() => requireProviderCapability(generic, 'managedInstructions')).toThrow(
+      'Generic terminal CLI has no managed standing-instruction mechanism',
+    )
   })
 
   it('registers a fake third provider without changing shared provider IDs', () => {

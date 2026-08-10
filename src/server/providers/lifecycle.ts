@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import type {
   CapabilitySupport,
   ProviderIdentity,
@@ -113,6 +117,28 @@ interface ProviderTelemetryLaunchCapability {
   launchFlags?: (context: ProviderTelemetryLaunchContext) => readonly string[]
 }
 
+export interface ProviderManagedInstructionsContext {
+  sessionDir: string
+  version: string
+  content: string
+}
+
+export interface PreparedManagedInstructions {
+  version: string
+  mechanism: string
+  launchFlags: readonly string[]
+  artifactPath?: string
+}
+
+interface ProviderManagedInstructionsCapability {
+  /** Stable diagnostic label persisted with the session launch receipt. */
+  mechanism: string
+  /** Optional environment/CLI compatibility check run before provisioning. */
+  validate?: () => void
+  /** May create provider-private artifacts, but never writes into the workspace. */
+  prepare: (context: ProviderManagedInstructionsContext) => PreparedManagedInstructions
+}
+
 export interface TerminalProviderCapabilities {
   nats: CapabilitySupport<{
     transport: ProviderNatsLaunchCapability['transport']
@@ -123,6 +149,7 @@ export interface TerminalProviderCapabilities {
     environment?: ProviderTelemetryLaunchCapability['environment']
     launchFlags?: ProviderTelemetryLaunchCapability['launchFlags']
   }>
+  managedInstructions: CapabilitySupport<ProviderManagedInstructionsCapability>
 }
 
 export type TerminalProviderCapability = keyof TerminalProviderCapabilities
@@ -387,6 +414,92 @@ const unsupportedTelemetry = (
   reason: `${provider} has no managed OTLP telemetry transport`,
 })
 
+const unsupportedManagedInstructions = (
+  provider: string,
+): TerminalProviderCapabilities['managedInstructions'] => ({
+  state: 'unsupported',
+  reason: `${provider} has no managed standing-instruction mechanism`,
+})
+
+function writePrivateFile(path: string, content: string): void {
+  let current: string | null = null
+  try {
+    current = readFileSync(path, 'utf8')
+  } catch {
+    // Missing and unreadable files are both replaced with the canonical copy.
+  }
+  if (current !== content) {
+    writeFileSync(path, content, { mode: 0o600 })
+  }
+  chmodSync(path, 0o600)
+}
+
+function ensurePrivateDirectory(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 })
+  chmodSync(path, 0o700)
+}
+
+function prepareCursorManagedInstructions(
+  context: ProviderManagedInstructionsContext,
+): PreparedManagedInstructions {
+  const pluginDir = join(context.sessionDir, 'managed-instructions', 'cursor-slate-first')
+  const manifestDir = join(pluginDir, '.cursor-plugin')
+  const rulesDir = join(pluginDir, 'rules')
+  ensurePrivateDirectory(pluginDir)
+  ensurePrivateDirectory(manifestDir)
+  ensurePrivateDirectory(rulesDir)
+
+  writePrivateFile(join(manifestDir, 'plugin.json'), `${JSON.stringify({
+    name: 'tinstar-slate-first',
+    displayName: 'Tinstar Slate-first collaboration',
+    version: '1.0.0',
+    description: 'Standing instructions for Tinstar Slate-first managed sessions.',
+    author: { name: 'Tinstar' },
+  }, null, 2)}\n`)
+  writePrivateFile(join(rulesDir, 'slate-first.mdc'), `---
+description: Tinstar Slate-first collaboration contract (${context.version})
+alwaysApply: true
+---
+
+${context.content}
+`)
+
+  return {
+    version: context.version,
+    mechanism: 'cursor-local-plugin-rule',
+    launchFlags: [`--plugin-dir ${shellQuote(pluginDir)}`],
+    artifactPath: pluginDir,
+  }
+}
+
+let cursorPluginSupportValidated = false
+
+function validateCursorPluginSupport(): void {
+  if (cursorPluginSupportValidated) return
+  let help = ''
+  try {
+    help = execFileSync('agent', ['--help'], { encoding: 'utf8' })
+  } catch (err) {
+    throw new Error(`Cursor Agent CLI is unavailable: ${(err as Error).message}`)
+  }
+  if (!help.includes('--plugin-dir')) {
+    throw new Error('Cursor Agent CLI does not support the required --plugin-dir option')
+  }
+  cursorPluginSupportValidated = true
+}
+
+export function validateProviderManagedInstructions(adapter: TerminalProviderAdapter): void {
+  const capability = requireProviderCapability(adapter, 'managedInstructions')
+  capability.validate?.()
+}
+
+export function prepareProviderManagedInstructions(
+  adapter: TerminalProviderAdapter,
+  context: ProviderManagedInstructionsContext,
+): PreparedManagedInstructions {
+  return requireProviderCapability(adapter, 'managedInstructions').prepare(context)
+}
+
 export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
   provider: { id: 'claude', label: 'Claude Code' },
   sessionLifecycle: 'terminal',
@@ -420,6 +533,19 @@ export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
             OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
             OTEL_METRIC_EXPORT_INTERVAL: '10000',
             OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${sessionName}`,
+          }),
+        },
+      },
+      managedInstructions: {
+        state: 'supported',
+        detail: {
+          mechanism: 'claude-append-system-prompt',
+          prepare: context => ({
+            version: context.version,
+            mechanism: 'claude-append-system-prompt',
+            launchFlags: [
+              `--append-system-prompt ${shellQuote(context.content)}`,
+            ],
           }),
         },
       },
@@ -463,6 +589,19 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
           ],
         },
       },
+      managedInstructions: {
+        state: 'supported',
+        detail: {
+          mechanism: 'codex-developer-instructions',
+          prepare: context => ({
+            version: context.version,
+            mechanism: 'codex-developer-instructions',
+            launchFlags: [
+              `--config ${shellQuote(`developer_instructions=${JSON.stringify(context.content)}`)}`,
+            ],
+          }),
+        },
+      },
     },
     defaultTelemetry: true,
     transcript: codexTranscript,
@@ -477,6 +616,27 @@ export const CODEX_PROVIDER: TerminalProviderAdapter = {
   },
 }
 
+export const CURSOR_PROVIDER: TerminalProviderAdapter = {
+  provider: { id: 'cursor', label: 'Cursor Agent' },
+  sessionLifecycle: 'terminal',
+  terminal: {
+    capabilities: {
+      nats: unsupportedNats('Cursor Agent'),
+      telemetry: unsupportedTelemetry('Cursor Agent'),
+      managedInstructions: {
+        state: 'supported',
+        detail: {
+          mechanism: 'cursor-local-plugin-rule',
+          validate: validateCursorPluginSupport,
+          prepare: prepareCursorManagedInstructions,
+        },
+      },
+    },
+    defaultTelemetry: false,
+    transcript: null,
+  },
+}
+
 export const GENERIC_PROVIDER: TerminalProviderAdapter = {
   provider: { id: 'generic', label: 'Generic terminal CLI' },
   sessionLifecycle: 'terminal',
@@ -484,6 +644,7 @@ export const GENERIC_PROVIDER: TerminalProviderAdapter = {
     capabilities: {
       nats: unsupportedNats('Generic terminal CLI'),
       telemetry: unsupportedTelemetry('Generic terminal CLI'),
+      managedInstructions: unsupportedManagedInstructions('Generic terminal CLI'),
     },
     defaultTelemetry: false,
     transcript: null,
@@ -496,6 +657,7 @@ export function createDefaultProviderRegistry(
   return new ProviderAdapterRegistry([
     CLAUDE_PROVIDER,
     CODEX_PROVIDER,
+    CURSOR_PROVIDER,
     GENERIC_PROVIDER,
     ...additional,
   ])

@@ -27,6 +27,12 @@ export interface SessionNats {
   subscriptions: string[]
 }
 
+export interface ManagedInstructionsReceipt {
+  version: string
+  mechanism: string
+  status: 'delivered' | 'unsupported'
+}
+
 export interface Session {
   name: string
   backend: SessionBackend
@@ -75,6 +81,8 @@ export interface Session {
    * `null` for plain template sessions.
    */
   appendSystemPrompt: string | null
+  /** Observable delivery receipt. It proves launch wiring, not model compliance. */
+  managedInstructions?: ManagedInstructionsReceipt | null
   /**
    * Persistent persona substituted into the CLI template via the
    * {agentName}/{agentDescription}/{agentPrompt}/{agentJson} placeholders.
@@ -175,6 +183,7 @@ export interface CreateSessionOpts {
   adapter?: string | null
   nats?: SessionNats | null
   appendSystemPrompt?: string | null
+  managedInstructions?: ManagedInstructionsReceipt | null
   agent?: { name: string; description: string; prompt: string } | null
   modelOverride?: string | null
 }
@@ -209,6 +218,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     ttydPid: null,
     natsControlOrphanedAt: null,
     appendSystemPrompt: opts.appendSystemPrompt ?? null,
+    managedInstructions: opts.managedInstructions ?? null,
     agent: opts.agent ?? null,
     modelOverride: opts.modelOverride ?? null,
     created: now,
@@ -226,6 +236,7 @@ export function getSession(sessionsDir: string, name: string): Session | null {
     // assume the type as declared.
     if (raw.natsControlOrphanedAt === undefined) raw.natsControlOrphanedAt = null
     if (raw.appendSystemPrompt === undefined) raw.appendSystemPrompt = null
+    if (raw.managedInstructions === undefined) raw.managedInstructions = null
     if (raw.agent === undefined) raw.agent = null
     if (raw.modelOverride === undefined) raw.modelOverride = null
     if (raw.background === undefined) raw.background = false

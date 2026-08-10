@@ -119,6 +119,7 @@ import {
   ProviderCapabilityError,
   providerTelemetryEnabled,
   requireProviderCapability,
+  validateProviderManagedInstructions,
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
@@ -1462,6 +1463,7 @@ async function createReservedSession(
   let provider: TerminalProviderAdapter
   try {
     provider = providerRegistry.resolveTemplate(resolvedTemplate)
+    validateProviderManagedInstructions(provider)
     if (nats?.enabled) requireProviderCapability(provider, 'nats')
     // This is also the fail-fast validation for an explicit telemetry:true on a
     // provider that cannot supply the environment transport.
@@ -1629,7 +1631,12 @@ async function createReservedSession(
       appendSystemPrompt: appendSystemPrompt ?? null,
     })
     sessionPort = result.port
-    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    updateSession(sessDir, name, {
+      port: sessionPort,
+      ttydPid: result.ttydPid ?? null,
+      state: 'running',
+      managedInstructions: result.managedInstructions,
+    })
     const ttydGeneration = currentSessionBackendGeneration(sessDir, name)
     tmuxBackend.onTtydRestart(name, (newPid) => {
       persistTtydRestartForSessionIncarnation(
@@ -6367,7 +6374,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 if (claimedPort) tmuxBackend.releasePort(port)
                 throw err
               }
-              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+              updateSession(sessDir, session.name, {
+                port: result.port,
+                ttydPid: result.ttydPid ?? null,
+                managedInstructions: result.managedInstructions,
+              })
               const ttydGeneration = currentSessionBackendGeneration(
                 sessDir,
                 session.name,
@@ -6909,7 +6920,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   provider: reviveProvider,
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
                 })
-                updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
+                updateSession(sessDir, name, {
+                  port: startResult.port,
+                  ttydPid: startResult.ttydPid ?? null,
+                  managedInstructions: startResult.managedInstructions,
+                })
                 const ttydGeneration = currentSessionBackendGeneration(
                   sessDir,
                   name,
@@ -7269,6 +7284,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         provider = (ctx.providerRegistry ?? defaultProviderRegistry)
           .resolveTemplate(resolvedTemplate)
         providerTelemetryEnabled(provider, resolvedTemplate)
+        validateProviderManagedInstructions(provider)
       } catch (err) {
         return fail(res, 'BRIDGE_UNAVAILABLE', (err as Error).message)
       }
@@ -7582,7 +7598,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           appendSystemPrompt: handSystemPrompt,
         })
         const sessionPort = result.port
-        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
+        updateSession(sessDir, spawnedName, {
+          port: sessionPort,
+          ttydPid: result.ttydPid ?? null,
+          state: 'running',
+          appendSystemPrompt: handSystemPrompt,
+          managedInstructions: result.managedInstructions,
+        })
         const ttydGeneration = currentSessionBackendGeneration(
           sessDir,
           spawnedName,

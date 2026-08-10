@@ -9,7 +9,7 @@ import type { ErrorCode } from '../../domain/api'
 
 /**
  * Open provider ID resolved through ProviderAdapterRegistry. The built-ins are
- * claude/codex/generic, but adding a provider must not require widening a union.
+ * claude/codex/cursor/generic, but adding a provider must not require widening a union.
  */
 export type AdapterType = string
 
@@ -279,11 +279,12 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     id: 'cursor-agent',
     name: 'Cursor Agent',
     icon: '/agent-icons/cursor.svg',
-    adapter: 'generic',
+    adapter: 'cursor',
     // Interactive launch: cursor's `agent` shows a one-time workspace-trust
     // modal that --yolo can't bypass. Tinstar pre-seeds cursor's trust marker
     // before launch (see sessions/cursor-trust.ts) so the session starts
-    // unattended. NATS is intentionally never wired for this generic adapter.
+    // unattended. NATS is intentionally unavailable; standing instructions
+    // arrive through a private per-session local plugin outside the workspace.
     //
     // --model pins Grok 4.5 rather than leaving cursor on `auto`; drop the flag
     // (or change it) in Settings → Agents to pick a different one. Model IDs
