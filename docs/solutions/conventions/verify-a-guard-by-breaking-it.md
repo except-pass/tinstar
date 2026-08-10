@@ -51,3 +51,4 @@ If you cannot describe **what edit would make this test fail**, you have written
 ## Related
 
 - `docs/solutions/conventions/sub-resource-routes-under-prefix-matched-handlers.md` — the routing trap this guard protects (where a mis-ordered `DELETE …/dismiss` would have deleted the notice outright).
+- `docs/solutions/conventions/assert-against-the-real-parser-not-your-model-of-it.md` — the case this practice does not cover. Breaking your own guard proves the test can fail, but a guard can be perfectly falsifiable and still be wrong forever when the oracle it checks against shares a blind spot with the code under test. When the real consumer is an external tool, invoking it is the only equivalent move.

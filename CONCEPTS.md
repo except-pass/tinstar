@@ -33,6 +33,11 @@ The single-process server that serves the HTTP API, the server-sent-event stream
 ### SSE bridge
 The mechanism that re-dispatches named server-sent events from a single shared event stream onto the frontend as window events, so React consumers subscribe by name without each opening its own connection. A new pushed event type becomes available to the UI by being added to the bridge's forwarded-events set and given a typed window-event name.
 
+### Reach
+Remote reachability for an operator's own other devices, obtained by putting an external provider in front of the loopback listener rather than by widening what Tinstar binds. Membership of the provider's network *is* the authorization: Tinstar issues no credential of its own and adds no login, so "reachable" and "a member of that network" mean the same thing. Distinct from naming an extra bind address, which genuinely exposes the port to anything that can route to it.
+
+Reach is opt-in and the opt-in is durable — it is a stored preference, not a running process, so a restart re-establishes it without asking again. Two things are therefore tracked separately: the operator's preference, and the live mapping the provider currently serves. A clean shutdown takes down the mapping and never the preference; erasing the preference is how reach would silently fail to come back. Because the provider is configured rather than supervised, drift after an unclean stop is repaired by reconciling recorded state against what the provider is actually serving, and only one instance on a host may hold the mapping.
+
 ## Surfaces
 
 ### Focus mode
