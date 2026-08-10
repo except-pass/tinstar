@@ -196,7 +196,7 @@ describe('SlatePanel compose card lifecycle', () => {
 })
 
 describe('SlatePanel reflow (U1/R2)', () => {
-  it('renders one grid column for a narrow (or unset) width', () => {
+  it('renders one masonry column for a narrow (or unset) width', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={300} />,
     )
@@ -204,6 +204,9 @@ describe('SlatePanel reflow (U1/R2)', () => {
     expect(scroll.className).toContain('grid-cols-1')
     expect(scroll.className).not.toContain('grid-cols-2')
     expect(scroll.getAttribute('data-columns')).toBe('1')
+    expect(scroll.getAttribute('data-layout')).toBe('masonry')
+    expect((scroll as HTMLElement).style.gridAutoRows).toBe('1px')
+    expect((scroll as HTMLElement).style.rowGap).toBe('8px')
 
     // No width prop → still single-column.
     cleanup()
@@ -211,7 +214,7 @@ describe('SlatePanel reflow (U1/R2)', () => {
     expect(c2.querySelector('[data-columns]')!.getAttribute('data-columns')).toBe('1')
   })
 
-  it('renders two grid columns for a wide width', () => {
+  it('renders two masonry columns at a comfortable width', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={500} />,
     )
@@ -221,6 +224,34 @@ describe('SlatePanel reflow (U1/R2)', () => {
     // The #126 layout guards must survive the grid switch.
     expect(scroll.className).toContain('overflow-x-hidden')
     expect(scroll.className).toContain('[overflow-wrap:anywhere]')
+  })
+
+  it('renders three masonry columns when the Slate becomes the primary width', () => {
+    const { container } = render(
+      <SlatePanel
+        runId="run-1"
+        surfaces={[surface('s1', 'a'), surface('s2', 'b'), surface('s3', 'c')]}
+        width={760}
+      />,
+    )
+    const scroll = container.querySelector('[data-columns]')!
+    expect(scroll.className).toContain('grid-cols-3')
+    expect(scroll.getAttribute('data-columns')).toBe('3')
+    expect(scroll.querySelectorAll('[data-slate-masonry-cell]')).toHaveLength(3)
+  })
+
+  it('keeps the grouped open-points work object as a full-width masonry break', () => {
+    const point = surface('point-1', 'pick a name', {
+      kind: 'open-point',
+      headline: 'Pick a name',
+    })
+    const { container } = render(
+      <SlatePanel runId="run-1" surfaces={[surface('before', 'before'), point, surface('after', 'after')]} width={760} />,
+    )
+    const fullWidth = container.querySelector('[data-slate-masonry-cell][data-full-width="true"]')
+    expect(fullWidth).not.toBeNull()
+    expect((fullWidth as HTMLElement).style.gridColumn).toBe('1 / -1')
+    expect(fullWidth?.querySelector('[data-testid="open-points-surface"]')).not.toBeNull()
   })
 })
 

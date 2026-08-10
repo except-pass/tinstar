@@ -15,9 +15,10 @@
 //     its own `A2uiErrorBoundary` so one malformed/hostile surface degrades ALONE.
 //
 // Slate v2:
-//   · U1/R2 — the scroll body is a CSS grid that reflows 1→2 columns as the column
-//     is drag-resized (see `RunWorkspaceWidget`); the open-points list always spans
-//     the full width, diagram/generic surfaces flow into the grid.
+//   · U1/R2 — the scroll body is a measured masonry grid that reflows 1→2→3 columns
+//     as the Slate is drag-resized (see `RunWorkspaceWidget`). Cards keep canonical
+//     DOM order while independently sized rows pack upward; the open-points list
+//     always spans the full width.
 //   · U2/R4 — each surface carries a ✕ hide affordance; hiding is a per-browser view
 //     preference (uiPrefs `hiddenSlateSurfaces`, mirror of `hiddenRuns`), so it's
 //     non-destructive and a file re-projection can't resurrect it (the filter reads
@@ -51,10 +52,7 @@ import { surfaceHaystack } from './slateSearch'
 import { isEditable } from '../../hotkeys/isEditable'
 import { apiFetch } from '../../apiClient'
 import { randomUUID } from '../../uuid'
-
-/** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
- *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
-const SLATE_TWO_COL_MIN = 420
+import { SLATE_MASONRY_GRID_STYLE, SlateMasonryCell, slateColumnCount } from './slateMasonry'
 
 interface Props {
   /** The run id (= the run's `.id`) — Slate mutations are run-scoped. */
@@ -62,8 +60,8 @@ interface Props {
   /** The run's Slate projection. Undefined/empty renders nothing (additive) unless
    *  `open` forces a blank Slate to render. */
   surfaces?: SlateSurface[]
-  /** Measured column width (px) driving the 1→2 column reflow (R2). When absent
-   *  the grid stays single-column. */
+  /** Measured Slate width (px) driving the 1→2→3 column reflow (R2). When absent
+   *  the masonry stays single-column. */
   width?: number
   /** When true, render even with zero surfaces (a blank Slate the user opened on
    *  purpose) so Explain / + Add are reachable to fill it. */
@@ -615,7 +613,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   const firstOpenPointIdx = matched.findIndex((s) => s.kind === 'open-point' && s.presentation !== 'compose-card')
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
-  const columns = width && width >= SLATE_TWO_COL_MIN ? 2 : 1
+  const columns = slateColumnCount(width)
   // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
   // too) — a recipe is optional, so all of them are refreshable.
   const visibleSurfaces = matched.filter((s) => showHidden || !hidden.has(s.id))
@@ -775,13 +773,15 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
 
       {/* Scroll body — data-scrollable so the canvas wheel handler yields the
           wheel to this column instead of panning the canvas (useCanvasCamera).
-          A CSS grid reflows 1→2 columns with the measured width (R2); the #126
-          layout guards (overflow-x-hidden, overflow-wrap, per-cell min-w-0) still
-          hold so `columnsOverlapPx === 0` / no horizontal overflow survive. */}
+          Tiny implicit rows plus measured cell spans produce Keep-style masonry:
+          cards of different heights pack upward and reflow 1→2→3 as width changes.
+          DOM order remains canonical for keyboard and assistive navigation. */}
       <div
         data-scrollable
         data-columns={columns}
-        className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-2 items-start [overflow-wrap:anywhere] ${columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
+        data-layout="masonry"
+        style={SLATE_MASONRY_GRID_STYLE}
+        className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-x-2 items-start [overflow-wrap:anywhere] ${columns === 3 ? 'grid-cols-3' : columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
         {/* An open-but-empty Slate is an INVITATION, not a dead end (S6 U5): the
             composer renders inline, right where the surfaces would be, so the first
@@ -790,28 +790,32 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
             The header's "+ Add surface" popover is still the path once surfaces
             exist, so the two never both show. */}
         {sorted.length === 0 && (
-          <div data-testid="slate-blank-invite" className="col-span-full flex flex-col gap-2 px-1 pt-4">
-            <div className="text-center font-sans text-[12px] leading-relaxed text-ink-low">
-              {/* "else" once an objective is pinned above — otherwise the invitation
-                  would contradict the card the user is looking at. */}
-              Nothing {objective ? 'else ' : ''}on the Slate yet — describe a surface, or{' '}
-              <span className="text-ink-mid">✦ Explain</span> the session.
+          <SlateMasonryCell fullWidth>
+            <div data-testid="slate-blank-invite" className="flex flex-col gap-2 px-1 pt-4">
+              <div className="text-center font-sans text-[12px] leading-relaxed text-ink-low">
+                {/* "else" once an objective is pinned above — otherwise the invitation
+                    would contradict the card the user is looking at. */}
+                Nothing {objective ? 'else ' : ''}on the Slate yet — describe a surface, or{' '}
+                <span className="text-ink-mid">✦ Explain</span> the session.
+              </div>
+              <SlateComposer
+                runId={runId}
+                inline
+                onClose={() => {}}
+                onDraftChange={setComposerDirty}
+                onAccepted={acceptSurface}
+              />
             </div>
-            <SlateComposer
-              runId={runId}
-              inline
-              onClose={() => {}}
-              onDraftChange={setComposerDirty}
-              onAccepted={acceptSurface}
-            />
-          </div>
+          </SlateMasonryCell>
         )}
         {/* A search that matches nothing says so, rather than looking like an empty
             Slate — the surfaces are still there, just filtered out. */}
         {sorted.length > 0 && matched.length === 0 && (
-          <div data-testid="slate-no-matches" className="col-span-full px-1 py-6 text-center font-mono text-2xs text-ink-ctrl">
-            No surface matches “{query.trim()}”.
-          </div>
+          <SlateMasonryCell fullWidth>
+            <div data-testid="slate-no-matches" className="px-1 py-6 text-center font-mono text-2xs text-ink-ctrl">
+              No surface matches “{query.trim()}”.
+            </div>
+          </SlateMasonryCell>
         )}
         {matched.map((surface, i) => {
           // Open-points collapse into one grouped list at the first one's slot;
@@ -819,7 +823,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           if (surface.kind === 'open-point' && surface.presentation !== 'compose-card') {
             if (i !== firstOpenPointIdx) return null
             return (
-              <div key="open-points" className="col-span-full min-w-0">
+              <SlateMasonryCell key="open-points" fullWidth>
                 <OpenPointsSurface
                   runId={runId}
                   points={openPoints}
@@ -833,7 +837,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   now={now}
                   focusedId={focusedSurfaceId}
                 />
-              </div>
+              </SlateMasonryCell>
             )
           }
 
@@ -923,7 +927,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                 ? 'border-amber-400/30'
                 : 'border-hairline'
           const shellClass = [
-            'relative rounded border min-w-0 transition-shadow bg-surface-raised',
+            'relative rounded border min-w-0 bg-surface-raised duration-150 transition-[transform,box-shadow,border-color] hover:-translate-y-px hover:border-white/20 hover:shadow-[0_8px_24px_rgba(0,0,0,0.24)] motion-reduce:transform-none',
             isMinimized ? 'px-[14px] py-2' : 'p-[14px]',
             edgeClass,
             isFocused ? 'ring-1 ring-primary/70' : '',
@@ -939,22 +943,22 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // lives on the shell.
           if (isMinimized) {
             return (
-              <div
-                key={surface.id}
-                data-testid={`slate-surface-${surface.id}`}
-                data-minimized="true"
-                data-refreshing={isRefreshing ? 'true' : undefined}
-                data-freshness={phase}
-                data-focused={isFocused ? 'true' : undefined}
-                className={shellClass}
-                // POINTER SELECTION IS INTENT (R11). A real pointer event on a dirty
-                // card is a person saying "this one, now" — the same act as landing on
-                // it with `j`/`k`, and it has to mean the same thing. Repeats join the
-                // attempt in flight rather than starting a second (R14).
-                onPointerDown={() => selectSurface(surface.id)}
-              >
-                {controls}
-                <div className="flex items-center gap-2 pr-16 min-w-0">
+              <SlateMasonryCell key={surface.id}>
+                <div
+                  data-testid={`slate-surface-${surface.id}`}
+                  data-minimized="true"
+                  data-refreshing={isRefreshing ? 'true' : undefined}
+                  data-freshness={phase}
+                  data-focused={isFocused ? 'true' : undefined}
+                  className={shellClass}
+                  // POINTER SELECTION IS INTENT (R11). A real pointer event on a dirty
+                  // card is a person saying "this one, now" — the same act as landing on
+                  // it with `j`/`k`, and it has to mean the same thing. Repeats join the
+                  // attempt in flight rather than starting a second (R14).
+                  onPointerDown={() => selectSurface(surface.id)}
+                >
+                  {controls}
+                  <div className="flex items-center gap-2 pr-16 min-w-0">
                   {/* The ⟳ stays live while collapsed, so its ONE failure mode has to
                       be reachable here too — otherwise "sent to a session that isn't
                       there" is swallowed entirely. Same testid as the expanded note,
@@ -999,24 +1003,25 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                       now={now}
                     />
                   </span>
+                  </div>
                 </div>
-              </div>
+              </SlateMasonryCell>
             )
           }
 
           return (
-            <div
-              key={surface.id}
-              data-testid={`slate-surface-${surface.id}`}
-              data-refreshing={isRefreshing ? 'true' : undefined}
-              data-freshness={phase}
-              data-focused={isFocused ? 'true' : undefined}
-              className={shellClass}
-              // Same seam as the minimized card above: one selection path, one intent.
-              onPointerDown={() => selectSurface(surface.id)}
-            >
-              {controls}
-              {creationPhase === 'authoring' ? (
+            <SlateMasonryCell key={surface.id}>
+              <div
+                data-testid={`slate-surface-${surface.id}`}
+                data-refreshing={isRefreshing ? 'true' : undefined}
+                data-freshness={phase}
+                data-focused={isFocused ? 'true' : undefined}
+                className={shellClass}
+                // Same seam as the minimized card above: one selection path, one intent.
+                onPointerDown={() => selectSurface(surface.id)}
+              >
+                {controls}
+                {creationPhase === 'authoring' ? (
                 <div data-testid={`surface-authoring-${surface.id}`} className="flex min-h-24 flex-col items-center justify-center gap-3 text-center">
                   <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary/25 border-t-primary motion-reduce:animate-none" aria-hidden="true" />
                   <div>
@@ -1070,15 +1075,16 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   Above the footer, because it is about the content just rendered
                   rather than about how fresh it is — and the content IS the new one:
                   a refused claim costs that claim, never the surface (KTD5). */}
-              {creationInteractive && <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />}
+                {creationInteractive && <ClaimRefusalNote id={surface.id} freshness={surface.freshness} />}
               {/* And a claim the host DID accept but could not resolve (U7). Below
                   the refusal because it is the weaker statement of the two: a
                   refusal is permanent until a person edits the file, an unresolved
                   witness may well resolve on the next sweep. */}
-              {creationInteractive && <ClaimProblemNote id={surface.id} freshness={surface.freshness} />}
-              {creationInteractive && note}
-              {creationInteractive && footer}
-            </div>
+                {creationInteractive && <ClaimProblemNote id={surface.id} freshness={surface.freshness} />}
+                {creationInteractive && note}
+                {creationInteractive && footer}
+              </div>
+            </SlateMasonryCell>
           )
         })}
       </div>
