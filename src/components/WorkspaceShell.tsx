@@ -42,6 +42,7 @@ import {
   reconcileOptimisticSessionFailure,
   type OptimisticSessionIntent,
 } from './optimisticSession'
+import { hasCanonicalObjective } from '../slate/objective'
 
 
 /**
@@ -130,13 +131,19 @@ function WorkspaceShellInner() {
   // Retire only projections that have reached that authoritative state; failed
   // launches stay visible and inspectable instead of disappearing on snapshot.
   useEffect(() => {
-    const liveIds = new Set(serverRunRepo.getAll().filter(run => run.backend).map(run => run.id))
+    const optimisticById = new Map(optimisticSessionRuns.map(run => [run.id, run]))
+    const liveIds = new Set(serverRunRepo.getAll().filter(run => {
+      if (!run.backend) return false
+      const optimistic = optimisticById.get(run.id)
+      const waitsForObjective = optimistic?.slate?.some(surface => surface.kind === 'objective') ?? false
+      return !waitsForObjective || hasCanonicalObjective(run)
+    }).map(run => run.id))
     if (liveIds.size === 0) return
     setOptimisticSessionRuns(current => {
       const next = current.filter(run => !liveIds.has(run.id))
       return next.length === current.length ? current : next
     })
-  }, [serverRunRepo])
+  }, [serverRunRepo, optimisticSessionRuns])
 
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch

@@ -97,13 +97,14 @@ import {
   updateSession,
 } from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
-import type { Notice, Run } from '../../../domain/types'
+import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID, type Notice, type Run } from '../../../domain/types'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
 import { natsControlSocketPath } from '../../sessions/backends/tmux'
 import {
   createDefaultProviderRegistry,
   type TerminalProviderAdapter,
 } from '../../providers/lifecycle'
+import { SurfaceService } from '../../surfaces/surface-service'
 
 const SPACE_ID = 'spc-create-fixture'
 const TASK_ID = 'task-create-fixture'
@@ -267,6 +268,73 @@ afterEach(async () => {
 })
 
 describe('POST /api/sessions', () => {
+  it('persists the exact trimmed caller prompt as the Objective and initial work', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'objective-worker', prompt: '  Build the Slate first.  ' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(testCtx.docStore.getSlatePoint('objective-worker', OBJECTIVE_POINT_ID)).toMatchObject({
+      id: OBJECTIVE_POINT_ID,
+      headline: 'Build the Slate first.',
+      source: 'user',
+    })
+    const launch = createTmuxSessionMock.mock.calls.at(-1)![1] as { session: { initialPrompt?: string } }
+    expect(launch.session.initialPrompt).toBe('Build the Slate first.')
+  })
+
+  it('keeps a caller prompt as the Objective when a hand supplies persona prose', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'hand-objective-worker',
+        hand: 'codex-hand',
+        prompt: 'Review only this change.',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(testCtx.docStore.getSlatePoint('hand-objective-worker', OBJECTIVE_POINT_ID)?.headline)
+      .toBe('Review only this change.')
+  })
+
+  it('does not turn a hand-generated introduction into an Objective', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'hand-intro-worker', hand: 'codex-hand' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(testCtx.docStore.getSlatePoint('hand-intro-worker', OBJECTIVE_POINT_ID)).toBeUndefined()
+  })
+
+  it('rejects an oversized explicit work prompt before provisioning', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'oversized-objective', prompt: 'x'.repeat(OBJECTIVE_MAX + 1) }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      error: { message: `work prompt exceeds ${OBJECTIVE_MAX} characters` },
+    })
+    expect(findPortMock).not.toHaveBeenCalled()
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+    expect(testCtx.docStore.getRun('oversized-objective')).toBeUndefined()
+  })
+
+  it('creates an Objective through the task-scoped session route', async () => {
+    const res = await testCtx.fetch(`/api/tasks/${TASK_ID}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'task-objective-worker', prompt: 'Finish the widget.' }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(testCtx.docStore.getSlatePoint('task-objective-worker', OBJECTIVE_POINT_ID)?.headline)
+      .toBe('Finish the widget.')
+  })
+
   it('lands computed natsSubscriptions on the run projection (not just the session file)', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
@@ -1885,6 +1953,31 @@ describe('POST /api/sessions', () => {
     expect(testCtx.docStore.getRun('failed-run-projection')).toBeUndefined()
   })
 
+  it('rolls back the Run and backend when required Objective persistence fails', async () => {
+    const createPoint = vi.spyOn(SurfaceService.prototype, 'createRunPoint')
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'write-failed', message: 'objective write failed' },
+      } as never)
+
+    const failed = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'failed-objective', prompt: 'Keep this visible.' }),
+    })
+    createPoint.mockRestore()
+
+    expect(failed.status).toBe(500)
+    expect(stopTmuxSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'failed-objective' }),
+    )
+    expect(releasePortMock).toHaveBeenCalledWith(6123)
+    expect(getSession(join(tmpRoot, 'sessions'), 'failed-objective')).toBeNull()
+    expect(testCtx.docStore.getRun('failed-objective')).toBeUndefined()
+    expect(testCtx.docStore.getSlatePoint('failed-objective', OBJECTIVE_POINT_ID)).toBeUndefined()
+    expect(testCtx.docStore.getSurfacesForRunAlias('failed-objective')).toEqual([])
+  })
+
   it('preserves a reused worktree and its entity when session provisioning fails', async () => {
     const repo = join(tmpRoot, 'proj')
     execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
@@ -1989,6 +2082,7 @@ describe('POST /api/sessions', () => {
       method: 'POST',
       body: JSON.stringify({
         name: 'failed-registration-cleanup',
+        prompt: 'Persist me only if the session succeeds.',
         taskId: TASK_ID,
         nats: { enabled: true },
       }),
@@ -2009,6 +2103,7 @@ describe('POST /api/sessions', () => {
     expect(testCtx.routeContext.sse.broadcastReadyQueueUpdate).toHaveBeenCalledTimes(2)
     expect(getSession(join(tmpRoot, 'sessions'), 'failed-registration-cleanup')).toBeNull()
     expect(testCtx.docStore.getRun('failed-registration-cleanup')).toBeUndefined()
+    expect(testCtx.docStore.getSurfacesForRunAlias('failed-registration-cleanup')).toEqual([])
     // The legacy task attachment no longer creates a shared broadcast topic.
     // The failed session's unique DM metadata is removed during rollback.
     expect(testCtx.docStore.getAllTopicMetadata()).toEqual([])

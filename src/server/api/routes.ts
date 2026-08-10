@@ -76,6 +76,7 @@ import { parseSlateFileLocator, slateSourceAdapters } from '../surfaces/slate-so
 import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
+import { validateExplicitWorkPrompt } from '../../slate/objective'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -476,6 +477,8 @@ interface CreateSessionParams {
   worktree?: boolean
   worktreePath?: string
   prompt?: string
+  /** Caller-authored work text only. Host persona/introduction prose never enters it. */
+  objective?: string
   skipPermissions?: boolean
   cliTemplate?: string
   taskId?: string
@@ -632,11 +635,13 @@ async function rollbackFailedSessionProvisioning(args: {
     previous: Worktree | null
     provisional: Worktree
   } | null
+  /** Canonical Surfaces created by this provisioning attempt, never historical aliases. */
+  provisionedSurfaceIds?: readonly string[]
 }): Promise<boolean> {
   const {
     cfg, sessDir, docStore, name, session, claimedPort,
     natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
-    createdWorktreeProject, worktreeEntityRollback,
+    createdWorktreeProject, worktreeEntityRollback, provisionedSurfaceIds = [],
   } = args
 
   // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
@@ -685,6 +690,32 @@ async function rollbackFailedSessionProvisioning(args: {
     name,
     resolvedNats,
   )
+  if (provisionedSurfaceIds.length > 0) {
+    const created = new Set(provisionedSurfaceIds)
+    const svc = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
+    const actor = { actor: { kind: 'process' as const, id: 'session-provisioning-rollback' } }
+    const roots = provisionedSurfaceIds
+      .map(id => docStore.getSurface(id))
+      .filter((surface): surface is NonNullable<typeof surface> => !!surface)
+      .filter(surface => surface.home.kind !== 'surface' || !created.has(surface.home.surfaceId))
+    for (const root of roots) {
+      const descendants = docStore.getSurfaceDescendants(root.id)
+        .map(surface => surface.id)
+        .filter(id => created.has(id))
+      try {
+        const deleted = await svc.delete(root.id, {
+          ...(descendants.length > 0 ? { descendants, disposition: 'delete-subtree' } : {}),
+        }, actor)
+        if (!deleted.ok) throw new Error(deleted.error.reason ?? deleted.error.message)
+        const purged = await svc.purge(root.id, {
+          ...(descendants.length > 0 ? { descendants } : {}),
+        }, actor)
+        if (!purged.ok) throw new Error(purged.error.reason ?? purged.error.message)
+      } catch (err) {
+        log.warn('sessions', `${name}: failed provisioning rollback could not purge Surface ${root.id}: ${(err as Error).message}`)
+      }
+    }
+  }
   try {
     docStore.deleteRun(name)
   } catch (err) {
@@ -1332,6 +1363,11 @@ async function createSessionInternal(
   if (typeof params.name !== 'string' || !params.name) {
     return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   }
+  const objective = validateExplicitWorkPrompt(params.objective, OBJECTIVE_MAX)
+  if (!objective.ok) {
+    return { ok: false, error: { code: 'INVALID_WORK_PROMPT', message: objective.message } }
+  }
+  params = { ...params, objective: objective.text }
   const reservation = reserveSessionName(
     ctx.sessDir,
     ctx.cfg.sessions.prefix,
@@ -1375,7 +1411,7 @@ async function createReservedSession(
 ): Promise<CreateSessionResult> {
   const {
     name, project, worktree = false, worktreePath,
-    prompt, skipPermissions = true, cliTemplate: cliTemplateId,
+    prompt, objective, skipPermissions = true, cliTemplate: cliTemplateId,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
     view, viewData, model: modelOverride, token: tokenOverride, focus,
     background = false
@@ -1386,6 +1422,10 @@ async function createReservedSession(
     natsTraffic, natsHealth,
   } = ctx
   const providerRegistry = ctx.providerRegistry ?? defaultProviderRegistry
+  const priorRunSurfaceIds = new Set(docStore.getSurfacesForRunAlias(name).map(surface => surface.id))
+  const provisionedSurfaceIds = (): string[] => docStore.getSurfacesForRunAlias(name)
+    .map(surface => surface.id)
+    .filter(id => !priorRunSurfaceIds.has(id))
 
   // This call already owns the in-flight reservation; only durable state can
   // conflict here.
@@ -1615,6 +1655,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -1678,6 +1719,17 @@ async function createReservedSession(
       ...(focus === false || background ? { focusOnCreate: false } : {}),
     })
 
+    if (objective) {
+      const saved = await new RunSlateBridge(
+        docStore,
+        new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() }),
+      ).upsertUserPoint(runId, {
+        id: OBJECTIVE_POINT_ID,
+        headline: objective,
+      }, { kind: 'human', id: 'session-bootstrap' }, { claim: true })
+      if (!saved.point) throw new Error(`could not persist session Objective: ${saved.reason ?? 'unknown error'}`)
+    }
+
     registerLaunchedSession(
       { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
       name,
@@ -1703,6 +1755,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -5957,15 +6010,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        const explicitPrompt = validateExplicitWorkPrompt(prompt, OBJECTIVE_MAX)
+        if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
         const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
-          resolvedHand ? resolveHandPrompts(resolvedHand, prompt) : { initialPrompt: prompt, systemPrompt: null }
+          resolvedHand
+            ? resolveHandPrompts(resolvedHand, explicitPrompt.text)
+            : { initialPrompt: explicitPrompt.text, systemPrompt: null }
 
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
 
         try {
           const result = await createSessionInternal({
-            name, project, worktree, worktreePath, prompt: handInitialPrompt, skipPermissions,
+            name, project, worktree, worktreePath, prompt: handInitialPrompt,
+            objective: explicitPrompt.text, skipPermissions,
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
@@ -5975,6 +6034,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!result.ok) {
             switch (result.error.code) {
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'INVALID_WORK_PROMPT': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
@@ -6023,8 +6083,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
           const resolvedProject = settings?.resolved?.project
 
+          const explicitPrompt = validateExplicitWorkPrompt(overrides.prompt, OBJECTIVE_MAX)
+          if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
           const params: CreateSessionParams = {
             ...overrides,
+            prompt: explicitPrompt.text,
+            objective: explicitPrompt.text,
             project: overrides.project ?? resolvedProject,
             taskId,
             epicId: overrides.epicId ?? task.epicId,
@@ -6049,6 +6114,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
             if (result.error.code === 'MISSING_NAME') return fail(res, 'BAD_REQUEST', result.error.message)
+            if (result.error.code === 'INVALID_WORK_PROMPT') return fail(res, 'BAD_REQUEST', result.error.message)
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
             if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
               return fail(res, 'BAD_REQUEST', result.error.message)

@@ -12,6 +12,7 @@ vi.mock('../../../apiClient', () => ({
 }))
 
 import { ObjectiveSurface } from '../ObjectiveSurface'
+import { OBJECTIVE_MAX } from '../../../domain/types'
 
 function okApply(over: { delivered?: boolean; changed?: boolean } = {}) {
   return Promise.resolve({
@@ -33,6 +34,16 @@ function objective(headline: string): SlateSurface {
 }
 
 describe('ObjectiveSurface (S2)', () => {
+  it('keeps a long Objective bounded for reading and fully available for editing', () => {
+    const text = 'x'.repeat(OBJECTIVE_MAX)
+    render(<ObjectiveSurface runId="run-1" surface={objective(text)} />)
+
+    expect(screen.getByTestId('objective-text')).toHaveClass('max-h-40', 'overflow-y-auto')
+    fireEvent.click(screen.getByTestId('objective-edit'))
+    expect(screen.getByTestId('objective-input')).toHaveValue(text)
+    expect(screen.getByTestId('objective-input')).toHaveAttribute('maxlength', String(OBJECTIVE_MAX))
+  })
+
   beforeEach(() => {
     cleanup()
     apiFetch.mockReset()

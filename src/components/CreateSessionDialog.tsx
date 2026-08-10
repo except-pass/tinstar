@@ -5,6 +5,8 @@ import { apiFetch } from '../apiClient'
 import { type Project, parseProjects } from '../lib/projects'
 import { ProjectPickerOptions } from './ProjectPickerOptions'
 import type { OptimisticSessionIntent, WorktreeMode } from './optimisticSession'
+import { OBJECTIVE_MAX } from '../domain/types'
+import { validateExplicitWorkPrompt } from '../slate/objective'
 
 export interface SessionPrefill {
   project?: string
@@ -140,7 +142,14 @@ export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCr
       setError(`Session '${effectiveName}' already exists`)
       return
     }
-    const trimmedPrompt = prompt.trim()
+    const promptResult = validateExplicitWorkPrompt(prompt === '' ? undefined : prompt, OBJECTIVE_MAX)
+    if (!promptResult.ok) {
+      setError(promptResult.message.startsWith('work prompt exceeds')
+        ? `Keep it under ${OBJECTIVE_MAX} characters.`
+        : 'The starting prompt needs some words.')
+      return
+    }
+    const trimmedPrompt = promptResult.text
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -155,7 +164,7 @@ export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCr
 
     const intent: OptimisticSessionIntent = {
       id: effectiveName,
-      prompt: trimmedPrompt || undefined,
+      prompt: trimmedPrompt,
       color: runColor || undefined,
       project: project || undefined,
       worktree: worktreeMode === 'new'

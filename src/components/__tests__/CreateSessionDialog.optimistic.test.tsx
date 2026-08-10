@@ -8,6 +8,7 @@ vi.mock('../../apiClient', () => ({
 }))
 
 import { CreateSessionDialog } from '../CreateSessionDialog'
+import { OBJECTIVE_MAX } from '../../domain/types'
 
 function jsonResponse(data: unknown, ok = true) {
   return { ok, json: async () => data }
@@ -60,6 +61,9 @@ describe('CreateSessionDialog optimistic creation', () => {
     expect(onCreateStarted).toHaveBeenCalledWith(expect.objectContaining({
       id: 'optimistic-run',
       prompt: 'preserve this prompt',
+    }))
+    expect(apiFetch).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({
+      body: expect.stringContaining('"prompt":"preserve this prompt"'),
     }))
     expect(onClose).toHaveBeenCalledOnce()
     expect(onCreated).not.toHaveBeenCalled()
@@ -116,6 +120,30 @@ describe('CreateSessionDialog optimistic creation', () => {
     fireEvent.click(screen.getByTestId('create-session-submit'))
 
     expect(screen.getByRole('alert')).toHaveTextContent("Session 'already-there' already exists")
+    expect(onCreateStarted).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/sessions', expect.anything())
+  })
+
+  it('rejects an oversized work prompt before optimistic admission', async () => {
+    mockBootstrapRequests(Promise.resolve(jsonResponse({ ok: true, data: {} })))
+    const onClose = vi.fn()
+    const onCreateStarted = vi.fn()
+
+    render(
+      <CreateSessionDialog
+        onClose={onClose}
+        onCreateStarted={onCreateStarted}
+      />,
+    )
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/state'))
+
+    fireEvent.change(screen.getByPlaceholderText('Initial message to send to Claude...'), {
+      target: { value: 'x'.repeat(OBJECTIVE_MAX + 1) },
+    })
+    fireEvent.click(screen.getByTestId('create-session-submit'))
+
+    expect(screen.getByRole('alert')).toHaveTextContent(`Keep it under ${OBJECTIVE_MAX} characters.`)
     expect(onCreateStarted).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
     expect(apiFetch).not.toHaveBeenCalledWith('/api/sessions', expect.anything())

@@ -554,9 +554,8 @@ export const OBJECTIVE_POINT_ID = 'objective'
  */
 export const OBJECTIVE_ORDER = -1
 
-/** How long an objective may be (characters). Longer than a point headline (200):
- *  an objective is a sentence or three of prose, not a one-line title. */
-export const OBJECTIVE_MAX = 600
+/** Shared bound for an explicit session work prompt and its durable Objective. */
+export const OBJECTIVE_MAX = 32 * 1024
 
 /** One surface on a run's Slate (see The Slate in CONCEPTS.md): a small,
  *  scoped, agent/user/process-authored panel rendered in the run workspace card.

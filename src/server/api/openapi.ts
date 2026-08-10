@@ -1,4 +1,4 @@
-import { HOST_RECIPE_KINDS } from '../../domain/types'
+import { HOST_RECIPE_KINDS, OBJECTIVE_MAX } from '../../domain/types'
 import { REFRESH_INTENTS } from './surfaceRoutes'
 
 /** The typed refresh recipe, as an author may write it (R1/R6/R7, KTD1). Shared by
@@ -231,7 +231,7 @@ export const spec = {
             properties: {
               name: { type: 'string', description: 'Session name (unique identifier)' },
               cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
-              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              prompt: { type: 'string', maxLength: OBJECTIVE_MAX, description: 'Caller-authored work sent to the agent and saved as the initial Objective' },
               project: { type: 'string', description: 'Override the resolved project' },
               color: { type: 'string' },
               nats: { type: 'object', properties: { enabled: { type: 'boolean' }, subscriptions: { type: 'array', items: { type: 'string' } } } },
@@ -307,7 +307,7 @@ export const spec = {
               project: { type: 'string', description: 'Project name for workspace path' },
               worktree: { type: 'boolean', default: false },
               worktreePath: { type: 'string', description: 'Existing worktree path (if not creating new)' },
-              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              prompt: { type: 'string', maxLength: OBJECTIVE_MAX, description: 'Caller-authored work sent to the agent and saved as the initial Objective' },
               skipPermissions: { type: 'boolean', default: true },
               cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
               taskId: { type: 'string' },
