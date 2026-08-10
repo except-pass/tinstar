@@ -10,7 +10,11 @@ on:
 
 jobs:
   typecheck-and-test:
-    runs-on: ubuntu-22.04
+    # noble, not jammy: jammy's archive ttyd is 1.6.3, which predates the `-H`
+    # auth-header flag entirely and sits below TTYD_MIN_VERSION. The live proofs
+    # below spawn ttyd with `-H`, so on jammy they would fail against a build the
+    # spawner itself refuses — proving containment on a binary we forbid.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -43,4 +47,7 @@ jobs:
         # Fails rather than skips if ttyd went missing from the runner image.
         env:
           TINSTAR_REQUIRE_LIVE_TTYD: '1'
+          # Same reasoning for the sudoers rule: its only real-parser proof is
+          # skippable, and the bug it guards shipped once already.
+          TINSTAR_REQUIRE_LIVE_VISUDO: '1'
         run: npm run test:unit

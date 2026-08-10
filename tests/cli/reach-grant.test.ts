@@ -196,13 +196,27 @@ describe('the grant covers exactly what the adapter runs', () => {
   })
 })
 
-/** visudo -cf parses a file without touching the live sudoers config. */
+/**
+ * visudo -cf parses a file without touching the live sudoers config.
+ *
+ * These are the only tests that ask the REAL parser whether the generated rule
+ * is legal, and the bug they exist for — an unescaped `:` that made the grant
+ * unparseable on every host — shipped once already. A silent skip on a runner
+ * image without visudo would take that coverage away without saying so, which
+ * is why CI sets TINSTAR_REQUIRE_LIVE_VISUDO=1 to turn absence into a failure.
+ */
 function visudoAvailable(): boolean {
   for (const bin of ['/usr/sbin/visudo', '/sbin/visudo', 'visudo']) {
     try {
       execFileSync(bin, ['-V'], { stdio: 'ignore' })
       return true
     } catch { /* try the next path */ }
+  }
+  if (process.env.TINSTAR_REQUIRE_LIVE_VISUDO === '1') {
+    throw new Error(
+      'TINSTAR_REQUIRE_LIVE_VISUDO=1 but visudo is not installed: the only '
+      + 'proofs that the generated sudoers rule actually parses would silently skip.',
+    )
   }
   return false
 }

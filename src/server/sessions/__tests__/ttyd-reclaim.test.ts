@@ -17,6 +17,7 @@ import {
   terminalBindAddress,
   ttydSpawnArgv,
   ttydVersionRefusal,
+  ttydVersionRefusalNow,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
@@ -1194,9 +1195,9 @@ function bindArgFrom(argv: string[]): string | null {
  * TINSTAR_REQUIRE_LIVE_TTYD=1 to turn a missing binary into a failure instead.
  */
 function ttydInstalled(): boolean {
+  let version: string
   try {
-    execFileSync('ttyd', ['--version'], { stdio: 'ignore' })
-    return true
+    version = execFileSync('ttyd', ['--version'], { encoding: 'utf-8', stdio: 'pipe' })
   } catch {
     if (process.env.TINSTAR_REQUIRE_LIVE_TTYD === '1') {
       throw new Error(
@@ -1206,6 +1207,17 @@ function ttydInstalled(): boolean {
     }
     return false
   }
+  // Presence is not floor-compliance. A runner image carrying a pre-1.7.4 ttyd
+  // would run these proofs against a binary `startTtydForTokenAttempt` refuses
+  // to spawn — green here, and green for a build that can never ship.
+  const refusal = ttydVersionRefusal(version)
+  if (refusal) {
+    if (process.env.TINSTAR_REQUIRE_LIVE_TTYD === '1') {
+      throw new Error(`TINSTAR_REQUIRE_LIVE_TTYD=1 but ${refusal}`)
+    }
+    return false
+  }
+  return true
 }
 
 function firstNonLoopbackIPv4(): string | null {
@@ -1446,6 +1458,48 @@ describe('ttyd version floor — refused at spawn, not just reported', () => {
     // An unreadable version is not evidence of a good one.
     expect(ttydVersionRefusal('')).toContain(TTYD_MIN_VERSION)
     expect(ttydVersionRefusal(null)).toContain(TTYD_MIN_VERSION)
+  })
+
+  it('refuses before touching an incumbent, so a doomed spawn kills nothing', async () => {
+    // Ordering, not just outcome. The refusal has to land before the inventories
+    // resolve: reversing it would tear down a working terminal on behalf of a
+    // replacement this very function then declines to start.
+    const deps = fakeStartDeps({
+      versionRefusal: () => 'ttyd 1.6.3 is below the required 1.7.4',
+      incumbentsOnPort: vi.fn(async () => []),
+      allIncumbents: vi.fn(async () => []),
+    })
+    await expect(startTtydForTokenAttempt(
+      { sessionName: 'vf', tmuxName: 'tinstar-vf', port: 6399 },
+      Symbol('start'),
+      () => true,
+      deps,
+    )).rejects.toThrow('1.6.3')
+    expect(deps.incumbentsOnPort).not.toHaveBeenCalled()
+    expect(deps.allIncumbents).not.toHaveBeenCalled()
+    expect(deps.killProcess).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('re-probes on every spawn rather than trusting a boot-time answer', () => {
+    // A cached PASS is the dangerous direction. Below the floor `-i` and `-H`
+    // are accepted and ignored, so a binary swapped under a long-running server
+    // would keep spawning wide-open terminals against a verdict reached at boot.
+    // A cached REFUSAL is merely useless — it outlives the upgrade its own
+    // message instructs the operator to perform.
+    let probes = 0
+    const reads = ['ttyd version 1.7.4', 'ttyd version 1.6.3', null]
+    const read = () => { const v = reads[probes]; probes += 1; return v ?? null }
+
+    // Probe count first: a memoizing implementation fails HERE, naming the
+    // actual defect, instead of tripping a type error downstream on a cached
+    // null and reporting something unrelated.
+    const verdicts = [ttydVersionRefusalNow(read), ttydVersionRefusalNow(read), ttydVersionRefusalNow(read)]
+    expect(probes).toBe(3)
+
+    expect(verdicts[0]).toBeNull()
+    expect(verdicts[1]).toContain('1.6.3')
+    expect(verdicts[2]).toContain(TTYD_MIN_VERSION)
   })
 })
 

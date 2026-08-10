@@ -2163,10 +2163,21 @@ export function ttydVersionRefusal(versionOutput: string | null): string | null 
   return null
 }
 
-/** Probed once per process — a spawn must not pay for `ttyd -v` every time. */
-let ttydVersionRefusalCache: string | null | undefined
-
-export function ttydVersionRefusalCached(
+/**
+ * Probed fresh on every spawn. Deliberately NOT memoized.
+ *
+ * The floor is a containment control, not a capability hint: below 1.7.4 the
+ * `-i` and `-H` flags are accepted and ignored, so a terminal binds every
+ * interface and admits anyone. A cached PASS is the dangerous direction — a
+ * binary upgraded, downgraded, or repackaged under a long-running server would
+ * keep spawning against a determination made at boot, which is exactly the
+ * exposure the floor exists to stop. A cached REFUSAL is merely useless: it
+ * outlives the upgrade its own message tells the operator to perform.
+ *
+ * The probe costs ~20ms and runs once per terminal spawn, so there is nothing
+ * to buy back here.
+ */
+export function ttydVersionRefusalNow(
   readVersion: () => string | null = () => {
     try {
       return execSync('ttyd --version', { encoding: 'utf-8', timeout: 5_000, stdio: 'pipe' })
@@ -2175,15 +2186,7 @@ export function ttydVersionRefusalCached(
     }
   },
 ): string | null {
-  if (ttydVersionRefusalCache === undefined) {
-    ttydVersionRefusalCache = ttydVersionRefusal(readVersion())
-  }
-  return ttydVersionRefusalCache
-}
-
-/** Tests only — the cache would otherwise pin one host's ttyd for the run. */
-export function clearTtydVersionRefusalCacheForTests(): void {
-  ttydVersionRefusalCache = undefined
+  return ttydVersionRefusal(readVersion())
 }
 
 export function ttydSpawnArgv(opts: StartTtydOptions): string[] {
@@ -2210,7 +2213,7 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
   schedule: setTimeout,
   tmuxAlive: tmuxHasSession,
   enqueueRestart: enqueueTtydStart,
-  versionRefusal: () => ttydVersionRefusalCached(),
+  versionRefusal: () => ttydVersionRefusalNow(),
 }
 
 function enqueueTtydStart(

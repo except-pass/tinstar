@@ -31,16 +31,24 @@ export function reachGrantCommands({ tailscalePath, port }) {
 }
 
 /**
- * Escape the characters sudoers(5) treats as syntax when they appear inside a
- * command argument: ',', ':', '=' and '\\'.
+ * The characters sudoers(5) treats as syntax inside a command argument.
  *
  * This is not defensive politeness. `:` is the sudoers list separator, so the
  * unescaped `http://127.0.0.1:5273` in the establish command is a SYNTAX ERROR
  * — `visudo -c` rejects the whole file, which means the grant could never have
  * installed at all. Verified against real visudo, not read off the man page.
+ *
+ * It lives here as ONE constant because this exact set was wrong once already,
+ * and it is consumed three ways — escape, unescape, and the split-on-unescaped-
+ * comma below. Three hand-kept copies is three chances to fix only two.
  */
+const SUDOERS_SYNTAX_CHARS = '\\\\,:='
+const ESCAPE_PATTERN = new RegExp(`([${SUDOERS_SYNTAX_CHARS}])`, 'g')
+const UNESCAPE_PATTERN = new RegExp(`\\\\([${SUDOERS_SYNTAX_CHARS}])`, 'g')
+const UNESCAPED_COMMA = /(?<!\\),/
+
 function escapeSudoersArgument(argument) {
-  return argument.replace(/([\\,:=])/g, '\\$1')
+  return argument.replace(ESCAPE_PATTERN, '\\$1')
 }
 
 export function buildReachSudoersRule({ user, tailscalePath, port }) {
@@ -61,8 +69,8 @@ export function grantPermits(rule, commandLine) {
   // then unescape, so this compares against the literal command line the
   // adapter executes rather than its sudoers spelling.
   return body
-    .split(/(?<!\\),/)
-    .map(c => c.trim().replace(/\\([\\,:=])/g, '$1'))
+    .split(UNESCAPED_COMMA)
+    .map(c => c.trim().replace(UNESCAPE_PATTERN, '$1'))
     .includes(commandLine.trim())
 }
 
