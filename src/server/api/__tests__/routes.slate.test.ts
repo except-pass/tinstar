@@ -542,6 +542,39 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     expect(stored.replies![0]!.author).toBe('user')
     expect(stored.replies![0]!.text).toContain('Deploy now')
     expect(stored.replies![0]!.text).toContain('go for it')
+
+    const owner = srv.docStore.surfaceForRunAlias(RUN, pid)!
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain(`canonical Surface "${owner.id}"`)
+    expect(prompt).toContain(`run-local id "${pid}"`)
+    expect(prompt).toContain(`/api/surfaces/${owner.id}/content`)
+    expect(prompt).toContain(`expectedRev ${owner.rev}`)
+    expect(prompt).toContain('amend this same Surface')
+
+    const amendment = await srv.fetch(`/api/surfaces/${owner.id}/content`, {
+      method: 'PATCH',
+      body: JSON.stringify({ expectedRev: owner.rev, headline: 'Open points — acted on' }),
+    })
+    expect(amendment.status).toBe(200)
+    expect(srv.docStore.surfaceForRunAlias(RUN, pid)).toMatchObject({
+      id: owner.id,
+      content: { headline: 'Open points — acted on' },
+      thread: { replies: [{ text: expect.stringContaining('go for it') }] },
+    })
+  }))
+
+  it('persists the answer before attempting best-effort delivery', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = await createPoint(srv, { content: answerableContent() })
+    getSession.mockReturnValue({ name: RUN })
+    sendPrompt.mockImplementationOnce(async () => {
+      expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(1)
+    })
+
+    const res = await answer(srv, pid, { choices: ['opt-a'] })
+
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
   }))
 
   it('an ended session returns delivered:false with 200, answer still persisted', withServer(async srv => {
@@ -642,6 +675,25 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect(sendPrompt).not.toHaveBeenCalled()
     // Both persisted regardless of delivery.
     expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(2)
+  }))
+
+  it('directs a source-bound reply to the exact existing file owner', withServer(async srv => {
+    seedRun(srv.docStore)
+    await seedRunSlate(srv.docStore, RUN, [{
+      id: 'research', headline: 'Current findings', file: 'research.json', body: TEXT,
+    }])
+    getSession.mockReturnValue({ name: RUN })
+
+    const res = await reply(srv, 'research', { author: 'user', text: 'Add the new benchmark.' })
+
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    const owner = srv.docStore.surfaceForRunAlias(RUN, 'research')!
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain(`canonical Surface "${owner.id}"`)
+    expect(prompt).toContain(`atomically rewriting "${join('/tmp', RUN, '.tinstar', 'slate', 'research.json')}"`)
+    expect(prompt).toContain('with id "research"')
+    expect(prompt).toContain('Create another Surface only if')
   }))
 
   it('a process reply does not deliver either', withServer(async srv => {

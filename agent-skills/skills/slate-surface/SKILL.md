@@ -60,6 +60,20 @@ capabilities, and one exact `target`:
 - `canonical-content`: `PATCH` the returned `endpoint` with `expectedRev`.
 - `unavailable`: do not guess a write path; the response says why it is blocked.
 
+For a `canonical-content` target, send only authored fields plus its revision gate:
+
+```bash
+curl -s -X PATCH "$TINSTAR_URL<returned endpoint>" \
+  -H 'Content-Type: application/json' \
+  -H "x-tinstar-actor: $RUN_ID" \
+  -H 'x-tinstar-actor-kind: session' \
+  -d '{"expectedRev":<returned expectedRev>,"headline":"Updated headline","body":<A2UI object or null>}'
+```
+
+If that revision is stale, read the context again and retry against the current owner.
+For a `slate-file` target, use the atomic temp-file-and-rename pattern below against
+the returned absolute file, preserving its returned `localId`.
+
 Choose based on the work object, not the conversational turn. If an existing Surface
 owns the subject, amend that target and preserve its identity and thread. Reserve only
 when the object is genuinely distinct and Surface-worthy.
@@ -287,6 +301,11 @@ curl -s -X POST "$TINSTAR_URL/api/runs/$RUN_ID/slate/points/$POINT_ID/replies" \
 
 Reply with `author:"agent"` — an agent reply is recorded but **not** delivered back to
 you (that would be a self-loop). Only the **user's** replies are injected.
+
+The injected note also names the interaction's canonical Surface, run-local id, and
+current amendment target. Act on the interaction, then amend that same owner. Do not
+make a fresh card merely because another message arrived; reserve another only when
+the message introduces a genuinely distinct work object.
 
 ### The guardrail (do not skip this)
 

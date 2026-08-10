@@ -1,55 +1,11 @@
 import { join } from 'node:path'
 
-import type {
-  Surface,
-  SurfaceCapabilities,
-  SurfaceContentAuthority,
-  SurfaceCreation,
-  SurfaceFreshness,
-  PointAuthor,
-  PointStatus,
-} from '../../domain/types'
+import type { Surface, SurfaceCapabilities } from '../../domain/types'
+import type { RunAuthoringContext, RunAuthoringSurface, RunAuthoringTarget } from '../../slate/run-authoring'
 import type { DocumentStore } from '../stores/document-store'
 import { inRunSlate, isObjectiveSurface, runAliasOf } from '../stores/run-slate-projection'
 import type { SurfaceService } from './surface-service'
 import { parseSlateFileLocator, SLATE_DIR_PARTS, SLATE_FILE_ADAPTER } from './slate-source'
-
-export type RunAuthoringTarget =
-  | {
-      kind: 'slate-file'
-      file: string
-      localId: string
-      attemptToken?: string
-    }
-  | {
-      kind: 'canonical-content'
-      method: 'PATCH'
-      endpoint: string
-      expectedRev: number
-    }
-  | {
-      kind: 'unavailable'
-      reason: string
-    }
-
-export interface RunAuthoringSurface {
-  surfaceId: string
-  localId: string
-  headline: string
-  author: PointAuthor
-  status: PointStatus
-  contentAuthority: SurfaceContentAuthority
-  target: RunAuthoringTarget
-  capabilities: SurfaceCapabilities
-  freshness: SurfaceFreshness
-  creation?: SurfaceCreation
-}
-
-export interface RunAuthoringContext {
-  runId: string
-  objective: RunAuthoringSurface | null
-  surfaces: RunAuthoringSurface[]
-}
 
 function targetFor(surface: Surface, capabilities: SurfaceCapabilities): RunAuthoringTarget {
   if (surface.source?.adapter === SLATE_FILE_ADAPTER && surface.source.worktree) {
@@ -79,6 +35,42 @@ function targetFor(surface: Surface, capabilities: SurfaceCapabilities): RunAuth
       ?? 'this Surface has no writable source destination',
   }
 }
+
+function projectSurface(
+  service: SurfaceService,
+  surface: Surface,
+  runId: string,
+  actor: { kind: 'session'; id: string },
+): RunAuthoringSurface | null {
+  const alias = runAliasOf(surface, runId)
+  if (!inRunSlate(surface, alias)) return null
+  const context = service.context(surface.id, { actor })
+  if (!context.ok) return null
+  return {
+    surfaceId: surface.id,
+    localId: alias.localId,
+    headline: surface.content.headline,
+    author: surface.author,
+    status: surface.thread.status,
+    contentAuthority: surface.contentAuthority,
+    target: targetFor(surface, context.data.capabilities),
+    capabilities: context.data.capabilities,
+    freshness: surface.freshness,
+    ...(surface.creation ? { creation: surface.creation } : {}),
+  }
+}
+
+/** Resolve one current run-local owner after a mutation, including its new revision. */
+export function buildRunAuthoringSurface(
+  docStore: DocumentStore,
+  service: SurfaceService,
+  runId: string,
+  localId: string,
+  actor: { kind: 'session'; id: string },
+): RunAuthoringSurface | null {
+  const surface = docStore.surfaceForRunAlias(runId, localId)
+  return surface ? projectSurface(service, surface, runId, actor) : null
+}
 export function buildRunAuthoringContext(
   docStore: DocumentStore,
   service: SurfaceService,
@@ -87,22 +79,8 @@ export function buildRunAuthoringContext(
 ): RunAuthoringContext {
   const projected = docStore.getSurfacesForRunAlias(runId)
     .flatMap(surface => {
-      const alias = runAliasOf(surface, runId)
-      if (!inRunSlate(surface, alias)) return []
-      const context = service.context(surface.id, { actor })
-      if (!context.ok) return []
-      const item: RunAuthoringSurface = {
-        surfaceId: surface.id,
-        localId: alias.localId,
-        headline: surface.content.headline,
-        author: surface.author,
-        status: surface.thread.status,
-        contentAuthority: surface.contentAuthority,
-        target: targetFor(surface, context.data.capabilities),
-        capabilities: context.data.capabilities,
-        freshness: surface.freshness,
-        ...(surface.creation ? { creation: surface.creation } : {}),
-      }
+      const item = projectSurface(service, surface, runId, actor)
+      if (!item) return []
       return [{ surface, item }]
     })
     .sort((a, b) => (a.surface.order ?? a.surface.createdAt) - (b.surface.order ?? b.surface.createdAt))

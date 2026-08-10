@@ -71,7 +71,7 @@ import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coor
 import type { SurfaceComposeCoordinator } from '../surfaces/surface-compose-coordinator'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
-import { buildRunAuthoringContext } from '../surfaces/run-authoring-context'
+import { buildRunAuthoringContext, buildRunAuthoringSurface } from '../surfaces/run-authoring-context'
 import { SurfaceService } from '../surfaces/surface-service'
 import { parseSlateFileLocator, slateSourceAdapters, SLATE_DIR_PARTS } from '../surfaces/slate-source'
 import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
@@ -4824,8 +4824,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // canonical Surface it addresses (plan KTD3/U2). Built per request because the
   // service and the bridge hold no per-call state; the durable ordering that does
   // matter is enforced by the sidecar's transaction queue, not by object identity.
-  const slateBridge = (): RunSlateBridge =>
-    new RunSlateBridge(ctx.docStore, new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() }))
+  const slateService = (): SurfaceService =>
+    new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+  const slateBridge = (): RunSlateBridge => new RunSlateBridge(ctx.docStore, slateService())
+  const slateInteractionOwner = (runId: string, localId: string) =>
+    buildRunAuthoringSurface(ctx.docStore, slateService(), runId, localId, { kind: 'session', id: runId })
 
   /** The acting principal for a run-scoped Slate write. The trusted-local human in
    *  this release (KTD6); an agent- or process-attributed reply carries its own. */
@@ -4875,8 +4878,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
     const principal = runAuthoringPrincipal(runId)
     if (!principal) return true
-    const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
-    ok(res, buildRunAuthoringContext(ctx.docStore, service, runId, principal.actor))
+    ok(res, buildRunAuthoringContext(ctx.docStore, slateService(), runId, principal.actor))
     return true
   }
 
@@ -4919,10 +4921,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!worktree) {
         fail(res, 'CONFLICT', `Run ${runId} has no writable worktree for Slate authoring`); return
       }
-      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
       let reserved: Awaited<ReturnType<RunSlateBridge['reserveComposition']>>
       try {
-        reserved = await new RunSlateBridge(ctx.docStore, service).reserveComposition(runId, {
+        reserved = await slateBridge().reserveComposition(runId, {
           label,
           request: { freeform: request, ...(recipe ? { recipe } : {}) },
           worktree,
@@ -5231,11 +5232,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-answer'), author: 'user', text: parts.join(' — '), createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       const delivered = await deliverSlatePrompt(
         ctx,
         runId,
-        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()),
+        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase(), owner),
         requestGeneration,
       )
       ok(res, { point: updated, delivered })
@@ -5278,10 +5280,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-reply'), author, text: trimmed, createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       // Only a USER reply delivers — the anti-loop guard (R15).
       const delivered = author === 'user'
-        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()), requestGeneration)
+        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase(), owner), requestGeneration)
         : false
       ok(res, { point: updated, reply, delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
