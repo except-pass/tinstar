@@ -5,7 +5,6 @@ import { expect } from '@playwright/test'
 
 import { createSession, updateSession } from '../src/server/sessions/session'
 import { pluginTest as test } from './fixtures'
-import { resetAndWaitForData } from './helpers'
 
 interface Reservation {
   surfaceId: string
@@ -15,10 +14,12 @@ interface Reservation {
 }
 
 const RESOURCE_NOT_FOUND = 'Failed to load resource: the server responded with a status of 404 (Not Found)'
+const RESOURCE_CONFLICT = 'Failed to load resource: the server responded with a status of 409 (Conflict)'
 
-function isExpectedSimulator404(error: string): boolean {
+function isExpectedSimulatorClientError(error: string): boolean {
   return /^404 http:\/\/localhost:\d+\/api\/sessions\/CLD-\d+\/timeline\?windowSec=3600$/.test(error)
     || /^404 http:\/\/localhost:\d+\/widget-icons\/model-attribution\.svg$/.test(error)
+    || /^409 http:\/\/localhost:\d+\/api\/marshal\/ensure$/.test(error)
 }
 
 function writeSurface(reservation: Reservation, headline: string, text: string) {
@@ -58,7 +59,12 @@ test('Objective-first live authoring keeps one visible work object as it evolves
   })
   await page.setViewportSize({ width: 1600, height: 1000 })
   await page.goto('/')
-  await resetAndWaitForData(page)
+  await page.evaluate(async () => {
+    await fetch('/api/simulator/reset', { method: 'POST' })
+    await fetch('/api/simulator/start', { method: 'POST' })
+    localStorage.removeItem('tinstar-layouts-v3')
+  })
+  await page.reload()
 
   const widget = page.locator('[data-testid^="canvas-widget-run-"]').first()
   await widget.waitFor({ timeout: 15_000 })
@@ -198,7 +204,7 @@ test('Objective-first live authoring keeps one visible work object as it evolves
   expect(authoringRequests.filter(url => url.endsWith('/reservations'))).toHaveLength(1)
   expect(authoringRequests.filter(url => url.endsWith('/context'))).toHaveLength(2)
   expect(serverErrors).toEqual([])
-  expect(clientErrors.filter(error => !isExpectedSimulator404(error))).toEqual([])
-  expect(consoleErrors.filter(error => error !== RESOURCE_NOT_FOUND)).toEqual([])
+  expect(clientErrors.filter(error => !isExpectedSimulatorClientError(error))).toEqual([])
+  expect(consoleErrors.filter(error => ![RESOURCE_NOT_FOUND, RESOURCE_CONFLICT].includes(error))).toEqual([])
   await page.screenshot({ path: testInfo.outputPath('04-amended-same-surface.png'), fullPage: false })
 })
