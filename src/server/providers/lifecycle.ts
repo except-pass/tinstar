@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 import type {
@@ -424,25 +434,44 @@ const unsupportedManagedInstructions = (
 function writePrivateFile(path: string, content: string): void {
   let current: string | null = null
   try {
+    const stat = lstatSync(path)
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`managed-instruction artifact is not a regular file: ${path}`)
+    }
     current = readFileSync(path, 'utf8')
-  } catch {
-    // Missing and unreadable files are both replaced with the canonical copy.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  if (current !== content) {
-    writeFileSync(path, content, { mode: 0o600 })
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW
+    | (current === content ? 0 : constants.O_TRUNC)
+  const fd = openSync(path, flags, 0o600)
+  try {
+    if (current !== content) writeFileSync(fd, content)
+    fchmodSync(fd, 0o600)
+  } finally {
+    closeSync(fd)
   }
-  chmodSync(path, 0o600)
 }
 
 function ensurePrivateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: 0o700 })
+  try {
+    const stat = lstatSync(path)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`managed-instruction artifact is not a directory: ${path}`)
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    mkdirSync(path, { mode: 0o700 })
+  }
   chmodSync(path, 0o700)
 }
 
 function prepareCursorManagedInstructions(
   context: ProviderManagedInstructionsContext,
 ): PreparedManagedInstructions {
+  ensurePrivateDirectory(context.sessionDir)
   const pluginDir = join(context.sessionDir, 'managed-instructions', 'cursor-slate-first')
+  ensurePrivateDirectory(join(context.sessionDir, 'managed-instructions'))
   const manifestDir = join(pluginDir, '.cursor-plugin')
   const rulesDir = join(pluginDir, 'rules')
   ensurePrivateDirectory(pluginDir)

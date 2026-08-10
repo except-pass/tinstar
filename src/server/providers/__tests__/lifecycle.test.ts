@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -96,6 +96,24 @@ describe('provider lifecycle registry', () => {
       .toContain('tinstar-slate-first')
     expect(readFileSync(join(prepared.artifactPath!, 'rules', 'slate-first.mdc'), 'utf8'))
       .toContain("Use the Slate; don't make turn cards.")
+  })
+
+  it('refuses a symlinked Cursor rule instead of writing outside session storage', () => {
+    const provider = createDefaultProviderRegistry().require('cursor')
+    const sessionDir = mkdtempSync(join(tmpdir(), 'tinstar-cursor-instructions-'))
+    const context = { sessionDir, version: 'test-contract/v1', content: 'Original contract' }
+    const prepared = prepareProviderManagedInstructions(provider, context)
+    const rule = join(prepared.artifactPath!, 'rules', 'slate-first.mdc')
+    const victim = join(sessionDir, 'outside-rule.txt')
+    writeFileSync(victim, 'leave me alone')
+    unlinkSync(rule)
+    symlinkSync(victim, rule)
+
+    expect(() => prepareProviderManagedInstructions(provider, {
+      ...context,
+      content: 'Replacement contract',
+    })).toThrow('managed-instruction artifact is not a regular file')
+    expect(readFileSync(victim, 'utf8')).toBe('leave me alone')
   })
 
   it('fails honestly when a generic provider is asked for standing instructions', () => {
