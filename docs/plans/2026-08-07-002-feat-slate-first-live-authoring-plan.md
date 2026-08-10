@@ -8,6 +8,8 @@ artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 deepened: 2026-08-10
+implementation_status: implemented
+canonical_guide: ../features/slate-first-live-authoring.md
 ---
 
 # Slate-First Live Authoring - Plan
