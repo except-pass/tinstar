@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { reconnectSessionNats } from '../natsReconnect'
+import { reapSessionNatsChannelServer, reconnectSessionNats } from '../natsReconnect'
 
 describe('reconnectSessionNats', () => {
   it('SIGTERMs every process matching the control-socket path', async () => {
@@ -49,5 +49,20 @@ describe('reconnectSessionNats', () => {
     // Both are reported as targeted; the failure on 201 doesn't stop 202.
     expect(res.killed).toEqual([201, 202])
     expect(signalled).toEqual([202])
+  })
+})
+
+describe('reapSessionNatsChannelServer', () => {
+  it('targets the stable per-session control-socket path', async () => {
+    const needles: string[] = []
+    const res = await reapSessionNatsChannelServer('standup', {
+      findPids: async (needle) => {
+        needles.push(needle)
+        return [4242]
+      },
+      kill: () => {},
+    })
+    expect(needles).toEqual(['/tmp/tinstar-nats-standup.sock'])
+    expect(res).toEqual({ sessionName: 'standup', killed: [4242] })
   })
 })

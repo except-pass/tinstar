@@ -101,7 +101,7 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
-import { reconnectSessionNats } from '../sessions/natsReconnect'
+import { reapSessionNatsChannelServer } from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -6587,7 +6587,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             )
           }
           try {
-            const { killed } = await reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+            const { killed } = await reapSessionNatsChannelServer(name)
             // Clear the orphan flag; the next health probe re-establishes truth.
             updateSession(sessDir, name, { natsControlOrphanedAt: null })
             const run = ctx.docStore.getRun(name)

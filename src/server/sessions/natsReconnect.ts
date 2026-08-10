@@ -8,9 +8,16 @@
 //
 // We match the process by its unique --control-socket path (one per session),
 // so we never touch another session's channel-server or the tinstar host.
+//
+// Same lever runs on session stop/delete and as a start/create preflight: Codex
+// (and friends) spawn nats-channel-mcp as a child that often reparents to
+// systemd --user when the agent exits, keeping `/tmp/tinstar-nats-<session>.sock`
+// forever. tmux kill-session does not reap those grandchildren, so the next
+// required-MCP start dies with "control socket … already in use".
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { natsControlSocketPath } from './nats-control'
 
 const execFileAsync = promisify(execFile)
 
@@ -51,4 +58,19 @@ export async function reconnectSessionNats(
     try { kill(pid, 'SIGTERM') } catch { /* process may have exited already */ }
   }
   return { sessionName, killed: pids }
+}
+
+/**
+ * Lifecycle entry point: reclaim this session's NATS control socket before the
+ * next channel-server bind (stop/delete teardown, or start/create preflight).
+ * Thin wrapper over {@link reconnectSessionNats} with the stable socket path.
+ */
+export async function reapSessionNatsChannelServer(
+  sessionName: string,
+  deps: Omit<ReconnectDeps, 'socketPath'> = {},
+): Promise<{ sessionName: string; killed: number[] }> {
+  return reconnectSessionNats(sessionName, {
+    ...deps,
+    socketPath: natsControlSocketPath(sessionName),
+  })
 }

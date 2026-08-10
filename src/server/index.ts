@@ -70,7 +70,7 @@ import { natsControlSocketPath } from './sessions/backends/tmux'
 import {
   describeTtydFailure,
 } from './sessions/backends/ttyd-diagnostics'
-import { reconnectSessionNats } from './sessions/natsReconnect'
+import { reapSessionNatsChannelServer } from './sessions/natsReconnect'
 import { migrateCliTemplateIds } from './sessions/cli-template-id-migration'
 import { getDefaultHandsDir } from './hands'
 import {
@@ -1095,7 +1095,7 @@ export function initBackend(): RouteContext {
         // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
         onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
           ? (name) => {
-              void reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+              void reapSessionNatsChannelServer(name)
                 .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
                 .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
             }
