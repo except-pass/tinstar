@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { reapSessionNatsChannelServer, reconnectSessionNats } from '../natsReconnect'
+import {
+  filterChannelServerPids,
+  reapSessionNatsChannelServer,
+  reconnectSessionNats,
+} from '../natsReconnect'
 
 describe('reconnectSessionNats', () => {
   it('SIGTERMs every process matching the control-socket path', async () => {
@@ -64,5 +68,20 @@ describe('reapSessionNatsChannelServer', () => {
     })
     expect(needles).toEqual(['/tmp/tinstar-nats-standup.sock'])
     expect(res).toEqual({ sessionName: 'standup', killed: [4242] })
+  })
+})
+
+describe('filterChannelServerPids', () => {
+  it('keeps nats-channel-mcp and drops the Codex parent that embeds the socket path', () => {
+    const cmdlines: Record<number, string> = {
+      10: 'codex\0resume\0--last\0--control-socket\0/tmp/tinstar-nats-standup.sock',
+      11: 'bun\0x\0nats-channel-mcp\0--control-socket\0/tmp/tinstar-nats-standup.sock',
+      12: 'bun\0/tmp/bunx-…/nats-channel-mcp\0--control-socket\0/tmp/tinstar-nats-standup.sock',
+    }
+    expect(filterChannelServerPids([10, 11, 12], (pid) => cmdlines[pid]!)).toEqual([11, 12])
+  })
+
+  it('skips PIDs whose cmdline disappears mid-scan', () => {
+    expect(filterChannelServerPids([99], () => { throw new Error('ENOENT') })).toEqual([])
   })
 })

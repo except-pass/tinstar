@@ -16,6 +16,7 @@
 // required-MCP start dies with "control socket … already in use".
 
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { natsControlSocketPath } from './nats-control'
 
@@ -30,11 +31,35 @@ export interface ReconnectDeps {
   kill?: (pid: number, signal: NodeJS.Signals) => void
 }
 
-/** Default: `pgrep -f -- <needle>`, parsed to PIDs. Returns [] on no match. */
+/**
+ * Keep only channel-server PIDs. Codex embeds `--control-socket <path>` in its
+ * own argv, so a bare socket-path `pgrep -f` would SIGTERM the agent — the exact
+ * failure that made `/nats-reconnect` lethal for codex-full-auto sessions.
+ */
+export function filterChannelServerPids(
+  pids: number[],
+  readCmdline: (pid: number) => string = (pid) => readFileSync(`/proc/${pid}/cmdline`, 'utf8'),
+): number[] {
+  const out: number[] = []
+  for (const pid of pids) {
+    try {
+      if (readCmdline(pid).includes('nats-channel-mcp')) out.push(pid)
+    } catch {
+      /* process may have exited between pgrep and the read */
+    }
+  }
+  return out
+}
+
+/** Default: `pgrep -f -- <needle>`, then keep only nats-channel-mcp processes. */
 async function defaultFindPids(needle: string): Promise<number[]> {
   try {
     const { stdout } = await execFileAsync('pgrep', ['-f', '--', needle])
-    return stdout.split('\n').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
+    const candidates = stdout
+      .split('\n')
+      .map(s => Number(s.trim()))
+      .filter(n => Number.isInteger(n) && n > 0)
+    return filterChannelServerPids(candidates)
   } catch {
     // pgrep exits non-zero when nothing matches — that's "no process", not an error.
     return []
