@@ -42,6 +42,21 @@ Surfaces represent work objects, not conversation turns.
 New information about an existing work object amends its current Surface. Surface count
 has no prescribed relationship to turn count.
 
+## Layout and reflow
+
+The Slate is a resizable working surface. Its cards form one column below 420 pixels, two
+columns from 420 through 699 pixels, and three columns at 700 pixels or wider. Cards keep
+their natural height and pack upward independently, so a short Surface does not leave a
+row-sized hole beneath a tall neighbor. Grouped open points and other full-width work
+objects remain section breaks across every column.
+
+Reflow is local presentation state. Resizing, searching, hiding, minimizing, or amending
+a Surface may move cards, but never changes their identities, canonical order, threads,
+or refresh state. Keyboard traversal follows canonical order rather than the temporary
+visual position. The Slate width remains a per-browser preference; individual card
+coordinates are neither stored nor user-managed. The layout decision and rejected
+alternatives are recorded in [ADR 0003](../adrs/0003-slate-masonry-reflow.md).
+
 ## Foreground authoring flow
 
 Every supported managed agent receives the same versioned standing contract through

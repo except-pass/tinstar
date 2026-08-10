@@ -4,6 +4,10 @@ type: feat
 date: 2026-07-21
 ---
 
+> **Status: SHIPPED** — 2026-07-21 · PR #127 · layout decision superseded in part by [ADR 0003](../adrs/0003-slate-masonry-reflow.md)
+> This is the decision record. For what the Slate does now, see [Slate-first live authoring](../features/slate-first-live-authoring.md).
+> Do not treat this as current intent; treat it as why the current intent is what it is.
+
 # feat: The Slate v2 — resize, hide, refresh, and a surface composer
 
 ## Summary
