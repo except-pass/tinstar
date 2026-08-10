@@ -47,6 +47,7 @@ import type { Point, Run, SurfaceRefreshRecipe } from '../../../domain/types'
 
 interface Harness {
   docStore: DocumentStore
+  ctx: RouteContext
   /** The temp config root, so a test can plant a worktree the routes will read. */
   root: string
   fetch(path: string, init?: RequestInit): Promise<Response>
@@ -87,6 +88,7 @@ function createTestServer(root: string): Harness {
     resolve()
   }))
   return {
+    ctx,
     docStore,
     root,
     async fetch(path, init) {
@@ -289,6 +291,13 @@ describe('run-scoped Slate authoring API', () => {
 
   it('reserves a visible source destination idempotently without prompting or dispatching', withServer(async srv => {
     seedRun(srv.docStore)
+    const refreshAccess = vi.fn()
+    srv.ctx.refreshCoordinator = new Proxy({}, {
+      get: (_target, property) => {
+        refreshAccess(property)
+        throw new Error('live authoring must not call refresh')
+      },
+    }) as RouteContext['refreshCoordinator']
     getSession.mockImplementation((_dir, name) => name === RUN
       ? { name: RUN, workspace: { path: srv.root } }
       : null)
@@ -325,6 +334,7 @@ describe('run-scoped Slate authoring API', () => {
     })
     expect(sendPrompt).not.toHaveBeenCalled()
     expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    expect(refreshAccess).not.toHaveBeenCalled()
 
     const replay = await reserve('open-questions')
     expect(replay.status).toBe(200)

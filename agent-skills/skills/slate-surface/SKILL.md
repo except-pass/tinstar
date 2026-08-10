@@ -63,7 +63,8 @@ capabilities, and one exact `target`:
 For a `canonical-content` target, send only authored fields plus its revision gate:
 
 ```bash
-curl -s -X PATCH "$TINSTAR_URL<returned endpoint>" \
+ENDPOINT="<returned endpoint>"
+curl -s -X PATCH "$TINSTAR_URL$ENDPOINT" \
   -H 'Content-Type: application/json' \
   -H "x-tinstar-actor: $RUN_ID" \
   -H 'x-tinstar-actor-kind: session' \

@@ -4861,7 +4861,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       fail(res, 'FORBIDDEN', `session principal '${actor.id}' is not a managed session`, { status: 403 })
       return null
     }
-    return { actor, session }
+    return { actor: { kind: 'session', id: actor.id }, session }
   }
 
   // Append a reply to a point's thread. REOPEN-ON-REPLY lives inside the bridge.

@@ -9,10 +9,27 @@ import {
 describe('Slate-first managed contract', () => {
   it('is versioned and establishes the Surface-worthiness rails', () => {
     expect(SLATE_FIRST_CONTRACT_VERSION).toBe('slate-first-live-authoring/v1')
-    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('Always create or update a Surface')
-    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('Never create a Surface merely for a conversational turn')
+    for (const alwaysIn of [
+      'explicitly asks for one',
+      'must act or choose',
+      'primary result needed to judge the Objective',
+      'blocker that needs human intervention',
+    ]) expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain(alwaysIn)
+    for (const alwaysOut of [
+      'conversational turn',
+      'raw tool or terminal output',
+      'transient working update',
+      'private reasoning',
+      'content already owned by another Surface',
+    ]) expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain(alwaysOut)
     expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('use judgment')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('work objects, not turns')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('inspect the run\'s Slate authoring context')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('Amend the Surface that already owns the subject')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('Reserve a new Surface only for a genuinely distinct work object')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('amend that same Surface')
     expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('Refresh recipes remain the synchronization mechanism')
+    expect(SLATE_FIRST_MANAGED_INSTRUCTIONS).toContain('do not spawn ambient refresh workers')
   })
 
   it('composes a persistent persona exactly once without changing the contract', () => {
