@@ -157,6 +157,8 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.background !== b.background) return false
   if (a.blocked !== b.blocked) return false
   if (a.sessionId !== b.sessionId) return false
+  if (a.scope?.project !== b.scope?.project) return false
+  if (a.scope?.worktree !== b.scope?.worktree) return false
   if (a.taskId !== b.taskId) return false
   if (a.initiative !== b.initiative) return false
   if (a.epic !== b.epic) return false

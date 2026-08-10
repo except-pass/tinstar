@@ -28,7 +28,7 @@ function request(): ProviderDeliveryRequest {
     attempt: 1,
     acceptedAt: '2026-08-01T12:00:00.000Z',
     sender: { sessionId: 'sender', incarnation: 'sender-v2' },
-    destination: { subject: 'tinstar.space.init.epic.task.receiver' },
+    destination: { subject: 'tinstar.space.project.worktree.receiver' },
     recipient: {
       providerId: 'claude',
       sessionId: 'receiver',

@@ -143,8 +143,8 @@ all-hands/
 
 Use Tinstar's existing breakout-room primitive. Subjects scoped to the all-hands instance:
 
-- Room broadcast: `tinstar.<init>.<epic>.<task>.allhands`
-- Direct to a hand: `tinstar.<init>.<epic>.<task>.allhands.<hand-name>`
+- Room broadcast: `tinstar.room.<room-name>`
+- Direct to a hand: the hand's `tinstar.<space>.<project>.<worktree>.<session>` subject
 
 All hands subscribe to the broadcast. @mentions resolve to the per-hand subject.
 

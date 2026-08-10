@@ -283,11 +283,10 @@ describe('POST /api/sessions', () => {
     // run) showed a green dot with no topics. The run must carry them.
     expect(Array.isArray(run.natsSubscriptions)).toBe(true)
     expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
-    // Two-tier: broadcast + direct, both rooted at the task token.
-    expect(run.natsSubscriptions!.some(s => s.includes('make-widget'))).toBe(true)
-    // The advertised DM subject is the direct (second) subscription — not the
-    // broadcast channel at [0]. Guards that #998's fix didn't alter task agents.
-    expect(run.natsSubject).toBe(run.natsSubscriptions![1])
+    // A legacy task attachment does not create organizational scope. Without a
+    // Project and Worktree the session receives only its direct inbox.
+    expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._.widget-worker'])
+    expect(run.natsSubject).toBe(run.natsSubscriptions![0])
   })
 
   it('enables NATS by default for a standalone session (active space, no task)', async () => {
@@ -303,17 +302,15 @@ describe('POST /api/sessions', () => {
     const run = testCtx.docStore.getRun('lone-wolf') as Run
     expect(run).toBeTruthy()
     expect(run.natsEnabled).toBe(true)
-    // Scope leak guard: a task-less agent gets a DM-ONLY inbox — its own exact
-    // direct subject with '_' for the unresolved levels — and NOT a space
-    // wildcard. A `tinstar.<space>.>` sub would funnel every task broadcast in
-    // the space into an un-seated agent (the remote-control leak).
-    expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._._.lone-wolf'])
+    // Scope leak guard: an Unscoped agent gets a DM-ONLY inbox — its own exact
+    // direct subject with '_' for Project and Worktree — and no space wildcard.
+    expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._.lone-wolf'])
     expect(run.natsSubscriptions!.some(s => s.includes('>'))).toBe(false)
     // #998: the advertised DM subject must be exactly what the agent subscribes
     // to. It was recomputed by the space-blind buildNatsSubject, yielding a
-    // '_'-rooted 'tinstar._._._._.lone-wolf' the agent never listens on — so a
+    // '_'-rooted 'tinstar._._._.lone-wolf' the agent never listens on — so a
     // sender reading run.natsSubject couldn't reach it. Now derived from the subs.
-    expect(run.natsSubject).toBe('tinstar.create-space._._._.lone-wolf')
+    expect(run.natsSubject).toBe('tinstar.create-space._._.lone-wolf')
     expect(run.natsSubject).toBe(run.natsSubscriptions![0])
   })
 
@@ -2012,12 +2009,9 @@ describe('POST /api/sessions', () => {
     expect(testCtx.routeContext.sse.broadcastReadyQueueUpdate).toHaveBeenCalledTimes(2)
     expect(getSession(join(tmpRoot, 'sessions'), 'failed-registration-cleanup')).toBeNull()
     expect(testCtx.docStore.getRun('failed-registration-cleanup')).toBeUndefined()
-    // Shared live-set/task metadata is never rollback-owned: another session
-    // may have joined it after this launch created it. Only the failed
-    // session's unique DM metadata is safe to remove.
-    expect(testCtx.docStore.getAllTopicMetadata()).toEqual([
-      expect.objectContaining({ kind: 'broadcast', name: 'Task: Make Widget' }),
-    ])
+    // The legacy task attachment no longer creates a shared broadcast topic.
+    // The failed session's unique DM metadata is removed during rollback.
+    expect(testCtx.docStore.getAllTopicMetadata()).toEqual([])
     expect(testCtx.docStore.getAllTopicMetadata().some(
       metadata => metadata.subject.endsWith('.failed-registration-cleanup'),
     )).toBe(false)
@@ -2636,9 +2630,6 @@ describe('POST /api/sessions', () => {
         unknown,
         { name: string },
       ])[1].name
-      expect(testCtx.docStore.getAllTopicMetadata().some(
-        metadata => metadata.subject.split('.').length === 5,
-      )).toBe(true)
       expect(testCtx.docStore.getAllTopicMetadata().some(
         metadata => metadata.subject.endsWith(`.${stoppedChild}`),
       )).toBe(false)

@@ -7,6 +7,7 @@ export interface OptimisticSessionIntent {
   prompt?: string
   color?: string
   project?: string
+  worktree?: string
   taskId?: string
   epicId?: string
   initiativeId?: string
@@ -33,6 +34,10 @@ export function buildOptimisticSessionRun(
     background: false,
     blocked: false,
     sessionId: intent.id,
+    scope: {
+      ...(intent.project ? { project: intent.project } : {}),
+      ...(intent.project && intent.worktree ? { worktree: intent.worktree } : {}),
+    },
     taskId: intent.taskId ?? '',
     worktreeId: usesNewWorktree ? intent.id : '',
     createdAt,
@@ -41,7 +46,7 @@ export function buildOptimisticSessionRun(
     epic: intent.epicId ?? '',
     task: intent.taskId ?? '',
     repo: intent.project ?? '',
-    worktree: usesNewWorktree ? intent.id : '',
+    worktree: intent.worktree ?? (usesNewWorktree ? intent.id : ''),
     touchedFiles: [],
     recapEntries: [],
     rawLogs: '',

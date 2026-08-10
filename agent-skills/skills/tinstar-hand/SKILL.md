@@ -1,11 +1,11 @@
 ---
 name: tinstar-hand
-description: Spawn, steer, and tear down a Tinstar hand — a specialized collaborator agent that inherits your worktree/task/NATS and talks over NATS. Use when you want help from a reviewer/tester/bugsearcher/docs/security/skeptic/rubberduck/etc. Skip for one-off lookups (subagent is lighter).
+description: Spawn, steer, and tear down a Tinstar hand — a specialized collaborator agent that inherits your Project/Worktree scope and NATS link. Use when you want help from a reviewer/tester/bugsearcher/docs/security/skeptic/rubberduck/etc. Skip for one-off lookups (subagent is lighter).
 ---
 
 # Tinstar Hand
 
-A **hand** is a Tinstar session spawned as your child. It inherits your worktree, your task, and your NATS subscriptions, and talks back to you over NATS — not the prompt API. You spawn one when you want a persistent, conversational collaborator you can hand work to, probe, push back on, and reassign.
+A **hand** is a Tinstar session spawned as your child. It inherits your Project/Worktree scope and NATS subscriptions, and talks back to you over NATS — not the prompt API. You spawn one when you want a persistent, conversational collaborator you can hand work to, probe, push back on, and reassign.
 
 ## When *not* to use a hand
 
@@ -22,7 +22,7 @@ Don't spawn a hand for a one-shot lookup. Subagents are lighter.
 
 Rule of thumb: if the interaction is one round-trip, use a subagent. If you'll come back to them, use a hand.
 
-**Corollary — don't spawn-and-immediately-dismiss.** Spawning has fixed setup cost (NATS wiring, task association, session record) that only pays off across multiple round-trips. If you'd kill the hand right after its first reply, a subagent was the right call.
+**Corollary — don't spawn-and-immediately-dismiss.** Spawning has fixed setup cost (NATS wiring, scope inheritance, session record) that only pays off across multiple round-trips. If you'd kill the hand right after its first reply, a subagent was the right call.
 
 ## 1 — Confirm you can spawn
 
@@ -65,9 +65,9 @@ If none fit, `general-purpose` with a sharp prompt is always valid.
 
 ## 3 — Spawn (same worktree — the default)
 
-**Always use `POST /api/sessions/<your-session>/spawn`.** This endpoint inherits your worktree, task, epic, initiative, and NATS subscriptions, and wires up a parent↔child NATS link so the hand can reach you directly.
+**Always use `POST /api/sessions/<your-session>/spawn`.** This endpoint inherits your Project/Worktree scope and NATS subscriptions, and wires up a parent↔child NATS link so the hand can reach you directly.
 
-**Never use `POST /api/sessions`** for a child. It creates an orphan with no task context and no NATS link — the hand cannot talk to you.
+**Never use `POST /api/sessions`** for a child. It creates a standalone session with no parent link — the hand cannot talk to you directly.
 
 ```bash
 HAND="reviewer"
@@ -166,10 +166,10 @@ Follow-ups use the same `reply` tool:
 reply(to="<hand-subject>", text="One more thing — did you look at the token-refresh path in auth.ts:140?")
 ```
 
-**Broadcast to every agent on your task:**
+**Broadcast to every agent in your Worktree:**
 
 ```
-reply(to="tinstar.<space>.<init>.<epic>.<task>.*", text="Status check")
+reply(to="tinstar.<space>.<project>.<worktree>", text="Status check")
 ```
 
 **Don't use `POST /api/sessions/:id/prompt`** for hands — that's the non-NATS path and bypasses the parent-child channel. **Don't use `tmux send-keys`** — same reason. Always `reply()`.
@@ -202,7 +202,7 @@ When the work — not just the message — is actually done:
 
 - **Session names must not contain dots.** tmux reads `.` as a pane separator. Spawned names are auto-generated so this usually doesn't bite you, but if you name anything manually, stick to `[a-z0-9-]`.
 - **Parent must have NATS.** Without `Claude (multi-agent)` on your own session, spawning succeeds but the hand can't hear you. Step 1 catches this.
-- **Intros go point-to-point, not broadcast.** Don't look for the intro on the task `*` subject.
+- **Intros go point-to-point, not broadcast.** Don't look for the intro on the Worktree broadcast subject.
 - **A live hand roster is `GET /api/hands`.** The table above drifts — trust the API for what's actually installed.
 - **Defining new hands:** drop a `<name>.md` with the right frontmatter into `~/.config/tinstar/hands/`. See `~/.config/tinstar/hands/HAND-PROTOCOL.md` for the contract and any existing file in that directory as a template.
 

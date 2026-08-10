@@ -29,7 +29,7 @@ import {
   type LiveDeliveryRequest,
 } from '../live-recipient-resolution'
 
-const TASK = 'tinstar.space.init.epic.task'
+const TASK = 'tinstar.space.project.worktree'
 const ROOM = 'tinstar.room.review-pair'
 
 function managedSession(
@@ -326,7 +326,7 @@ describe('live delivery recipient resolution', () => {
       managedSession('codex-live', 'idle', [TASK, `${TASK}.codex-live`], 'codex'),
       managedSession('stopped-agent', 'stopped'),
       managedSession('dead-agent'),
-      managedSession('other-task', 'running', ['tinstar.space.init.epic.other']),
+      managedSession('other-task', 'running', ['tinstar.space.project.other']),
     ]
     const deps = dependencies(sessions, {
       observeProcess: async name => name === 'dead-agent'

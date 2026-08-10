@@ -143,7 +143,6 @@ interface HierarchySidebarProps {
   onCreateSpace: (name: string) => void
   onRenameSpace: (id: string, name: string) => void
   onDeleteSpace: (id: string) => void
-  onAdd: (parentId: string | null, type: GroupingDimension | 'run') => void
   /** Runs rename too: their `name` is a display-only field, so `type` may be 'run'. */
   onRename: (entityId: string, type: GroupingDimension | 'run', newName: string) => void
   onDelete: (entityId: string, type: GroupingDimension) => void
@@ -179,19 +178,11 @@ function statusDotStyle(node: TreeNode): React.CSSProperties | undefined {
   return { backgroundColor: node.color ?? '#94a3b8' }
 }
 
-function nextChildType(type: GroupingDimension | 'run', dimensions: GroupingDimension[]): GroupingDimension | 'run' {
-  if (type === 'run') return 'run'
-  const idx = dimensions.indexOf(type)
-  if (idx === -1 || idx === dimensions.length - 1) return 'run'
-  return dimensions[idx + 1]!
-}
-
 function SidebarNode({
   node,
   depth,
   dimensions,
   dimensionIconMap,
-  onAdd,
   onRename,
   onDelete,
   onFocusRun,
@@ -212,7 +203,6 @@ function SidebarNode({
   depth: number
   dimensions: GroupingDimension[]
   dimensionIconMap: Record<string, string>
-  onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
@@ -276,6 +266,7 @@ function SidebarNode({
   // and skips the entity-style kebab menu (Start Session / Add Child / etc.).
   const isPluginWidget = pluginWidgetIds?.has(node.entityId) === true
   const isWorkWidget = (node.type in WORK_WIDGET_META) || isPluginWidget
+  const isScopeGroup = node.type === 'project' || node.type === 'worktree' || node.type === 'unscoped'
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   // Background run rendered in the tree ⇒ toggle-revealed or attention
   // breakthrough (pruned otherwise, upstream in WorkspaceShell). Marked with
@@ -579,7 +570,7 @@ function SidebarNode({
         )}
 
         {/* Kebab menu button */}
-        {!isWorkWidget && !editing && onMenuOpen && (
+        {!isWorkWidget && !isScopeGroup && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -596,7 +587,7 @@ function SidebarNode({
         )}
 
         {/* Fallback: individual buttons when onMenuOpen is not provided */}
-        {!isWorkWidget && !editing && !onMenuOpen && (
+        {!isWorkWidget && !isScopeGroup && !editing && !onMenuOpen && (
           <>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
@@ -609,18 +600,6 @@ function SidebarNode({
               style={{ opacity: hovered ? 1 : undefined }}
             >
               ✏
-            </button>
-            <button
-              className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100 hover:!opacity-100"
-              onClick={(e) => {
-                e.stopPropagation()
-                onAdd(node.entityId, nextChildType(node.type as GroupingDimension | 'run', dimensions))
-              }}
-              data-testid={`add-child-${node.id}`}
-              aria-label={`Add ${nextChildType(node.type as GroupingDimension | 'run', dimensions)}`}
-              style={{ opacity: hovered ? 1 : undefined }}
-            >
-              +
             </button>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 hover:!opacity-100"
@@ -658,7 +637,6 @@ function SidebarNode({
               depth={depth + 1}
               dimensions={dimensions}
               dimensionIconMap={dimensionIconMap}
-              onAdd={onAdd}
               onRename={onRename}
               onDelete={onDelete}
               onFocusRun={onFocusRun}
@@ -706,7 +684,6 @@ function TreeWithOrphanSeparators({
   depth,
   dimensions,
   dimensionIconMap,
-  onAdd,
   onRename,
   onDelete,
   onFocusRun,
@@ -727,7 +704,6 @@ function TreeWithOrphanSeparators({
   depth: number
   dimensions: GroupingDimension[]
   dimensionIconMap: Record<string, string>
-  onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
@@ -756,7 +732,6 @@ function TreeWithOrphanSeparators({
           depth={depth}
           dimensions={dimensions}
           dimensionIconMap={dimensionIconMap}
-          onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
           onFocusRun={onFocusRun}
@@ -782,7 +757,6 @@ function TreeWithOrphanSeparators({
           depth={depth}
           dimensions={dimensions}
           dimensionIconMap={dimensionIconMap}
-          onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
           onFocusRun={onFocusRun}
@@ -804,7 +778,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, showBackgroundSessions, onToggleShowBackground, backgroundCount, backgroundRunIds, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, showBackgroundSessions, onToggleShowBackground, backgroundCount, backgroundRunIds, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onOrganize, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onOrganize?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -946,19 +920,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     [levelMeta],
   )
 
-  const [addMenuOpen, setAddMenuOpen] = useState(false)
-  const addMenuRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!addMenuOpen) return
-    const handler = (e: MouseEvent) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
-        setAddMenuOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [addMenuOpen])
-
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
   }, [onReparent])
@@ -1095,41 +1056,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             <span className="material-symbols-outlined text-sm">filter_list</span>
           </button>
         )}
-        <div className="relative shrink-0" ref={addMenuRef}>
-          <button
-            className="text-xs text-slate-500 hover:text-primary"
-            onClick={() => setAddMenuOpen(o => !o)}
-            data-testid="add-root"
-            aria-label="Add entity"
-            aria-haspopup="menu"
-            aria-expanded={addMenuOpen}
-          >
-            +
-          </button>
-          {addMenuOpen && (
-            <div
-              className="absolute top-full right-0 z-50 mt-0.5 min-w-[10rem] bg-surface-raised border border-primary/25 shadow-neon"
-              role="menu"
-              data-testid="add-root-menu"
-            >
-              {dimensions.map(dim => (
-                <button
-                  key={dim}
-                  role="menuitem"
-                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-hover hover:text-primary transition-colors"
-                  onClick={() => {
-                    setAddMenuOpen(false)
-                    onAdd(null, dim)
-                  }}
-                  data-testid={`add-root-${dim}`}
-                >
-                  <span aria-hidden>{dimensionIconMap[dim] ?? ''}</span>
-                  <span>{dimensionLabelMap[dim] ?? dim}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Search bar */}
@@ -1179,7 +1105,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
               depth={0}
               dimensions={dimensions}
               dimensionIconMap={dimensionIconMap}
-              onAdd={onAdd}
               onRename={onRename}
               onDelete={onDelete}
               onFocusRun={onFocusRun}
@@ -1214,35 +1139,18 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       {/* Tools section */}
       <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
         <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
-        {(onArrangeGrid || onArrangeSwimlanes || onArrangeReset) && (
+        {onOrganize && (
           <div className="w-px h-4 bg-white/10 mx-1" />
         )}
-        {onArrangeGrid && (
+        {onOrganize && (
           <button
-            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-            onClick={onArrangeGrid}
-            title="Tile selected in grid (or all if none selected)"
-          >
-            <span className="material-symbols-outlined text-base">grid_view</span>
-          </button>
-        )}
-        {onArrangeSwimlanes && (
-          <button
-            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-            onClick={onArrangeSwimlanes}
-            title="Swim lanes — rows by task (Ctrl+L)"
-          >
-            <span className="material-symbols-outlined text-base">view_agenda</span>
-          </button>
-        )}
-        {onArrangeReset && (
-          <button
-            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-            onClick={onArrangeReset}
+            className="h-7 px-2 flex items-center gap-1 text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onOrganize}
             data-testid="arrange-button"
-            title="Reset layout"
+            title="Organize canvas by Project and Worktree"
           >
             <span className="material-symbols-outlined text-base">auto_fix_high</span>
+            <span className="text-2xs uppercase tracking-wider">Organize</span>
           </button>
         )}
       </div>

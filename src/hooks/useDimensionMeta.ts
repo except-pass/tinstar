@@ -1,17 +1,15 @@
-import { useMemo } from 'react'
 import type { LevelLabel } from '../domain/types'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
-import { useBackendState } from './useBackendState'
 
 export interface LevelMeta {
-  internalType: 'initiative' | 'epic' | 'task'
+  internalType: 'project' | 'worktree'
   label: string
   plural: string
   icon: string
   index: number
 }
 
-const INTERNAL_TYPES: ('initiative' | 'epic' | 'task')[] = ['initiative', 'epic', 'task']
+const INTERNAL_TYPES: ('project' | 'worktree')[] = ['project', 'worktree']
 
 export function autoPlural(word: string): string {
   if (!word) return ''
@@ -21,7 +19,7 @@ export function autoPlural(word: string): string {
 }
 
 function resolveLevels(levels: LevelLabel[]): LevelMeta[] {
-  // levels.length 1–3; always maps to bottom N of ['initiative','epic','task']
+  // Organizational scope has one fixed hierarchy in v1.
   const offset = INTERNAL_TYPES.length - levels.length
   return levels.map((lvl, i) => ({
     internalType: INTERNAL_TYPES[offset + i]!,
@@ -33,13 +31,7 @@ function resolveLevels(levels: LevelLabel[]): LevelMeta[] {
 }
 
 export function useDimensionMeta(): LevelMeta[] {
-  const { spaces, activeSpaceId } = useBackendState()
-  return useMemo(() => {
-    const space = spaces.find(s => s.id === activeSpaceId)
-    const levels = space?.labelConfig?.levels
-    if (!levels || levels.length === 0) return resolveLevels(DEFAULT_LEVELS)
-    return resolveLevels(levels)
-  }, [spaces, activeSpaceId])
+  return resolveLevels(DEFAULT_LEVELS)
 }
 
 /** Non-hook version for components that receive LevelMeta[] as a prop */

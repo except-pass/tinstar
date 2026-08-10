@@ -82,7 +82,7 @@ describe.skipIf(!natsServerAvailable)('message router with real NATS', () => {
       version: MESSAGE_ROUTE_PROTOCOL_VERSION,
       requestId: 'real-nats-request',
       sender: { sessionId: 'sender', incarnation: 'sender-v1' },
-      destination: { subject: 'tinstar.space.init.epic.task.receiver' },
+      destination: { subject: 'tinstar.space.project.worktree.receiver' },
       text: 'real transport proof',
     }
     const authMasterKey = Buffer.alloc(32, 0x41)

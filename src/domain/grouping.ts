@@ -1,4 +1,4 @@
-import type { Run, GroupingDimension, TreeNode, GroupRollupViewModel } from './types'
+import type { Run, LegacyEntityDimension, TreeNode, GroupRollupViewModel } from './types'
 import type { TaxonomyRepository } from './repositories'
 import { STATUS_BORDER_COLORS } from './status-colors'
 // A run node's label is its friendly name, falling back to the id (R2/R12).
@@ -11,7 +11,7 @@ import { runDisplayName } from './runName'
  */
 export function getRunDimensionValue(
   run: Run,
-  dimension: GroupingDimension,
+  dimension: LegacyEntityDimension,
   taxonomy: TaxonomyRepository,
 ): { id: string; label: string; color?: string } | undefined {
   return taxonomy.resolveDimension(run, dimension)
@@ -19,7 +19,7 @@ export function getRunDimensionValue(
 
 /** Get all entities for a dimension from the taxonomy (even those with no runs) */
 function getAllEntitiesForDimension(
-  dimension: GroupingDimension,
+  dimension: LegacyEntityDimension,
   taxonomy: TaxonomyRepository,
 ): Array<{ id: string; label: string; color?: string }> {
   switch (dimension) {
@@ -36,9 +36,9 @@ function getAllEntitiesForDimension(
 
 /** Get child entities that belong to a specific parent entity */
 function getChildEntitiesForParent(
-  parentDimension: GroupingDimension,
+  parentDimension: LegacyEntityDimension,
   parentEntityId: string,
-  childDimension: GroupingDimension,
+  childDimension: LegacyEntityDimension,
   taxonomy: TaxonomyRepository,
 ): Array<{ id: string; label: string; color?: string }> {
   if (parentDimension === 'initiative' && childDimension === 'epic') {
@@ -52,8 +52,8 @@ function getChildEntitiesForParent(
 
 /** Get orphan entities — those whose parent FK is empty or points to a missing entity */
 function getOrphanEntities(
-  dimension: GroupingDimension,
-  parentDimension: GroupingDimension | undefined,
+  dimension: LegacyEntityDimension,
+  parentDimension: LegacyEntityDimension | undefined,
   taxonomy: TaxonomyRepository,
 ): Array<{ id: string; label: string; color?: string }> {
   if (!parentDimension) return []
@@ -102,10 +102,10 @@ function getOrphanEntities(
  */
 export function buildGroupTree(
   runs: Run[],
-  dimensions: GroupingDimension[],
+  dimensions: LegacyEntityDimension[],
   taxonomy: TaxonomyRepository,
   _isRoot = true,
-  _parentDimension?: GroupingDimension,
+  _parentDimension?: LegacyEntityDimension,
   _parentEntityId?: string,
 ): TreeNode[] {
   if (dimensions.length === 0) {
@@ -125,7 +125,7 @@ export function buildGroupTree(
     }))
   }
 
-  const dimension: GroupingDimension = dimensions[0]!
+  const dimension: LegacyEntityDimension = dimensions[0]!
   const remaining = dimensions.slice(1)
 
   // Group runs by this dimension's value
@@ -355,7 +355,7 @@ export function computeRollup(node: TreeNode, runs: Run[]): GroupRollupViewModel
   return {
     id: node.id,
     label: node.label,
-    type: groupType as GroupingDimension,
+    type: groupType as never,
     runCount: nodeRuns.length,
     activeCount: nodeRuns.filter(r => r.status === 'running').length,
     completedCount: nodeRuns.filter(r => r.status === 'stopped').length,

@@ -2,27 +2,27 @@ import { describe, it, expect } from 'vitest'
 import { buildAgentSubject, parseSubject, BREAKOUT_PREFIX, TINSTAR_PREFIX } from '../subjects'
 
 describe('buildAgentSubject', () => {
-  it('builds the canonical tinstar.<space>.<init>.<epic>.<task>.<session> shape', () => {
-    expect(buildAgentSubject({ space: 's', init: 'i', epic: 'e', task: 't', session: 'demo' }))
-      .toBe('tinstar.s.i.e.t.demo')
+  it('builds the canonical tinstar.<space>.<project>.<worktree>.<session> shape', () => {
+    expect(buildAgentSubject({ space: 's', project: 'p', worktree: 'w', session: 'demo' }))
+      .toBe('tinstar.s.p.w.demo')
   })
 
   it('builds the broadcast (no session) form when session is omitted', () => {
-    expect(buildAgentSubject({ space: 's', init: 'i', epic: 'e', task: 't' }))
-      .toBe('tinstar.s.i.e.t')
+    expect(buildAgentSubject({ space: 's', project: 'p', worktree: 'w' }))
+      .toBe('tinstar.s.p.w')
   })
 })
 
 describe('parseSubject', () => {
-  it('recognizes broadcast (5 parts)', () => {
-    expect(parseSubject('tinstar.s.i.e.t')).toEqual({
-      kind: 'broadcast', space: 's', init: 'i', epic: 'e', task: 't',
+  it('recognizes broadcast (4 parts)', () => {
+    expect(parseSubject('tinstar.s.p.w')).toEqual({
+      kind: 'broadcast', space: 's', project: 'p', worktree: 'w',
     })
   })
 
-  it('recognizes dm (6 parts)', () => {
-    expect(parseSubject('tinstar.s.i.e.t.demo')).toEqual({
-      kind: 'dm', space: 's', init: 'i', epic: 'e', task: 't', session: 'demo',
+  it('recognizes dm (5 parts)', () => {
+    expect(parseSubject('tinstar.s.p.w.demo')).toEqual({
+      kind: 'dm', space: 's', project: 'p', worktree: 'w', session: 'demo',
     })
   })
 
@@ -39,7 +39,7 @@ describe('parseSubject', () => {
 
   it('returns null for malformed tinstar subjects (wrong part count)', () => {
     expect(parseSubject('tinstar.s')).toBeNull()
-    expect(parseSubject('tinstar.s.i.e.t.demo.extra')).toBeNull()
+    expect(parseSubject('tinstar.s.p.w.demo.extra')).toBeNull()
   })
 
   it('returns null for empty breakout room', () => {

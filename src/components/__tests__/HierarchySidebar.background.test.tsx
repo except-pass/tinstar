@@ -113,7 +113,6 @@ function renderSidebar(props: Partial<React.ComponentProps<typeof HierarchySideb
     onCreateSpace: vi.fn(),
     onRenameSpace: vi.fn(),
     onDeleteSpace: vi.fn(),
-    onAdd: vi.fn(),
     onRename: vi.fn(),
     onDelete: vi.fn(),
   }
@@ -158,7 +157,6 @@ describe('HierarchySidebar background toggle', () => {
         onCreateSpace={vi.fn()}
         onRenameSpace={vi.fn()}
         onDeleteSpace={vi.fn()}
-        onAdd={vi.fn()}
         onRename={vi.fn()}
         onDelete={vi.fn()}
         showBackgroundSessions={false}

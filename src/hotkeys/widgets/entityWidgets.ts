@@ -11,31 +11,3 @@ registerWidget({
     { key: 'KeyZ', label: 'Fit to viewport', action: 'fit-viewport' },
   ],
 })
-
-
-registerWidget({
-  type: 'task',
-  displayName: 'Task',
-  contexts: [],
-  bindings: [
-    { key: 'Enter', label: 'Settings', action: 'settings' },
-  ],
-})
-
-registerWidget({
-  type: 'epic',
-  displayName: 'Epic',
-  contexts: [],
-  bindings: [
-    { key: 'Enter', label: 'Settings', action: 'settings' },
-  ],
-})
-
-registerWidget({
-  type: 'initiative',
-  displayName: 'Initiative',
-  contexts: [],
-  bindings: [
-    { key: 'Enter', label: 'Settings', action: 'settings' },
-  ],
-})
