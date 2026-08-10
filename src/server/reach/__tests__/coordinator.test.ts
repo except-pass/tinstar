@@ -203,6 +203,82 @@ describe('ReachCoordinator — one holder per host', () => {
     expect((await restarted.status()).state).toBe('active')
   })
 
+  it('reports stranded, not off, when the revoke fails', async () => {
+    // The failure this exists for: a revoke that does not land, reported as a
+    // clean 'off'. The CLI believed it and deleted the privilege grant, which
+    // removed the only way to finish taking the mapping down.
+    const p = fakeProvider()
+    const reach = coordinator(p.provider)
+    await reach.enable(5273)
+    const url = (await reach.status()).url!
+
+    p.provider.revoke = async () => { throw new Error('tailscaled is not running') }
+    const status = await reach.disable()
+
+    expect(status.state).toBe('stranded')
+    expect(status.url).toBe(url)
+    expect(status.detail ?? '').toMatch(/tailscaled is not running/)
+    // The record MUST survive: it is how doctor finds the stranded mapping and
+    // how a later retry knows which URL to take down.
+    expect(readReachMapping(root)).not.toBeNull()
+    // The preference is off regardless — the operator's wish is not in doubt,
+    // only whether the provider acted on it.
+    expect(readReachPreference(root)?.enabled).toBe(false)
+  })
+
+  it('reports stranded from status() too, so a restart still surfaces it', async () => {
+    const p = fakeProvider()
+    const reach = coordinator(p.provider)
+    await reach.enable(5273)
+    p.provider.revoke = async () => { throw new Error('nope') }
+    await reach.disable()
+
+    // A fresh process reading the same files must reach the same conclusion:
+    // preference off, our mapping still recorded, so this host may still be up.
+    const restarted = coordinator(p.provider)
+    expect((await restarted.status()).state).toBe('stranded')
+  })
+
+  it('returns to a clean off when a later revoke succeeds', async () => {
+    const p = fakeProvider()
+    const reach = coordinator(p.provider)
+    await reach.enable(5273)
+    const failing = async () => { throw new Error('down') }
+    const working = p.provider.revoke
+    p.provider.revoke = failing
+    expect((await reach.disable()).state).toBe('stranded')
+
+    p.provider.revoke = working
+    const second = await reach.disable()
+    expect(second.state).toBe('off')
+    expect(readReachMapping(root)).toBeNull()
+  })
+
+  it('re-registers the reach origin when it adopts a mapping across a restart', async () => {
+    const first = fakeProvider()
+    const reach = coordinator(first.provider)
+    await reach.enable(5273)
+    const url = (await reach.status()).url!
+
+    // A restart keeps the on-disk mapping but NOT the in-memory origin set, so
+    // the new process must re-register from what it reconciled. Without this the
+    // canvas loads over the tailnet and every terminal upgrade is refused, which
+    // is the shape of the bug the previous review already caught once.
+    resetOriginAllowlistForTests()
+    expect(currentOriginAllowlist()).not.toContain(url)
+
+    const restarted = new ReachCoordinator({
+      configRoot: root,
+      provider: first.provider,
+      disabled: false,
+      now: () => '2026-08-06T00:00:00.000Z',
+    })
+    await restarted.onListening(5273)
+
+    expect((await restarted.status()).state).toBe('active')
+    expect(currentOriginAllowlist()).toContain(url)
+  })
+
   it('repairs its own mapping when the bound port moved', async () => {
     const first = fakeProvider()
     const reach = coordinator(first.provider)

@@ -14,7 +14,11 @@
 // present to read the sudoers rule before it is written. A host that installs
 // the service and never wants remote access never gets a root-adjacent grant.
 
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { getApiBase } from '../../apiBase.js'
+import { getConfigRoot } from '../../configRoot.js'
 import { installReachGrant, removeReachGrant } from './service.js'
 
 const GREEN = '\x1b[32m'
@@ -37,6 +41,11 @@ function printStatus(status) {
   if (!status || status.state === 'off') {
     console.log(`${DIM}reach is off${RESET}`)
     if (status?.detail) console.log(`${DIM}${status.detail}${RESET}`)
+    return
+  }
+  if (status.state === 'stranded') {
+    console.log(`${RED}✗${RESET} reach stranded — ${BOLD}${status.url}${RESET} may still be served`)
+    if (status.detail) console.log(`${DIM}${status.detail}${RESET}`)
     return
   }
   if (status.state === 'active') {
@@ -78,25 +87,78 @@ async function reachOn() {
   })
   if (!ok) {
     console.error(`${RED}✗${RESET} ${body?.error?.message ?? 'reach refused'}`)
+    // The server keeps the opt-in on a failed establish ON PURPOSE, so a
+    // transient provider outage does not silently discard the decision. That is
+    // the right behaviour and the wrong thing to leave unsaid: without this line
+    // the operator reads "failed" and does not expect reach at the next start.
+    console.error(`${DIM}The opt-in was kept, so reach will be retried when the server `
+      + `next starts. Run ${RESET}tinstar reach off${DIM} if you do not want that.${RESET}`)
     process.exit(1)
   }
   printStatus(body?.data)
   console.log(`${DIM}This preference persists: a restart brings the same URL back.${RESET}`)
 }
 
+/**
+ * Clearing the stored opt-in without the server.
+ *
+ * The CLI owns this half deliberately. `reach off` has to work when the server
+ * is down — that is exactly when an operator wants to be sure they are not still
+ * exposed — and the preference is a file this process can write itself.
+ */
+function clearPreferenceLocally() {
+  const file = join(getConfigRoot(), 'reach', 'preference.json')
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf-8'))
+    if (raw?.enabled === false) return true
+    writeFileSync(file, JSON.stringify({ ...raw, enabled: false }), { mode: 0o600 })
+    return true
+  } catch {
+    // No preference file means no opt-in to clear, which is the desired end state.
+    return !existsSync(file)
+  }
+}
+
 async function reachOff() {
-  const { ok, body } = await api('/api/reach', {
-    method: 'POST',
-    body: JSON.stringify({ enabled: false }),
-  })
+  // Always clear the opt-in first, so a server that never answers cannot leave
+  // reach set to come back at the next start.
+  const cleared = clearPreferenceLocally()
+
+  let ok = false
+  let body = null
+  try {
+    ({ ok, body } = await api('/api/reach', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: false }),
+    }))
+  } catch {
+    ok = false
+  }
+
   if (!ok) {
-    console.error(`${RED}✗${RESET} ${body?.error?.message ?? 'could not turn reach off'}`)
+    // The server could not be reached, so nothing has confirmed the mapping is
+    // down. KEEP the grant: removing it here is what previously took away the
+    // only means of finishing the job.
+    console.error(`${RED}✗${RESET} could not reach the server to take the mapping down`)
+    console.error(`${DIM}The opt-in is ${cleared ? 'cleared' : 'NOT cleared'}, so reach will not `
+      + `come back on its own.${RESET}`)
+    console.error(`${DIM}Your tailnet URL may still be live. Run ${RESET}tinstar doctor${DIM} to check, `
+      + `then ${RESET}tinstar reach off${DIM} again once the server is up.${RESET}`)
     process.exit(1)
   }
-  // The grant goes with the opt-in. Leaving it behind would keep a root-adjacent
-  // rule on the machine for a feature the operator just turned off.
+
+  const status = body?.data
+  if (status?.state === 'stranded') {
+    // Same reasoning: the mapping is still up, so the grant has to stay.
+    console.error(`${RED}✗${RESET} reach did not come down: ${status.detail ?? 'unknown reason'}`)
+    console.error(`${DIM}Keeping the privilege grant so this can be retried.${RESET}`)
+    process.exit(1)
+  }
+
+  // Confirmed down. The grant goes with the opt-in — leaving it behind would keep
+  // a root-adjacent rule on the machine for a feature the operator turned off.
   removeReachGrant()
-  printStatus(body?.data)
+  printStatus(status)
 }
 
 export async function run(argv) {

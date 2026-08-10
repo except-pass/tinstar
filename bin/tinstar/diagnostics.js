@@ -132,6 +132,22 @@ export function checkExternalVersion(name, installed, floor) {
 export function checkReachState(opts) {
   const { providerPresent, mapping } = opts
   const serverPort = opts.serverPort
+  // Tri-state on purpose: `false` means "the operator asked for off and we read
+  // that", `undefined` means "we could not read the preference at all". Only the
+  // first is evidence of strandedness — treating a missing file as `false` would
+  // make doctor cry wolf on every host that predates this check.
+  const preferenceEnabled = opts.preferenceEnabled
+  if (mapping && preferenceEnabled === false) {
+    return {
+      status: 'fail',
+      label: `reach stranded — ${mapping.url} may still be served`,
+      detail: 'reach was turned off but the mapping was not removed, so this host '
+        + 'may still be reachable from your tailnet',
+      remedy: 'Run `tinstar reach off` again once tailscale is reachable. If the '
+        + 'server is down, take it down directly with '
+        + '`sudo tailscale serve --bg --yes --https=443 off`.',
+    }
+  }
   if (!mapping) {
     return {
       status: 'skip',

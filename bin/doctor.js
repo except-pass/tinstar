@@ -36,10 +36,14 @@ function printSection(name) {
   console.log(`\n${BOLD}${name}${RESET}`)
 }
 
-function printCheck({ status, label, detail }) {
+function printCheck({ status, label, detail, remedy }) {
   const sym = SYM[status]
   const detailStr = detail ? ` ${DIM}${detail}${RESET}` : ''
   console.log(`  ${sym} ${label}${detailStr}`)
+  // A finding an operator cannot act on is only half a diagnosis, so a check
+  // that knows the fix prints it on its own line rather than burying it in the
+  // dim detail text.
+  if (remedy) console.log(`    ${YELLOW}fix:${RESET} ${remedy}`)
 }
 
 // ── Check helpers ──
@@ -532,10 +536,18 @@ async function doctor() {
     const raw = JSON.parse(readFileSync(join(ROOT, 'reach', 'mapping.json'), 'utf-8'))
     if (raw && typeof raw.url === 'string' && typeof raw.port === 'number') reachMapping = raw
   } catch { /* no mapping recorded */ }
+  // Left undefined when the file is missing or unreadable — see checkReachState:
+  // "could not read it" and "the operator said off" must not collapse together.
+  let reachPreferenceEnabled
+  try {
+    const raw = JSON.parse(readFileSync(join(ROOT, 'reach', 'preference.json'), 'utf-8'))
+    if (raw && typeof raw.enabled === 'boolean') reachPreferenceEnabled = raw.enabled
+  } catch { /* no preference recorded */ }
   exposureChecks.push(checkReachState({
     providerPresent: Boolean(tailscaleVersion),
     mapping: reachMapping,
     serverPort: reachMapping ? serverPort : undefined,
+    preferenceEnabled: reachPreferenceEnabled,
   }))
 
   for (const c of exposureChecks) {

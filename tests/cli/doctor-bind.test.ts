@@ -150,6 +150,56 @@ describe('checkReachState', () => {
     expect(check.status).toBe('fail')
     expect(`${check.label} ${check.detail ?? ''}`).toContain('5273')
   })
+
+  it('fails loudly on a stranded mapping — off was asked for, exposure remains', () => {
+    // The state a failed revoke leaves: preference off, mapping still recorded,
+    // so the host may still be reachable while nothing says so. Doctor is the
+    // only place an operator would find this, because the CLI already printed
+    // its result and moved on.
+    const check = checkReachState({
+      providerPresent: true,
+      mapping: { url: 'https://host.tailnet.ts.net', port: 5273 },
+      serverPort: 5273,
+      preferenceEnabled: false,
+    })
+    expect(check.status).toBe('fail')
+    expect(`${check.label} ${check.detail ?? ''}`).toContain('https://host.tailnet.ts.net')
+  })
+
+  it('tells the operator the exact command that clears a stranded mapping', () => {
+    // "Something is wrong" without "here is what to run" is a dead end: the
+    // operator explicitly accepted manual remediation, so the remedy has to be
+    // present and runnable, not implied.
+    const check = checkReachState({
+      providerPresent: true,
+      mapping: { url: 'https://host.tailnet.ts.net', port: 5273 },
+      serverPort: 5273,
+      preferenceEnabled: false,
+    })
+    expect(check.remedy ?? '').toContain('tinstar reach off')
+  })
+
+  it('does not cry stranded while reach is legitimately on', () => {
+    const check = checkReachState({
+      providerPresent: true,
+      mapping: { url: 'https://host.tailnet.ts.net', port: 5273 },
+      serverPort: 5273,
+      preferenceEnabled: true,
+    })
+    expect(check.status).toBe('pass')
+  })
+
+  it('stays quiet about strandedness when it cannot read the preference', () => {
+    // An unreadable preference is not evidence of one. Older callers pass no
+    // preference at all, and inventing a failure from missing input would make
+    // doctor cry wolf on every host that predates this field.
+    const check = checkReachState({
+      providerPresent: true,
+      mapping: { url: 'https://host.tailnet.ts.net', port: 5273 },
+      serverPort: 5273,
+    })
+    expect(check.status).toBe('pass')
+  })
 })
 
 describe('the provider floor carries its verification date', () => {

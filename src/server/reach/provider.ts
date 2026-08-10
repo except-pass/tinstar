@@ -28,6 +28,16 @@ export type ReachState =
   | 'provisioning'
   /** A precondition was unmet; `detail` names which. */
   | 'refused'
+  /**
+   * The operator asked for off, and the mapping did NOT come down.
+   *
+   * This is the honest middle: the preference is off, but the provider may still
+   * be serving the URL, so the host may still be reachable. It exists as its own
+   * state because reporting it as 'off' is what let a failed revoke read as
+   * success — after which the CLI removed the privilege grant and took away the
+   * only means of finishing the job. `detail` names the remedy.
+   */
+  | 'stranded'
 
 export interface ReachStatus {
   state: ReachState

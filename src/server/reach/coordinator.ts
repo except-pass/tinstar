@@ -12,6 +12,12 @@ import {
   type ReachMapping,
 } from './state'
 
+/** What `revokeOurMapping` observed — not what it intended. */
+type RevokeOutcome =
+  | { kind: 'nothing' }
+  | { kind: 'revoked' }
+  | { kind: 'failed'; url: string; detail: string }
+
 export interface ReachCoordinatorOptions {
   configRoot: string
   provider: ReachProvider
@@ -59,6 +65,14 @@ export class ReachCoordinator {
     if (this.disabled) return { state: 'off', detail: 'reach disabled for this instance' }
     const mapping = readReachMapping(this.configRoot)
     if (!mapping || !mappingIsOurs(mapping, this.instanceId)) return { state: 'off' }
+    // Preference off but our mapping still recorded is the stranded shape, and
+    // it has to be derivable from the files alone — the process that failed the
+    // revoke may be long gone, and a fresh one must reach the same conclusion
+    // rather than reporting a mapping the operator already asked to remove.
+    const preference = readReachPreference(this.configRoot)
+    if (!preference?.enabled) {
+      return this.stranded(mapping.url, 'reach was turned off but the mapping was not removed')
+    }
     return { state: 'active', url: mapping.url }
   }
 
@@ -78,8 +92,11 @@ export class ReachCoordinator {
   /** Turns the opt-in off, and takes down our mapping if we hold one. */
   async disable(): Promise<ReachStatus> {
     if (this.disabled) return { state: 'off' }
+    // The preference records the operator's wish and is written first: that much
+    // is never in doubt, even when the provider will not cooperate.
     writeReachPreference(this.configRoot, { enabled: false, provider: this.provider.name })
-    await this.revokeOurMapping()
+    const outcome = await this.revokeOurMapping()
+    if (outcome.kind === 'failed') return this.stranded(outcome.url, outcome.detail)
     return { state: 'off' }
   }
 
@@ -149,6 +166,13 @@ export class ReachCoordinator {
     if (ours && ours.port === boundPort) {
       // Already correct. Confirming rather than re-establishing is what keeps
       // repeated reconciles from stacking duplicates.
+      //
+      // The origin still has to be registered: the mapping survives a restart on
+      // disk, the in-memory allowlist does not. Registering only on the establish
+      // path below tied the upgrade gate to which process created the mapping
+      // rather than to which mapping is live, so a reconciled reach reported
+      // active while every terminal upgrade from it was refused.
+      registerReachOrigin(ours.url)
       return { state: 'active', url: ours.url }
     }
 
@@ -184,17 +208,39 @@ export class ReachCoordinator {
     return { state: 'active', url: mapping.url }
   }
 
-  private async revokeOurMapping(): Promise<void> {
+  /**
+   * Takes our mapping down and says whether it actually went.
+   *
+   * The return value is the whole point. This used to be `Promise<void>`, so a
+   * revoke that threw was indistinguishable from one that worked, and every
+   * caller reported success either way.
+   */
+  private async revokeOurMapping(): Promise<RevokeOutcome> {
     const recorded = readReachMapping(this.configRoot)
-    if (!mappingIsOurs(recorded, this.instanceId) || !recorded) return
+    if (!mappingIsOurs(recorded, this.instanceId) || !recorded) return { kind: 'nothing' }
     try {
       await this.provider.revoke({ port: recorded.port, url: recorded.url })
     } catch (err) {
-      log.warn('reach', `revoke failed, leaving the record for reconcile: ${(err as Error).message}`)
-      return
+      const detail = (err as Error).message
+      log.warn('reach', `revoke failed, leaving the record for reconcile: ${detail}`)
+      // The record stays: it is how `tinstar doctor` finds the stranded mapping
+      // and how a retry knows which URL to take down.
+      return { kind: 'failed', url: recorded.url, detail }
     }
     unregisterReachOrigin(recorded.url)
     clearReachMapping(this.configRoot)
+    return { kind: 'revoked' }
+  }
+
+  /** The state a failed revoke leaves behind, phrased for an operator. */
+  private stranded(url: string, detail: string): ReachStatus {
+    return {
+      state: 'stranded',
+      url,
+      detail: `${detail} — ${this.provider.name} may still serve ${url}. `
+        + 'Re-run `tinstar reach off` once the provider is reachable, or run '
+        + '`tinstar doctor` to see the current exposure.',
+    }
   }
 
   private refuse(detail: string): ReachStatus {
