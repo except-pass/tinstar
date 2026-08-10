@@ -288,8 +288,8 @@ async function uninstallService() {
 export function installReachGrant({ port }) {
   const tailscalePath = '/usr/bin/tailscale'
   if (!existsSync(tailscalePath)) {
-    console.log(`${DIM}tailscale not installed — skipping the reach privilege grant.${RESET}`)
-    return
+    console.log(`${DIM}tailscale is not installed — reach needs it.${RESET}`)
+    return false
   }
   const user = userInfo().username
   console.log()
@@ -297,19 +297,31 @@ export function installReachGrant({ port }) {
   console.log()
 
   const rule = buildReachSudoersRule({ user, tailscalePath, port })
+  // Staged 0600, not 0440: a read-only staging file makes every retry fail on
+  // the leftover from the previous attempt. The INSTALLED drop-in is still
+  // 0440 root:root — `install -m 0440` sets that, which is what sudo requires.
+  const staged = join(getConfigRoot(), 'tinstar-reach.sudoers')
   try {
-    // visudo -cf validates before anything is installed: a malformed drop-in
-    // can lock every user out of sudo, so it is never written unchecked.
-    const staged = join(getConfigRoot(), 'tinstar-reach.sudoers')
     mkdirSync(getConfigRoot(), { recursive: true })
-    writeFileSync(staged, `${rule}\n`, { mode: 0o440 })
-    sh(`visudo -cf ${staged}`)
-    sh(`sudo install -m 0440 -o root -g root ${staged} ${REACH_SUDOERS_PATH}`)
-    unlinkSync(staged)
+    writeFileSync(staged, `${rule}\n`, { mode: 0o600 })
+    // Validated BEFORE anything reaches /etc/sudoers.d. A malformed drop-in
+    // there locks every user out of sudo, so it is never installed unchecked.
+    // argv form throughout: a config root containing a space or a shell
+    // metacharacter must not be able to reshape a sudo command line.
+    execFileSync('visudo', ['-cf', staged], { stdio: 'inherit' })
+    execFileSync(
+      'sudo',
+      ['install', '-m', '0440', '-o', 'root', '-g', 'root', staged, REACH_SUDOERS_PATH],
+      { stdio: 'inherit' },
+    )
     console.log(`${GREEN}✓${RESET} installed ${REACH_SUDOERS_PATH}`)
+    return true
   } catch (err) {
     console.log(`${YELLOW}!${RESET} reach privilege grant not installed: ${err.message}`)
-    console.log(`${DIM}Reach will refuse with a named reason until it is. Re-run install-service to retry.${RESET}`)
+    console.log(`${DIM}Reach cannot establish until it is. Re-run \`tinstar reach on\` to retry.${RESET}`)
+    return false
+  } finally {
+    try { unlinkSync(staged) } catch { /* never staged, or already gone */ }
   }
 }
 
