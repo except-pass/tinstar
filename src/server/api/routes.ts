@@ -71,11 +71,13 @@ import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coor
 import type { SurfaceComposeCoordinator } from '../surfaces/surface-compose-coordinator'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
+import { buildRunAuthoringContext, buildRunAuthoringSurface } from '../surfaces/run-authoring-context'
 import { SurfaceService } from '../surfaces/surface-service'
-import { parseSlateFileLocator, slateSourceAdapters } from '../surfaces/slate-source'
+import { parseSlateFileLocator, slateSourceAdapters, SLATE_DIR_PARTS } from '../surfaces/slate-source'
 import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
+import { validateExplicitWorkPrompt } from '../../slate/objective'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -109,7 +111,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
-import { handleSurfaceRoutes, handleRefreshIntent } from './surfaceRoutes'
+import { handleSurfaceRoutes, handleRefreshIntent, resolveActor } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 import {
@@ -118,6 +120,7 @@ import {
   ProviderCapabilityError,
   providerTelemetryEnabled,
   requireProviderCapability,
+  validateProviderManagedInstructions,
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
@@ -476,6 +479,8 @@ interface CreateSessionParams {
   worktree?: boolean
   worktreePath?: string
   prompt?: string
+  /** Caller-authored work text only. Host persona/introduction prose never enters it. */
+  objective?: string
   skipPermissions?: boolean
   cliTemplate?: string
   taskId?: string
@@ -632,11 +637,13 @@ async function rollbackFailedSessionProvisioning(args: {
     previous: Worktree | null
     provisional: Worktree
   } | null
+  /** Canonical Surfaces created by this provisioning attempt, never historical aliases. */
+  provisionedSurfaceIds?: readonly string[]
 }): Promise<boolean> {
   const {
     cfg, sessDir, docStore, name, session, claimedPort,
     natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
-    createdWorktreeProject, worktreeEntityRollback,
+    createdWorktreeProject, worktreeEntityRollback, provisionedSurfaceIds = [],
   } = args
 
   // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
@@ -685,6 +692,32 @@ async function rollbackFailedSessionProvisioning(args: {
     name,
     resolvedNats,
   )
+  if (provisionedSurfaceIds.length > 0) {
+    const created = new Set(provisionedSurfaceIds)
+    const svc = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
+    const actor = { actor: { kind: 'process' as const, id: 'session-provisioning-rollback' } }
+    const roots = provisionedSurfaceIds
+      .map(id => docStore.getSurface(id))
+      .filter((surface): surface is NonNullable<typeof surface> => !!surface)
+      .filter(surface => surface.home.kind !== 'surface' || !created.has(surface.home.surfaceId))
+    for (const root of roots) {
+      const descendants = docStore.getSurfaceDescendants(root.id)
+        .map(surface => surface.id)
+        .filter(id => created.has(id))
+      try {
+        const deleted = await svc.delete(root.id, {
+          ...(descendants.length > 0 ? { descendants, disposition: 'delete-subtree' } : {}),
+        }, actor)
+        if (!deleted.ok) throw new Error(deleted.error.reason ?? deleted.error.message)
+        const purged = await svc.purge(root.id, {
+          ...(descendants.length > 0 ? { descendants } : {}),
+        }, actor)
+        if (!purged.ok) throw new Error(purged.error.reason ?? purged.error.message)
+      } catch (err) {
+        log.warn('sessions', `${name}: failed provisioning rollback could not purge Surface ${root.id}: ${(err as Error).message}`)
+      }
+    }
+  }
   try {
     docStore.deleteRun(name)
   } catch (err) {
@@ -1332,6 +1365,11 @@ async function createSessionInternal(
   if (typeof params.name !== 'string' || !params.name) {
     return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   }
+  const objective = validateExplicitWorkPrompt(params.objective, OBJECTIVE_MAX)
+  if (!objective.ok) {
+    return { ok: false, error: { code: 'INVALID_WORK_PROMPT', message: objective.message } }
+  }
+  params = { ...params, objective: objective.text }
   const reservation = reserveSessionName(
     ctx.sessDir,
     ctx.cfg.sessions.prefix,
@@ -1375,7 +1413,7 @@ async function createReservedSession(
 ): Promise<CreateSessionResult> {
   const {
     name, project, worktree = false, worktreePath,
-    prompt, skipPermissions = true, cliTemplate: cliTemplateId,
+    prompt, objective, skipPermissions = true, cliTemplate: cliTemplateId,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
     view, viewData, model: modelOverride, token: tokenOverride, focus,
     background = false
@@ -1386,6 +1424,10 @@ async function createReservedSession(
     natsTraffic, natsHealth,
   } = ctx
   const providerRegistry = ctx.providerRegistry ?? defaultProviderRegistry
+  const priorRunSurfaceIds = new Set(docStore.getSurfacesForRunAlias(name).map(surface => surface.id))
+  const provisionedSurfaceIds = (): string[] => docStore.getSurfacesForRunAlias(name)
+    .map(surface => surface.id)
+    .filter(id => !priorRunSurfaceIds.has(id))
 
   // This call already owns the in-flight reservation; only durable state can
   // conflict here.
@@ -1422,6 +1464,7 @@ async function createReservedSession(
   let provider: TerminalProviderAdapter
   try {
     provider = providerRegistry.resolveTemplate(resolvedTemplate)
+    validateProviderManagedInstructions(provider)
     if (nats?.enabled) requireProviderCapability(provider, 'nats')
     // This is also the fail-fast validation for an explicit telemetry:true on a
     // provider that cannot supply the environment transport.
@@ -1589,7 +1632,12 @@ async function createReservedSession(
       appendSystemPrompt: appendSystemPrompt ?? null,
     })
     sessionPort = result.port
-    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    updateSession(sessDir, name, {
+      port: sessionPort,
+      ttydPid: result.ttydPid ?? null,
+      state: 'running',
+      managedInstructions: result.managedInstructions,
+    })
     const ttydGeneration = currentSessionBackendGeneration(sessDir, name)
     tmuxBackend.onTtydRestart(name, (newPid) => {
       persistTtydRestartForSessionIncarnation(
@@ -1615,6 +1663,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -1678,6 +1727,17 @@ async function createReservedSession(
       ...(focus === false || background ? { focusOnCreate: false } : {}),
     })
 
+    if (objective) {
+      const saved = await new RunSlateBridge(
+        docStore,
+        new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() }),
+      ).upsertUserPoint(runId, {
+        id: OBJECTIVE_POINT_ID,
+        headline: objective,
+      }, { kind: 'human', id: 'session-bootstrap' }, { claim: true })
+      if (!saved.point) throw new Error(`could not persist session Objective: ${saved.reason ?? 'unknown error'}`)
+    }
+
     registerLaunchedSession(
       { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
       name,
@@ -1703,6 +1763,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -4756,13 +4817,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // persisted snapshot; oversize is refused with a 413.
   const SLATE_HEADLINE_MAX = 200
   const SLATE_CONTENT_MAX = 32 * 1024
+  const SLATE_AUTHORING_KEY_MAX = 200
+  const SLATE_AUTHORING_REQUEST_MAX = 8 * 1024
 
   // Every run-scoped Slate write goes through the compatibility alias to the ONE
   // canonical Surface it addresses (plan KTD3/U2). Built per request because the
   // service and the bridge hold no per-call state; the durable ordering that does
   // matter is enforced by the sidecar's transaction queue, not by object identity.
-  const slateBridge = (): RunSlateBridge =>
-    new RunSlateBridge(ctx.docStore, new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() }))
+  const slateService = (): SurfaceService =>
+    new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+  const slateBridge = (): RunSlateBridge => new RunSlateBridge(ctx.docStore, slateService())
+  const slateInteractionOwner = (runId: string, localId: string) =>
+    buildRunAuthoringSurface(ctx.docStore, slateService(), runId, localId, { kind: 'session', id: runId })
 
   /** The acting principal for a run-scoped Slate write. The trusted-local human in
    *  this release (KTD6); an agent- or process-attributed reply carries its own. */
@@ -4771,10 +4837,125 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       : author === 'process' ? { kind: 'process', id: 'run-workspace' }
         : { kind: 'session', id: 'run-workspace' }
 
+  /**
+   * Agent authoring is run-scoped by construction. These headers are trusted-local
+   * routing identity, not authentication; checking them prevents accidental writes
+   * to a sibling run without pretending a local process cannot spoof them.
+   */
+  const runAuthoringPrincipal = (
+    runId: string,
+  ): { actor: { kind: 'session'; id: string }; session: Session } | null => {
+    const actor = resolveActor(req)
+    if (actor.kind !== 'session' || actor.id !== runId) {
+      fail(
+        res,
+        'FORBIDDEN',
+        'Slate authoring requires a session principal matching the target Run',
+        { status: 403 },
+      )
+      return null
+    }
+    const sessionsDir = ctx.sessionConfig?.dirs.sessions
+    const session = sessionsDir ? getSession(sessionsDir, actor.id) : null
+    if (!session) {
+      fail(res, 'FORBIDDEN', `session principal '${actor.id}' is not a managed session`, { status: 403 })
+      return null
+    }
+    return { actor: { kind: 'session', id: actor.id }, session }
+  }
+
   // Append a reply to a point's thread. REOPEN-ON-REPLY lives inside the bridge.
   const appendSlateReply = async (runId: string, pid: string, reply: Reply): Promise<Point | undefined> => {
     const result = await slateBridge().appendReply(runId, pid, reply.text, slateActor(reply.author))
     return result.point
+  }
+
+  // GET /api/runs/:id/slate/authoring/context — the run-scoped work-object index
+  // a foreground agent reads before deciding whether to amend or reserve.
+  if (method === 'GET' && /^\/api\/runs\/[^/]+\/slate\/authoring\/context$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/context'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    ok(res, buildRunAuthoringContext(ctx.docStore, slateService(), runId, principal.actor))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/authoring/reservations — reserve the same durable,
+  // visible compose-card lifecycle as Add surface, but return its destination to
+  // the foreground agent without dispatching an author or prompting the run.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/authoring\/reservations$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/reservations'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    readBody(req).then(async raw => {
+      let parsed: { key?: unknown; label?: unknown; request?: unknown; recipe?: unknown }
+      try { parsed = JSON.parse(raw) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      const unknownField = Object.keys(parsed).find(field => !['key', 'label', 'request', 'recipe'].includes(field))
+      if (unknownField) {
+        fail(res, 'INVALID_PARAMS', `${unknownField} is not accepted by Slate authoring reservations`); return
+      }
+      const key = typeof parsed.key === 'string' ? parsed.key.trim() : ''
+      const label = typeof parsed.label === 'string' ? parsed.label.trim() : ''
+      const request = typeof parsed.request === 'string' ? parsed.request.trim() : ''
+      const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
+      if (!key || key.length > SLATE_AUTHORING_KEY_MAX) {
+        fail(res, 'INVALID_PARAMS', `key must be a non-empty string of at most ${SLATE_AUTHORING_KEY_MAX} characters`); return
+      }
+      if (!label || label.length > SLATE_HEADLINE_MAX) {
+        fail(res, 'INVALID_PARAMS', `label must be a non-empty string of at most ${SLATE_HEADLINE_MAX} characters`); return
+      }
+      if (!request) {
+        fail(res, 'INVALID_PARAMS', 'request must be a non-empty string'); return
+      }
+      if (request.length + recipe.length > SLATE_AUTHORING_REQUEST_MAX) {
+        fail(res, 'BAD_REQUEST', `authoring request exceeds ${SLATE_AUTHORING_REQUEST_MAX} characters`, { status: 413 }); return
+      }
+      const worktree = principal.session.workspace?.path
+      if (!worktree) {
+        fail(res, 'CONFLICT', `Run ${runId} has no writable worktree for Slate authoring`); return
+      }
+      let reserved: Awaited<ReturnType<RunSlateBridge['reserveComposition']>>
+      try {
+        reserved = await slateBridge().reserveComposition(runId, {
+          label,
+          request: { freeform: request, ...(recipe ? { recipe } : {}) },
+          worktree,
+          timeoutMs: ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000,
+        }, {
+          actor: principal.actor,
+          idempotencyKey: key,
+        })
+      } catch (error) {
+        console.error('Slate authoring reservation failed:', error)
+        fail(res, 'INTERNAL', 'could not reserve the Surface')
+        return
+      }
+      if (!reserved.reservation) {
+        fail(res, 'CONFLICT', `could not reserve the Surface: ${reserved.reason ?? 'unknown error'}`); return
+      }
+      const card = reserved.reservation
+      const deadlineAt = card.surface.creation?.deadlineAt
+      if (deadlineAt === undefined) {
+        fail(res, 'INTERNAL', 'reserved Surface is missing its authoring deadline')
+        return
+      }
+      ok(res, {
+        surfaceId: card.surface.id,
+        localId: card.localId,
+        file: join(worktree, ...SLATE_DIR_PARTS, card.file),
+        attemptToken: card.token,
+        deadlineAt,
+        replayed: card.replayed,
+      }, { status: card.replayed ? 200 : 201 })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
   }
 
   // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.
@@ -5051,11 +5232,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-answer'), author: 'user', text: parts.join(' — '), createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       const delivered = await deliverSlatePrompt(
         ctx,
         runId,
-        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()),
+        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase(), owner),
         requestGeneration,
       )
       ok(res, { point: updated, delivered })
@@ -5098,10 +5280,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-reply'), author, text: trimmed, createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       // Only a USER reply delivers — the anti-loop guard (R15).
       const delivered = author === 'user'
-        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()), requestGeneration)
+        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase(), owner), requestGeneration)
         : false
       ok(res, { point: updated, reply, delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
@@ -5957,15 +6140,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        const explicitPrompt = validateExplicitWorkPrompt(prompt, OBJECTIVE_MAX)
+        if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
         const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
-          resolvedHand ? resolveHandPrompts(resolvedHand, prompt) : { initialPrompt: prompt, systemPrompt: null }
+          resolvedHand
+            ? resolveHandPrompts(resolvedHand, explicitPrompt.text)
+            : { initialPrompt: explicitPrompt.text, systemPrompt: null }
 
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
 
         try {
           const result = await createSessionInternal({
-            name, project, worktree, worktreePath, prompt: handInitialPrompt, skipPermissions,
+            name, project, worktree, worktreePath, prompt: handInitialPrompt,
+            objective: explicitPrompt.text, skipPermissions,
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
@@ -5975,6 +6164,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!result.ok) {
             switch (result.error.code) {
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'INVALID_WORK_PROMPT': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
@@ -6023,8 +6213,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
           const resolvedProject = settings?.resolved?.project
 
+          const explicitPrompt = validateExplicitWorkPrompt(overrides.prompt, OBJECTIVE_MAX)
+          if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
           const params: CreateSessionParams = {
             ...overrides,
+            prompt: explicitPrompt.text,
+            objective: explicitPrompt.text,
             project: overrides.project ?? resolvedProject,
             taskId,
             epicId: overrides.epicId ?? task.epicId,
@@ -6049,6 +6244,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
             if (result.error.code === 'MISSING_NAME') return fail(res, 'BAD_REQUEST', result.error.message)
+            if (result.error.code === 'INVALID_WORK_PROMPT') return fail(res, 'BAD_REQUEST', result.error.message)
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
             if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
               return fail(res, 'BAD_REQUEST', result.error.message)
@@ -6301,7 +6497,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 if (claimedPort) tmuxBackend.releasePort(port)
                 throw err
               }
-              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+              updateSession(sessDir, session.name, {
+                port: result.port,
+                ttydPid: result.ttydPid ?? null,
+                managedInstructions: result.managedInstructions,
+              })
               const ttydGeneration = currentSessionBackendGeneration(
                 sessDir,
                 session.name,
@@ -6843,7 +7043,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   provider: reviveProvider,
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
                 })
-                updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
+                updateSession(sessDir, name, {
+                  port: startResult.port,
+                  ttydPid: startResult.ttydPid ?? null,
+                  managedInstructions: startResult.managedInstructions,
+                })
                 const ttydGeneration = currentSessionBackendGeneration(
                   sessDir,
                   name,
@@ -7203,6 +7407,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         provider = (ctx.providerRegistry ?? defaultProviderRegistry)
           .resolveTemplate(resolvedTemplate)
         providerTelemetryEnabled(provider, resolvedTemplate)
+        validateProviderManagedInstructions(provider)
       } catch (err) {
         return fail(res, 'BRIDGE_UNAVAILABLE', (err as Error).message)
       }
@@ -7516,7 +7721,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           appendSystemPrompt: handSystemPrompt,
         })
         const sessionPort = result.port
-        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
+        updateSession(sessDir, spawnedName, {
+          port: sessionPort,
+          ttydPid: result.ttydPid ?? null,
+          state: 'running',
+          appendSystemPrompt: handSystemPrompt,
+          managedInstructions: result.managedInstructions,
+        })
         const ttydGeneration = currentSessionBackendGeneration(
           sessDir,
           spawnedName,

@@ -94,6 +94,8 @@ describe('the happy path', () => {
       source: { state: 'present', generation: 1 },
     })
 
+    await h.svc.appendThread(id, { text: 'Please keep this question visible.' }, ctx(2_500))
+
     const refreshed = await h.run(epoch([entry(localId, 'One open point', {
       file: `${localId}.json`, attemptToken: 'current-token',
     })]), 3_000)
@@ -101,6 +103,10 @@ describe('the happy path', () => {
     expect(h.surface(localId)).toMatchObject({
       content: { headline: 'One open point' },
       creation: { phase: 'ready', token: 'current-token' },
+      thread: {
+        status: 'discussing',
+        replies: [{ text: 'Please keep this question visible.' }],
+      },
       source: { generation: 2 },
     })
 

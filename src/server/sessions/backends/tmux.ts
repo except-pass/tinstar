@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
-import type { Session, SessionNats } from '../session'
+import type { ManagedInstructionsReceipt, Session, SessionNats } from '../session'
 import { portWindowsOverlap, type TinstarConfig, type CliTemplate, type PortWindow } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { serializeByKey } from './serializeByKey'
@@ -26,10 +26,16 @@ import { log } from '../../logger'
 import {
   defaultProviderRegistry,
   providerTelemetryEnabled,
+  prepareProviderManagedInstructions,
   requireProviderCapability,
   type ProviderTelemetryLaunchContext,
   type TerminalProviderAdapter,
+  validateProviderManagedInstructions,
 } from '../../providers/lifecycle'
+import {
+  composeSlateFirstManagedInstructions,
+  SLATE_FIRST_CONTRACT_VERSION,
+} from '../../../slate/managed-contract'
 import { CODEX_OTEL_LOGS_PORT } from '../../observability/ports'
 import { natsBrokerUrl } from '../../nats/url'
 import {
@@ -561,6 +567,8 @@ export function buildAgentCommand(opts: {
   /** Provider-owned OTel flags, kept out of user config and injected before the prompt. */
   telemetry?: ProviderTelemetryLaunchContext | null
   appendSystemPrompt?: string | null
+  /** Opaque provider-owned standing-instruction flags prepared before assembly. */
+  managedInstructionFlags?: readonly string[]
   agent?: AgentDef | null
   /** Per-session model override (Switchboard). Appends `--model <modelOverride>`
    * to the resolved command, overriding the template's baked model. Null/absent
@@ -632,6 +640,9 @@ export function buildAgentCommand(opts: {
         preFlags.push(...telemetry.launchFlags(opts.telemetry))
       }
     }
+    if (opts.managedInstructionFlags) {
+      preFlags.push(...opts.managedInstructionFlags)
+    }
     // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
@@ -658,6 +669,9 @@ export function buildAgentCommand(opts: {
         preFlags.push(...telemetry.launchFlags(opts.telemetry))
       }
     }
+    if (opts.managedInstructionFlags) {
+      preFlags.push(...opts.managedInstructionFlags)
+    }
     if (opts.appendSystemPrompt) {
       preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
     }
@@ -672,6 +686,55 @@ export function buildAgentCommand(opts: {
 
   const flags = preFlags.length > 0 ? ' ' + preFlags.join(' ') : ''
   return head + flags + promptTail
+}
+
+export function prepareManagedInstructionsForLaunch(opts: {
+  config: TinstarConfig
+  provider: TerminalProviderAdapter
+  sessionName: string
+  template?: CliTemplate | null
+  resume: boolean
+  appendSystemPrompt?: string | null
+  agent?: AgentDef | null
+}): { flags: readonly string[]; receipt: ManagedInstructionsReceipt } {
+  const support = opts.provider.terminal.capabilities.managedInstructions
+  if (support.state === 'unsupported') {
+    if (!opts.resume) requireProviderCapability(opts.provider, 'managedInstructions')
+    log.warn(
+      'tmux',
+      `${opts.sessionName}: resumed without Slate-first standing instructions: ${support.reason}`,
+    )
+    return {
+      flags: [],
+      receipt: {
+        version: SLATE_FIRST_CONTRACT_VERSION,
+        mechanism: 'unsupported',
+        status: 'unsupported',
+      },
+    }
+  }
+
+  validateProviderManagedInstructions(opts.provider)
+
+  const commandTemplate = opts.template
+    ? (opts.resume ? opts.template.resumeCmd : opts.template.startCmd)
+    : ''
+  const personaIsInterpolated = opts.agent != null
+    && /\{agent(Name|Description|Prompt|Json)\}/.test(commandTemplate)
+  const roleInstructions = personaIsInterpolated ? null : opts.appendSystemPrompt
+  const prepared = prepareProviderManagedInstructions(opts.provider, {
+    sessionDir: join(opts.config.dirs.sessions, opts.sessionName),
+    version: SLATE_FIRST_CONTRACT_VERSION,
+    content: composeSlateFirstManagedInstructions(roleInstructions),
+  })
+  return {
+    flags: prepared.launchFlags,
+    receipt: {
+      version: prepared.version,
+      mechanism: prepared.mechanism,
+      status: 'delivered',
+    },
+  }
 }
 
 // --- Tmux operations ---
@@ -788,7 +851,7 @@ export async function createTmuxSession(
     appendSystemPrompt?: string | null
     agent?: AgentDef | null
   },
-): Promise<{ port: number; ttydPid: number | undefined }> {
+): Promise<{ port: number; ttydPid: number | undefined; managedInstructions: ManagedInstructionsReceipt }> {
   const provider = opts.provider ?? defaultProviderRegistry.resolveTemplate(opts.template)
   const tmuxName = tmuxSessionName(config, opts.session.name)
 
@@ -914,6 +977,15 @@ export async function createTmuxSession(
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
 
+  const managedInstructions = prepareManagedInstructionsForLaunch({
+    config,
+    provider,
+    sessionName: opts.session.name,
+    template: opts.template,
+    resume: opts.resume ?? false,
+    appendSystemPrompt: opts.appendSystemPrompt,
+    agent: opts.agent,
+  })
   const agentCmd = buildAgentCommand({
     provider,
     template: opts.template,
@@ -923,7 +995,10 @@ export async function createTmuxSession(
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
     nats: natsOpts,
     telemetry: providerTelemetryCommandOptions(opts.session.name, provider, opts.template),
-    appendSystemPrompt: opts.appendSystemPrompt,
+    appendSystemPrompt: provider.terminal.capabilities.managedInstructions.state === 'supported'
+      ? null
+      : opts.appendSystemPrompt,
+    managedInstructionFlags: managedInstructions.flags,
     agent: opts.agent,
     modelOverride: opts.session.modelOverride,
   })
@@ -949,7 +1024,7 @@ export async function createTmuxSession(
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
 
-  return { port: opts.port, ttydPid }
+  return { port: opts.port, ttydPid, managedInstructions: managedInstructions.receipt }
 }
 
 interface StartTmuxSessionDeps {
@@ -970,7 +1045,7 @@ export async function startTmuxSession(
     agent?: AgentDef | null
   },
   deps: StartTmuxSessionDeps = startTmuxSessionDeps,
-): Promise<{ port: number; ttydPid: number | undefined }> {
+): Promise<{ port: number; ttydPid: number | undefined; managedInstructions: ManagedInstructionsReceipt }> {
   const provider = opts.provider ?? defaultProviderRegistry.resolveSession(
     opts.session,
     opts.template,
@@ -987,10 +1062,18 @@ export async function startTmuxSession(
   // Re-establish the exact-target terminal surface because the prior ttyd may
   // have exited independently while the agent survived.
   if (await getTmuxAgentIdentity(config, opts.session.name) !== null) {
-    return deps.reattachTmuxSession(config, {
+    const attached = await deps.reattachTmuxSession(config, {
       session: opts.session,
       port: opts.port,
     })
+    return {
+      ...attached,
+      managedInstructions: opts.session.managedInstructions ?? {
+        version: SLATE_FIRST_CONTRACT_VERSION,
+        mechanism: 'unknown-existing-process',
+        status: 'unsupported',
+      },
+    }
   }
 
   // A restart in the same pane keeps the shell PID, so give every managed
@@ -1057,6 +1140,15 @@ export async function startTmuxSession(
     autoAcceptNatsWarning = nats.command.autoAcceptWarning
   }
 
+  const managedInstructions = prepareManagedInstructionsForLaunch({
+    config,
+    provider,
+    sessionName: opts.session.name,
+    template: opts.template,
+    resume: true,
+    appendSystemPrompt: opts.appendSystemPrompt,
+    agent: opts.agent,
+  })
   const agentCmd = buildAgentCommand({
     provider,
     template: opts.template,
@@ -1065,7 +1157,10 @@ export async function startTmuxSession(
     resume: true,
     nats: natsOpts,
     telemetry: providerTelemetryCommandOptions(opts.session.name, provider, opts.template),
-    appendSystemPrompt: opts.appendSystemPrompt,
+    appendSystemPrompt: provider.terminal.capabilities.managedInstructions.state === 'supported'
+      ? null
+      : opts.appendSystemPrompt,
+    managedInstructionFlags: managedInstructions.flags,
     agent: opts.agent,
     modelOverride: opts.session.modelOverride,
   })
@@ -1091,7 +1186,7 @@ export async function startTmuxSession(
     port: opts.port,
     sessionName: opts.session.name,
   })
-  return { port: opts.port, ttydPid }
+  return { port: opts.port, ttydPid, managedInstructions: managedInstructions.receipt }
 }
 
 async function syncProviderTelemetryEnvironment(

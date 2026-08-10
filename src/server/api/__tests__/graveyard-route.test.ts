@@ -440,6 +440,11 @@ describe('GET/POST /api/graveyard', () => {
     const start = vi.spyOn(tmuxBackend, 'startTmuxSession').mockResolvedValue({
       port: 6123,
       ttydPid: 4242,
+      managedInstructions: {
+        version: 'slate-first-live-authoring/v1',
+        mechanism: 'claude-append-system-prompt',
+        status: 'delivered',
+      },
     })
     const onRestart = vi.spyOn(tmuxBackend, 'onTtydRestart').mockImplementation(() => {})
     try {

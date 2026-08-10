@@ -211,13 +211,26 @@ describe('session-scoped tmux targets', () => {
         adapter: 'claude',
         state: 'running',
         ttydPid: 7373,
+        managedInstructions: {
+          version: 'slate-first-live-authoring/v1',
+          mechanism: 'claude-append-system-prompt',
+          status: 'delivered',
+        },
       },
       secrets: {},
       port: 6123,
       provider: {} as never,
     }, {
       reattachTmuxSession: ensureTtyd,
-    })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
+    })).resolves.toEqual({
+      port: 6123,
+      ttydPid: 8383,
+      managedInstructions: {
+        version: 'slate-first-live-authoring/v1',
+        mechanism: 'claude-append-system-prompt',
+        status: 'delivered',
+      },
+    })
     expect(ensureTtyd).toHaveBeenCalledWith(config, {
       session: expect.objectContaining({ name: 'parent' }),
       port: 6123,

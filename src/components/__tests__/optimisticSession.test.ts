@@ -6,6 +6,7 @@ import {
   reconcileOptimisticSessionFailure,
 } from '../optimisticSession'
 import { applyDelta } from '../../hooks/useServerEvents'
+import { OBJECTIVE_POINT_ID } from '../../domain/types'
 
 const baseState = () => ({
   activeSpaceId: 'space-1', spaces: [], initiatives: [], epics: [], tasks: [], worktrees: [],
@@ -37,6 +38,12 @@ describe('optimistic session projection', () => {
       taskId: '',
       spaceId: 'space-1',
       createdAt: '2026-08-07T12:00:00.000Z',
+      slate: [{
+        id: OBJECTIVE_POINT_ID,
+        kind: 'objective',
+        author: 'user',
+        headline: 'start here',
+      }],
     })
   })
 
@@ -104,5 +111,41 @@ describe('optimistic session projection', () => {
       port: 8681,
     }
     expect(mergeOptimisticSessionRuns([live], [optimistic])).toEqual([live])
+  })
+
+  it('keeps the optimistic Objective through an early backend delta', () => {
+    const optimistic = buildOptimisticSessionRun({ id: 'fresh-run', prompt: 'start here' })
+    const backendRun = {
+      ...optimistic,
+      slate: undefined,
+      status: 'running' as const,
+      backend: 'tmux' as const,
+      port: 8681,
+    }
+
+    const [merged] = mergeOptimisticSessionRuns([backendRun], [optimistic])
+    expect(merged).toMatchObject({
+      backend: 'tmux',
+      slate: [{ id: OBJECTIVE_POINT_ID, headline: 'start here' }],
+    })
+  })
+
+  it('replaces the optimistic Objective only after the canonical one arrives', () => {
+    const optimistic = buildOptimisticSessionRun({ id: 'fresh-run', prompt: 'start here' })
+    const canonicalObjective = {
+      ...optimistic.slate![0]!,
+      rev: 2,
+      headline: 'start here',
+      amendedAt: Date.now() + 1,
+    }
+    const backendRun = {
+      ...optimistic,
+      slate: [canonicalObjective],
+      status: 'running' as const,
+      backend: 'tmux' as const,
+      port: 8681,
+    }
+
+    expect(mergeOptimisticSessionRuns([backendRun], [optimistic])).toEqual([backendRun])
   })
 })

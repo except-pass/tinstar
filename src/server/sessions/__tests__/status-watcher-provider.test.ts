@@ -28,6 +28,7 @@ describe('StatusWatcher provider transcripts', () => {
     const capabilities: TerminalProviderAdapter['terminal']['capabilities'] = {
       nats: { state: 'unsupported', reason: 'not implemented' },
       telemetry: { state: 'unsupported', reason: 'not implemented' },
+      managedInstructions: { state: 'unsupported', reason: 'not implemented' },
     }
     const stalledDiscover = vi.fn(() => new Promise<string | null>(() => undefined))
     const stalled: TerminalProviderAdapter = {
@@ -104,6 +105,7 @@ describe('StatusWatcher provider transcripts', () => {
     const terminalCapabilities: TerminalProviderAdapter['terminal']['capabilities'] = {
       nats: { state: 'unsupported', reason: 'not implemented' },
       telemetry: { state: 'unsupported', reason: 'not implemented' },
+      managedInstructions: { state: 'unsupported', reason: 'not implemented' },
     }
     const broken: TerminalProviderAdapter = {
       provider: { id: 'broken', label: 'Broken CLI' },
@@ -181,6 +183,7 @@ describe('StatusWatcher provider transcripts', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
         },
         defaultTelemetry: false,
         transcript: {
@@ -243,6 +246,7 @@ describe('StatusWatcher provider transcripts', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
         },
         defaultTelemetry: false,
         transcript: {
@@ -299,6 +303,7 @@ describe('StatusWatcher provider transcripts', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
         },
         defaultTelemetry: false,
         transcript: {
@@ -360,6 +365,7 @@ describe('StatusWatcher provider transcripts', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
         },
         defaultTelemetry: false,
         transcript: {
@@ -414,6 +420,7 @@ describe('StatusWatcher provider transcripts', () => {
         capabilities: {
           nats: { state: 'unsupported', reason: 'not implemented' },
           telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
         },
         defaultTelemetry: false,
         transcript: {

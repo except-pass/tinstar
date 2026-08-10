@@ -1,4 +1,5 @@
 import type { Run } from '../domain/types'
+import { buildObjectiveSurface, hasCanonicalObjective } from '../slate/objective'
 
 export type WorktreeMode = 'none' | 'new' | 'existing'
 
@@ -27,6 +28,7 @@ export function buildOptimisticSessionRun(
   createdAt = new Date().toISOString(),
 ): Run {
   const usesNewWorktree = intent.worktreeMode === 'new'
+  const prompt = intent.prompt?.trim()
   return {
     id: intent.id,
     color: intent.color,
@@ -54,6 +56,7 @@ export function buildOptimisticSessionRun(
     backend: null,
     backendInfo: 'Session provisioning…',
     view: intent.view,
+    ...(prompt ? { slate: [buildObjectiveSurface(prompt, createdAt)] } : {}),
   }
 }
 
@@ -113,9 +116,17 @@ export function mergeOptimisticSessionRuns(
 ): Run[] {
   const merged = new Map(optimisticRuns.map(run => [run.id, run]))
   for (const serverRun of serverRuns) {
-    if (serverRun.backend || !merged.has(serverRun.id)) {
-      merged.set(serverRun.id, serverRun)
+    const optimistic = merged.get(serverRun.id)
+    if (!optimistic) { merged.set(serverRun.id, serverRun); continue }
+    const optimisticObjective = optimistic.slate?.find(surface => surface.kind === 'objective')
+    if (optimisticObjective && !hasCanonicalObjective(serverRun)) {
+      merged.set(serverRun.id, {
+        ...serverRun,
+        slate: [optimisticObjective, ...(serverRun.slate ?? [])],
+      })
+      continue
     }
+    if (serverRun.backend) merged.set(serverRun.id, serverRun)
   }
   return [...merged.values()]
 }
