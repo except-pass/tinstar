@@ -1,6 +1,6 @@
 ---
 name: slate-surface
-description: Author a run's Slate — the per-run region of its workspace card where you paint small interactive surfaces (an open-points list, a diagram, a form, a live progress card) by writing files into your worktree. Use when you want to show the user something richer than a line of transcript for THIS run — a decision to make, a picture to react to, the live state of a long command. You author by writing `.tinstar/slate/*.json`; the user answers back over HTTP and you receive their reply as an injected note.
+description: Author a run's Slate — the per-run region of its workspace card where you maintain small interactive Surfaces (an open-points list, a diagram, a form, a live progress card). Use when the user must act, judge the result, or revisit an evolving work object. Inspect the run's authoring context first, amend its existing owner when present, and reserve a visible card before authoring a distinct foreground work object.
 ---
 
 # The Slate
@@ -19,22 +19,89 @@ It is **not the Roundup**. The Roundup (see the `roundup-notices` skill) is one
 Slate surface when the detail belongs inside this run's own workspace. Neither replaces
 the other.
 
-## How authoring works: files in, HTTP out
+## How authoring works: inspect, amend or reserve, then write
 
 The Slate is a **two-way** surface with a deliberate split:
 
-- **You author by writing files** (file-in). You write a JSON file into
-  `.tinstar/slate/` in your worktree. A server watcher validates it and projects it
-  onto your run's card live. There is **no Tinstar URL to author a surface** — a plain
-  file write is the whole authoring path.
+- **You inspect and reserve over HTTP, then author at the returned target.** Read the
+  run-scoped authoring context before creating anything. If a Surface already owns the
+  subject, amend its returned file or revision-gated API target. For a genuinely
+  distinct work object, reserve a visible saved card, then atomically write the
+  assigned file, local id, and attempt token.
 - **The user answers over HTTP** (HTTP-out). When the user clicks a control, submits a
   form, replies on a thread, or adds their own point, their browser POSTs to a
   run-scoped endpoint. The server persists it, then **injects a note into your session**
   so you learn about it. You reply on the thread with a small `curl` (baked into the
   note you receive).
 
-So: **surfaces are files you write; answers are notes you receive.** You almost never
-POST to create a surface — you write a file.
+Direct unreserved `.tinstar/slate/*.json` files remain valid for scripts and older
+automation. For new interactive foreground work, reserve first: the saved shell appears
+immediately and can fail or recover in place if the first content write is invalid,
+late, or interrupted.
+
+## Start with the run's authoring context
+
+Use your managed session name as both the run id and routing actor:
+
+```bash
+TINSTAR_URL="${TINSTAR_DASHBOARD_URL:-http://localhost:5273}"
+RUN_ID="$TINSTAR_SESSION_NAME"
+curl -s "$TINSTAR_URL/api/runs/$RUN_ID/slate/authoring/context" \
+  -H "x-tinstar-actor: $RUN_ID" \
+  -H 'x-tinstar-actor-kind: session'
+```
+
+The response separates the user's `objective` from `surfaces`. Each Surface includes
+its canonical `surfaceId`, run-local `localId`, creation/freshness state, effective
+capabilities, and one exact `target`:
+
+- `slate-file`: atomically rewrite `file`, keeping `localId`; include `attemptToken`
+  while the card is still authoring.
+- `canonical-content`: `PATCH` the returned `endpoint` with `expectedRev`.
+- `unavailable`: do not guess a write path; the response says why it is blocked.
+
+Choose based on the work object, not the conversational turn. If an existing Surface
+owns the subject, amend that target and preserve its identity and thread. Reserve only
+when the object is genuinely distinct and Surface-worthy.
+
+## Reserve a visible card for a distinct work object
+
+Pick a stable `key` for the work object, not for this attempt or turn. Reuse that same
+key after a lost response. A new key means a new card.
+
+```bash
+curl -s -X POST "$TINSTAR_URL/api/runs/$RUN_ID/slate/authoring/reservations" \
+  -H 'Content-Type: application/json' \
+  -H "x-tinstar-actor: $RUN_ID" \
+  -H 'x-tinstar-actor-kind: session' \
+  -d '{"key":"open-points","label":"Open points","request":"Keep the unresolved questions current as the work evolves."}'
+```
+
+The first response is `201`; a retry of the same key is `200` with `replayed:true`.
+Both return the same `surfaceId`, `localId`, absolute `file`, `attemptToken`, and
+`deadlineAt`. Write only that assigned destination. The reservation itself never
+prompts this session, dispatches another author, or runs a refresh recipe.
+
+The first valid write uses the returned values exactly:
+
+```json
+{
+  "id": "<returned localId>",
+  "attemptToken": "<returned attemptToken>",
+  "headline": "Open points",
+  "content": { "root": "root", "components": [
+    { "id": "root", "component": "Text", "variant": "body", "text": "No open points." }
+  ] }
+}
+```
+
+Write that JSON to the returned absolute `file` with the temp-file-and-rename pattern
+below. After the watcher accepts it, the same card becomes ready. Later rewrites keep
+the same `id` and file; they may retain the token, but never substitute a token from an
+older retry.
+
+Do **not** use `POST /api/runs/:id/slate/compose` or the user's add-point endpoint for
+agent live authoring: those are user interaction paths and may prompt or dispatch work.
 
 ## Write a surface file
 
@@ -55,6 +122,7 @@ Each entry is a **point** — the primitive the Slate is built from:
 |---|---|---|---|
 | `headline` | **yes** | file | the one-line title of the point (non-empty) |
 | `id` | recommended | file | **stable** point identity — reuse it so a rewrite *amends* instead of duplicating |
+| `attemptToken` | assigned only | host | for a reserved card, copy the returned token exactly until the first valid write makes the card ready; omit it for direct file authoring |
 | `content` | no | file | the surface body: an **A2UI component tree** (see below) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` — attach the point to a decision or another surface by id |
@@ -324,14 +392,12 @@ go through. Use it when the file path cannot express what you want:
   it, and whether the host thinks it is still current;
 - you are not in a worktree with a `.tinstar/slate/` directory at all.
 
-**Where a canonical Surface actually shows up, today.** Be honest with yourself
-about this before you reach for `create`: a Surface created through the API is
-real, persisted, and survives restart — but it is **not yet rendered anywhere the
-user can see**. The run card's Slate still projects from the file path, and the
-Canvas cannot draw Surfaces yet. So a canonical `create` today is a write to a
-store with no reader: no error, no card, nothing on screen. Until that lands, if
-you want the user to SEE something, write a file. Use the API for organising,
-lifecycle, and reading the tree — the things files cannot express.
+**Where a canonical Surface actually shows up, today.** The run-scoped reservation
+endpoint above is the supported visible creation path: it saves the canonical card and
+assigns the Slate file that will fill it. A generic `POST /api/surfaces` create is real,
+persisted, and survives restart, but is not automatically attached to a run's visible
+Slate. Use generic canonical creation for organising, lifecycle, and tree work; use the
+run reservation when the user must see a new foreground work object.
 
 There is **no approval step**. You create, group, reparent and delete directly. What
 makes that safe is that **delete is a move, not an erase**: the subtree goes into a
@@ -375,11 +441,10 @@ they are what keeps identity stable while a surface moves.
 
 ## The discipline that makes this work
 
-- **Author with files; answer with HTTP.** Write a file to make a surface; reply with a
-  `curl` when the user talks back. Don't POST to *create* surfaces — that path
-  (`POST /slate/points`) is the **user's** add-a-point. The canonical
-  `POST /api/surfaces` above is a different thing: it is for surfaces that are not
-  file-authored, and for organising and lifecycle work the file path cannot express.
+- **Context first; amend or reserve; then write.** Read the run-scoped context before
+  creating anything. Amend the returned owner when one exists. For a distinct
+  interactive work object, reserve one visible card with a stable key, then write its
+  exact assigned target. Direct files remain valid for scripts and compatibility.
 - **Keep `id`s stable.** Same id → an amend that preserves the thread. Changed/missing
   id → a duplicate with a fresh thread.
 - **`objective` is a RESERVED id — never use it.** It carries the *user's* Objective,

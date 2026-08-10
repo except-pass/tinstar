@@ -71,8 +71,9 @@ import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coor
 import type { SurfaceComposeCoordinator } from '../surfaces/surface-compose-coordinator'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
+import { buildRunAuthoringContext } from '../surfaces/run-authoring-context'
 import { SurfaceService } from '../surfaces/surface-service'
-import { parseSlateFileLocator, slateSourceAdapters } from '../surfaces/slate-source'
+import { parseSlateFileLocator, slateSourceAdapters, SLATE_DIR_PARTS } from '../surfaces/slate-source'
 import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
@@ -110,7 +111,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
-import { handleSurfaceRoutes, handleRefreshIntent } from './surfaceRoutes'
+import { handleSurfaceRoutes, handleRefreshIntent, resolveActor } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 import {
@@ -4816,6 +4817,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // persisted snapshot; oversize is refused with a 413.
   const SLATE_HEADLINE_MAX = 200
   const SLATE_CONTENT_MAX = 32 * 1024
+  const SLATE_AUTHORING_KEY_MAX = 200
+  const SLATE_AUTHORING_REQUEST_MAX = 8 * 1024
 
   // Every run-scoped Slate write goes through the compatibility alias to the ONE
   // canonical Surface it addresses (plan KTD3/U2). Built per request because the
@@ -4831,10 +4834,127 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       : author === 'process' ? { kind: 'process', id: 'run-workspace' }
         : { kind: 'session', id: 'run-workspace' }
 
+  /**
+   * Agent authoring is run-scoped by construction. These headers are trusted-local
+   * routing identity, not authentication; checking them prevents accidental writes
+   * to a sibling run without pretending a local process cannot spoof them.
+   */
+  const runAuthoringPrincipal = (
+    runId: string,
+  ): { actor: { kind: 'session'; id: string }; session: Session } | null => {
+    const actor = resolveActor(req)
+    if (actor.kind !== 'session' || actor.id !== runId) {
+      fail(
+        res,
+        'FORBIDDEN',
+        'Slate authoring requires a session principal matching the target Run',
+        { status: 403 },
+      )
+      return null
+    }
+    const sessionsDir = ctx.sessionConfig?.dirs.sessions
+    const session = sessionsDir ? getSession(sessionsDir, actor.id) : null
+    if (!session) {
+      fail(res, 'FORBIDDEN', `session principal '${actor.id}' is not a managed session`, { status: 403 })
+      return null
+    }
+    return { actor, session }
+  }
+
   // Append a reply to a point's thread. REOPEN-ON-REPLY lives inside the bridge.
   const appendSlateReply = async (runId: string, pid: string, reply: Reply): Promise<Point | undefined> => {
     const result = await slateBridge().appendReply(runId, pid, reply.text, slateActor(reply.author))
     return result.point
+  }
+
+  // GET /api/runs/:id/slate/authoring/context — the run-scoped work-object index
+  // a foreground agent reads before deciding whether to amend or reserve.
+  if (method === 'GET' && /^\/api\/runs\/[^/]+\/slate\/authoring\/context$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/context'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+    ok(res, buildRunAuthoringContext(ctx.docStore, service, runId, principal.actor))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/authoring/reservations — reserve the same durable,
+  // visible compose-card lifecycle as Add surface, but return its destination to
+  // the foreground agent without dispatching an author or prompting the run.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/authoring\/reservations$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/reservations'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    readBody(req).then(async raw => {
+      let parsed: { key?: unknown; label?: unknown; request?: unknown; recipe?: unknown }
+      try { parsed = JSON.parse(raw) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      const unknownField = Object.keys(parsed).find(field => !['key', 'label', 'request', 'recipe'].includes(field))
+      if (unknownField) {
+        fail(res, 'INVALID_PARAMS', `${unknownField} is not accepted by Slate authoring reservations`); return
+      }
+      const key = typeof parsed.key === 'string' ? parsed.key.trim() : ''
+      const label = typeof parsed.label === 'string' ? parsed.label.trim() : ''
+      const request = typeof parsed.request === 'string' ? parsed.request.trim() : ''
+      const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
+      if (!key || key.length > SLATE_AUTHORING_KEY_MAX) {
+        fail(res, 'INVALID_PARAMS', `key must be a non-empty string of at most ${SLATE_AUTHORING_KEY_MAX} characters`); return
+      }
+      if (!label || label.length > SLATE_HEADLINE_MAX) {
+        fail(res, 'INVALID_PARAMS', `label must be a non-empty string of at most ${SLATE_HEADLINE_MAX} characters`); return
+      }
+      if (!request) {
+        fail(res, 'INVALID_PARAMS', 'request must be a non-empty string'); return
+      }
+      if (request.length + recipe.length > SLATE_AUTHORING_REQUEST_MAX) {
+        fail(res, 'BAD_REQUEST', `authoring request exceeds ${SLATE_AUTHORING_REQUEST_MAX} characters`, { status: 413 }); return
+      }
+      const worktree = principal.session.workspace?.path
+      if (!worktree) {
+        fail(res, 'CONFLICT', `Run ${runId} has no writable worktree for Slate authoring`); return
+      }
+      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      let reserved: Awaited<ReturnType<RunSlateBridge['reserveComposition']>>
+      try {
+        reserved = await new RunSlateBridge(ctx.docStore, service).reserveComposition(runId, {
+          label,
+          request: { freeform: request, ...(recipe ? { recipe } : {}) },
+          worktree,
+          timeoutMs: ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000,
+        }, {
+          actor: principal.actor,
+          idempotencyKey: key,
+        })
+      } catch (error) {
+        console.error('Slate authoring reservation failed:', error)
+        fail(res, 'INTERNAL', 'could not reserve the Surface')
+        return
+      }
+      if (!reserved.reservation) {
+        fail(res, 'CONFLICT', `could not reserve the Surface: ${reserved.reason ?? 'unknown error'}`); return
+      }
+      const card = reserved.reservation
+      const deadlineAt = card.surface.creation?.deadlineAt
+      if (deadlineAt === undefined) {
+        fail(res, 'INTERNAL', 'reserved Surface is missing its authoring deadline')
+        return
+      }
+      ok(res, {
+        surfaceId: card.surface.id,
+        localId: card.localId,
+        file: join(worktree, ...SLATE_DIR_PARTS, card.file),
+        attemptToken: card.token,
+        deadlineAt,
+        replayed: card.replayed,
+      }, { status: card.replayed ? 200 : 201 })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
   }
 
   // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.

@@ -284,6 +284,57 @@ export const spec = {
         responses: { 200: { description: 'Updated' }, 400: { description: 'Invalid name/attention shape or non-boolean background' }, 404: { description: 'Run not found' } },
       },
     },
+    '/api/runs/{id}/slate/authoring/context': {
+      get: {
+        tags: ['Runs', 'Surfaces'],
+        summary: 'Read the current Slate authoring context for a run',
+        description: 'Returns the Objective separately from visible work objects, including the exact file or revision-gated API target needed to amend each Surface. Requires x-tinstar-actor-kind: session and an x-tinstar-actor matching the target run. These headers prevent accidental cross-run writes in the trusted-local model; they are routing identity, not authentication.',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'x-tinstar-actor', in: 'header', required: true, schema: { type: 'string' }, description: 'Managed session name; must equal the run id.' },
+          { name: 'x-tinstar-actor-kind', in: 'header', required: true, schema: { type: 'string', enum: ['session'] } },
+        ],
+        responses: {
+          200: { description: 'Objective and visible work-object authoring targets', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringContextResponse' } } } },
+          403: { description: 'Missing, non-session, mismatched, or unmanaged session principal' },
+          404: { description: 'Run not found' },
+        },
+      },
+    },
+    '/api/runs/{id}/slate/authoring/reservations': {
+      post: {
+        tags: ['Runs', 'Surfaces'],
+        summary: 'Reserve one visible Slate card for foreground authoring',
+        description: 'Reserves the existing durable compose-card lifecycle and returns its assigned source destination. It does not dispatch an author, prompt the foreground session, or schedule refresh. Reuse the same stable key after a lost response; use a new key only for a genuinely distinct work object.',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'x-tinstar-actor', in: 'header', required: true, schema: { type: 'string' }, description: 'Managed session name; must equal the run id.' },
+          { name: 'x-tinstar-actor-kind', in: 'header', required: true, schema: { type: 'string', enum: ['session'] } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['key', 'label', 'request'],
+            additionalProperties: false,
+            properties: {
+              key: { type: 'string', minLength: 1, maxLength: 200, description: 'Stable identity for this distinct work object. Reuse on retry.' },
+              label: { type: 'string', minLength: 1, maxLength: 200 },
+              request: { type: 'string', minLength: 1, description: 'What this foreground authoring attempt should put on the Surface.' },
+              recipe: { type: 'string', description: 'Optional agent refresh recipe retained with the composition request.' },
+            },
+          } } },
+        },
+        responses: {
+          201: { description: 'New visible reservation', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringReservationResponse' } } } },
+          200: { description: 'Replay of the existing reservation for this key', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringReservationResponse' } } } },
+          400: { description: 'Invalid or oversized input' },
+          403: { description: 'Missing, non-session, mismatched, or unmanaged session principal' },
+          404: { description: 'Run not found' },
+          409: { description: 'Run has no writable worktree or reservation could not be made' },
+        },
+      },
+    },
 
     // ── Sessions ─────────────────────────────────────────
     '/api/sessions': {
@@ -1377,6 +1428,89 @@ export const spec = {
         properties: {
           ok: { type: 'boolean', enum: [true] },
           data: { nullable: true },
+        },
+      },
+      RunAuthoringTarget: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['kind', 'file', 'localId'],
+            properties: {
+              kind: { type: 'string', enum: ['slate-file'] },
+              file: { type: 'string', description: 'Absolute assigned Slate file path.' },
+              localId: { type: 'string' },
+              attemptToken: { type: 'string', description: 'Required in the authored entry while composition is in the authoring phase.' },
+            },
+          },
+          {
+            type: 'object',
+            required: ['kind', 'method', 'endpoint', 'expectedRev'],
+            properties: {
+              kind: { type: 'string', enum: ['canonical-content'] },
+              method: { type: 'string', enum: ['PATCH'] },
+              endpoint: { type: 'string' },
+              expectedRev: { type: 'integer' },
+            },
+          },
+          {
+            type: 'object',
+            required: ['kind', 'reason'],
+            properties: {
+              kind: { type: 'string', enum: ['unavailable'] },
+              reason: { type: 'string' },
+            },
+          },
+        ],
+      },
+      RunAuthoringSurface: {
+        type: 'object',
+        required: ['surfaceId', 'localId', 'headline', 'author', 'status', 'contentAuthority', 'target', 'capabilities', 'freshness'],
+        properties: {
+          surfaceId: { type: 'string', description: 'Canonical Surface identity.' },
+          localId: { type: 'string', description: 'Identity within this run Slate.' },
+          headline: { type: 'string' },
+          author: { type: 'string', enum: ['agent', 'user', 'process'] },
+          status: { type: 'string', enum: ['open', 'discussing', 'waiting', 'resolved', 'dismissed'] },
+          contentAuthority: { type: 'string', enum: ['source-binding', 'canonical-direct'] },
+          target: { $ref: '#/components/schemas/RunAuthoringTarget' },
+          capabilities: { type: 'object', description: 'Effective operations for this actor, including blocked reasons.' },
+          freshness: { type: 'object', description: 'Current last-known freshness state.' },
+          creation: { type: 'object', description: 'Durable compose lifecycle when this Surface was reserved.' },
+        },
+      },
+      RunAuthoringContextResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: {
+            type: 'object',
+            required: ['runId', 'objective', 'surfaces'],
+            properties: {
+              runId: { type: 'string' },
+              objective: { allOf: [{ $ref: '#/components/schemas/RunAuthoringSurface' }], nullable: true },
+              surfaces: { type: 'array', items: { $ref: '#/components/schemas/RunAuthoringSurface' } },
+            },
+          },
+        },
+      },
+      RunAuthoringReservationResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: {
+            type: 'object',
+            required: ['surfaceId', 'localId', 'file', 'attemptToken', 'deadlineAt', 'replayed'],
+            properties: {
+              surfaceId: { type: 'string' },
+              localId: { type: 'string' },
+              file: { type: 'string', description: 'Absolute file to write atomically.' },
+              attemptToken: { type: 'string', description: 'Token required in the reserved entry.' },
+              deadlineAt: { type: 'integer', format: 'int64', description: 'Unix epoch milliseconds.' },
+              replayed: { type: 'boolean' },
+            },
+          },
         },
       },
       Run: {
