@@ -789,8 +789,22 @@ function codexUserText(payload: Record<string, unknown>): string | null {
     .map(block => block.text as string)
     .join('\n')
     .trim()
-  if (!text || text.startsWith('<environment_context>')) return null
+  if (!text || isCodexInternalUserText(text)) return null
   return text
+}
+
+/** Codex serializes some host/control-plane inputs with the same `role: user`
+ * shape as a human prompt. Keep those implementation records out of Recap. */
+function isCodexInternalUserText(text: string): boolean {
+  return (
+    text.startsWith('<environment_context>')
+    || text.startsWith('# AGENTS.md instructions for ')
+    || text.startsWith('<skill>')
+    || text.startsWith('<turn_aborted>')
+    || text.startsWith('TINSTAR_MESSAGE_ENVELOPE_V1 ')
+    || text.startsWith('The following is the Codex agent history whose request action you are assessing.')
+    || text.startsWith('The following is the Codex agent history added since your last approval assessment.')
+  )
 }
 
 export function resetCodexOffset(sessionName: string): void {
