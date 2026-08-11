@@ -10,7 +10,11 @@ afterEach(cleanup)
 vi.mock('../RunWorkspaceHeader', () => ({ RunWorkspaceHeader: () => <div data-testid="header" /> }))
 vi.mock('../TouchedFilesPanel', () => ({ TouchedFilesPanel: () => <div data-testid="files-content" /> }))
 vi.mock('../FileTreePanel', () => ({ FileTreePanel: () => <div data-testid="tree-content" /> }))
-vi.mock('../RunSessionPanel', () => ({ RunSessionPanel: () => <div data-testid="session-content" /> }))
+vi.mock('../RunSessionPanel', () => ({
+  RunSessionPanel: ({ controlledTab }: { controlledTab?: string }) => (
+    <div data-testid="session-content" data-active-tab={controlledTab} />
+  ),
+}))
 vi.mock('../TelemetryPanel', () => ({ TelemetryPanel: () => <div data-testid="telemetry-content" /> }))
 vi.mock('../HandsPanel', () => ({ HandsPanel: () => null }))
 vi.mock('../SlatePanel', async () => {
@@ -63,6 +67,11 @@ describe('RunWorkspaceWidget focus layout', () => {
     expect(screen.queryByTestId('focus-telemetry-rail')).not.toBeInTheDocument()
     expect(screen.getByTestId('files-content')).toBeVisible()
     expect(screen.getByTestId('telemetry-content')).toBeVisible()
+  })
+
+  it('starts on Recap even when a terminal port is already available', () => {
+    renderFocused(1400, makeRun({ port: 19999 }))
+    expect(screen.getByTestId('session-content')).toHaveAttribute('data-active-tab', 'recap')
   })
 
   it('uses mutually exclusive support drawers and Escape returns focus to the rail', () => {

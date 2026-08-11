@@ -43,6 +43,7 @@ export type BandKind = typeof BAND_KINDS[number]
  */
 export const DEFAULT_WINDOW_SEC = 3600
 export type RecapEntryType = 'agent' | 'user' | 'status'
+export type RecapStatusKind = 'completed'
 export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
 
 export interface DiffLine {
@@ -60,6 +61,11 @@ export interface RecapEntry {
   id: string
   type: RecapEntryType
   content: string
+  /** Structured lifecycle meaning for durable status entries. Absent on legacy
+   * generic status messages and conversation entries. */
+  statusKind?: RecapStatusKind
+  /** Reliable provider-reported elapsed turn time. Omitted when unavailable. */
+  durationMs?: number
   diff?: DiffBlock
   timestamp?: string
   /** For an `agent` entry: number of tool_use blocks the agent emitted during

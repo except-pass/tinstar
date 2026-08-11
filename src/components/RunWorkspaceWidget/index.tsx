@@ -66,7 +66,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [handsCollapsed, setHandsCollapsed] = useState(false)
-  const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
+  const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>('recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const [handsPanelHeight, setHandsPanelHeight] = useState(120)
   // Slate column width — restored from the per-browser pref on mount, written on

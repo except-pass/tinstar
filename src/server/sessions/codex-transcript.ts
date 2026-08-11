@@ -10,9 +10,9 @@ import {
 import { open as openFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { log } from '../logger'
-import { readTail } from './transcript-parser'
+import { readTail, stableRecapDigest } from './transcript-parser'
 import type { RecapEntry } from '../../types'
 import type {
   ProviderQuota,
@@ -815,8 +815,70 @@ export class CodexRolloutObservationSource {
 
 // --- Recap entries ---
 
-// Track last read byte offset per session.
-const codexOffsets = new Map<string, number>()
+type CodexCompletion = {
+  turnId: string
+  message: string
+  timestamp: string
+  durationMs?: number
+}
+
+type CodexRecapState = {
+  byteOffset: number
+  carry: string
+  currentTurnId: string | null
+  startedAtMs: number | null
+  promptRepresentations: Map<string, 'event' | 'response'>
+  completion: CodexCompletion | null
+}
+
+const codexOffsets = new Map<string, CodexRecapState>()
+
+function newCodexRecapState(): CodexRecapState {
+  return {
+    byteOffset: 0,
+    carry: '',
+    currentTurnId: null,
+    startedAtMs: null,
+    promptRepresentations: new Map(),
+    completion: null,
+  }
+}
+
+function epochMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function codexUserText(payload: Record<string, unknown>): string | null {
+  if (payload.type !== 'message' || payload.role !== 'user' || !Array.isArray(payload.content)) return null
+  const text = (payload.content as Array<Record<string, unknown>>)
+    .filter(block => block.type === 'input_text' && typeof block.text === 'string')
+    .map(block => block.text as string)
+    .join('\n')
+    .trim()
+  if (!text || isCodexInternalUserText(text)) return null
+  return text
+}
+
+/** Codex serializes some host/control-plane inputs with the same `role: user`
+ * shape as a human prompt. Keep those implementation records out of Recap. */
+function isCodexInternalUserText(text: string): boolean {
+  return (
+    text.startsWith('<environment_context>')
+    || text.startsWith('# AGENTS.md instructions for ')
+    || text.startsWith('<skill>')
+    || text.startsWith('<turn_aborted>')
+    || text.startsWith('TINSTAR_MESSAGE_ENVELOPE_V1 ')
+    || text.startsWith('The following is the Codex agent history whose request action you are assessing.')
+    || text.startsWith('The following is the Codex agent history added since your last approval assessment.')
+  )
+}
 
 export function resetCodexOffset(sessionName: string): void {
   codexOffsets.delete(sessionName)
@@ -824,52 +886,124 @@ export function resetCodexOffset(sessionName: string): void {
 
 /**
  * Parse new recap entries from a Codex transcript.
- * Extracts user_message and task_complete.last_agent_message events.
+ * Extracts historical and current user messages, then publishes completion and
+ * the final response only once the provider lifecycle is idle.
  */
-export function parseCodexRecapEntries(sessionName: string, transcriptPath: string): RecapEntry[] {
+export function parseCodexRecapEntries(sessionName: string, transcriptPath: string, lifecycle: 'running' | 'idle' = 'idle'): RecapEntry[] {
   if (!existsSync(transcriptPath)) return []
 
   const size = statSync(transcriptPath).size
-  const last = codexOffsets.get(sessionName) ?? 0
-  // If the file was truncated/rotated, reset.
-  const start = size < last ? 0 : last
-  if (size === start) return []
+  let state = codexOffsets.get(sessionName) ?? newCodexRecapState()
+  if (size < state.byteOffset) {
+    state = newCodexRecapState()
+  }
 
   const entries: RecapEntry[] = []
-
-  const fd = openSync(transcriptPath, 'r')
-  try {
-    const CHUNK = 256 * 1024 // 256KB
-    const buf = Buffer.alloc(CHUNK)
-    let pos = start
-    let carry = ''
-    while (pos < size) {
-      const toRead = Math.min(CHUNK, size - pos)
-      const n = readSync(fd, buf, 0, toRead, pos)
-      if (n <= 0) break
-      pos += n
-      const text = carry + buf.subarray(0, n).toString('utf-8')
-      const parts = text.split('\n')
-      carry = parts.pop() ?? ''
-      for (const line of parts) {
-        if (!line.trim()) continue
-        try {
-          const obj = JSON.parse(line)
-          if (obj.type !== 'event_msg') continue
-          const p = obj.payload
-          const ts = obj.timestamp ?? new Date().toISOString()
-
-          if (p?.type === 'user_message' && p.message) {
-            entries.push({ id: randomUUID(), type: 'user', content: p.message, timestamp: ts })
-          } else if (p?.type === 'task_complete' && p.last_agent_message) {
-            entries.push({ id: randomUUID(), type: 'agent', content: p.last_agent_message, timestamp: ts })
-          }
-        } catch { /* skip */ }
-      }
-    }
-    codexOffsets.set(sessionName, pos)
-  } finally {
-    closeSync(fd)
+  const flushCompletion = () => {
+    if (!state.completion) return
+    const completion = state.completion
+    entries.push({
+      id: `codex:turn:${completion.turnId}:completed`,
+      type: 'status', statusKind: 'completed', content: 'Completed',
+      timestamp: completion.timestamp,
+      ...(completion.durationMs === undefined ? {} : { durationMs: completion.durationMs }),
+    })
+    entries.push({
+      id: `codex:turn:${completion.turnId}:agent`,
+      type: 'agent', content: completion.message, timestamp: completion.timestamp,
+    })
+    state.completion = null
   }
+
+  if (size > state.byteOffset) {
+    const fd = openSync(transcriptPath, 'r')
+    try {
+      const CHUNK = 256 * 1024 // 256KB
+      const buf = Buffer.alloc(CHUNK)
+      let pos = state.byteOffset
+      let carry = state.carry
+      while (pos < size) {
+        const toRead = Math.min(CHUNK, size - pos)
+        const n = readSync(fd, buf, 0, toRead, pos)
+        if (n <= 0) break
+        pos += n
+        const text = carry + buf.subarray(0, n).toString('utf-8')
+        const parts = text.split('\n')
+        carry = parts.pop() ?? ''
+        for (const line of parts) {
+          if (!line.trim()) continue
+          try {
+            const obj = JSON.parse(line) as Record<string, unknown>
+            const p = obj.payload as Record<string, unknown> | undefined
+            // An absent native timestamp stays absent/empty rather than using
+            // wall-clock parse time, which would make replay IDs and durations
+            // change across restarts.
+            const ts = typeof obj.timestamp === 'string' ? obj.timestamp : ''
+
+            if (obj.type === 'turn_context' && typeof p?.turn_id === 'string') {
+              state.currentTurnId = p.turn_id
+            } else if (obj.type === 'event_msg' && p?.type === 'task_started') {
+              // A later task start is conclusive closure evidence for an older
+              // completed turn encountered during initial history replay.
+              flushCompletion()
+              if (typeof p.turn_id === 'string') state.currentTurnId = p.turn_id
+              state.startedAtMs = epochMs(p.started_at) ?? epochMs(ts)
+              state.promptRepresentations = new Map()
+              state.completion = null
+            } else if (obj.type === 'event_msg' && p?.type === 'user_message' && typeof p.message === 'string') {
+              const content = p.message.trim()
+              if (!content) continue
+              const turnId = state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
+              const key = `${turnId}\0${content}`
+              if (state.promptRepresentations.get(key) === 'response') continue
+              state.promptRepresentations.set(key, 'event')
+              entries.push({
+                id: `codex:turn:${turnId}:user:${stableRecapDigest(content)}`,
+                type: 'user', content, timestamp: ts,
+              })
+            } else if (obj.type === 'response_item' && p) {
+              const content = codexUserText(p)
+              if (!content) continue
+              const metadata = p.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined
+              const turnId = typeof metadata?.turn_id === 'string'
+                ? metadata.turn_id
+                : state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
+              state.currentTurnId = turnId
+              const key = `${turnId}\0${content}`
+              if (state.promptRepresentations.get(key) === 'event') continue
+              state.promptRepresentations.set(key, 'response')
+              const messageId = typeof p.id === 'string' ? p.id : stableRecapDigest(turnId, ts, content)
+              entries.push({ id: `codex:message:${messageId}`, type: 'user', content, timestamp: ts })
+            } else if (obj.type === 'event_msg' && p?.type === 'task_complete' && typeof p.last_agent_message === 'string') {
+              const turnId = typeof p.turn_id === 'string'
+                ? p.turn_id
+                : state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
+              const completedAtMs = epochMs(p.completed_at) ?? epochMs(ts)
+              const explicitDuration = typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0
+                ? p.duration_ms
+                : null
+              const derivedDuration = state.startedAtMs !== null && completedAtMs !== null && completedAtMs >= state.startedAtMs
+                ? completedAtMs - state.startedAtMs
+                : null
+              const durationMs = explicitDuration ?? derivedDuration
+              state.completion = {
+                turnId,
+                message: p.last_agent_message,
+                timestamp: completedAtMs === null ? ts : new Date(completedAtMs).toISOString(),
+                ...(durationMs === null ? {} : { durationMs }),
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+      state.byteOffset = pos
+      state.carry = carry
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  if (lifecycle === 'idle') flushCompletion()
+  codexOffsets.set(sessionName, state)
   return entries
 }

@@ -299,7 +299,7 @@ describe('StatusWatcher blocked signal — override added', () => {
     expect(onDisk.blocked).toBe(true)
   })
 
-  it('parses recap entries when a cached transcript is blocked into idle', async () => {
+  it('does not close recap history when a cached transcript is blocked into attention', async () => {
     const session = makeSession('s4-recap', 'running')
     const transcriptPath = writeIdleTranscript()
     const recapEntries = [{
@@ -321,7 +321,7 @@ describe('StatusWatcher blocked signal — override added', () => {
     await w.checkProcessTree(session)
     await w.checkProcessTree(session)
 
-    expect(onRecapEntries).toHaveBeenCalledWith(session.name, recapEntries)
+    expect(onRecapEntries).not.toHaveBeenCalled()
   })
 })
 

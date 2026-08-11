@@ -214,6 +214,48 @@ function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
   return true
 }
 
+function recapSemanticKey(entry: RecapEntry): string {
+  return JSON.stringify({
+    type: entry.type,
+    content: entry.content,
+    timestamp: entry.timestamp ?? null,
+    statusKind: entry.statusKind ?? null,
+    durationMs: entry.durationMs ?? null,
+    diff: entry.diff ?? null,
+    toolUses: entry.toolUses ?? null,
+  })
+}
+
+function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.id)
+}
+
+/** Keep the first occurrence of a recap event. Stable source IDs handle normal
+ * replay; the semantic key repairs histories written by older parsers whose IDs
+ * were random on every read. Exactness is intentional so repeated prompts from
+ * distinct turns remain distinct whenever their timestamp or metadata differs. */
+function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
+  const ids = new Set<string>()
+  const legacySemantics = new Set<string>()
+  const normalized: RecapEntry[] = []
+  for (const entry of entries) {
+    const semanticKey = recapSemanticKey(entry)
+    const legacyRandomId = hasLegacyRandomRecapId(entry)
+    if (ids.has(entry.id) || (legacyRandomId && legacySemantics.has(semanticKey))) continue
+    ids.add(entry.id)
+    if (legacyRandomId) legacySemantics.add(semanticKey)
+    normalized.push(entry)
+  }
+  return normalized
+}
+
+function hasRecapEntry(entries: RecapEntry[], candidate: RecapEntry): boolean {
+  if (entries.some(entry => entry.id === candidate.id)) return true
+  if (!hasLegacyRandomRecapId(candidate)) return false
+  const semanticKey = recapSemanticKey(candidate)
+  return entries.some(entry => hasLegacyRandomRecapId(entry) && recapSemanticKey(entry) === semanticKey)
+}
+
 function noticeEqual(a: Notice, b: Notice): boolean {
   return (
     a.id === b.id &&
@@ -347,6 +389,7 @@ export class DocumentStore {
           console.warn('[docstore] skipping corrupt run entry on load:', r)
           continue
         }
+        r.recapEntries = normalizeRecapEntries(Array.isArray(r.recapEntries) ? r.recapEntries : [])
         this.runs.set(r.id, r)
       }
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
@@ -588,6 +631,7 @@ export class DocumentStore {
   addRecapEntry(runId: string, entry: RecapEntry): void {
     const run = this.runs.get(runId)
     if (!run) return
+    if (hasRecapEntry(run.recapEntries, entry)) return
     run.recapEntries.push(entry)
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }

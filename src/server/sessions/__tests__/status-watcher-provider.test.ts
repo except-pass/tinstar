@@ -21,6 +21,50 @@ afterEach(() => {
 })
 
 describe('StatusWatcher provider transcripts', () => {
+  it('polls recap while a provider remains running and supplies the lifecycle state', async () => {
+    const transcriptPath = join(scratch, 'live-recap.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const parseRecapEntries = vi.fn(() => [{
+      id: 'live-prompt', type: 'user' as const, content: 'visible now',
+    }])
+    const provider: TerminalProviderAdapter = {
+      provider: { id: 'live-recap', label: 'Live Recap CLI' },
+      sessionLifecycle: 'terminal',
+      terminal: {
+        capabilities: {
+          nats: { state: 'unsupported', reason: 'not implemented' },
+          telemetry: { state: 'unsupported', reason: 'not implemented' },
+          managedInstructions: { state: 'unsupported', reason: 'not implemented' },
+        },
+        defaultTelemetry: false,
+        transcript: {
+          discover: async () => transcriptPath,
+          readStatus: () => ({ state: 'running' }),
+          parseRecapEntries,
+          resetOffset: vi.fn(),
+        },
+      },
+    }
+    const sessionsDir = join(scratch, 'live-recap-sessions')
+    createSession(sessionsDir, {
+      name: 'live-recap-worker', backend: 'tmux', adapter: 'live-recap',
+      workspace: { path: scratch },
+    })
+    setState(sessionsDir, 'live-recap-worker', 'running')
+    const onRecapEntries = vi.fn()
+    const watcher = new StatusWatcher({
+      sessionsDir,
+      providerRegistry: new ProviderAdapterRegistry([provider]),
+      onStatusChanged: vi.fn(),
+      onRecapEntries,
+    })
+
+    await (watcher as unknown as { tick(): Promise<void> }).tick()
+
+    expect(parseRecapEntries).toHaveBeenCalledWith('live-recap-worker', transcriptPath, 'running')
+    expect(onRecapEntries).toHaveBeenCalledWith('live-recap-worker', [expect.objectContaining({ id: 'live-prompt' })])
+  })
+
   it('bounds a non-settling provider discovery without starving healthy sessions', async () => {
     const healthyPath = join(scratch, 'bounded-healthy.jsonl')
     writeFileSync(healthyPath, '{}\n')
@@ -230,7 +274,7 @@ describe('StatusWatcher provider transcripts', () => {
     )
   })
 
-  it('lets an adapter retain recap parsing on unchanged idle observations', async () => {
+  it('polls recap entries on unchanged idle observations', async () => {
     const transcriptPath = join(scratch, 'boundary.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const parseRecapEntries = vi.fn(() => [{
@@ -253,7 +297,6 @@ describe('StatusWatcher provider transcripts', () => {
           discover: async () => transcriptPath,
           readStatus: () => ({ state: 'idle' }),
           parseRecapEntries,
-          parseRecapWhileIdle: true,
           resetOffset: vi.fn(),
         },
       },
@@ -279,7 +322,7 @@ describe('StatusWatcher provider transcripts', () => {
       checkSession(session: Session): Promise<void>
     }).checkSession(session)
 
-    expect(parseRecapEntries).toHaveBeenCalledWith('boundary-worker', transcriptPath)
+    expect(parseRecapEntries).toHaveBeenCalledWith('boundary-worker', transcriptPath, 'idle')
     expect(onRecapEntries).toHaveBeenCalledWith(
       'boundary-worker',
       expect.arrayContaining([expect.objectContaining({ id: 'between-polls' })]),

@@ -80,14 +80,12 @@ export interface ProviderTranscriptObservations {
 export interface ProviderTranscriptAdapter {
   discover(request: ProviderTranscriptDiscovery): Promise<string | null>
   readStatus(transcriptPath: string): ProviderTranscriptStatus | null
-  parseRecapEntries(sessionName: string, transcriptPath: string): RecapEntry[]
+  parseRecapEntries(sessionName: string, transcriptPath: string, lifecycle: 'running' | 'idle'): RecapEntry[]
   resetOffset(sessionName: string): void
   /** Optional normalized native observations, polled independently of status. */
   observations?: ProviderTranscriptObservations
   /** Number of identical idle observations required before running -> idle. */
   idleDebouncePolls?: number
-  /** Parse offset-based recap entries on unchanged idle observations too. */
-  parseRecapWhileIdle?: boolean
   /**
    * Providers whose conversation identity is a file name in a shared project
    * directory expose that directory here. The watcher can then run its generic
@@ -405,7 +403,6 @@ const codexTranscript: ProviderTranscriptAdapter = {
     codexRolloutObservations.reset(sessionName)
   },
   idleDebouncePolls: 1,
-  parseRecapWhileIdle: true,
 }
 
 function shellQuote(value: string): string {

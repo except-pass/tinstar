@@ -15,14 +15,14 @@ vi.mock('../../../hooks/useSlashCommands', () => ({
 
 const ACCENT = '#ff7700'
 
-function renderComposer(recapEntries: RecapEntry[]) {
+function renderComposer(recapEntries: RecapEntry[], status: 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' = 'idle') {
   return render(
     <PromptComposer
       recapEntries={recapEntries}
       rawLogs=""
       port={undefined}
       sessionId="run-1"
-      status="idle"
+      status={status}
       accent={ACCENT}
       promptComposerExpanded={true}
       controlledTab="recap"
@@ -32,6 +32,37 @@ function renderComposer(recapEntries: RecapEntry[]) {
 }
 
 describe('<PromptComposer> recap markdown rendering', () => {
+  it('shows a live working divider only while the session is running', () => {
+    const running = renderComposer([], 'running')
+    expect(running.getByTestId('recap-working-status')).toHaveTextContent('Working')
+    running.unmount()
+
+    for (const status of ['creating', 'idle', 'needs_attention', 'stopped'] as const) {
+      const view = renderComposer([], status)
+      expect(view.queryByTestId('recap-working-status')).toBeNull()
+      view.unmount()
+    }
+  })
+
+  it('renders completed history with compact duration and no pulse', () => {
+    const { getByTestId } = renderComposer([
+      { id: 'u-complete', type: 'user', content: 'do it' },
+      { id: 's-complete', type: 'status', statusKind: 'completed', content: 'Completed', durationMs: 72_000 },
+      { id: 'a-complete', type: 'agent', content: 'done' },
+    ])
+    const completed = getByTestId('recap-completed-status')
+    expect(completed).toHaveTextContent('Completed in 1m 12s')
+    expect(completed.querySelector('.animate-pulse-glow')).toBeNull()
+  })
+
+  it('renders completed history without inventing a duration', () => {
+    const { getByTestId } = renderComposer([
+      { id: 's-complete', type: 'status', statusKind: 'completed', content: 'Completed' },
+    ])
+    expect(getByTestId('recap-completed-status')).toHaveTextContent('Completed')
+    expect(getByTestId('recap-completed-status')).not.toHaveTextContent('Completed in')
+  })
+
   it('renders agent markdown emphasis, lists, and inline code as HTML elements', () => {
     const { container } = renderComposer([
       {
