@@ -123,6 +123,31 @@ describe('readSessionStatusDetailAt', () => {
 })
 
 describe('parseNewEntriesAt — tool_use counting', () => {
+  it('publishes a prompt while running but retains assistant assembly until idle', () => {
+    const session = 'live-turn'
+    resetOffset(session)
+    const path = writeTranscript('-p', 'live', [
+      { uuid: 'user-live', timestamp: '2026-08-11T12:00:00.000Z', type: 'user', message: { content: 'do a thing' } },
+      { uuid: 'tool-live', timestamp: '2026-08-11T12:00:05.000Z', type: 'assistant', message: { content: [
+        { type: 'text', text: 'intermediate narration' },
+        { type: 'tool_use', id: 'a', name: 'Read', input: {} },
+      ] } },
+    ])
+
+    expect(parseNewEntriesAt(session, path, 'running')).toEqual([
+      expect.objectContaining({ id: 'claude:user:user-live', type: 'user', content: 'do a thing' }),
+    ])
+
+    appendFileSync(path, `${JSON.stringify({
+      uuid: 'agent-live', timestamp: '2026-08-11T12:00:10.000Z', type: 'assistant',
+      message: { content: [{ type: 'text', text: 'final answer' }] },
+    })}\n`)
+    expect(parseNewEntriesAt(session, path, 'idle')).toEqual([
+      expect.objectContaining({ type: 'status', statusKind: 'completed', durationMs: 10_000 }),
+      expect.objectContaining({ id: 'claude:agent:agent-live', type: 'agent', content: 'final answer', toolUses: 1 }),
+    ])
+  })
+
   it('sums tool_use blocks across a turn onto the closing agent entry', () => {
     const session = 'tool-count-1'
     resetOffset(session)

@@ -298,6 +298,7 @@ export class StatusWatcher {
     // - session currently "running" that might be blocked on permission
     // - session we already flipped to "idle" that might have resumed
     if (detail.toolPending && session.backend === 'tmux') {
+      this.parseRecapEntries(session, transcript, transcriptPath, 'running')
       if (this.processTreeOverride.has(session.name)) {
         return // already determined blocked — skip until JSONL changes
       }
@@ -326,18 +327,19 @@ export class StatusWatcher {
       if (session.state === 'running' && detail.state === 'idle') {
         const streak = (this.idleStreak.get(session.name) ?? 0) + 1
         this.idleStreak.set(session.name, streak)
-        if (streak < (transcript.idleDebouncePolls ?? 2)) return
+        if (streak < (transcript.idleDebouncePolls ?? 2)) {
+          this.parseRecapEntries(session, transcript, transcriptPath, 'running')
+          return
+        }
         log.info('status-watcher', `${session.name}: idle confirmed (streak=${streak})`)
       }
       this.idleStreak.delete(session.name)
-      this.transitionState(session, detail.state, transcript, transcriptPath)
+      this.transitionState(session, detail.state)
     } else {
       // State unchanged — reset idle streak
       this.idleStreak.delete(session.name)
-      if (detail.state === 'idle' && transcript.parseRecapWhileIdle) {
-        this.parseRecapEntries(session, transcript, transcriptPath)
-      }
     }
+    this.parseRecapEntries(session, transcript, transcriptPath, detail.state)
   }
 
   /**
@@ -558,12 +560,7 @@ export class StatusWatcher {
         this.processTreeOverride.add(session.name)
         this.persistBlocked(session, true)
         if (session.state !== 'idle') {
-          this.transitionState(
-            session,
-            'idle',
-            this.transcriptAdapters.get(session.name),
-            this.transcriptPaths.get(session.name),
-          )
+          this.transitionState(session, 'idle')
         } else {
           // Block began while already idle: no state-string change, but
           // blocked flipped — notify so attention derives urgent instead
@@ -588,8 +585,6 @@ export class StatusWatcher {
   private transitionState(
     session: Session,
     newState: SessionState,
-    transcript?: ProviderTranscriptAdapter,
-    transcriptPath?: string,
   ): void {
     // The blocked signal rides along on every transition: true only while the
     // process-tree override stands (and never for a stopped session — setState
@@ -599,24 +594,16 @@ export class StatusWatcher {
     this.opts.onStatusChanged(session.name, newState, blocked)
     log.info('status-watcher', `${session.name}: ${session.state} → ${newState}`)
 
-    // Parse transcript for recap entries on idle transitions
-    if (
-      newState === 'idle'
-      && this.opts.onRecapEntries
-      && transcript
-      && transcriptPath
-    ) {
-      this.parseRecapEntries(session, transcript, transcriptPath)
-    }
   }
 
   private parseRecapEntries(
     session: Session,
     transcript: ProviderTranscriptAdapter,
     transcriptPath: string,
+    lifecycle: 'running' | 'idle',
   ): void {
     try {
-      const entries = transcript.parseRecapEntries(session.name, transcriptPath)
+      const entries = transcript.parseRecapEntries(session.name, transcriptPath, lifecycle)
       if (entries.length > 0) this.opts.onRecapEntries?.(session.name, entries)
     } catch (err) {
       log.warn('status-watcher', `transcript parse failed for ${session.name}: ${err}`)

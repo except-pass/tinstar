@@ -37,12 +37,12 @@ describe('DocumentStore recap entries', () => {
     expect(events).toHaveLength(3)
   })
 
-  it('keeps identical text when native identities or timestamps differ', () => {
+  it('keeps identical text when native identities differ even at the same timestamp', () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
 
     store.addRecapEntry('run-1', { id: 'prompt-1', type: 'user', content: 'Again', timestamp: '2026-08-11T12:00:00.000Z' })
-    store.addRecapEntry('run-1', { id: 'prompt-2', type: 'user', content: 'Again', timestamp: '2026-08-11T12:05:00.000Z' })
+    store.addRecapEntry('run-1', { id: 'prompt-2', type: 'user', content: 'Again', timestamp: '2026-08-11T12:00:00.000Z' })
 
     expect(store.getRun('run-1')?.recapEntries).toHaveLength(2)
   })
@@ -51,14 +51,14 @@ describe('DocumentStore recap entries', () => {
     const dir = mkdtempSync(join(tmpdir(), 'recap-store-'))
     const file = join(dir, 'docstore.json')
     try {
-      const prompt = { id: 'legacy-random-a', type: 'user', content: 'Hello', timestamp: '2026-08-11T12:00:00.000Z' } satisfies RecapEntry
-      const completed = { id: 'legacy-random-b', type: 'status', statusKind: 'completed', content: 'Completed', durationMs: 900, timestamp: '2026-08-11T12:00:00.900Z' } satisfies RecapEntry
+      const prompt = { id: '11111111-1111-4111-8111-111111111111', type: 'user', content: 'Hello', timestamp: '2026-08-11T12:00:00.000Z' } satisfies RecapEntry
+      const completed = { id: '22222222-2222-4222-8222-222222222222', type: 'status', statusKind: 'completed', content: 'Completed', durationMs: 900, timestamp: '2026-08-11T12:00:00.900Z' } satisfies RecapEntry
       writeFileSync(file, JSON.stringify({
         runs: [makeRun([
           prompt,
-          { ...prompt, id: 'legacy-random-c' },
+          { ...prompt, id: '33333333-3333-4333-8333-333333333333' },
           completed,
-          { ...completed, id: 'legacy-random-d' },
+          { ...completed, id: '44444444-4444-4444-8444-444444444444' },
           { id: 'answer-1', type: 'agent', content: 'Hi', timestamp: '2026-08-11T12:00:00.900Z' },
         ])],
       }))
@@ -67,7 +67,9 @@ describe('DocumentStore recap entries', () => {
       store.enablePersistence(file)
 
       expect(store.getRun('run-1')?.recapEntries.map(entry => entry.id)).toEqual([
-        'legacy-random-a', 'legacy-random-b', 'answer-1',
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+        'answer-1',
       ])
     } finally {
       rmSync(dir, { recursive: true, force: true })

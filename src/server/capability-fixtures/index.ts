@@ -68,6 +68,8 @@ export const CODEX_ROLLOUT_FIXTURES = [
   'rollout-partial-token-count',
   /** Blank + non-JSON + truncated tail; non-JSON stands in for task_started. */
   'rollout-malformed-tail',
+  /** Current Codex user messages: response_item/message with role user. */
+  'rollout-current-user-message',
 ] as const
 export type CodexRolloutFixture = (typeof CODEX_ROLLOUT_FIXTURES)[number]
 

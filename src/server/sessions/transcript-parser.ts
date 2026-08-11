@@ -2,7 +2,7 @@ import { existsSync, statSync, openSync, readSync, closeSync, readdirSync } from
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RecapEntry } from '../../types'
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 
 /** Read the last N lines of a file without reading the entire thing. */
 export function readTail(filePath: string, maxLines: number): string[] {
@@ -42,15 +42,38 @@ export function getTranscriptPath(workdir: string, conversationId: string, state
 }
 
 // Track last read position per session
-type OffsetState = { byteOffset: number; carry: string }
+type ParsedRecord = {
+  type: 'user' | 'agent'
+  id: string
+  text: string
+  timestamp: string
+  toolUses: number
+}
+
+type PendingClaudeTurn = {
+  id: string
+  startedAt: string
+  lastAgent: ParsedRecord | null
+  toolUses: number
+}
+
+type OffsetState = {
+  byteOffset: number
+  carry: string
+  pendingTurn: PendingClaudeTurn | null
+}
 const offsets = new Map<string, OffsetState>()
+
+function stableDigest(...parts: string[]): string {
+  return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 24)
+}
 
 /**
  * Parse transcript into recap entries: user prompt + last assistant response per turn.
  * Intermediate assistant messages (thinking-out-loud, tool-call narration) are skipped.
  */
-export function parseNewEntries(sessionName: string, workdir: string, conversationId: string, stateDir?: string): RecapEntry[] {
-  return parseNewEntriesAt(sessionName, getTranscriptPath(workdir, conversationId, stateDir))
+export function parseNewEntries(sessionName: string, workdir: string, conversationId: string, stateDir?: string, lifecycle: 'running' | 'idle' = 'idle'): RecapEntry[] {
+  return parseNewEntriesAt(sessionName, getTranscriptPath(workdir, conversationId, stateDir), lifecycle)
 }
 
 /**
@@ -58,50 +81,51 @@ export function parseNewEntries(sessionName: string, workdir: string, conversati
  * directly. Use this when the path was discovered another way (e.g. via
  * findTranscriptByConvId for a session with no workspace.path, like marshal).
  */
-export function parseNewEntriesAt(sessionName: string, path: string): RecapEntry[] {
+export function parseNewEntriesAt(sessionName: string, path: string, lifecycle: 'running' | 'idle' = 'idle'): RecapEntry[] {
   if (!existsSync(path)) return []
 
   const size = statSync(path).size
-  const state = offsets.get(sessionName) ?? { byteOffset: 0, carry: '' }
+  const state = offsets.get(sessionName) ?? { byteOffset: 0, carry: '', pendingTurn: null }
   // If the file was truncated/rotated, reset.
   if (size < state.byteOffset) {
     state.byteOffset = 0
     state.carry = ''
+    state.pendingTurn = null
   }
-  if (size === state.byteOffset) return []
 
   // Parse all new lines into typed records
-  const records: Array<{ type: 'user' | 'agent'; text: string; timestamp: string; toolUses: number }> = []
-  const fd = openSync(path, 'r')
-  try {
-    const CHUNK = 256 * 1024 // 256KB
-    const buf = Buffer.alloc(CHUNK)
-    let pos = state.byteOffset
-    let carry = state.carry
-    while (pos < size) {
-      const toRead = Math.min(CHUNK, size - pos)
-      const n = readSync(fd, buf, 0, toRead, pos)
-      if (n <= 0) break
-      pos += n
-      const text = carry + buf.subarray(0, n).toString('utf-8')
-      const parts = text.split('\n')
-      carry = parts.pop() ?? ''
-      for (const line of parts) {
-        if (!line.trim()) continue
-        try {
-          const obj = JSON.parse(line)
-          const rec = extractRecord(obj)
-          if (rec) records.push(rec)
-        } catch {
-          // Skip malformed lines
+  const records: ParsedRecord[] = []
+  if (size > state.byteOffset) {
+    const fd = openSync(path, 'r')
+    try {
+      const CHUNK = 256 * 1024 // 256KB
+      const buf = Buffer.alloc(CHUNK)
+      let pos = state.byteOffset
+      let carry = state.carry
+      while (pos < size) {
+        const toRead = Math.min(CHUNK, size - pos)
+        const n = readSync(fd, buf, 0, toRead, pos)
+        if (n <= 0) break
+        pos += n
+        const text = carry + buf.subarray(0, n).toString('utf-8')
+        const parts = text.split('\n')
+        carry = parts.pop() ?? ''
+        for (const line of parts) {
+          if (!line.trim()) continue
+          try {
+            const obj = JSON.parse(line)
+            const rec = extractRecord(obj)
+            if (rec) records.push(rec)
+          } catch {
+            // Skip malformed lines
+          }
         }
       }
+      state.byteOffset = pos
+      state.carry = carry
+    } finally {
+      closeSync(fd)
     }
-    state.byteOffset = pos
-    state.carry = carry
-    offsets.set(sessionName, state)
-  } finally {
-    closeSync(fd)
   }
 
   // Group into turns: each user message starts a new turn.
@@ -111,31 +135,48 @@ export function parseNewEntriesAt(sessionName: string, path: string): RecapEntry
   // no text and so don't become `lastAgent`), and attach the total to the
   // turn-closing agent entry.
   const entries: RecapEntry[] = []
-  let lastAgent: { text: string; timestamp: string } | null = null
-  let turnToolUses = 0
+  const flushPendingTurn = () => {
+    const turn = state.pendingTurn
+    if (!turn?.lastAgent) return
+    const startMs = Date.parse(turn.startedAt)
+    const completedMs = Date.parse(turn.lastAgent.timestamp)
+    const durationMs = Number.isFinite(startMs) && Number.isFinite(completedMs) && completedMs >= startMs
+      ? completedMs - startMs
+      : undefined
+    entries.push({
+      id: `claude:completed:${turn.id}`,
+      type: 'status', statusKind: 'completed', content: 'Completed',
+      timestamp: turn.lastAgent.timestamp,
+      ...(durationMs === undefined ? {} : { durationMs }),
+    })
+    entries.push({
+      id: `claude:agent:${turn.lastAgent.id}`,
+      type: 'agent', content: turn.lastAgent.text,
+      timestamp: turn.lastAgent.timestamp,
+      toolUses: turn.toolUses,
+    })
+    state.pendingTurn = null
+  }
 
   for (const rec of records) {
     if (rec.type === 'user') {
-      // Flush previous turn's last agent response
-      if (lastAgent) {
-        entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp, toolUses: turnToolUses })
-        lastAgent = null
-      }
-      turnToolUses = 0
-      entries.push({ id: randomUUID(), type: 'user', content: rec.text, timestamp: rec.timestamp })
+      // A later human prompt proves the previous turn closed, including when
+      // several historical turns arrive in one initial transcript read.
+      flushPendingTurn()
+      state.pendingTurn = { id: rec.id, startedAt: rec.timestamp, lastAgent: null, toolUses: 0 }
+      entries.push({ id: `claude:user:${rec.id}`, type: 'user', content: rec.text, timestamp: rec.timestamp })
     } else {
-      turnToolUses += rec.toolUses
+      if (!state.pendingTurn) continue
+      state.pendingTurn.toolUses += rec.toolUses
       // Only records that carry text can become the turn's final response; a
       // tool-only record contributes its count above but must not blank out the
       // last real assistant text.
-      if (rec.text) lastAgent = { text: rec.text, timestamp: rec.timestamp }
+      if (rec.text) state.pendingTurn.lastAgent = rec
     }
   }
 
-  // Flush trailing agent response
-  if (lastAgent) {
-    entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp, toolUses: turnToolUses })
-  }
+  if (lifecycle === 'idle') flushPendingTurn()
+  offsets.set(sessionName, state)
 
   return entries
 }
@@ -338,15 +379,26 @@ function isLocalCommandArtifact(obj: Record<string, unknown>): boolean {
 
 // --- Record extraction ---
 
-function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; text: string; timestamp: string; toolUses: number } | null {
+function extractRecord(obj: Record<string, unknown>): ParsedRecord | null {
   const type = obj.type as string
   if (!type) return null
 
-  const timestamp = (obj.timestamp as string) ?? new Date().toISOString()
+  // Do not synthesize wall-clock time: replay of a timestamp-less legacy
+  // record must derive the same identity and must not invent a duration.
+  const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : ''
+  const message = obj.message as Record<string, unknown> | undefined
+  const nativeId = typeof obj.uuid === 'string'
+    ? obj.uuid
+    : typeof message?.id === 'string'
+      ? message.id
+      : null
 
   if (type === 'user') {
     const text = extractUserText(obj)
-    return text ? { type: 'user', text, timestamp, toolUses: 0 } : null
+    return text ? {
+      type: 'user', id: nativeId ?? stableDigest('user', timestamp, text),
+      text, timestamp, toolUses: 0,
+    } : null
   }
   if (type === 'assistant') {
     const text = extractAssistantText(obj)
@@ -354,7 +406,11 @@ function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; 
     // Keep tool-only assistant records (no text) so their tool_use blocks are
     // counted toward the turn; drop records that have neither text nor tools.
     if (!text && toolUses === 0) return null
-    return { type: 'agent', text: text ?? '', timestamp, toolUses }
+    const agentText = text ?? ''
+    return {
+      type: 'agent', id: nativeId ?? stableDigest('agent', timestamp, agentText, String(toolUses)),
+      text: agentText, timestamp, toolUses,
+    }
   }
   return null
 }

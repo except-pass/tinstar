@@ -1,0 +1,6 @@
+{"timestamp":"2026-08-11T12:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-current-1","started_at":1786449600}}
+{"timestamp":"2026-08-11T12:00:00.050Z","type":"response_item","payload":{"type":"message","id":"msg-environment","role":"user","content":[{"type":"input_text","text":"<environment_context>synthetic host context</environment_context>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-current-1"}}}
+{"timestamp":"2026-08-11T12:00:00.100Z","type":"response_item","payload":{"type":"message","id":"msg-human-1","role":"user","content":[{"type":"input_text","text":"Show this prompt in Recap"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-current-1"}}}
+{"timestamp":"2026-08-11T12:00:00.200Z","type":"response_item","payload":{"type":"message","id":"msg-developer","role":"developer","content":[{"type":"input_text","text":"hidden developer instruction"}]}}
+{"timestamp":"2026-08-11T12:00:00.300Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"hidden reasoning"}]}}
+{"timestamp":"2026-08-11T12:01:12.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-current-1","last_agent_message":"Visible final answer","started_at":1786449600,"completed_at":1786449672,"duration_ms":72000}}

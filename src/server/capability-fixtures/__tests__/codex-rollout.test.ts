@@ -259,6 +259,7 @@ describe('Codex rollout chronology', () => {
     'rollout-spawned-thread': 1,
     'rollout-partial-token-count': 1,
     'rollout-malformed-tail': 0,
+    'rollout-current-user-message': 1,
   }
 
   it.each(CODEX_ROLLOUT_FIXTURES)('%s keeps timestamped append order monotonic', (fixture) => {
@@ -344,10 +345,92 @@ describe('parseCodexRecapEntries over the frozen rollouts', () => {
     const entries = parseCodexRecapEntries('recap-basic', scratch('rollout-root-session'))
     expect(entries.map(e => ({ type: e.type, content: e.content }))).toEqual([
       { type: 'user', content: 'add a fixture' },
+      { type: 'status', content: 'Completed' },
       { type: 'agent', content: 'Added the fixture.' },
     ])
     // Timestamps come from the envelope, not the payload.
     expect(entries[0]?.timestamp).toBe('2026-07-30T18:33:38.010Z')
+  })
+
+  it('emits current user-role input_text while running and excludes host-owned records', () => {
+    resetCodexOffset('recap-current-running')
+    const entries = parseCodexRecapEntries(
+      'recap-current-running',
+      scratch('rollout-current-user-message'),
+      'running',
+    )
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      id: 'codex:message:msg-human-1',
+      type: 'user',
+      content: 'Show this prompt in Recap',
+    })
+  })
+
+  it('places a duration-bearing completion before the final answer', () => {
+    resetCodexOffset('recap-current-complete')
+    const entries = parseCodexRecapEntries(
+      'recap-current-complete',
+      scratch('rollout-current-user-message'),
+      'idle',
+    )
+
+    expect(entries.map(entry => ({
+      type: entry.type,
+      content: entry.content,
+      statusKind: entry.statusKind,
+      durationMs: entry.durationMs,
+    }))).toEqual([
+      { type: 'user', content: 'Show this prompt in Recap', statusKind: undefined, durationMs: undefined },
+      { type: 'status', content: 'Completed', statusKind: 'completed', durationMs: 72_000 },
+      { type: 'agent', content: 'Visible final answer', statusKind: undefined, durationMs: undefined },
+    ])
+  })
+
+  it('retains a split JSONL tail until the terminating newline and emits it once', () => {
+    const path = join(tmp, 'split.jsonl')
+    const line = '{"timestamp":"2026-08-11T12:00:00.100Z","type":"response_item","payload":{"type":"message","id":"msg-split","role":"user","content":[{"type":"input_text","text":"split prompt"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-split"}}}'
+    writeFileSync(path, line.slice(0, 80))
+    resetCodexOffset('recap-split')
+    expect(parseCodexRecapEntries('recap-split', path, 'running')).toEqual([])
+    writeFileSync(path, `${line.slice(80)}\n`, { flag: 'a' })
+    expect(parseCodexRecapEntries('recap-split', path, 'running').map(entry => entry.content)).toEqual(['split prompt'])
+    expect(parseCodexRecapEntries('recap-split', path, 'running')).toEqual([])
+  })
+
+  it('replays stable identities after its offset is reset', () => {
+    const path = scratch('rollout-current-user-message')
+    resetCodexOffset('recap-stable')
+    const first = parseCodexRecapEntries('recap-stable', path, 'idle').map(entry => entry.id)
+    resetCodexOffset('recap-stable')
+    const replay = parseCodexRecapEntries('recap-stable', path, 'idle').map(entry => entry.id)
+    expect(replay).toEqual(first)
+  })
+
+  it('coalesces historical and current representations of the same prompt', () => {
+    const path = join(tmp, 'dual-prompt.jsonl')
+    writeFileSync(path, [
+      { timestamp: '2026-08-11T12:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-dual' } },
+      { timestamp: '2026-08-11T12:00:00.100Z', type: 'event_msg', payload: { type: 'user_message', message: 'same prompt' } },
+      { timestamp: '2026-08-11T12:00:00.200Z', type: 'response_item', payload: {
+        type: 'message', id: 'msg-dual', role: 'user', content: [{ type: 'input_text', text: 'same prompt' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn-dual' },
+      } },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n')
+    resetCodexOffset('recap-dual')
+    expect(parseCodexRecapEntries('recap-dual', path, 'running').filter(entry => entry.type === 'user')).toHaveLength(1)
+  })
+
+  it('omits duration when completion timing is unavailable', () => {
+    const path = join(tmp, 'no-duration.jsonl')
+    writeFileSync(path, [
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-no-duration', started_at: 'invalid' } },
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-no-duration', last_agent_message: 'done', completed_at: 'invalid' } },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n')
+    resetCodexOffset('recap-no-duration')
+    const completion = parseCodexRecapEntries('recap-no-duration', path, 'idle').find(entry => entry.statusKind === 'completed')
+    expect(completion?.durationMs).toBeUndefined()
   })
 
   it('ignores agent_message events — only task_complete closes a turn', () => {
@@ -387,12 +470,14 @@ describe('parseCodexRecapEntries over the frozen rollouts', () => {
     resetCodexOffset('recap-resume')
     expect(parseCodexRecapEntries('recap-resume', path).map(e => e.content)).toEqual([
       'first synthetic prompt',
+      'Completed',
       'First synthetic answer.',
     ])
 
     writeFileSync(path, `${lines.slice(resumeMarker).join('\n')}\n`, { flag: 'a' })
     expect(parseCodexRecapEntries('recap-resume', path).map(e => e.content)).toEqual([
       'second synthetic prompt',
+      'Completed',
       'Second synthetic answer.',
     ])
   })
@@ -404,13 +489,13 @@ describe('parseCodexRecapEntries over the frozen rollouts', () => {
     // If a watched rollout path is replaced by a shorter file, the offset must
     // reset independently of resume (which appends to the existing rollout).
     copyFileSync(codexRolloutPath('rollout-partial-token-count'), path)
-    expect(parseCodexRecapEntries('recap-rotate', path).map(e => e.content)).toEqual(['Done.'])
+    expect(parseCodexRecapEntries('recap-rotate', path).map(e => e.content)).toEqual(['Completed', 'Done.'])
   })
 
   it('skips blank, non-JSON, and truncated lines without losing the good ones', () => {
     resetCodexOffset('recap-malformed')
     const entries = parseCodexRecapEntries('recap-malformed', scratch('rollout-malformed-tail'))
-    expect(entries.map(e => e.content)).toEqual(['first prompt', 'First answer.'])
+    expect(entries.map(e => e.content)).toEqual(['first prompt', 'Completed', 'First answer.'])
   })
 
   it('returns [] for a missing file', () => {

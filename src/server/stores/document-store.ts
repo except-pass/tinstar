@@ -226,19 +226,24 @@ function recapSemanticKey(entry: RecapEntry): string {
   })
 }
 
+function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.id)
+}
+
 /** Keep the first occurrence of a recap event. Stable source IDs handle normal
  * replay; the semantic key repairs histories written by older parsers whose IDs
  * were random on every read. Exactness is intentional so repeated prompts from
  * distinct turns remain distinct whenever their timestamp or metadata differs. */
 function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
   const ids = new Set<string>()
-  const semantics = new Set<string>()
+  const legacySemantics = new Set<string>()
   const normalized: RecapEntry[] = []
   for (const entry of entries) {
     const semanticKey = recapSemanticKey(entry)
-    if (ids.has(entry.id) || semantics.has(semanticKey)) continue
+    const legacyRandomId = hasLegacyRandomRecapId(entry)
+    if (ids.has(entry.id) || (legacyRandomId && legacySemantics.has(semanticKey))) continue
     ids.add(entry.id)
-    semantics.add(semanticKey)
+    if (legacyRandomId) legacySemantics.add(semanticKey)
     normalized.push(entry)
   }
   return normalized

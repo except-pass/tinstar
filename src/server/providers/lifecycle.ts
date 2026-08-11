@@ -80,7 +80,7 @@ export interface ProviderTranscriptObservations {
 export interface ProviderTranscriptAdapter {
   discover(request: ProviderTranscriptDiscovery): Promise<string | null>
   readStatus(transcriptPath: string): ProviderTranscriptStatus | null
-  parseRecapEntries(sessionName: string, transcriptPath: string): RecapEntry[]
+  parseRecapEntries(sessionName: string, transcriptPath: string, lifecycle: 'running' | 'idle'): RecapEntry[]
   resetOffset(sessionName: string): void
   /** Optional normalized native observations, polled independently of status. */
   observations?: ProviderTranscriptObservations
