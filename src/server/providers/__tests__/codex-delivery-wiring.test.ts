@@ -6,6 +6,7 @@ import type { TinstarConfig } from '../../sessions/config'
 import type { Session } from '../../sessions/session'
 import { createDefaultProviderRegistry } from '../lifecycle'
 import { registerCodexDelivery } from '../codex-delivery-wiring'
+import { rolloutUserInputItemCompleted } from '../../sessions/__tests__/codex-rollout-shapes'
 
 const { discoverCodexTranscript } = vi.hoisted(() => ({
   discoverCodexTranscript: vi.fn(),
@@ -139,11 +140,9 @@ describe('Codex production delivery wiring', () => {
       text: 'confirm the production mapping',
     })
     if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
-    writeFileSync(transcriptPath, `${JSON.stringify({
-      timestamp: '2026-08-01T12:00:01.000Z',
-      type: 'event_msg',
-      payload: { type: 'user_message', message: submittedPrompt },
-    })}\n`)
+    writeFileSync(transcriptPath, `${JSON.stringify(
+      rolloutUserInputItemCompleted(submittedPrompt, '2026-08-01T12:00:01.000Z'),
+    )}\n`)
 
     await expect(delivery.confirm!(accepted)).resolves.toMatchObject({
       state: 'confirmed',
@@ -216,11 +215,9 @@ describe('Codex production delivery wiring', () => {
       text: 'confirm standalone rollout mapping',
     })
     if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
-    writeFileSync(transcriptPath, `${JSON.stringify({
-      timestamp: '2026-08-01T12:00:01.000Z',
-      type: 'event_msg',
-      payload: { type: 'user_message', message: submittedPrompt },
-    })}\n`)
+    writeFileSync(transcriptPath, `${JSON.stringify(
+      rolloutUserInputItemCompleted(submittedPrompt, '2026-08-01T12:00:01.000Z'),
+    )}\n`)
 
     await expect(delivery.confirm!(accepted)).resolves.toMatchObject({
       state: 'confirmed',

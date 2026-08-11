@@ -1,5 +1,34 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { isTinstarSelfEmbedUrl, TINSTAR_SELF_EMBED_MESSAGE } from '../browser-widget-url'
+import {
+  registerReachOrigin,
+  resetOriginAllowlistForTests,
+  unregisterReachOrigin,
+} from '../originAllowlist'
+
+describe('isTinstarSelfEmbedUrl — the reach origin counts as self', () => {
+  afterEach(() => { resetOriginAllowlistForTests() })
+
+  it('recognizes a registered reach URL as the dashboard', () => {
+    // A reach URL is this same dashboard under another name, so nesting it in a
+    // browser widget recurses exactly as a loopback URL would. Without this the
+    // guard is silently absent for the remote case it exists for.
+    expect(isTinstarSelfEmbedUrl('https://host.tailnet.ts.net/')).toBe(false)
+    registerReachOrigin('https://host.tailnet.ts.net')
+    expect(isTinstarSelfEmbedUrl('https://host.tailnet.ts.net/')).toBe(true)
+  })
+
+  it('still exempts the artifact endpoint on the reach origin', () => {
+    registerReachOrigin('https://host.tailnet.ts.net')
+    expect(isTinstarSelfEmbedUrl('https://host.tailnet.ts.net/api/artifacts/abc')).toBe(false)
+  })
+
+  it('stops recognizing it once reach is revoked', () => {
+    registerReachOrigin('https://host.tailnet.ts.net')
+    unregisterReachOrigin('https://host.tailnet.ts.net')
+    expect(isTinstarSelfEmbedUrl('https://host.tailnet.ts.net/')).toBe(false)
+  })
+})
 
 describe('isTinstarSelfEmbedUrl', () => {
   const env = process.env

@@ -1,3 +1,5 @@
+import { reachOrigins } from './originAllowlist'
+
 /** Default Tinstar dashboard ports — standalone and dev server. */
 const DEFAULT_TINSTAR_PORTS = [5273, 5280] as const
 
@@ -22,6 +24,14 @@ function tinstarDashboardOrigins(): Set<string> {
     try {
       origins.add(new URL(dashUrl).origin)
     } catch { /* ignore malformed env */ }
+  }
+  // A reach URL is this same dashboard by another name, so nesting it in a
+  // browser widget recurses exactly as a loopback URL would. Without this the
+  // guard is silently absent for the remote case it was written for.
+  for (const origin of reachOrigins()) {
+    try {
+      origins.add(new URL(origin).origin)
+    } catch { /* a provider gave us something unparseable */ }
   }
   return origins
 }

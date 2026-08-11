@@ -48,7 +48,7 @@ async function ask(question) {
 // position is a typo — we refuse it rather than silently starting the server.
 const KNOWN_COMMANDS = [
   'doctor', 'install-skills', 'install-statusline', 'status',
-  'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
+  'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs', 'reach',
   'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'surfaces', 'help',
 ]
 
@@ -176,6 +176,13 @@ async function main() {
   if (process.argv[2] === 'status') {
     const { run } = await import('./tinstar/status.js')
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  // Remote reach — the opt-in surface, and the only writer of the preference
+  // the server re-establishes from on every start.
+  if (process.argv[2] === 'reach') {
+    const { run } = await import('./tinstar/commands/reach.js')
+    return run(process.argv.slice(3)).catch(e => { console.error(e.message); process.exit(1) })
   }
 
   // Service management — drives the systemd user unit
@@ -322,7 +329,10 @@ async function main() {
   const noOpen = process.argv.includes('--no-open')
   const portIdx = process.argv.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
-  // Collect repeated --host flags and/or a comma-separated list.
+  // Collect repeated --host flags and/or a comma-separated list. Deliberately
+  // no default: an empty list reaches startServer, which is the single place
+  // the bind default lives. Adding one here would give the two entry points
+  // independent defaults that drift.
   const hosts = []
   for (let i = 0; i < process.argv.length; i++) {
     if (process.argv[i] === '--host' && process.argv[i + 1]) {

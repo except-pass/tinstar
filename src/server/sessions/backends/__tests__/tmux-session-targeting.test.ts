@@ -261,8 +261,8 @@ describe('session-scoped tmux targets', () => {
       port: 6123,
     }, {
       incumbentsOnPort: async () => [
-        { pid: 7373, tmuxTarget: 'tinstar-parent' },
-        { pid: 7474, tmuxTarget: 'tinstar-parent-hand' },
+        { pid: 7373, tmuxTarget: 'tinstar-parent', bindAddress: '127.0.0.1' },
+        { pid: 7474, tmuxTarget: 'tinstar-parent-hand', bindAddress: '127.0.0.1' },
       ],
       verifySurface,
       startTtyd: startSurface,
@@ -275,6 +275,47 @@ describe('session-scoped tmux targets', () => {
     expect(startSurface).not.toHaveBeenCalled()
   })
 
+  it('replaces an exact-target ttyd inherited with a wider bind', async () => {
+    // The pre-containment shape: identity matches, exposure does not. Adopting
+    // it would keep an all-interfaces terminal serving under a build that
+    // would never spawn one.
+    const startSurface = vi.fn(async () => 8383)
+    const verifySurface = vi.fn(async () => 'verified' as const)
+
+    await expect(reattachTmuxSession(config, {
+      session: parent,
+      port: 6123,
+    }, {
+      incumbentsOnPort: async () => [
+        { pid: 7373, tmuxTarget: 'tinstar-parent', bindAddress: '0.0.0.0' },
+      ],
+      verifySurface,
+      startTtyd: startSurface,
+    })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
+    expect(verifySurface).not.toHaveBeenCalled()
+    expect(startSurface).toHaveBeenCalledWith({
+      tmuxName: 'tinstar-parent',
+      port: 6123,
+      sessionName: 'parent',
+    })
+  })
+
+  it('replaces an exact-target ttyd inherited with no bind argument at all', async () => {
+    const startSurface = vi.fn(async () => 8383)
+
+    await expect(reattachTmuxSession(config, {
+      session: parent,
+      port: 6123,
+    }, {
+      incumbentsOnPort: async () => [
+        { pid: 7373, tmuxTarget: 'tinstar-parent', bindAddress: null },
+      ],
+      verifySurface: async () => 'verified',
+      startTtyd: startSurface,
+    })).resolves.toEqual({ port: 6123, ttydPid: 8383 })
+    expect(startSurface).toHaveBeenCalled()
+  })
+
   it('restarts an exact-target ttyd that is listening but unresponsive', async () => {
     const startSurface = vi.fn(async () => 8383)
 
@@ -283,7 +324,7 @@ describe('session-scoped tmux targets', () => {
       port: 6123,
     }, {
       incumbentsOnPort: async () => [
-        { pid: 7373, tmuxTarget: 'tinstar-parent' },
+        { pid: 7373, tmuxTarget: 'tinstar-parent', bindAddress: '127.0.0.1' },
       ],
       verifySurface: async () => 'unhealthy',
       startTtyd: startSurface,

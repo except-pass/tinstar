@@ -7,7 +7,24 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
+import {
+  TERMINAL_AUTH_HEADER,
+  TERMINAL_AUTH_VALUE,
+  TAILSCALE_FLOOR_VERIFIED_ON,
+  TAILSCALE_MIN_VERSION,
+  TTYD_MIN_VERSION,
+  checkExternalVersion,
+  checkReachState,
+  classifyListenerBind,
+  parseSsListeners,
+} from './tinstar/diagnostics.js'
 import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
+import {
+  MIN_SUPPORTED_CODEX_VERSION,
+  compareVersions,
+  parseCodexVersion,
+  unconfirmedAcceptedFailures,
+} from './codexSupport.js'
 
 // ── Formatting ──
 
@@ -18,16 +35,23 @@ const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const RESET = '\x1b[0m'
 
+/** Every doctor probe that speaks to a terminal presents this. */
+const TERMINAL_AUTH_HEADERS = { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE }
+
 const SYM = { pass: `${GREEN}✓${RESET}`, fail: `${RED}✗${RESET}`, warn: `${YELLOW}⚠${RESET}`, skip: `${DIM}⊘${RESET}` }
 
 function printSection(name) {
   console.log(`\n${BOLD}${name}${RESET}`)
 }
 
-function printCheck({ status, label, detail }) {
+function printCheck({ status, label, detail, remedy }) {
   const sym = SYM[status]
   const detailStr = detail ? ` ${DIM}${detail}${RESET}` : ''
   console.log(`  ${sym} ${label}${detailStr}`)
+  // A finding an operator cannot act on is only half a diagnosis, so a check
+  // that knows the fix prints it on its own line rather than burying it in the
+  // dim detail text.
+  if (remedy) console.log(`    ${YELLOW}fix:${RESET} ${remedy}`)
 }
 
 // ── Check helpers ──
@@ -65,10 +89,10 @@ function checkStandaloneTtydService() {
   }
 }
 
-function httpGet(url, timeoutMs = 3000) {
+function httpGet(url, timeoutMs = 3000, headers = {}) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url)
-    const req = httpRequest({ hostname: urlObj.hostname, port: urlObj.port, path: urlObj.pathname + urlObj.search, timeout: timeoutMs }, (res) => {
+    const req = httpRequest({ hostname: urlObj.hostname, port: urlObj.port, path: urlObj.pathname + urlObj.search, headers, timeout: timeoutMs }, (res) => {
       let body = ''
       res.on('data', chunk => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode, body }))
@@ -79,7 +103,7 @@ function httpGet(url, timeoutMs = 3000) {
   })
 }
 
-function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000) {
+function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = httpRequest({
       hostname: host,
@@ -90,6 +114,7 @@ function wsUpgradeCheck(host, port, path = '/ws', timeoutMs = 3000) {
         'Connection': 'Upgrade',
         'Sec-WebSocket-Key': Buffer.from(Math.random().toString()).toString('base64'),
         'Sec-WebSocket-Version': '13',
+        ...extraHeaders,
       },
       timeout: timeoutMs,
     })
@@ -206,6 +231,23 @@ async function doctor() {
       } catch {
         return { status: 'fail', label: 'claude — not found', detail: 'agent sessions will not start' }
       }
+    })(),
+    // codex is optional, but below the floor its rollouts cannot confirm
+    // deliveries: every NATS message to a Codex session would fail after
+    // duplicate injections, so an outdated install is a hard fail.
+    (() => {
+      const out = cmdVersion('codex', ['--version'])
+      if (!out) return { status: 'skip', label: 'codex — not installed', detail: 'Codex sessions unavailable (optional)' }
+      const version = parseCodexVersion(out)
+      if (!version) return { status: 'warn', summarize: true, label: 'codex — unrecognized version output', detail: out.slice(0, 60) }
+      if (compareVersions(version, MIN_SUPPORTED_CODEX_VERSION) < 0) {
+        return {
+          status: 'fail',
+          label: `codex ${version} — below supported ${MIN_SUPPORTED_CODEX_VERSION}`,
+          detail: 'its rollout format predates the delivery scanner; message delivery to Codex sessions will fail — upgrade codex',
+        }
+      }
+      return { status: 'pass', label: `codex ${version}` }
     })(),
   ]
   const ttydService = checkStandaloneTtydService()
@@ -407,6 +449,39 @@ async function doctor() {
     }
   }
 
+  // Delivery ledger — terminal failures where the terminal accepted every
+  // injection but the recipient transcript never yielded confirmation
+  // evidence. Genuine non-delivery fails differently (recipient replaced,
+  // submission error), so this pattern is the fingerprint of a provider
+  // transcript-format change: the scanner went blind, redelivered, and gave
+  // up. Surface it so the next codex schema change is a doctor warning, not
+  // days of silent duplicate deliveries.
+  const LEDGER = join(ROOT, 'delivery-ledger.json')
+  if (existsSync(LEDGER)) {
+    try {
+      const ledger = JSON.parse(readFileSync(LEDGER, 'utf-8'))
+      const suspects = unconfirmedAcceptedFailures(ledger.deliveries)
+      if (suspects.length > 0) {
+        const sample = suspects[0]
+        const recipient = `${sample.recipient?.providerId ?? '?'}/${sample.recipient?.sessionId ?? '?'}`
+        const c = {
+          status: 'warn',
+          summarize: true,
+          label: `${suspects.length} ${suspects.length === 1 ? 'delivery' : 'deliveries'} accepted by the terminal but never confirmed`,
+          detail: `e.g. ${sample.id} → ${recipient}; provider transcript format may have changed — check the provider CLI version`,
+        }
+        printCheck(c)
+        issues.push(c)
+      } else {
+        printCheck({ status: 'pass', label: 'no unconfirmed-but-accepted delivery failures' })
+      }
+    } catch (err) {
+      const c = { status: 'fail', label: 'delivery-ledger.json — corrupt', detail: err.message }
+      printCheck(c)
+      issues.push(c)
+    }
+  }
+
   // Stuck .deleting markers
   if (existsSync(SESSIONS_DIR)) {
     let stuckCount = 0
@@ -477,7 +552,9 @@ async function doctor() {
 
         // HTTP check
         try {
-          const resp = await httpGet(`http://localhost:${port}/`)
+          // ttyd runs with -H, so an unauthenticated probe reads 407 and every
+          // healthy terminal would be reported broken.
+          const resp = await httpGet(`http://localhost:${port}/`, 3000, TERMINAL_AUTH_HEADERS)
           if (resp.status === 200) {
             parts.push(`${GREEN}✓${RESET}http`)
           } else {
@@ -491,7 +568,7 @@ async function doctor() {
 
         // WebSocket upgrade check
         try {
-          await wsUpgradeCheck('localhost', port, '/ws')
+          await wsUpgradeCheck('localhost', port, '/ws', 3000, TERMINAL_AUTH_HEADERS)
           parts.push(`${GREEN}✓${RESET}ws`)
         } catch {
           parts.push(`${RED}✗${RESET}ws`)
@@ -529,6 +606,89 @@ async function doctor() {
   }
 
   // ────── Skills ──────
+  // ────── Exposure ──────
+  //
+  // The one section that answers "can anything off this host reach me". The
+  // bind is OBSERVED from the live listener set, never read from server.host —
+  // that file is self-reported, so a server that believed it bound loopback and
+  // did not would report itself clean.
+  printSection('Exposure')
+
+  let listeners = []
+  try {
+    listeners = parseSsListeners(
+      execSync('ss -tlnp', { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }),
+    )
+  } catch {
+    printCheck({ status: 'warn', label: 'ss unavailable — bind cannot be observed' })
+  }
+
+  const exposureChecks = []
+
+  if (listeners.length) {
+    exposureChecks.push(classifyListenerBind(
+      `Tinstar server :${serverPort}`,
+      listeners.filter(l => l.port === serverPort),
+    ))
+
+    const terminalPorts = [...new Set(
+      listeners.filter(l => l.process === 'ttyd').map(l => l.port),
+    )].sort((a, b) => a - b)
+    if (!terminalPorts.length) {
+      exposureChecks.push({ status: 'skip', label: 'no terminals running' })
+    }
+    for (const port of terminalPorts) {
+      exposureChecks.push(classifyListenerBind(
+        `terminal :${port}`,
+        listeners.filter(l => l.port === port),
+      ))
+    }
+  }
+
+  // Both operator-installed externals carry a containment guarantee, so both
+  // are gated. Reporting one and not the other was an asymmetry, not a choice.
+  exposureChecks.push(checkExternalVersion(
+    'ttyd',
+    (cmdVersion('ttyd', ['--version']) || '').replace(/^ttyd version\s*/i, '').trim() || null,
+    TTYD_MIN_VERSION,
+  ))
+
+  const tailscaleVersion = cmdExists('tailscale')
+    ? ((cmdVersion('tailscale', ['version']) || '').split('\n')[0] || '').trim() || null
+    : null
+  if (tailscaleVersion) {
+    exposureChecks.push(checkExternalVersion('tailscale', tailscaleVersion, TAILSCALE_MIN_VERSION))
+  }
+  exposureChecks.push({
+    status: 'pass',
+    label: `tailscale floor ${TAILSCALE_MIN_VERSION}`,
+    detail: `last checked against advisories ${TAILSCALE_FLOOR_VERIFIED_ON}`,
+  })
+
+  let reachMapping = null
+  try {
+    const raw = JSON.parse(readFileSync(join(ROOT, 'reach', 'mapping.json'), 'utf-8'))
+    if (raw && typeof raw.url === 'string' && typeof raw.port === 'number') reachMapping = raw
+  } catch { /* no mapping recorded */ }
+  // Left undefined when the file is missing or unreadable — see checkReachState:
+  // "could not read it" and "the operator said off" must not collapse together.
+  let reachPreferenceEnabled
+  try {
+    const raw = JSON.parse(readFileSync(join(ROOT, 'reach', 'preference.json'), 'utf-8'))
+    if (raw && typeof raw.enabled === 'boolean') reachPreferenceEnabled = raw.enabled
+  } catch { /* no preference recorded */ }
+  exposureChecks.push(checkReachState({
+    providerPresent: Boolean(tailscaleVersion),
+    mapping: reachMapping,
+    serverPort: reachMapping ? serverPort : undefined,
+    preferenceEnabled: reachPreferenceEnabled,
+  }))
+
+  for (const c of exposureChecks) {
+    printCheck(c)
+    if (c.status === 'fail') issues.push(c)
+  }
+
   printSection('Skills')
 
   const commitSkillPath = join(homedir(), '.claude', 'commands', 'tinstar-commit.md')

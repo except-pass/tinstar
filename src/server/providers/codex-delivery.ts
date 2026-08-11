@@ -681,6 +681,7 @@ export class CodexDeliveryAdapter {
       resolvedTranscript,
     ].filter((path): path is string => Boolean(path)))]
     let readableTranscript = false
+    let sawLegacyUserInput = false
     for (const transcriptPath of transcriptPaths) {
       const priorScan = this.confirmationOffsets.get(confirmationKey)
       let scan: Awaited<ReturnType<typeof scanCodexUserMessages>>
@@ -706,6 +707,7 @@ export class CodexDeliveryAdapter {
       }
       if (scan.available) {
         readableTranscript = true
+        sawLegacyUserInput ||= scan.sawLegacyUserInput
         if (scan.identity) {
           this.rememberConfirmationOffset(confirmationKey, {
             path: transcriptPath,
@@ -743,6 +745,19 @@ export class CodexDeliveryAdapter {
       observationUnavailableReason = null
     } else {
       observationUnavailableReason ??= 'Codex rollout is not available yet'
+    }
+    if (sawLegacyUserInput) {
+      // Pre-0.147.0 codex records user input in a rollout shape Tinstar no
+      // longer parses, so no retry can ever be confirmed. Failing terminally
+      // here is what keeps an old codex from receiving duplicate injections.
+      this.confirmationOffsets.delete(confirmationKey)
+      return {
+        ...identity,
+        state: 'failed',
+        checkedAt: this.now(),
+        reason: 'The Codex CLI writes a legacy rollout format Tinstar no longer reads; upgrade the codex CLI',
+        retryable: false,
+      }
     }
     if (
       cachedTranscript

@@ -454,7 +454,12 @@ function renderedSteps(card: SlateSurface): Record<string, string> {
   return out
 }
 
-describe('the two slice surfaces, over the real chain', () => {
+// Every case here shells out to real `git` against a real temp worktree, so its wall
+// clock is set by process spawn and disk, not by the assertions. Unloaded each takes
+// 1.0-1.6s; under a full-suite run they contend with ~400 other files and the slowest
+// crosses the 5s default. Raised rather than narrowed to the one case that lost the
+// race first — they are all the same shape, and which one tips is a coin flip.
+describe('the two slice surfaces, over the real chain', { timeout: 30_000 }, () => {
   it('reports the repository\'s actual merge state, witnessed, with no agent woken', async () => {
     const c = chain()
     const at = c.clock.now

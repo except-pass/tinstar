@@ -13,12 +13,18 @@
 // ~/.config/tinstar/service.json so `restart` can rebuild from the right tree
 // even if invoked from elsewhere.
 
-import { execSync, spawnSync } from 'node:child_process'
+import { execFileSync, execSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, userInfo } from 'node:os'
 import { getConfigRoot } from '../../configRoot.js'
+import {
+  REACH_SUDOERS_PATH,
+  buildReachSudoersRule,
+  describeReachGrant,
+  unitNeedsRegeneration,
+} from '../reachGrant.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..', '..', '..')
@@ -47,14 +53,6 @@ function flag(args, name, fallback) {
   const i = args.indexOf(name)
   if (i === -1) return fallback
   return args[i + 1] ?? fallback
-}
-
-function detectTailscaleIp() {
-  const ip = shCapture('/usr/bin/tailscale ip --4').split('\n')[0].trim()
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
-    throw new Error(`tailscale ip --4 returned unexpected output: "${ip}"`)
-  }
-  return ip
 }
 
 function detectNodePath() {
@@ -127,7 +125,7 @@ function installCliShim(repoRoot) {
   }
 }
 
-function buildUnit({ repoRoot, nodePath, port, corsOrigins, extraPathDirs }) {
+export function buildUnit({ repoRoot, nodePath, port, extraPathDirs }) {
   const nodeBinDir = dirname(nodePath)
   // PATH for the service. We include the user's local bin dirs (where `claude`
   // and friends typically live) plus standard system paths. Preflight checks
@@ -141,8 +139,9 @@ function buildUnit({ repoRoot, nodePath, port, corsOrigins, extraPathDirs }) {
   // De-dup while preserving order.
   const seen = new Set()
   const path = pathEntries.filter(p => p && !seen.has(p) && (seen.add(p), true)).join(':')
-  // ExecStart resolves the tailscale IPv4 at start time so the unit keeps
-  // working if the tailscale address changes (rare but free correctness).
+  // ExecStart names no host. The server binds loopback by default, and reach
+  // fronts that bind rather than widening it — pinning a tailnet address here
+  // (as this unit used to) re-opens exactly what containment closed.
   return `[Unit]
 Description=Tinstar Agent Orchestrator
 Documentation=https://github.com/anthropics/tinstar
@@ -160,10 +159,9 @@ Type=simple
 KillMode=process
 WorkingDirectory=${repoRoot}
 Environment=NODE_ENV=production
-Environment=TINSTAR_CORS_ORIGINS=${corsOrigins}
 Environment=PATH=${path}
 Environment=HOME=${homedir()}
-ExecStart=/bin/bash -c 'exec "${nodePath}" "${repoRoot}/bin/tinstar.js" --port ${port} --no-open --no-setup --host 127.0.0.1 --host $(/usr/bin/tailscale ip --4 | head -n1)'
+ExecStart="${nodePath}" "${repoRoot}/bin/tinstar.js" --port ${port} --no-open --no-setup
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10
@@ -185,28 +183,17 @@ function writeServiceConfig(cfg) {
 }
 
 async function installService(args) {
-  if (!existsSync('/usr/bin/tailscale')) {
-    throw new Error('tailscale not found at /usr/bin/tailscale — install it first')
-  }
+  // tailscale is a reach prerequisite, not a service prerequisite: the unit
+  // runs fine on a host that never wants remote access.
   const port = parseInt(flag(args, '--port', '5273'))
   const repoRoot = REPO_ROOT
   const nodePath = detectNodePath()
-  const tsIp = detectTailscaleIp()
   const extraPathDirs = collectUserBinDirs()
-  const corsOrigins = [
-    'tauri://localhost',
-    'https://tauri.localhost',
-    'http://tauri.localhost',
-    `http://localhost:${port}`,
-    `http://infrapoc:${port}`,
-    `http://${tsIp}:${port}`,
-  ].join(',')
 
   console.log(`${BOLD}Installing tinstar systemd user unit${RESET}\n`)
   console.log(`  ${DIM}Repo:${RESET}      ${repoRoot}`)
   console.log(`  ${DIM}Node:${RESET}      ${nodePath}`)
   console.log(`  ${DIM}Port:${RESET}      ${port}`)
-  console.log(`  ${DIM}TS IPv4:${RESET}   ${tsIp} ${DIM}(re-resolved at every start)${RESET}`)
   console.log(`  ${DIM}Extra PATH:${RESET} ${extraPathDirs.join(':') || '(none)'}`)
   console.log(`  ${DIM}Unit path:${RESET} ${UNIT_PATH}\n`)
 
@@ -216,7 +203,7 @@ async function installService(args) {
   ensureClaudeOnPath(extraPathDirs)
 
   mkdirSync(UNIT_DIR, { recursive: true })
-  const unit = buildUnit({ repoRoot, nodePath, port, corsOrigins, extraPathDirs })
+  const unit = buildUnit({ repoRoot, nodePath, port, extraPathDirs })
   writeFileSync(UNIT_PATH, unit)
   console.log(`${GREEN}✓${RESET} wrote ${UNIT_PATH}`)
 
@@ -256,8 +243,9 @@ async function installService(args) {
   sh(`systemctl --user enable --now ${UNIT_NAME}`)
 
   console.log(`\n${GREEN}✓${RESET} ${BOLD}tinstar service installed and running${RESET}`)
-  console.log(`${DIM}Reachable at: http://infrapoc:${port}${RESET}`)
+  console.log(`${DIM}Reachable at: http://localhost:${port} (loopback only — see \`tinstar reach\`)${RESET}`)
   console.log(`${DIM}Restart with:  tinstar restart${RESET}`)
+  console.log(`${DIM}Remote access: tinstar reach on${RESET}`)
   console.log(`${DIM}Tail logs:     tinstar logs${RESET}`)
 }
 
@@ -269,6 +257,7 @@ async function uninstallService() {
   }
   try { sh(`systemctl --user daemon-reload`) } catch { /* fine */ }
   try { unlinkSync(SERVICE_CONFIG_PATH) } catch { /* fine */ }
+  removeReachGrant()
   // Remove the CLI shim if it points at our repo.
   const linkPath = join(homedir(), 'bin', 'tinstar')
   try {
@@ -284,7 +273,87 @@ async function uninstallService() {
   console.log(`${GREEN}✓${RESET} tinstar service uninstalled`)
 }
 
+/**
+ * Install the scoped sudoers drop-in, printing its literal text first.
+ *
+ * Called from `tinstar reach on`, NOT from `install-service`. An operator who
+ * installs the service and never wants remote access should never acquire a
+ * root-adjacent rule; and the moment they DO ask for reach is the moment they
+ * are present to read the rule before it is written. Showing it is not
+ * optional — this is a sudoers grant on a machine running autonomous agents.
+ *
+ * Returns whether the grant is in place, so the caller can refuse to enable
+ * reach rather than leave it failing on privilege with no explanation.
+ */
+export function installReachGrant({ port }) {
+  const tailscalePath = '/usr/bin/tailscale'
+  if (!existsSync(tailscalePath)) {
+    console.log(`${DIM}tailscale is not installed — reach needs it.${RESET}`)
+    return false
+  }
+  const user = userInfo().username
+  console.log()
+  console.log(describeReachGrant({ user, tailscalePath, port }))
+  console.log()
+
+  const rule = buildReachSudoersRule({ user, tailscalePath, port })
+  // Staged 0600, not 0440: a read-only staging file makes every retry fail on
+  // the leftover from the previous attempt. The INSTALLED drop-in is still
+  // 0440 root:root — `install -m 0440` sets that, which is what sudo requires.
+  const staged = join(getConfigRoot(), 'tinstar-reach.sudoers')
+  try {
+    mkdirSync(getConfigRoot(), { recursive: true })
+    writeFileSync(staged, `${rule}\n`, { mode: 0o600 })
+    // Validated BEFORE anything reaches /etc/sudoers.d. A malformed drop-in
+    // there locks every user out of sudo, so it is never installed unchecked.
+    // argv form throughout: a config root containing a space or a shell
+    // metacharacter must not be able to reshape a sudo command line.
+    execFileSync('visudo', ['-cf', staged], { stdio: 'inherit' })
+    execFileSync(
+      'sudo',
+      ['install', '-m', '0440', '-o', 'root', '-g', 'root', staged, REACH_SUDOERS_PATH],
+      { stdio: 'inherit' },
+    )
+    console.log(`${GREEN}✓${RESET} installed ${REACH_SUDOERS_PATH}`)
+    return true
+  } catch (err) {
+    console.log(`${YELLOW}!${RESET} reach privilege grant not installed: ${err.message}`)
+    console.log(`${DIM}Reach cannot establish until it is. Re-run \`tinstar reach on\` to retry.${RESET}`)
+    return false
+  } finally {
+    try { unlinkSync(staged) } catch { /* never staged, or already gone */ }
+  }
+}
+
+export function removeReachGrant() {
+  if (!existsSync(REACH_SUDOERS_PATH)) return
+  try {
+    execFileSync('sudo', ['rm', '-f', REACH_SUDOERS_PATH], { stdio: 'inherit' })
+    console.log(`${GREEN}✓${RESET} removed ${REACH_SUDOERS_PATH}`)
+  } catch (err) {
+    console.log(`${YELLOW}!${RESET} could not remove ${REACH_SUDOERS_PATH}: ${err.message}`)
+    console.log(`${DIM}Remove it by hand: sudo rm ${REACH_SUDOERS_PATH}${RESET}`)
+  }
+}
+
+/**
+ * A unit written before the loopback default silently undoes containment: it
+ * pins a tailnet address into --host. Say so at every lifecycle command rather
+ * than only at install, because the operator who most needs to hear it is the
+ * one who upgraded and never re-ran the installer.
+ */
+function warnIfUnitIsStale() {
+  let unitText = null
+  try { unitText = readFileSync(UNIT_PATH, 'utf-8') } catch { return }
+  const verdict = unitNeedsRegeneration(unitText)
+  if (!verdict.needsRegeneration) return
+  console.log(`${YELLOW}!${RESET} ${BOLD}${UNIT_PATH} predates the loopback bind change${RESET}`)
+  for (const reason of verdict.reasons) console.log(`  ${DIM}- ${reason}${RESET}`)
+  console.log(`  ${DIM}Regenerate with: tinstar install-service --port <port>${RESET}`)
+}
+
 function ensureInstalled() {
+  warnIfUnitIsStale()
   if (!existsSync(UNIT_PATH)) {
     throw new Error(`unit not installed (${UNIT_PATH} missing). Run: tinstar install-service`)
   }
