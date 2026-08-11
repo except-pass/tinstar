@@ -51,6 +51,7 @@ import {
   messageRouterMasterKey,
 } from '../../messaging/message-router-auth'
 import { natsControlSocketPath } from '../nats-control'
+import { reapSessionNatsChannelServer } from '../natsReconnect'
 export { natsControlSocketPath } from '../nats-control'
 
 // NATS channel server paths come from config (see config.ts)
@@ -959,6 +960,9 @@ export async function createTmuxSession(
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
   let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    // Preflight: a prior stop that raced, or a crash before stop ran, can leave
+    // a live channel-server on this socket. Reclaim before the agent rebinds.
+    await reapSessionNatsChannelServer(opts.session.name)
     const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
@@ -1123,6 +1127,7 @@ export async function startTmuxSession(
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
   let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    await reapSessionNatsChannelServer(opts.session.name)
     const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
@@ -1294,6 +1299,11 @@ export async function stopTmuxSession(
     const failure = err as { stderr?: string | Buffer }
     if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
+
+  // Channel-server MCPs often survive tmux kill-session (reparent to systemd
+  // --user) and keep the per-session control socket. Reap explicitly so the
+  // next start can bind — same lever as /nats-reconnect.
+  await reapSessionNatsChannelServer(session.name)
 }
 
 export async function deleteTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
@@ -1311,6 +1321,9 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
     const failure = err as { stderr?: string | Buffer }
     if (!isOrdinaryTmuxSessionMiss(failure, failure.stderr)) throw err
   }
+
+  // Same orphan path as stop — delete must not leave a socket squatter either.
+  await reapSessionNatsChannelServer(session.name)
 }
 
 interface ReattachTmuxSessionDeps {

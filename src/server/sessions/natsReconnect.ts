@@ -8,9 +8,17 @@
 //
 // We match the process by its unique --control-socket path (one per session),
 // so we never touch another session's channel-server or the tinstar host.
+//
+// Same lever runs on session stop/delete and as a start/create preflight: Codex
+// (and friends) spawn nats-channel-mcp as a child that often reparents to
+// systemd --user when the agent exits, keeping `/tmp/tinstar-nats-<session>.sock`
+// forever. tmux kill-session does not reap those grandchildren, so the next
+// required-MCP start dies with "control socket … already in use".
 
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
+import { natsControlSocketPath } from './nats-control'
 
 const execFileAsync = promisify(execFile)
 
@@ -23,11 +31,35 @@ export interface ReconnectDeps {
   kill?: (pid: number, signal: NodeJS.Signals) => void
 }
 
-/** Default: `pgrep -f -- <needle>`, parsed to PIDs. Returns [] on no match. */
+/**
+ * Keep only channel-server PIDs. Codex embeds `--control-socket <path>` in its
+ * own argv, so a bare socket-path `pgrep -f` would SIGTERM the agent — the exact
+ * failure that made `/nats-reconnect` lethal for codex-full-auto sessions.
+ */
+export function filterChannelServerPids(
+  pids: number[],
+  readCmdline: (pid: number) => string = (pid) => readFileSync(`/proc/${pid}/cmdline`, 'utf8'),
+): number[] {
+  const out: number[] = []
+  for (const pid of pids) {
+    try {
+      if (readCmdline(pid).includes('nats-channel-mcp')) out.push(pid)
+    } catch {
+      /* process may have exited between pgrep and the read */
+    }
+  }
+  return out
+}
+
+/** Default: `pgrep -f -- <needle>`, then keep only nats-channel-mcp processes. */
 async function defaultFindPids(needle: string): Promise<number[]> {
   try {
     const { stdout } = await execFileAsync('pgrep', ['-f', '--', needle])
-    return stdout.split('\n').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
+    const candidates = stdout
+      .split('\n')
+      .map(s => Number(s.trim()))
+      .filter(n => Number.isInteger(n) && n > 0)
+    return filterChannelServerPids(candidates)
   } catch {
     // pgrep exits non-zero when nothing matches — that's "no process", not an error.
     return []
@@ -51,4 +83,19 @@ export async function reconnectSessionNats(
     try { kill(pid, 'SIGTERM') } catch { /* process may have exited already */ }
   }
   return { sessionName, killed: pids }
+}
+
+/**
+ * Lifecycle entry point: reclaim this session's NATS control socket before the
+ * next channel-server bind (stop/delete teardown, or start/create preflight).
+ * Thin wrapper over {@link reconnectSessionNats} with the stable socket path.
+ */
+export async function reapSessionNatsChannelServer(
+  sessionName: string,
+  deps: Omit<ReconnectDeps, 'socketPath'> = {},
+): Promise<{ sessionName: string; killed: number[] }> {
+  return reconnectSessionNats(sessionName, {
+    ...deps,
+    socketPath: natsControlSocketPath(sessionName),
+  })
 }

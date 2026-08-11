@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const execFileMock = vi.hoisted(() => vi.fn())
+const reapSessionNatsChannelServerMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ sessionName: 'parent', killed: [] }),
+)
 vi.mock('node:util', async (orig) => {
   const actual = await orig<typeof import('node:util')>()
   return { ...actual, promisify: () => execFileMock }
 })
+vi.mock('../../natsReconnect', () => ({
+  reapSessionNatsChannelServer: reapSessionNatsChannelServerMock,
+  reconnectSessionNats: vi.fn(),
+}))
 
 import {
   deleteTmuxSession,
@@ -27,6 +34,8 @@ const parent = { name: 'parent' } as Session
 beforeEach(() => {
   execFileMock.mockReset()
   execFileMock.mockResolvedValue({ stdout: '', stderr: '' })
+  reapSessionNatsChannelServerMock.mockReset()
+  reapSessionNatsChannelServerMock.mockResolvedValue({ sessionName: 'parent', killed: [] })
 })
 
 describe('session-scoped tmux targets', () => {
@@ -397,6 +406,30 @@ describe('session-scoped tmux targets', () => {
 
   it('deletes only the exact session so a stale parent target cannot kill its prefixed hand', async () => {
     await deleteTmuxSession(config, parent)
+
+    expect(execFileMock).toHaveBeenCalledWith(
+      'tmux',
+      ['kill-session', '-t', '=tinstar-parent'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+  })
+
+  it.each([
+    ['stop', stopTmuxSession],
+    ['delete', deleteTmuxSession],
+  ] as const)('reaps the session NATS channel-server on %s so the control socket cannot orphan', async (_label, action) => {
+    await action(config, parent)
+
+    expect(reapSessionNatsChannelServerMock).toHaveBeenCalledWith('parent')
+  })
+
+  it.each([
+    ['stop', stopTmuxSession],
+    ['delete', deleteTmuxSession],
+  ] as const)('still %ss the tmux session when channel-server reap finds nothing', async (_label, action) => {
+    reapSessionNatsChannelServerMock.mockResolvedValueOnce({ sessionName: 'parent', killed: [] })
+
+    await action(config, parent)
 
     expect(execFileMock).toHaveBeenCalledWith(
       'tmux',
