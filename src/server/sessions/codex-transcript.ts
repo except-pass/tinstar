@@ -10,7 +10,7 @@ import {
 import { open as openFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { log } from '../logger'
 import { readTail, stableRecapDigest } from './transcript-parser'
 import type { RecapEntry } from '../../types'
