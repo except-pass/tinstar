@@ -6,9 +6,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createInterface } from 'node:readline'
 import { getConfigRoot } from './configRoot.js'
+import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
 
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
+const YELLOW = '\x1b[33m'
 const DIM = '\x1b[2m'
 const BOLD = '\x1b[1m'
 const RESET = '\x1b[0m'
@@ -25,6 +27,13 @@ function check(label, fn) {
   }
 }
 
+// Non-fatal counterpart to check() — for a dependency an opt-in feature needs.
+// Prints and moves on; it must never gate the server starting.
+function warn(label, ...details) {
+  console.log(`${YELLOW}⚠${RESET} ${label}`)
+  for (const d of details) console.log(`  ${DIM}→ ${d}${RESET}`)
+}
+
 async function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   return new Promise(resolve => {
@@ -38,7 +47,7 @@ async function ask(question) {
 // Every top-level subcommand the CLI dispatches. Anything else in the command
 // position is a typo — we refuse it rather than silently starting the server.
 const KNOWN_COMMANDS = [
-  'doctor', 'install-skills', 'status',
+  'doctor', 'install-skills', 'install-statusline', 'status',
   'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs', 'reach',
   'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'surfaces', 'help',
 ]
@@ -75,6 +84,75 @@ function suggestCommand(input) {
   return bestDistance <= threshold ? best : null
 }
 
+// Port the server is about to bind — needed before the statusline shim is
+// registered, because a non-default port changes the ingest URL baked into it.
+function serverPort() {
+  const idx = process.argv.indexOf('--port')
+  const parsed = idx !== -1 ? parseInt(process.argv[idx + 1], 10) : NaN
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 5273
+}
+
+// Offer to register the cc-quota statusline hook with Claude Code. Non-fatal in
+// every branch: a declined or failed install still starts the server, it just
+// leaves the context meter dark — and says so, rather than failing silently.
+async function setupStatusline(skipSetup) {
+  const mod = await import('./install-statusline.js')
+  const port = serverPort()
+
+  let state
+  try {
+    state = mod.inspectStatusline({ port }).state
+  } catch {
+    return
+  }
+
+  if (state === 'ok') {
+    console.log(`${GREEN}✓${RESET} Claude statusline hook registered ${DIM}(context meter live)${RESET}`)
+    const missing = mod.missingShimDeps()
+    if (missing.length) {
+      console.log(`  ${DIM}→ but ${missing.join(' and ')} missing from PATH — the shim needs them${RESET}`)
+    }
+    console.log()
+    return
+  }
+
+  const label = {
+    missing: 'not registered yet',
+    drifted: 'out of date',
+    foreign: 'a different statusLine is registered',
+    unreadable: '~/.claude/settings.json is not valid JSON',
+  }[state] ?? state
+
+  console.log(`📊 Claude statusline hook — ${BOLD}${label}${RESET}`)
+  console.log(`   ${DIM}Powers the per-session context-fullness meter and the quota HUD.${RESET}`)
+
+  if (state === 'unreadable') {
+    console.log(`   ${DIM}Fix the file, then run: tinstar install-statusline${RESET}\n`)
+    return
+  }
+
+  if (skipSetup) {
+    console.log(`   ${DIM}Install it with: tinstar install-statusline${state === 'foreign' ? ' --force' : ''}${RESET}\n`)
+    return
+  }
+
+  const prompt = state === 'foreign'
+    ? `   Replace it with Tinstar's? Your current one is backed up. [y/N] `
+    : `   Install it now? [Y/n] `
+  const answer = await ask(prompt)
+  const yes = state === 'foreign'
+    ? answer === 'y' || answer === 'yes'
+    : answer !== 'n' && answer !== 'no'
+
+  if (!yes) {
+    console.log(`   ${DIM}Skipped — context meters will read "--". Run tinstar install-statusline later.${RESET}\n`)
+    return
+  }
+
+  mod.runInstall({ port, force: state === 'foreign' })
+  console.log()
+}
+
 async function main() {
   // Subcommand: doctor
   if (process.argv[2] === 'doctor') {
@@ -86,6 +164,12 @@ async function main() {
   if (process.argv[2] === 'install-skills') {
     const { installSkills } = await import('./install-skills.js')
     return installSkills(process.argv.slice(3))
+  }
+
+  // Subcommand: install-statusline
+  if (process.argv[2] === 'install-statusline') {
+    const { installStatusline } = await import('./install-statusline.js')
+    return installStatusline(process.argv.slice(3))
   }
 
   // Subcommand: status
@@ -191,6 +275,17 @@ async function main() {
     return null
   })
 
+  // bun — runtime for the per-session NATS channel MCP server. NATS is opt-in
+  // per session, so a miss is a warning rather than a hard stop: everything
+  // except agent-to-agent messaging still works. Probed by the absolute
+  // configured path, which is how nats-mcp.json actually spawns it.
+  const bun = probeBun()
+  if (bun.ok) {
+    check('bun installed', () => `${bun.version} — NATS channels`)
+  } else {
+    warn(`bun ${bun.reason} at ${bun.path}`, describeMissingBun(bun), BUN_INSTALL_HINT)
+  }
+
   if (!allPassed) {
     console.log(`\n${DIM}Fix the issues above and re-run: npx tinstar${RESET}\n`)
     process.exit(1)
@@ -201,6 +296,12 @@ async function main() {
   // Project detection — skip the prompt under --no-setup or when stdin isn't a TTY
   // (CI, pipes, here-strings). Non-TTY callers get the same effect as answering "n".
   const skipSetup = process.argv.includes('--no-setup') || !process.stdin.isTTY
+
+  // Claude Code statusline hook — the only channel that reports per-session
+  // context-window utilization. Unregistered, every context meter reads "--"
+  // and nothing tells you why, so onboarding asks for it up front.
+  await setupStatusline(skipSetup)
+
   try {
     const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: process.cwd() }).trim()
     const projectName = basename(gitRoot)

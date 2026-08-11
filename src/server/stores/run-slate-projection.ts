@@ -32,6 +32,7 @@ import {
   type Surface,
   type SurfaceClaimObservation,
   type SurfaceCompatAlias,
+  type SurfaceRefreshRecipe,
 } from '../../domain/types'
 
 /** The compatibility alias a Surface carries for `runId`, if any. A Surface may
@@ -129,12 +130,35 @@ const MAX_BOUND_STEPS = 1200
  * adapter writes the author's file back unchanged; this is a read on the way out.
  * Returns the SAME body object when nothing bound, so an unbound Surface costs the
  * document store's `JSON.stringify` comparison nothing extra.
+ *
+ * NOT WHEN AN AGENT OWNS THE REBUILD (KTD7, R1/R2/R5). A Surface has ONE writer and
+ * one outcome, and binding here is the host writing part of a card. The question is
+ * therefore not "is this card interesting" but "would the host be editing underneath
+ * somebody else":
+ *
+ *   · `host` recipe — the host owns the rebuild outright and returns the whole
+ *     Surface. Binding is the same writer doing the same job, cheaply, between
+ *     rebuilds. Allowed.
+ *   · NO recipe — nothing rebuilds this card at all. The author wrote it once and
+ *     declared the rail derived; there is no competing writer for the host to race,
+ *     and refusing to bind would leave a rail the author deliberately left blank
+ *     blank forever. Allowed.
+ *   · `agent` recipe — the agent owns the prose and will rewrite it. Binding here is
+ *     the host editing a region of somebody else's card, which is exactly what left
+ *     one card saying two things: a rail describing today and prose describing
+ *     whenever the author last looked, with nothing marking which half was older.
+ *     REFUSED — the observation still marks the Surface dirty, so drift is still
+ *     detected; it just does not get written.
+ *   · `unreadable` — the host could not tell what rebuilds this. Refused for the same
+ *     reason unknown recipes fail toward the human everywhere else.
  */
 export function bindClaimSteps(
   body: A2uiContent | undefined,
   observations: Record<string, SurfaceClaimObservation> | undefined,
+  recipe?: SurfaceRefreshRecipe,
 ): A2uiContent | undefined {
   if (!body) return body
+  if (recipe !== undefined && recipe.kind !== 'host') return body
   let bodyChanged = false
   const components = body.components.map(component => {
     if (component.component !== 'Stepper' || !Array.isArray(component.steps)) return component
@@ -179,15 +203,21 @@ function claimStepStatus(
 /** One canonical Surface as the client-facing `Run.slate` entry it aliases. */
 export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSurface {
   const objective = isObjectiveSurface(s, localId)
-  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations, s.content.recipe)
   return {
     id: localId,
+    rev: s.rev,
+    ...(s.creation ? { creation: s.creation } : {}),
+    ...(s.presentation ? { presentation: s.presentation } : {}),
     author: s.author,
     kind: objective ? 'objective' : 'open-point',
     // The objective is FORCED to its pin sentinel rather than storing one, so
     // whatever order it happens to carry cannot strand it mid-list.
     order: objective ? OBJECTIVE_ORDER : s.order ?? s.createdAt,
     ...(body ? { body } : {}),
+    // THE TYPED RECIPE, not a rendered string. The panel has to tell an agent
+    // recipe (which only a human's deliberate interaction may run) from a host one
+    // (which the host keeps warm by itself) to decide what its controls mean.
     ...(s.content.recipe ? { refresh: s.content.recipe } : {}),
     // The author's CLAIM about the work, beside the status rather than in it. The
     // panel needs both: `discussing` says the agent spoke last, and only the proposal
@@ -231,7 +261,7 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
  * its content from a request body — so a derived status here never reaches the record.
  */
 export function pointFromCanonical(s: Surface, runId: string, localId: string): Point {
-  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations)
+  const body = bindClaimSteps(s.content.body, s.freshness.claimObservations, s.content.recipe)
   return {
     id: localId,
     runId,

@@ -122,19 +122,14 @@ export function surfaceCapabilities(surface: Surface, inputs: CapabilityInputs):
   // nudge"), while one with a recipe can be rebuilt without a human. Two booleans,
   // both honest.
   //
-  // "Will be accepted" means EXACTLY what `SurfaceService.refreshRequest` accepts,
-  // and that includes the freshness phase: the state machine has no
-  // refreshing→queued edge for a human request, so a Surface already `queued` or
-  // `refreshing` is refused. Reporting `refresh: true` there advertised a button
-  // whose only outcome was a conflict — and a capability that lies is worse than
-  // an absent one, because the caller has no reason to check.
-  const busy = surface.freshness.phase === 'queued' || surface.freshness.phase === 'refreshing'
-  const refresh = !inputs.deleted && !busy
-  if (!refresh) {
-    blocked.refresh = inputs.deleted
-      ? 'the Surface is in the recovery store; restore it first'
-      : `a refresh is already ${surface.freshness.phase}; one refresh runs per Surface`
-  }
+  // A BUSY SURFACE IS STILL REFRESHABLE (R14). It used to be refused here, because
+  // the human path had no refreshing→queued edge and a second request could only
+  // produce a conflict. The canonical intent operation JOINS the attempt in flight
+  // instead, so reporting `refresh: false` while something is running would disable
+  // a control whose behaviour is now well defined — and would push a UI back toward
+  // guessing at in-flight state, which is exactly what races an SSE frame.
+  const refresh = !inputs.deleted
+  if (!refresh) blocked.refresh = 'the Surface is in the recovery store; restore it first'
   const refreshRecipe = !!surface.content.recipe
 
   return {

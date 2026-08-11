@@ -10,7 +10,7 @@ An agent session that Tinstar spawns, tracks, and renders on the dashboard — b
 A managed session can only rely on the environment values the backend explicitly injects (its own session name, the dashboard URL, secrets, telemetry vars) — not on the server's own startup configuration. Its NATS channel connectivity is provisioned per-session as config the backend generates, not as injected environment variables.
 
 ### Hand
-A managed session spawned as the child of another, inheriting the parent's worktree, task assignment, and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
+A managed session spawned as the child of another, inheriting the parent's Project/Worktree scope and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
 *Avoid:* subagent (a subagent is a lighter, one-shot helper that is not a managed session).
 
 ### Background session
@@ -21,6 +21,12 @@ A managed session flagged at creation (or by later demotion) to stay off the can
 A run a user has toggled off the canvas via the per-run eyeball — a per-browser view preference on a normal, fully-alive session, not a change to the session itself. The run stays in the hierarchy (dimmed) so it can be re-shown, and is skipped by canvas cycling. Distinct from a Background session: hidden is a client-side, per-browser view choice; background is a server-side flag on the session's nature.
 
 A hidden run's state is keyed to the run's identity and is dropped when the run is removed, so re-creating a run under a reused name does not inherit a prior hide.
+
+### Organizational scope
+The host-owned Project and optional Worktree membership used to organize any canvas widget. A Worktree belongs to one Project, so Worktree scope always implies its Project ancestry; a widget with neither is Unscoped. Scope determines the live hierarchy and the result of the explicit Organize action, but never filters widget contents or moves a widget merely because its scope changed.
+
+### Organize
+The one-shot whole-canvas action that projects current organizational scope into visible Project and Worktree containers while arranging Unscoped widgets as standalone peers. It carries forward Reset Layout's packing behavior and preserves snapped constellations. Hierarchy changes accumulate without moving canvas widgets until the user invokes Organize.
 
 ### Agent skill
 A documented capability — a `SKILL.md` with name/description frontmatter — installed into a harness's skills directory to teach an agent how to perform a Tinstar workflow. Skills are instructions only (no slash commands), and are symlinked or copied into any harness directory that has a skills folder.
@@ -56,7 +62,7 @@ A per-browser view of one Run Workspace that temporarily fits the existing works
 While Focus mode is active, mounted built-in Run Workspaces share the same transient viewport geometry and responsive presentation. Cycling changes which prepared workspace is visible rather than resizing terminals; genuine viewport changes may resize them, and leaving Focus restores each saved Canvas layout.
 
 ### The Slate
-A region of a run's workspace card where an agent, the user, or any local process paints small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. Surfaces are described in A2UI and drawn by the shared host renderer. Authoring is file-in (a process writes a surface file into the run's worktree; a server watcher validates and projects it onto the run), while threads, lifecycle status, and control answers are answered HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run.
+A region of a run's workspace card where an agent, the user, or any local process maintains small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. It is the primary place to understand and interact with a managed session; the transcript is supporting history. Surfaces are described in A2UI and drawn by the shared host renderer. Foreground agents inspect the run's current owners, amend one when it already owns the subject, or reserve a visible card before writing a distinct work object. Threads, lifecycle status, and control answers are HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run. See [Slate-first live authoring](docs/features/slate-first-live-authoring.md).
 
 Slate content is **semi-ephemeral**: surfaces are cheap to wipe and re-author, so a change to the authoring contract is resolved by clearing the Slate rather than by migrating it. This is why breaking changes to surface shape are acceptable and why durable value belongs in host-owned machinery rather than in any individual card.
 
@@ -64,10 +70,34 @@ Slate content is **semi-ephemeral**: surfaces are cheap to wipe and re-author, s
 The single primitive the Slate is built from: a durable, threaded item authored by an agent, a user, or a process, optionally anchored to a decision or a whole surface, carrying an append-only discussion thread and a soft lifecycle (open, discussing, waiting, resolved, dismissed). A Roundup notice, a canvas pin, and a per-surface discussion are the same object with a different anchor and default author. One id is reserved: a point at `objective` is the run's Objective and may only be written by the user, so a file-authored or HTTP-created point may not claim it.
 
 ### The Objective
-A run's standing statement of what the session is for: one short piece of user-written prose, pinned above every other surface on that run's Slate and editable in place. It is a reserved user-owned point rather than a new entity, which is why a run has exactly one and why neither an agent's surface file nor an add-a-point request can overwrite or retract it. Distinct from the run's launch prompt, which is delivered once at spawn, cannot be edited afterwards, and leaves no artifact — the Objective is durable, visible, and re-deliverable. Applying an edit both persists it and nudges the run's agent to re-align; typing alone never does, so the agent is only ever interrupted by a deliberate press.
+A run's standing statement of what the session is for: one piece of user-written prose, pinned above every other surface on that run's Slate and editable in place. When a person launches a session with an explicit prompt, its exact trimmed text becomes both the delivered work prompt and the optimistic then canonical Objective; host-authored persona and introduction text do not. It is a reserved user-owned point rather than a new entity, which is why a run has exactly one and why neither an agent's surface file nor an add-a-point request can overwrite or retract it. Applying a later edit both persists it and nudges the run's agent to re-align; typing alone never does.
 
 ### Surface
 A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
+
+A Surface is also the atomic refresh boundary. A refreshable Surface has one recipe, one whole-Surface result, and one freshness record; independently refreshed content belongs on separate Surfaces composed by the Slate. Its last-known result remains real information even when dirty, provided the Surface shows when that result was known and when freshness was last checked.
+
+### Surface-worthiness envelope
+The live-authoring rule that decides when foreground work belongs on the Slate. Obvious items are always in: an explicitly requested Surface, anything awaiting the user, the primary result needed to judge the Objective, and a blocker that needs intervention. Obvious transcript material is always out: turn receipts, raw logs, transient working pulses, microscopic steps, private reasoning, and duplicates of an existing Surface.
+
+The middle is deliberately agent-judged rather than a fixed taxonomy. An evolving plan, progress view, research thread, comparison, explainer, risk, or assumption earns a Surface when it has standalone value: the user can understand or use it without reconstructing the conversation, is likely to return to it, can act on or evaluate it, or would otherwise need the transcript to follow the work. New information about the same work object amends its existing Surface; Surface count never follows turn count.
+
+### Optimistic surface shell
+The visible card Tinstar creates as soon as it accepts an Add surface or foreground-agent reservation, before authoring has produced the body. It reserves the final Surface's identity and position, shows authoring progress, and becomes ready or failed in place. The shell is the creation receipt; dispatching or starting work without creating one is not visible success.
+
+Each attempt writes only to the host-assigned file and local ID and carries a host-issued attempt token. The watcher fills the reserved card only when that token is still current, so a late first attempt cannot overwrite a successful retry. The token correlates work; it is not a credential.
+
+### Refresh recipe
+The single instruction that rebuilds one whole Surface, and the thing that decides who is allowed to run it. A **host** recipe names a machine check from a closed, code-owned list: it is read-only, bounded, cannot invoke a model or create a session, and the host may therefore run it on its own. An **agent** recipe is prose, delivered to the Surface's existing foreground collaborator, and runs only when a person deliberately reaches the Surface. Prose can never become a host recipe however it is worded — machine authority comes from naming a registered handler, which an author has no way to forge. A recipe the host cannot read is kept and reported rather than dropped, so a mistyped one says so instead of leaving a Surface that quietly never updates.
+
+### Dirty vs refreshing
+Two different things a Surface can be, deliberately kept apart. **Dirty** means an observation has invalidated it: a commit landed, a deadline passed, a claim moved. Marking is cheap and happens freely. **Refreshing** means an executor is actually rebuilding it right now, which for an agent recipe requires a person to have asked. Making the two synonymous is what produced a background agent per matching event; separating them is what makes an open dashboard cost nothing.
+
+### Last known vs last checked
+The two facts a Surface presents about its own freshness. **Last known** dates the content on screen and moves only when that content is replaced. **Last checked** dates the host's most recent completed look and records how it ended — succeeded, failed, unavailable (nothing could look), or superseded (the world moved first). A check that succeeds and finds nothing to change moves only the second, which is the common case: collapsing them into one timestamp reports month-old content as fresh.
+
+### Lookup broker
+The single gate every proactive host check passes through before it leaves the process. It holds a host-wide concurrency budget, a per-provider budget, and an in-flight map keyed by provider plus a stable question identity, so many Surfaces asking the same question share one answer and the second asker consumes no budget at all. Its purpose is that Surface count cannot buy provider load. A request it declines is **deferred**, which is not a failure and is recorded nowhere: nothing looked, so there is nothing to write down.
 
 ### Dismissed vs deleted
 Two different endings, deliberately kept apart. **Dismissed** is a discussion outcome on an addressable point: the question was raised and the user decided it needs nothing further. The surface stays exactly where it is and remains visible. **Deleted** is structural: the surface and its descendants move into the recovery store, out of the workspace, and can be restored to their former home. A dismissed surface is still there and settled; a deleted one is gone but recoverable. Only **purge** erases, and only a deleted surface can be purged.

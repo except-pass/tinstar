@@ -177,6 +177,58 @@ export async function reconcileSlateEpoch(
       visible: true,
     }
     const before = svc.get(id)
+    if (before.ok && before.data.surface.creation) {
+      const prior = before.data.surface
+      const creation = prior.creation!
+      if (!entry.attemptToken) {
+        out.refusals.push({ localId: entry.localId, reason: 'missing-attempt-token' })
+        if (creation.phase === 'authoring') {
+          const failed = await svc.failComposition(id, {
+            token: creation.token,
+            expectedRev: prior.rev,
+            code: 'invalid-content',
+            message: 'The author returned content this card could not display. You can retry it.',
+          }, { ...ctx, at })
+          if (failed.ok && failed.data.surfaces[0]?.surface.rev !== prior.rev) out.updated++
+        }
+        continue
+      }
+      if (entry.attemptToken !== creation.token) {
+        out.refusals.push({ localId: entry.localId, reason: 'superseded' })
+        continue
+      }
+      // The token gate remains after creation completes so a late, older attempt
+      // cannot overwrite the card. A matching ready file otherwise returns to the
+      // ordinary source-observation path, preserving later refreshes and edits.
+      if (creation.phase === 'ready') {
+        // Fall through to observeSource below.
+      } else {
+        const evidenceMoved = prior.source?.watermark !== entry.watermark
+        const generation = (prior.source?.generation ?? 0) + (evidenceMoved ? 1 : 0)
+        const completed = await svc.completeComposition(id, {
+          token: entry.attemptToken,
+          expectedRev: prior.rev,
+          content: entry.content,
+          author: entry.author,
+          source: {
+            adapter: SLATE_FILE_ADAPTER,
+            locator: slateFileLocator(entry.file, entry.localId),
+            worktree: epoch.worktree,
+            generation,
+            watermark: entry.watermark,
+            state: 'present',
+          },
+          claimRefusals: entry.claimRefusals ?? [],
+        }, { ...ctx, at })
+        if (!completed.ok) {
+          out.refusals.push({ localId: entry.localId, reason: completed.error.reason ?? completed.error.code })
+          continue
+        }
+        out.observed++
+        if (completed.data.surfaces[0]?.surface.rev !== prior.rev) out.updated++
+        continue
+      }
+    }
     const result = await svc.observeSource({
       id,
       spaceId: epoch.spaceId,

@@ -72,6 +72,19 @@ describe('isUnwitnessed — both empty claim states collapse (KTD4)', () => {
 })
 
 describe('slateSurfaceFromCanonical — unwitnessed on the projected surface', () => {
+  it('projects a compose card lifecycle without changing its run-local identity or position', () => {
+    const creation = {
+      phase: 'authoring' as const, label: 'Open points', attempt: 1, token: 'attempt-1',
+      startedAt: 1_000, deadlineAt: 31_000, request: { templateId: 'open-points' },
+    }
+    const projected = slateSurfaceFromCanonical(surface({}, {
+      order: 900, creation, presentation: 'compose-card',
+    }), 'compose-1')
+    expect(projected).toMatchObject({
+      id: 'compose-1', order: 900, creation, presentation: 'compose-card',
+    })
+  })
+
   // AE3. A claimless surface reports unwitnessed rather than passing for verified.
   it('projects `unwitnessed` for a claimless surface', () => {
     expect(slateSurfaceFromCanonical(surface({}), 'p1').unwitnessed).toBe(true)
@@ -177,6 +190,22 @@ function observed(values: Record<string, SurfaceClaimValue>): Record<string, Sur
   return Object.fromEntries(Object.entries(values).map(([id, value]) => [id, { value, at: 1 }]))
 }
 
+/** The recipe a claim-bound rail must carry for the host to be allowed to write it
+ *  (KTD7, R1/R2/R5). Binding IS the host writing part of a card, which is legitimate
+ *  only when the host owns that Surface's rebuild outright and returns the whole
+ *  thing. On an interaction Surface the agent owns the prose, so the host may detect
+ *  drift but not patch — see the suite below this one. */
+const HOST_RECIPE = { kind: 'host' as const, handler: 'unit-landed' as const }
+
+/** Bind as a host-owned Surface. Every test in this suite is about the binding's own
+ *  mechanics, so they all pass the recipe that permits it. */
+function bind(
+  body: A2uiContent | undefined,
+  observations: Record<string, SurfaceClaimObservation> | undefined,
+): A2uiContent | undefined {
+  return bindClaimSteps(body, observations, HOST_RECIPE)
+}
+
 describe('bindClaimSteps — a rail derives from claim values, never from an author', () => {
   const steps = [
     { label: 'U1', claim: 'u1', done: 'landed' },
@@ -184,7 +213,7 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
   ]
 
   it('marks a step done only when a completed lookup returned its `done` value', () => {
-    const bound = boundSteps(bindClaimSteps(railBody(steps), observed({ u1: 'landed', u4: 'pending' })))
+    const bound = boundSteps(bind(railBody(steps), observed({ u1: 'landed', u4: 'pending' })))
     expect(bound.map(s => s.status)).toEqual(['done', 'pending'])
   })
 
@@ -192,7 +221,7 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
   // Author `done` on a unit that has not landed, and the host still says pending.
   it('overrides an authored status rather than trusting it', () => {
     const lying = [{ label: 'U4', claim: 'u4', done: 'landed', status: 'done' }]
-    const bound = boundSteps(bindClaimSteps(railBody(lying), observed({ u4: 'pending' })))
+    const bound = boundSteps(bind(railBody(lying), observed({ u4: 'pending' })))
     expect(bound[0]!.status).toBe('pending')
   })
 
@@ -200,9 +229,9 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
   // the honest one: the card says separately, through the freshness badge, that a
   // claim could not be checked.
   it('reads pending for a claim nobody has observed yet', () => {
-    expect(boundSteps(bindClaimSteps(railBody(steps), undefined)).map(s => s.status))
+    expect(boundSteps(bind(railBody(steps), undefined)).map(s => s.status))
       .toEqual(['pending', 'pending'])
-    expect(boundSteps(bindClaimSteps(railBody(steps), observed({ u1: 'landed' })))[1]!.status)
+    expect(boundSteps(bind(railBody(steps), observed({ u1: 'landed' })))[1]!.status)
       .toBe('pending')
   })
 
@@ -212,7 +241,7 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
     const problem: Record<string, SurfaceClaimObservation> = {
       u1: { problem: { status: 'unresolved', detail: 'could not fetch' }, at: 1 },
     }
-    expect(boundSteps(bindClaimSteps(railBody(steps), problem))[0]!.status).toBe('pending')
+    expect(boundSteps(bind(railBody(steps), problem))[0]!.status).toBe('pending')
   })
 
   // A failed fetch says nothing about whether the world moved, so the last completed
@@ -222,7 +251,7 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
     const stale: Record<string, SurfaceClaimObservation> = {
       u1: { value: 'landed', problem: { status: 'unresolved', detail: 'offline' }, at: 1 },
     }
-    expect(boundSteps(bindClaimSteps(railBody(steps), stale))[0]!.status).toBe('done')
+    expect(boundSteps(bind(railBody(steps), stale))[0]!.status).toBe('done')
   })
 
   // A typo in `claim`, or a `done` the author forgot, must not render a green tick —
@@ -232,13 +261,13 @@ describe('bindClaimSteps — a rail derives from claim values, never from an aut
       { label: 'typo', claim: 'u9', done: 'landed', status: 'done' },
       { label: 'no done', claim: 'u1', status: 'done' },
     ]
-    expect(boundSteps(bindClaimSteps(railBody(broken), observed({ u1: 'landed' }))).map(s => s.status))
+    expect(boundSteps(bind(railBody(broken), observed({ u1: 'landed' }))).map(s => s.status))
       .toEqual(['pending', 'pending'])
   })
 
   it('leaves an unbound step, and an unbound body, exactly as authored', () => {
     const plain = railBody([{ label: 'hand-written', status: 'active' }])
-    const out = bindClaimSteps(plain, observed({ u1: 'landed' }))
+    const out = bind(plain, observed({ u1: 'landed' }))
     // Identity, not equality: an unbound body must cost the document store's
     // `JSON.stringify` storm guard nothing extra.
     expect(out).toBe(plain)
@@ -265,7 +294,9 @@ describe('a bound rail reaches Run.slate and the point routes alike', () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
     await seedRunSlate(store, 'run-1', [
-      { id: 'roadmap', headline: 'Roadmap', body: railBody(steps), claims: [CLAIM] },
+      // HOST-OWNED, which is what permits the binding at all (KTD7). The suite
+      // below proves the interaction case is left alone.
+      { id: 'roadmap', headline: 'Roadmap', body: railBody(steps), claims: [CLAIM], recipe: HOST_RECIPE },
     ], 100)
     const id = store.surfaceForRunAlias('run-1', 'roadmap')!.id
     const before = store.getSurface(id)!
@@ -280,5 +311,67 @@ describe('a bound rail reaches Run.slate and the point routes alike', () => {
     // `pending` through the other is a card disagreeing with itself.
     expect(boundSteps(store.getSlatePoint('run-1', 'roadmap')!.content).map(s => s.status))
       .toEqual(['done', 'pending'])
+  })
+
+  it('leaves an INTERACTION surface unpatched — claims detect drift, they never write', async () => {
+    // KTD7, and the reason it is a rule rather than a nicety. An agent-written card
+    // owns its prose; a host that corrected the rail underneath it would leave one
+    // card saying two things — a rail describing today and prose describing whenever
+    // the author last looked — with nothing marking which half was older.
+    //
+    // The observation is still recorded and still marks the Surface dirty; what it
+    // may not do is edit part of somebody else's Surface.
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    await seedRunSlate(store, 'run-1', [{
+      id: 'roadmap', headline: 'Roadmap', body: railBody(steps), claims: [CLAIM],
+      recipe: { kind: 'agent', prompt: 'Re-derive the roadmap from the plan files.' },
+    }], 100)
+    const id = store.surfaceForRunAlias('run-1', 'roadmap')!.id
+    const before = store.getSurface(id)!
+    store.loadSurfaces([{
+      ...before,
+      freshness: { ...before.freshness, claimObservations: observed({ u1: 'landed', u4: 'pending' }) },
+    }])
+
+    // The author's own body, exactly as written — no status invented for either row.
+    expect(boundSteps(store.getRun('run-1')!.slate![0]!.body).map(s => s.status))
+      .toEqual([undefined, undefined])
+    expect(boundSteps(store.getSlatePoint('run-1', 'roadmap')!.content).map(s => s.status))
+      .toEqual([undefined, undefined])
+    // And the observation IS on the record: detection is unaffected, only writing is.
+    expect(store.getSurface(id)!.freshness.claimObservations?.u1).toBeDefined()
+  })
+})
+
+describe('who may write a claim-bound rail (KTD7)', () => {
+  const steps = [
+    { label: 'U1', claim: 'u1', done: 'landed' },
+    { label: 'U4', claim: 'u4', done: 'landed' },
+  ]
+  const obs = observed({ u1: 'landed', u4: 'pending' })
+
+  it('a HOST recipe may write it — the host owns the rebuild outright', () => {
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, HOST_RECIPE)).map(s => s.status))
+      .toEqual(['done', 'pending'])
+  })
+
+  it('NO recipe may write it — nothing else rebuilds the card, so nobody is raced', () => {
+    // The author wrote it once and declared the rail derived. Refusing here would
+    // leave a rail they deliberately left blank blank forever, for no safety.
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, undefined)).map(s => s.status))
+      .toEqual(['done', 'pending'])
+  })
+
+  it('an AGENT recipe may NOT — the agent owns the prose and will rewrite it', () => {
+    // The failure this prevents: a rail describing today beside prose describing
+    // whenever the author last looked, with nothing marking which half was older.
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, { kind: 'agent', prompt: 'rebuild' })).map(s => s.status))
+      .toEqual([undefined, undefined])
+  })
+
+  it('an UNREADABLE recipe may not either — the host cannot tell what rebuilds this', () => {
+    expect(boundSteps(bindClaimSteps(railBody(steps), obs, { kind: 'unreadable', detail: 'x' })).map(s => s.status))
+      .toEqual([undefined, undefined])
   })
 })

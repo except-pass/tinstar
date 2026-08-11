@@ -139,10 +139,14 @@ describe('Run.slate derives from canonical Surfaces', () => {
     }
   })
 
-  it('carries the author-declared recipe through as `refresh`', async () => {
+  it('carries the author-declared recipe through as a TYPED `refresh`', async () => {
+    // Prose is an AGENT recipe (KTD1): only a human's deliberate interaction runs it,
+    // and no wording can make it proactive-eligible.
     const h = setup()
-    await seedRunSlate(h.store, h.runId, [{ id: 'p1', headline: 'a', recipe: 'rebuild me' }])
-    expect(h.slate()![0]!.refresh).toBe('rebuild me')
+    await seedRunSlate(h.store, h.runId, [{
+      id: 'p1', headline: 'a', recipe: { kind: 'agent', prompt: 'rebuild me' },
+    }])
+    expect(h.slate()![0]!.refresh).toEqual({ kind: 'agent', prompt: 'rebuild me' })
   })
 })
 

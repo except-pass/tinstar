@@ -4,17 +4,17 @@ import { isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
 import { type Project, parseProjects } from '../lib/projects'
 import { ProjectPickerOptions } from './ProjectPickerOptions'
+import type { OptimisticSessionIntent, WorktreeMode } from './optimisticSession'
+import { OBJECTIVE_MAX } from '../domain/types'
+import { validateExplicitWorkPrompt } from '../slate/objective'
 
 export interface SessionPrefill {
   project?: string
-  worktreeMode?: 'none' | 'new' | 'existing'
+  worktreeMode?: WorktreeMode
   defaultWorktreePath?: string
   skipPermissions?: boolean
   cliTemplate?: string
   runColor?: string
-  taskId?: string
-  epicId?: string
-  initiativeId?: string
   /** Session-view widget type for the created run (run.view). Set when spawning
    *  a session-backed plugin view; absent for a default run-workspace session. */
   view?: string
@@ -24,13 +24,16 @@ export interface SessionPrefill {
 interface Props {
   onClose: () => void
   prefill?: SessionPrefill
+  /** Existing ids are checked synchronously so an optimistic upsert cannot
+   *  replace a live run while the server is still rejecting the collision. */
+  existingSessionIds?: ReadonlySet<string>
+  /** Fired synchronously on submit, before session provisioning settles. */
+  onCreateStarted?: (intent: OptimisticSessionIntent) => void
+  /** Associates an asynchronous provisioning failure with its visible run. */
+  onCreateFailed?: (intent: OptimisticSessionIntent, message: string) => void
   /** Fired on a successful /api/sessions create with the new session's id (== a run's sessionId). */
   onCreated?: (sessionId: string) => void
 }
-
-type WorktreeMode = 'none' | 'new' | 'existing'
-
-interface EntityOption { id: string; name: string }
 
 function generateName(): string {
   const adj = ['swift', 'bold', 'keen', 'calm', 'warm', 'cool', 'bright', 'sharp', 'quick', 'deft']
@@ -58,7 +61,7 @@ function InheritedFrom({ source }: { source?: { type: string; name: string } }) 
   )
 }
 
-export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
+export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCreateStarted, onCreateFailed, onCreated }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
@@ -73,14 +76,11 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [skipPermissions, _setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
   const [runColor, setRunColor] = useState(() => prefill?.runColor ?? pickRandomPaletteColor())
-  const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
-  const [taskSearch, setTaskSearch] = useState('')
-  const taskSearchRef = useRef<HTMLInputElement>(null)
-  const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const sources = prefill?.sources ?? {}
 
@@ -88,7 +88,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     nameRef.current?.focus()
   }, [])
 
-  // Fetch projects list and entities
+  // Fetch projects and agent templates.
   useEffect(() => {
     apiFetch('/api/projects')
       .then(r => r.ok ? r.json() : null)
@@ -112,17 +112,6 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       })
       .catch(() => {})
 
-    apiFetch('/api/state')
-      .then(r => r.ok ? r.json() : null)
-      .then(state => {
-        if (!state) return
-        setEntities({
-          initiatives: (state.initiatives ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-          epics: (state.epics ?? []).map((e: { id: string; name: string }) => ({ id: e.id, name: e.name })),
-          tasks: (state.tasks ?? []).map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })),
-        })
-      })
-      .catch(() => {})
   }, [])
 
   // Fetch existing worktrees when project is selected and mode is 'existing'
@@ -148,7 +137,19 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const effectiveName = name || placeholder
 
   const handleSubmit = useCallback(async () => {
-    if (submitting) return
+    if (submittingRef.current) return
+    if (existingSessionIds?.has(effectiveName)) {
+      setError(`Session '${effectiveName}' already exists`)
+      return
+    }
+    const promptResult = validateExplicitWorkPrompt(prompt === '' ? undefined : prompt, OBJECTIVE_MAX)
+    if (!promptResult.ok) {
+      setError(promptResult.message.startsWith('work prompt exceeds')
+        ? `Keep it under ${OBJECTIVE_MAX} characters.`
+        : 'The starting prompt needs some words.')
+      return
+    }
+    const trimmedPrompt = promptResult.text
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -157,19 +158,31 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
-    if (prompt.trim()) body.prompt = prompt.trim()
-    if (taskId) body.taskId = taskId
+    if (trimmedPrompt) body.prompt = trimmedPrompt
     if (runColor) body.color = runColor
-    if (prefill?.epicId) body.epicId = prefill.epicId
-    if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
     if (prefill?.view) body.view = prefill.view
 
-    // Keep the modal open until the create actually succeeds. A failed create
-    // (e.g. a blocked branch name) used to close optimistically and destroy the
-    // user's filled-in settings; now the error shows inline and the form stays
-    // put so they can fix the name and retry.
+    const intent: OptimisticSessionIntent = {
+      id: effectiveName,
+      prompt: trimmedPrompt,
+      color: runColor || undefined,
+      project: project || undefined,
+      worktree: worktreeMode === 'new'
+        ? effectiveName
+        : availableWorktrees.find(candidate => candidate.path === worktreePath)?.branch,
+      worktreeMode,
+      worktreePath: worktreeMode === 'existing' ? worktreePath || undefined : undefined,
+      view: prefill?.view,
+    }
+
+    // Paint and close before the network request. The visible run owns any
+    // later error, so the user's starting prompt is never trapped in a modal
+    // that disappears after a failed ttyd/worktree launch.
+    submittingRef.current = true
     setSubmitting(true)
     setError(null)
+    onCreateStarted?.(intent)
+    onClose()
     try {
       const r = await apiFetch('/api/sessions', {
         method: 'POST',
@@ -178,9 +191,9 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       })
       const data = await r.json()
       if (!data.ok) {
-        console.error('Failed to create session:', data.error?.message ?? data)
-        setError(data.error?.message ?? 'unknown error')
-        setSubmitting(false)
+        const message = data.error?.message ?? 'unknown error'
+        console.error('Failed to create session:', message)
+        onCreateFailed?.(intent, message)
         return
       }
       // The created session's `name` is the identifier that equals a run's
@@ -188,13 +201,11 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       // omits it for any reason.
       const createdId = (data.data?.name as string | undefined) ?? effectiveName
       onCreated?.(createdId)
-      onClose()
     } catch (err) {
       console.error('Failed to create session:', err)
-      setError((err as Error).message)
-      setSubmitting(false)
+      onCreateFailed?.(intent, (err as Error).message)
     }
-  }, [submitting, effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
+  }, [effectiveName, project, worktreeMode, worktreePath, availableWorktrees, skipPermissions, cliTemplate, prompt, runColor, prefill?.view, existingSessionIds, onClose, onCreateStarted, onCreateFailed, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -418,76 +429,6 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
             )}
           </div>
         )}
-
-        {/* Attach to entity */}
-        {entities.tasks.length > 0 && (
-          <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Attach to Task</label>
-            <div className="border border-white/10 rounded overflow-hidden">
-              <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 bg-surface-base">
-                <span className="material-symbols-outlined text-sm text-slate-500" aria-hidden>search</span>
-                <input
-                  ref={taskSearchRef}
-                  type="text"
-                  value={taskSearch}
-                  onChange={e => setTaskSearch(e.target.value)}
-                  placeholder="Search tasks…"
-                  className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
-                  data-testid="task-search-input"
-                  aria-label="Search tasks"
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                {taskSearch && (
-                  <button
-                    className="text-slate-500 hover:text-primary text-xs leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
-                    onClick={() => { setTaskSearch(''); taskSearchRef.current?.focus() }}
-                    aria-label="Clear search"
-                    data-testid="task-search-clear"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-              <div className="max-h-40 overflow-y-auto bg-surface-base" data-testid="task-list">
-                {(() => {
-                  const q = taskSearch.trim().toLowerCase()
-                  const filtered = q
-                    ? entities.tasks.filter(t => t.name.toLowerCase().includes(q))
-                    : entities.tasks
-                  const options: Array<{ id: string; name: string }> = [{ id: '', name: 'None (unattached)' }, ...filtered]
-                  return (
-                    <>
-                      {options.map(t => {
-                        const selected = t.id === taskId
-                        return (
-                          <button
-                            key={t.id || '__none__'}
-                            onClick={() => setTaskId(t.id)}
-                            className={[
-                              'w-full text-left px-3 py-1.5 text-xs transition-colors flex flex-col gap-0.5',
-                              selected
-                                ? 'bg-primary/20 text-primary'
-                                : 'text-slate-300 hover:bg-white/5',
-                              t.id === '' ? 'italic text-slate-400' : '',
-                            ].join(' ')}
-                            data-testid={`task-option-${t.id || 'none'}`}
-                          >
-                            <span className="truncate">{t.name}</span>
-                          </button>
-                        )
-                      })}
-                      {q && filtered.length === 0 && (
-                        <div className="text-xs text-slate-500 italic px-3 py-2">No matches</div>
-                      )}
-                    </>
-                  )
-                })()}
-              </div>
-            </div>
-          </div>
-        )}
-
 
         {/* Run color */}
         <div className="mb-3">

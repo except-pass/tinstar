@@ -54,7 +54,9 @@ import { parseA2uiContent } from '../../a2ui/schema'
 import { synthesizeId, type PointInput } from '../stores/slate'
 import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
 import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
-import { parseProposal, parseRefreshDeclaration, parseSurfaceClaims } from '../surfaces/surface-trigger-matcher'
+import {
+  parseProposal, parseRefreshDeclaration, parseRefreshRecipe, parseSurfaceClaims,
+} from '../surfaces/surface-trigger-matcher'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A watched run and the worktree the watcher resolves its slate dir from. */
@@ -115,6 +117,14 @@ export interface SlateWatcherOpts {
   /** Apply one reconciled epoch. Async; the watcher awaits it so a slow durable
    *  commit cannot overlap the next epoch for the same run. */
   applyEpoch: (epoch: SlateSourceEpoch) => Promise<unknown>
+  /** Reports a parsed entry that names a reserved card but fails the normal schema
+   *  gate. Ordinary invalid entries remain on the existing retain-and-log path. */
+  onInvalidEntry?: (entry: {
+    runId: string
+    file: string
+    localId: string
+    attemptToken?: string
+  }) => Promise<void> | void
   /** Poll-floor cadence in ms (default 3000 — the status-watcher cadence). */
   intervalMs?: number
   /** Debounce window for coalescing fs.watch bursts in ms (default 100). */
@@ -154,7 +164,7 @@ function emptyRead(): SlateDirRead {
  * would re-identify every existing id-less surface exactly once, for nothing.
  */
 function toSourceEntry(
-  runId: string, file: string, input: PointInput, claimRefusals: string[] = [],
+  runId: string, file: string, input: PointInput, claimRefusals: string[] = [], attemptToken?: string,
 ): SlateSourceEntry {
   const author: PointAuthor = input.author ?? 'agent'
   const content = {
@@ -173,6 +183,7 @@ function toSourceEntry(
     file,
     content,
     author,
+    ...(attemptToken ? { attemptToken } : {}),
     ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
     watermark: slateEntryWatermark({ ...content, author }),
     // AFTER the watermark, and not inside it: what the host refused is host
@@ -599,12 +610,41 @@ export class SlateWatcher {
           continue
         }
         const input = toPointInput(rawEntry, this.parseContent)
-        if (input === null) { unusable(name); continue } // schema-invalid entry — drop it
+        if (input === null) {
+          unusable(name)
+          if (rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)) {
+            const raw = rawEntry as Record<string, unknown>
+            if (typeof raw.id === 'string' && raw.id.length > 0) {
+              const attemptToken = typeof raw.attemptToken === 'string'
+                && raw.attemptToken.length > 0
+                && raw.attemptToken.length <= 200
+                ? raw.attemptToken
+                : undefined
+              try {
+                await this.opts.onInvalidEntry?.({
+                  runId,
+                  file: name,
+                  localId: raw.id,
+                  ...(attemptToken ? { attemptToken } : {}),
+                })
+              } catch (err) {
+                log.warn('slate-watcher', `${runId}: could not settle invalid entry ${JSON.stringify(raw.id)}: ${(err as Error).message}`)
+              }
+            }
+          }
+          continue
+        }
         // NOT `unusable`: a refused claim costs that claim and never the surface
         // (KTD5), so the entry projects its NEW content and carries the refusal with
         // it. Marking the file unreadable here would retain the surface's PRIOR
         // content instead — the exact conflation KTD5 warns about.
-        entries.push(toSourceEntry(runId, name, input, claimRefusalsOf(rawEntry)))
+        const rawToken = rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)
+          ? (rawEntry as Record<string, unknown>).attemptToken
+          : undefined
+        const attemptToken = typeof rawToken === 'string' && rawToken.length > 0 && rawToken.length <= 200
+          ? rawToken
+          : undefined
+        entries.push(toSourceEntry(runId, name, input, claimRefusalsOf(rawEntry), attemptToken))
       }
     }
 
@@ -671,9 +711,13 @@ export function toPointInput(
     out.content = content
   }
 
-  // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
-  // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
-  if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+  // File-owned refresh recipe, PARSED HERE AND NOWHERE ELSE ON THIS PATH (KTD1).
+  // A string is prose and becomes an `agent` recipe; an object naming a registered
+  // host check becomes a `host` one; anything else becomes `unreadable`, which is
+  // kept rather than dropped so a diagnostic can tell the author what was wrong
+  // instead of the recipe silently vanishing. Nothing downstream re-decides.
+  const recipe = parseRefreshRecipe(r.refresh)
+  if (recipe) out.refresh = recipe
 
   // File-owned freshness declaration (plan U6). Same posture as `refresh`: an
   // unusable value yields NO declaration rather than an error, so the surface falls

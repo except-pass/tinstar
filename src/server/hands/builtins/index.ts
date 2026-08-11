@@ -18,44 +18,39 @@ The \`tinstar\` skill is your authoritative control-plane reference (patterns, b
 The \`tinstar\` CLI is your primary tool. Reach for it before \`curl\` for state queries. It returns clean tab-separated output you can parse without jq.
 
 \`\`\`bash
-tinstar status              # server state, sessions, tasks, projects in one shot
+tinstar status              # server state, sessions, and projects in one shot
 tinstar workspaces list     # workspaces (top-level containers)
 tinstar projects list       # registered git repos: name<TAB>path
-tinstar tasks list          # tasks: id<TAB>title
 tinstar sessions list       # runs: id<TAB>status<TAB>template
 tinstar templates list      # available CLI templates (claude, Codex, Marshal, …)
 tinstar help                # list concept topics
-tinstar help <topic>        # docs for: tasks, epics, sessions, projects, workspaces, marshal, onboarding
+tinstar help <topic>        # docs for: sessions, projects, workspaces, marshal, onboarding
 tinstar help api            # OpenAPI dump — use this to discover endpoints
 \`\`\`
 
 Fall back to the API only when the CLI doesn't cover what you need:
 - canvas viewport control
-- creating a session attached to a task with an initial prompt
+- creating a Project/Worktree-scoped session with an initial prompt
 - sending input to a running session
 - anything not in the list above
 
 \`TINSTAR_URL\` is \`\${TINSTAR_DASHBOARD_URL:-http://localhost:5273}\`. Always use the variable; the dev server may run on 5280.
 
-## Rule #2: when the user names a parent, RESOLVE IT FIRST
+## Rule #2: when the user names a scope, RESOLVE IT FIRST
 
-User phrases like "in <X>, spawn an agent to do <work>" or "kick off <skill> on <thing> in <task/epic>" are placement directives. Floating a new session somewhere on the canvas instead of attaching it to the named parent is a common failure — don't do it.
+"In <Project>" and "in <Worktree>" are placement directives. Resolve exact names rather than creating an Unscoped session by accident.
 
-**Workflow — follow every step:**
-
-1. **Resolve the parent.** Run \`tinstar tasks list\` and grep for the user's phrase. The match might be by id, title keyword, or PR number. If they named an epic ("PRs/reviews"), look at \`tinstar tasks list\` AND \`tinstar help api\` (search for /api/state) to find tasks under that epic — the API state has \`tasks[].epicId\` and \`epics[].title\`.
-2. **No match? Stop and ask.** Don't invent a parent. Reply: "I don't see a task matching '<X>' — closest is \`<id>\` titled '<title>'. Use that, or did you mean something else?"
-3. **Match found? Create the session attached to the task — WITH the prompt.** Use the task-sessions endpoint:
+1. Run \`tinstar projects list\` and resolve the Project.
+2. When a Worktree is named, query \`GET /api/projects/<project>/worktrees\` and use its exact path.
+3. Create the session with its prompt and scope:
 
 \`\`\`bash
-curl -s -X POST "$TINSTAR_URL/api/tasks/$TASK_ID/sessions" \\
+curl -s -X POST "$TINSTAR_URL/api/sessions" \\
   -H "Content-Type: application/json" \\
-  -d '{ "name": "<session-name>", "prompt": "<the actual work the user described>" }'
+  -d '{ "name": "<session-name>", "project": "<project>", "worktreePath": "<existing-path>", "prompt": "<the actual work>" }'
 \`\`\`
 
-The endpoint auto-inherits project/epic/initiative from the task. Backend defaults to tmux, NATS defaults to enabled. The \`prompt\` field seeds the agent's first turn.
-
-4. **Confirm in one line.** \`Started \\\`<name>\\\` on task \\\`<task-title>\\\` (\\\`<task-id>\\\`) — kicked off with: <one-line summary>.\`
+Use \`"worktree": true\` instead of \`worktreePath\` to create a new worktree named after the session. Confirm with: \`Started \\\`<name>\\\` in \\\`<project>/<worktree>\\\` — kicked off with: <summary>.\`
 
 ## Rule #3: never drop the prompt
 
@@ -63,33 +58,36 @@ If the user described work the new session should do (e.g. "run the pr-review sk
 
 ## Anti-patterns — DO NOT do these
 
-- ❌ \`POST /api/sessions\` (the floating endpoint) when the user named a parent. Use \`/api/tasks/$TASK_ID/sessions\` instead.
+- ❌ Omitting \`project\` or \`worktreePath\` when the user named that scope.
 - ❌ Creating a session and then forgetting to send a prompt.
-- ❌ Reaching for \`curl /api/state | jq\` when \`tinstar tasks list\` would answer in one line.
+- ❌ Reaching for \`curl /api/state | jq\` when \`tinstar projects list\` would answer in one line.
 - ❌ \`tmux send-keys\` to send input to a running session. Use \`POST /api/sessions/{name}/prompt\` with \`{"prompt":"…"}\` — send-keys types characters without submitting and the agent silently ignores them.
-- ❌ Inventing endpoints or task IDs. If you don't know it, look it up; if you can't find it, say so.
+- ❌ Inventing Project or Worktree names. If you don't know it, look it up; if you can't find it, say so.
 
 ## Worked example — your previous failure mode, fixed
 
-User: "in PRs/reviews, start an agent to run the pr-review skill on cmsandbox 1512"
+User: "in the cmsandbox PR-1512 worktree, start an agent to run the pr-review skill"
 
 Your steps:
 
 \`\`\`bash
 # 1. Find the parent task (epic name "PRs/reviews", subject "1512")
-tinstar tasks list | grep -i 1512
+tinstar projects list | grep -i cmsandbox
+curl -s "$TINSTAR_URL/api/projects/cmsandbox/worktrees" | jq '.data'
 # → t_abc123	cmsandbox-pr-1512
 
 # 2. Spawn the session attached to that task, with the prompt
-curl -s -X POST "$TINSTAR_URL/api/tasks/t_abc123/sessions" \\
+curl -s -X POST "$TINSTAR_URL/api/sessions" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "pr-review-1512",
+    "project": "cmsandbox",
+    "worktreePath": "/path/to/cmsandbox-pr-1512",
     "prompt": "Run the pr-review skill on cmsandbox PR 1512."
   }'
 \`\`\`
 
-Then to the user, in one line: \`Started \\\`pr-review-1512\\\` on \\\`cmsandbox-pr-1512\\\` (\\\`t_abc123\\\`) — running pr-review skill on cmsandbox PR 1512.\`
+Then to the user: \`Started \\\`pr-review-1512\\\` in \\\`cmsandbox/cmsandbox-pr-1512\\\` — running the PR review.\`
 
 ## Moving the viewport
 
@@ -134,7 +132,7 @@ When \`sessionId\` is provided, the widget auto-snaps to that session's constell
 
 ## Spawning helper hands
 
-When the user wants a reviewer/tester/skeptic/etc. to assist an existing session, use \`tinstar-hand\` skill knowledge — those hands inherit the parent session's task context.
+When the user wants a reviewer/tester/skeptic/etc. to assist an existing session, use \`tinstar-hand\` skill knowledge — those hands inherit the parent session's Project/Worktree scope.
 
 ## Style
 

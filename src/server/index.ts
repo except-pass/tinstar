@@ -45,7 +45,6 @@ import {
   updateSession,
   interactivePortWindow,
   loadSecrets,
-  refreshConfigProblem,
   type TinstarConfig,
   type Session,
 } from './sessions'
@@ -56,6 +55,7 @@ import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
 import { SurfaceService } from './surfaces/surface-service'
 import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
+import { SurfaceComposeCoordinator } from './surfaces/surface-compose-coordinator'
 import { buildRefreshCoordinator, headRevision } from './surfaces/refresh-wiring'
 import { slateSourceAdapters } from './surfaces/slate-source'
 import { boundSlateRuns, reconcileSlateEpoch } from './surfaces/source-reconciler'
@@ -72,7 +72,9 @@ import { natsControlSocketPath } from './sessions/backends/tmux'
 import {
   describeTtydFailure,
 } from './sessions/backends/ttyd-diagnostics'
-import { reconnectSessionNats } from './sessions/natsReconnect'
+import { reapSessionNatsChannelServer } from './sessions/natsReconnect'
+import { migrateCliTemplateIds } from './sessions/cli-template-id-migration'
+import { getDefaultHandsDir } from './hands'
 import {
   startProcessNatsManager,
   stopProcessNatsManager,
@@ -813,6 +815,7 @@ export function initBackend(): RouteContext {
   })
   let slateWatcher: SlateWatcher | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
+  let composeCoordinator: SurfaceComposeCoordinator | undefined
   let natsBackendCleanup: Promise<void> | null = null
   const stopNatsBackendResources = (): Promise<void> => {
     if (natsBackendCleanup) return natsBackendCleanup
@@ -1097,7 +1100,7 @@ export function initBackend(): RouteContext {
         // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
         onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
           ? (name) => {
-              void reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+              void reapSessionNatsChannelServer(name)
                 .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
                 .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
             }
@@ -1164,10 +1167,11 @@ export function initBackend(): RouteContext {
       }))
       registerCodexDelivery(providerRegistry, sessionConfig)
 
-      // Port safety (plan U6). Registering the interactive window is what arms
-      // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
-      // into the range user sessions draw from is rejected at the call rather than
-      // quietly competing for the same ports.
+      // Port safety. Registering the interactive window is what arms `findPort`'s
+      // overlap refusal: any OTHER window that reaches into the range user sessions
+      // draw from is rejected at the call rather than quietly competing for the same
+      // ports. Refresh no longer has a window of its own — it creates no session, so
+      // it claims no port (plan U1).
       tmuxBackend.setInteractivePortWindow(interactivePortWindow(sessionConfig))
 
       // Terminal exposure. This is the ONE site where the bind setting reaches
@@ -1178,16 +1182,36 @@ export function initBackend(): RouteContext {
       // operator widens the dashboard's bind: a terminal is reachable only
       // through this backend's session proxy, never directly from another host.
       tmuxBackend.setTerminalBindAddress(LOOPBACK_BIND_ADDRESS)
-      const portProblem = refreshConfigProblem(sessionConfig)
-      if (portProblem) {
-        // A user edit, not a code bug — so it degrades the refresh engine rather
-        // than stopping the boot. The coordinator reads the same predicate and
-        // stays in owner-delivery mode while it holds.
-        log.error('refresh', `refresh engine disabled — ${portProblem}`)
-      }
 
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
+
+      // Rewrite pre-ID CLI template references (display name → stable ID). Runs
+      // immediately after hydration and before any session rehydration, so the
+      // records the boot path is about to resolve are already migrated.
+      try {
+        const tplMigration = migrateCliTemplateIds(
+          sessionConfig.cliTemplates,
+          sessionConfig.dirs.sessions,
+          docStore,
+          getDefaultHandsDir(),
+        )
+        const touched = tplMigration.sessions.length + tplMigration.entities.length
+          + tplMigration.tombstones.length + tplMigration.hands.length
+        if (touched > 0) {
+          log.info('sessions', `migrated ${touched} legacy CLI template reference(s) to stable IDs`, {
+            sessions: tplMigration.sessions,
+            entities: tplMigration.entities,
+            tombstones: tplMigration.tombstones,
+            hands: tplMigration.hands,
+          })
+        }
+        for (const { where, value } of tplMigration.unresolved) {
+          log.warn('sessions', `CLI template "${value}" (${where}) matches no configured template — left as-is`)
+        }
+      } catch (err) {
+        log.warn('sessions', `CLI template ID migration failed: ${(err as Error).message}`)
+      }
 
       // Canonical Surfaces (U1) — SAME GATE as docStore.enablePersistence, and
       // deliberately immediately after it: the migration reconciles the legacy
@@ -1587,8 +1611,28 @@ export function initBackend(): RouteContext {
         applyEpoch: epoch => reconcileSlateEpoch(slateService, epoch, {
           actor: { kind: 'job', id: 'slate-watcher', label: 'Slate watcher' },
         }),
+        onInvalidEntry: ({ runId, file, localId, attemptToken }) =>
+          composeCoordinator?.rejectInvalidOutput(runId, file, localId, attemptToken),
       })
+
+      composeCoordinator = new SurfaceComposeCoordinator(
+        docStore,
+        slateService,
+        runId => slateWatcher!.reconcileNow(runId),
+      )
       slateWatcher.start()
+      // Populate the watcher's worktree map and re-observe assigned files before
+      // deciding that attempts stranded by a restart have failed.
+      void slateWatcher.pollOnce()
+        .then(() => composeCoordinator!.recover())
+        .then(result => {
+          if (result.failed.length) log.info('slate-author', `restart failed ${result.failed.length} interrupted compose attempt(s)`)
+        })
+        .catch(err => log.warn('slate-author', `restart recovery failed: ${(err as Error).message}`))
+      setInterval(() => {
+        void composeCoordinator?.sweep()
+          .catch(err => log.warn('slate-author', `deadline sweep failed: ${(err as Error).message}`))
+      }, 5_000)
 
       // The durable refresh engine (plan U6). Its own SurfaceService for the same
       // reason the watcher has one: no per-call state to share, and no interleaving
@@ -1664,7 +1708,7 @@ export function initBackend(): RouteContext {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     simulatorTestApiEnabled: fastSim,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
-    providerObservationStores, refreshCoordinator,
+    providerObservationStores, refreshCoordinator, composeCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     providerRegistry,
     get natsTraffic() { return natsTraffic },

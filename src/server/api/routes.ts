@@ -2,11 +2,11 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, ren
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import { getMetricsText, register as turnLengthRegister } from '../observability/turn-length'
@@ -65,15 +65,19 @@ import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
+import { SURFACE_CATALOG } from '../../slate/surfaceCatalog'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
-import { resolveActor, statusFor } from './surfaceRoutes'
+import type { SurfaceComposeCoordinator } from '../surfaces/surface-compose-coordinator'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
+import { buildRunAuthoringContext, buildRunAuthoringSurface } from '../surfaces/run-authoring-context'
 import { SurfaceService } from '../surfaces/surface-service'
-import { slateSourceAdapters } from '../surfaces/slate-source'
+import { parseSlateFileLocator, slateSourceAdapters, SLATE_DIR_PARTS } from '../surfaces/slate-source'
+import { slateSurfaceFromCanonical } from '../stores/run-slate-projection'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
+import { validateExplicitWorkPrompt } from '../../slate/objective'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -97,7 +101,7 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
-import { reconnectSessionNats } from '../sessions/natsReconnect'
+import { reapSessionNatsChannelServer } from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -110,7 +114,7 @@ import { currentOriginAllowlist } from './originAllowlist'
 import { isUpgradeOriginAllowed } from '../sessionProxy'
 import { getReachCoordinator } from '../reach'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
-import { handleSurfaceRoutes } from './surfaceRoutes'
+import { handleSurfaceRoutes, handleRefreshIntent, resolveActor } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 import {
@@ -119,6 +123,7 @@ import {
   ProviderCapabilityError,
   providerTelemetryEnabled,
   requireProviderCapability,
+  validateProviderManagedInstructions,
   type ProviderAdapterRegistry,
   type TerminalProviderAdapter,
 } from '../providers/lifecycle'
@@ -240,60 +245,21 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   return snappedOk && membersOk && revOk
 }
 
-/** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
+/** Build a direct session subject from Project/Worktree organizational scope. */
 function buildNatsSubject(
   sessionName: string,
   docStore: DocumentStore,
-  taskId?: string,
-  epicId?: string,
-  initiativeId?: string,
+  project?: string,
+  worktree?: string,
 ): string {
   const BLANK = '_'
-  const sanitize = sanitizeSubjectToken
-
-  // Resolve hierarchy
-  let initId = initiativeId
-  let epId = epicId
-  let spaceId: string | undefined
-
-  if (taskId) {
-    const task = docStore.getTask(taskId)
-    if (task) {
-      epId = epId || task.epicId
-      initId = initId || task.initiativeId
-      spaceId = task.spaceId
-    }
-  }
-  if (epId && !initId) {
-    const epic = docStore.getEpic(epId)
-    if (epic) {
-      initId = epic.initiativeId
-      spaceId = spaceId || epic.spaceId
-    }
-  }
-  if (initId && !spaceId) {
-    const init = docStore.getInitiative(initId)
-    if (init) {
-      spaceId = init.spaceId
-    }
-  }
-
-  const space = spaceId ? docStore.getSpace(spaceId) : null
-  const initiative = initId ? docStore.getInitiative(initId) : null
-  const epic = epId ? docStore.getEpic(epId) : null
-  const task = taskId ? docStore.getTask(taskId) : null
-
-  const spaceName = space ? sanitize(space.name) : BLANK
-  const initName = initiative ? sanitize(initiative.name) : BLANK
-  const epicName = epic ? sanitize(epic.name) : BLANK
-  const taskName = task ? sanitize(task.name) : BLANK
+  const space = docStore.activeSpaceId ? docStore.getSpace(docStore.activeSpaceId) : null
 
   return buildAgentSubject({
-    space: spaceName,
-    init: initName,
-    epic: epicName,
-    task: taskName,
-    session: sanitize(sessionName),
+    space: sanitizeSubjectToken(space?.name ?? BLANK) || BLANK,
+    project: sanitizeSubjectToken(project ?? BLANK) || BLANK,
+    worktree: sanitizeSubjectToken(worktree ?? BLANK) || BLANK,
+    session: sanitizeSubjectToken(sessionName),
   })
 }
 import { discoverHands, getHandByName, type Hand } from '../hands'
@@ -521,6 +487,8 @@ interface CreateSessionParams {
   worktree?: boolean
   worktreePath?: string
   prompt?: string
+  /** Caller-authored work text only. Host persona/introduction prose never enters it. */
+  objective?: string
   skipPermissions?: boolean
   cliTemplate?: string
   taskId?: string
@@ -677,11 +645,13 @@ async function rollbackFailedSessionProvisioning(args: {
     previous: Worktree | null
     provisional: Worktree
   } | null
+  /** Canonical Surfaces created by this provisioning attempt, never historical aliases. */
+  provisionedSurfaceIds?: readonly string[]
 }): Promise<boolean> {
   const {
     cfg, sessDir, docStore, name, session, claimedPort,
     natsTraffic, natsHealth, readyQueue, sse, resolvedNats,
-    createdWorktreeProject, worktreeEntityRollback,
+    createdWorktreeProject, worktreeEntityRollback, provisionedSurfaceIds = [],
   } = args
 
   // Backend + port cleanup comes first. Auxiliary cleanup is allowed to be
@@ -730,6 +700,32 @@ async function rollbackFailedSessionProvisioning(args: {
     name,
     resolvedNats,
   )
+  if (provisionedSurfaceIds.length > 0) {
+    const created = new Set(provisionedSurfaceIds)
+    const svc = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
+    const actor = { actor: { kind: 'process' as const, id: 'session-provisioning-rollback' } }
+    const roots = provisionedSurfaceIds
+      .map(id => docStore.getSurface(id))
+      .filter((surface): surface is NonNullable<typeof surface> => !!surface)
+      .filter(surface => surface.home.kind !== 'surface' || !created.has(surface.home.surfaceId))
+    for (const root of roots) {
+      const descendants = docStore.getSurfaceDescendants(root.id)
+        .map(surface => surface.id)
+        .filter(id => created.has(id))
+      try {
+        const deleted = await svc.delete(root.id, {
+          ...(descendants.length > 0 ? { descendants, disposition: 'delete-subtree' } : {}),
+        }, actor)
+        if (!deleted.ok) throw new Error(deleted.error.reason ?? deleted.error.message)
+        const purged = await svc.purge(root.id, {
+          ...(descendants.length > 0 ? { descendants } : {}),
+        }, actor)
+        if (!purged.ok) throw new Error(purged.error.reason ?? purged.error.message)
+      } catch (err) {
+        log.warn('sessions', `${name}: failed provisioning rollback could not purge Surface ${root.id}: ${(err as Error).message}`)
+      }
+    }
+  }
   try {
     docStore.deleteRun(name)
   } catch (err) {
@@ -1377,6 +1373,11 @@ async function createSessionInternal(
   if (typeof params.name !== 'string' || !params.name) {
     return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   }
+  const objective = validateExplicitWorkPrompt(params.objective, OBJECTIVE_MAX)
+  if (!objective.ok) {
+    return { ok: false, error: { code: 'INVALID_WORK_PROMPT', message: objective.message } }
+  }
+  params = { ...params, objective: objective.text }
   const reservation = reserveSessionName(
     ctx.sessDir,
     ctx.cfg.sessions.prefix,
@@ -1420,7 +1421,7 @@ async function createReservedSession(
 ): Promise<CreateSessionResult> {
   const {
     name, project, worktree = false, worktreePath,
-    prompt, skipPermissions = true, cliTemplate: cliTemplateId,
+    prompt, objective, skipPermissions = true, cliTemplate: cliTemplateId,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
     view, viewData, model: modelOverride, token: tokenOverride, focus,
     background = false
@@ -1431,6 +1432,10 @@ async function createReservedSession(
     natsTraffic, natsHealth,
   } = ctx
   const providerRegistry = ctx.providerRegistry ?? defaultProviderRegistry
+  const priorRunSurfaceIds = new Set(docStore.getSurfacesForRunAlias(name).map(surface => surface.id))
+  const provisionedSurfaceIds = (): string[] => docStore.getSurfacesForRunAlias(name)
+    .map(surface => surface.id)
+    .filter(id => !priorRunSurfaceIds.has(id))
 
   // This call already owns the in-flight reservation; only durable state can
   // conflict here.
@@ -1467,6 +1472,7 @@ async function createReservedSession(
   let provider: TerminalProviderAdapter
   try {
     provider = providerRegistry.resolveTemplate(resolvedTemplate)
+    validateProviderManagedInstructions(provider)
     if (nats?.enabled) requireProviderCapability(provider, 'nats')
     // This is also the fail-fast validation for an explicit telemetry:true on a
     // provider that cannot supply the environment transport.
@@ -1494,35 +1500,9 @@ async function createReservedSession(
     ?? (epicId ? docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
     ?? (initiativeId ? docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
-  // Compute NATS subscriptions
+  // Explicit subscriptions are accepted as-is. Automatic subscriptions are
+  // computed after worktree resolution so their hierarchy uses the real branch.
   let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
-  const natsCtx = {
-    sessionName: name,
-    spaceId: docStore.activeSpaceId || null,
-    taskId: taskId || null,
-    epicId: epicId || null,
-    initiativeId: initiativeId || null,
-  }
-  if (
-    !nats
-    && provider.terminal.capabilities.nats.state === 'supported'
-    && (taskId || epicId || initiativeId || natsCtx.spaceId)
-  ) {
-    // NATS on by default whenever there's *any* hierarchy to root a subject in —
-    // including a bare space. Previously the gate omitted spaceId, so a
-    // standalone session (created with just an active space and no explicit
-    // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
-    // off and never joined the bus. computeNatsSubscriptions yields a DM-only
-    // inbox for the task-less case (not a space wildcard — see that fn). Passing
-    // `nats:{enabled:false}` explicitly still opts out, since this branch only
-    // runs when `nats` is absent.
-    //
-    // Gated by the registered provider capability: generic/Codex remain off,
-    // while a future provider can opt in without entering this shared branch.
-    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
-  } else if (nats?.enabled && !nats.subscriptions?.length) {
-    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
-  }
 
   // Acquire worktree resources only after all validation and pure projection
   // work above has completed. From this point onward every possible failure is
@@ -1551,6 +1531,21 @@ async function createReservedSession(
   }
 
   const isWorktree = !!(worktreePath || worktree)
+  const natsCtx = {
+    sessionName: name,
+    spaceId: docStore.activeSpaceId || null,
+    project: project || null,
+    worktree: isWorktree ? (branch ?? name) : null,
+  }
+  if (
+    !nats
+    && provider.terminal.capabilities.nats.state === 'supported'
+    && (project || natsCtx.spaceId)
+  ) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  } else if (nats?.enabled && !nats.subscriptions?.length) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  }
 
   // Register a Worktree entity so it appears in hierarchy/grouping. Keep both
   // the old value and the exact provisional object: rollback restores/deletes
@@ -1645,7 +1640,12 @@ async function createReservedSession(
       appendSystemPrompt: appendSystemPrompt ?? null,
     })
     sessionPort = result.port
-    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    updateSession(sessDir, name, {
+      port: sessionPort,
+      ttydPid: result.ttydPid ?? null,
+      state: 'running',
+      managedInstructions: result.managedInstructions,
+    })
     const ttydGeneration = currentSessionBackendGeneration(sessDir, name)
     tmuxBackend.onTtydRestart(name, (newPid) => {
       persistTtydRestartForSessionIncarnation(
@@ -1671,6 +1671,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -1682,10 +1683,11 @@ async function createReservedSession(
 
   // Advertise the agent's DM inbox, derived from the computed subscriptions so
   // it's exactly what the agent subscribes to: subscriptions[1] is the DM for a
-  // task-seated agent ([0] is the broadcast channel); for a task-less agent the
-  // list holds only the DM at [0]. This mirrors the reparent (newSubs[1] ?? [0])
+  // Worktree-scoped agent ([0] is the broadcast channel); for a Project-only or
+  // Unscoped agent the list holds only the DM at [0]. This mirrors the scope
+  // mutation (newSubs[1] ?? [0])
   // and restore paths. Recomputing via the space-blind buildNatsSubject diverged
-  // for task-less space-only sessions — it can't see activeSpaceId, so it
+  // for sessions outside a Worktree — it can't see activeSpaceId, so it
   // advertised a '_'-rooted subject the agent never listens on (roborev #998).
   const natsSubject = resolvedNats?.enabled
     ? (resolvedNats.subscriptions[1] ?? resolvedNats.subscriptions[0])
@@ -1699,6 +1701,10 @@ async function createReservedSession(
       background,
       blocked: false,
       sessionId: name,
+      scope: {
+        ...(project ? { project } : {}),
+        ...(project && isWorktree ? { worktree: branch ?? name } : {}),
+      },
       initiative: initiativeId ?? '',
       epic: epicId ?? '',
       task: taskId ?? '',
@@ -1729,6 +1735,17 @@ async function createReservedSession(
       ...(focus === false || background ? { focusOnCreate: false } : {}),
     })
 
+    if (objective) {
+      const saved = await new RunSlateBridge(
+        docStore,
+        new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() }),
+      ).upsertUserPoint(runId, {
+        id: OBJECTIVE_POINT_ID,
+        headline: objective,
+      }, { kind: 'human', id: 'session-bootstrap' }, { claim: true })
+      if (!saved.point) throw new Error(`could not persist session Objective: ${saved.reason ?? 'unknown error'}`)
+    }
+
     registerLaunchedSession(
       { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
       name,
@@ -1754,6 +1771,7 @@ async function createReservedSession(
       resolvedNats,
       createdWorktreeProject,
       worktreeEntityRollback,
+      provisionedSurfaceIds: provisionedSurfaceIds(),
     })
     throw new SessionProvisioningError(err, backendCleanupConfirmed)
   }
@@ -1788,6 +1806,8 @@ export interface RouteContext {
   /** The durable refresh engine (plan U6). Absent when sessions are disabled, in
    *  which case the run-scoped refresh route falls back to the legacy nudge. */
   refreshCoordinator?: SurfaceRefreshCoordinator
+  /** Settles compose process exits, deadlines, and restart recovery. */
+  composeCoordinator?: SurfaceComposeCoordinator
 }
 
 function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
@@ -2069,6 +2089,7 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
     id: widgetId,
     spaceId: spaceId || undefined,
     ...(sessionId ? { sessionId } : {}),
+    ...(run ? { scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined } } : {}),
     url: widgetUrl,
     color: widgetColor,
     ...(title ? { title } : {}),
@@ -3339,6 +3360,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         id: widgetId,
         spaceId: editorSpaceId,
         sessionId,
+        scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined },
         filePath: absoluteFilePath,
         task: task?.name ?? '',
         epic: epic?.name ?? '',
@@ -3415,6 +3437,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         id: shortId('image'),
         spaceId: ctx.docStore.activeSpaceId || undefined,
         sessionId,
+        scope: run.scope ?? { project: run.repo || undefined, worktree: run.worktree || undefined },
         filePath: absoluteFilePath,
         task: task?.name ?? '',
         epic: epic?.name ?? '',
@@ -4406,17 +4429,130 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PATCH /api/widgets/:id/scope — one host-owned scope mutation for every widget kind.
+  {
+    const scopeMatch = method === 'PATCH' && url.match(/^\/api\/widgets\/([^/]+)\/scope$/)
+    if (scopeMatch) {
+      const id = decodeURIComponent(scopeMatch[1]!)
+      readBody(req).then(async body => {
+        let parsed: { project?: string | null; worktree?: string | null }
+        try { parsed = JSON.parse(body) as typeof parsed }
+        catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+        if (!parsed || typeof parsed !== 'object') {
+          fail(res, 'BAD_REQUEST', 'Scope must be an object')
+          return
+        }
+        const project = typeof parsed.project === 'string' ? parsed.project.trim() : ''
+        const worktree = typeof parsed.worktree === 'string' ? parsed.worktree.trim() : ''
+        if (worktree && !project) {
+          fail(res, 'BAD_REQUEST', 'A Worktree scope requires a Project')
+          return
+        }
+        const projectsFile = ctx.sessionConfig?.files.projects
+        if (project && (!projectsFile || !getProject(projectsFile, project))) {
+          fail(res, 'NOT_FOUND', `Project '${project}' not found`)
+          return
+        }
+        if (worktree) {
+          const registered = ctx.docStore.getAllWorktrees().some(candidate =>
+            candidate.repo === project
+              && (candidate.branch === worktree || candidate.name === worktree || candidate.id === worktree),
+          )
+          // Session-created scopes remain valid drop targets even when their worktree
+          // record has not yet been reconciled into the registry.
+          const occupied = ctx.docStore.getAllRuns().some(candidate => {
+            const candidateProject = candidate.scope?.project?.trim() || candidate.repo?.trim()
+            const candidateWorktree = candidate.scope?.worktree?.trim() || candidate.worktree?.trim()
+            return candidateProject === project && candidateWorktree === worktree
+          })
+          const valid = registered || occupied
+          if (!valid) {
+            fail(res, 'NOT_FOUND', `Worktree '${worktree}' not found in Project '${project}'`)
+            return
+          }
+        }
+        const scope = {
+          ...(project ? { project } : {}),
+          ...(worktree ? { worktree } : {}),
+        }
+
+        const run = ctx.docStore.getRun(id)
+        if (run) {
+          let nextRun = { ...run, scope, repo: project, worktree }
+          const sessDir = ctx.sessionConfig?.dirs.sessions
+          const session = sessDir ? getSession(sessDir, run.sessionId) : null
+          if (run.natsEnabled && session?.nats?.enabled && sessDir) {
+            const oldSubs = session.nats.subscriptions ?? []
+            const newSubs = computeNatsSubscriptions({
+              sessionName: run.sessionId,
+              spaceId: run.spaceId,
+              project: project || null,
+              worktree: worktree || null,
+            }, ctx.docStore)
+            const { add, remove } = diffSubscriptions(oldSubs, newSubs)
+            for (const subject of remove) {
+              const warning = await trySendNatsSocketCommand(run.sessionId, { action: 'unsubscribe', subject })
+              if (warning) log.warn('nats', `${run.sessionId}: ${warning.message}`)
+            }
+            for (const subject of add) {
+              const warning = await trySendNatsSocketCommand(run.sessionId, { action: 'subscribe', subject })
+              if (warning) log.warn('nats', `${run.sessionId}: ${warning.message}`)
+            }
+            updateSession(sessDir, run.sessionId, {
+              nats: { ...session.nats, subscriptions: newSubs },
+            })
+            registerSaloonSubs(ctx.natsTraffic, run.sessionId, newSubs)
+            nextRun = {
+              ...nextRun,
+              natsSubject: newSubs[1] ?? newSubs[0],
+              natsSubscriptions: newSubs,
+            }
+          }
+          ctx.docStore.upsertRun(id, nextRun)
+          ok(res, { id, scope })
+          return
+        }
+        const editor = ctx.docStore.getAllEditorWidgets().find(widget => widget.id === id)
+        if (editor) {
+          ctx.docStore.upsertEditorWidget(id, { ...editor, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const browser = ctx.docStore.getAllBrowserWidgets().find(widget => widget.id === id)
+        if (browser) {
+          ctx.docStore.upsertBrowserWidget(id, { ...browser, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const image = ctx.docStore.getAllImageWidgets().find(widget => widget.id === id)
+        if (image) {
+          ctx.docStore.upsertImageWidget(id, { ...image, scope })
+          ok(res, { id, scope })
+          return
+        }
+        const plugin = ctx.docStore.getAllPluginWidgets().find(widget => widget.id === id)
+        if (plugin) {
+          ctx.docStore.upsertPluginWidget(id, { ...plugin, scope, updatedAt: new Date().toISOString() })
+          ok(res, { id, scope })
+          return
+        }
+        fail(res, 'NOT_FOUND', `Widget '${id}' not found`)
+      }).catch(error => fail(res, 'INTERNAL', (error as Error).message))
+      return true
+    }
+  }
+
   // POST /api/plugin-widgets
   if (method === 'POST' && url === '/api/plugin-widgets') {
     readBody(req).then(body => {
       const parsed = JSON.parse(body) as {
-        pluginId?: string; widgetType?: string; spaceId?: string;
+        pluginId?: string; widgetType?: string; spaceId?: string; sessionId?: string;
         position?: { x: number; y: number };
         size?: { width: number; height: number };
         data?: unknown;
         attach?: { to: string; anchors: string };
       }
-      const { pluginId, widgetType, spaceId, position, size, data } = parsed
+      const { pluginId, widgetType, spaceId, sessionId, position, size, data } = parsed
 
       // Parse attach early so we can report malformed input before heavier checks.
       const attach = parseAttach(parsed.attach)
@@ -4483,11 +4619,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       const now = new Date().toISOString()
+      const spawningRun = sessionId
+        ? ctx.docStore.getAllRuns().find(run => run.sessionId === sessionId)
+        : undefined
+      if (sessionId && !spawningRun) {
+        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
+        return
+      }
       const instance: PluginWidgetInstance = {
         id: widgetId,
         pluginId,
         widgetType,
         spaceId,
+        ...(sessionId ? { sessionId } : {}),
+        scope: spawningRun?.scope ?? (spawningRun
+          ? { project: spawningRun.repo || undefined, worktree: spawningRun.worktree || undefined }
+          : {}),
         position: finalPosition,
         size,
         data: data ?? null,
@@ -4734,13 +4881,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // persisted snapshot; oversize is refused with a 413.
   const SLATE_HEADLINE_MAX = 200
   const SLATE_CONTENT_MAX = 32 * 1024
+  const SLATE_AUTHORING_KEY_MAX = 200
+  const SLATE_AUTHORING_REQUEST_MAX = 8 * 1024
 
   // Every run-scoped Slate write goes through the compatibility alias to the ONE
   // canonical Surface it addresses (plan KTD3/U2). Built per request because the
   // service and the bridge hold no per-call state; the durable ordering that does
   // matter is enforced by the sidecar's transaction queue, not by object identity.
-  const slateBridge = (): RunSlateBridge =>
-    new RunSlateBridge(ctx.docStore, new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() }))
+  const slateService = (): SurfaceService =>
+    new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+  const slateBridge = (): RunSlateBridge => new RunSlateBridge(ctx.docStore, slateService())
+  const slateInteractionOwner = (runId: string, localId: string) =>
+    buildRunAuthoringSurface(ctx.docStore, slateService(), runId, localId, { kind: 'session', id: runId })
 
   /** The acting principal for a run-scoped Slate write. The trusted-local human in
    *  this release (KTD6); an agent- or process-attributed reply carries its own. */
@@ -4749,10 +4901,125 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       : author === 'process' ? { kind: 'process', id: 'run-workspace' }
         : { kind: 'session', id: 'run-workspace' }
 
+  /**
+   * Agent authoring is run-scoped by construction. These headers are trusted-local
+   * routing identity, not authentication; checking them prevents accidental writes
+   * to a sibling run without pretending a local process cannot spoof them.
+   */
+  const runAuthoringPrincipal = (
+    runId: string,
+  ): { actor: { kind: 'session'; id: string }; session: Session } | null => {
+    const actor = resolveActor(req)
+    if (actor.kind !== 'session' || actor.id !== runId) {
+      fail(
+        res,
+        'FORBIDDEN',
+        'Slate authoring requires a session principal matching the target Run',
+        { status: 403 },
+      )
+      return null
+    }
+    const sessionsDir = ctx.sessionConfig?.dirs.sessions
+    const session = sessionsDir ? getSession(sessionsDir, actor.id) : null
+    if (!session) {
+      fail(res, 'FORBIDDEN', `session principal '${actor.id}' is not a managed session`, { status: 403 })
+      return null
+    }
+    return { actor: { kind: 'session', id: actor.id }, session }
+  }
+
   // Append a reply to a point's thread. REOPEN-ON-REPLY lives inside the bridge.
   const appendSlateReply = async (runId: string, pid: string, reply: Reply): Promise<Point | undefined> => {
     const result = await slateBridge().appendReply(runId, pid, reply.text, slateActor(reply.author))
     return result.point
+  }
+
+  // GET /api/runs/:id/slate/authoring/context — the run-scoped work-object index
+  // a foreground agent reads before deciding whether to amend or reserve.
+  if (method === 'GET' && /^\/api\/runs\/[^/]+\/slate\/authoring\/context$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/context'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    ok(res, buildRunAuthoringContext(ctx.docStore, slateService(), runId, principal.actor))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/authoring/reservations — reserve the same durable,
+  // visible compose-card lifecycle as Add surface, but return its destination to
+  // the foreground agent without dispatching an author or prompting the run.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/authoring\/reservations$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/authoring/reservations'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const principal = runAuthoringPrincipal(runId)
+    if (!principal) return true
+    readBody(req).then(async raw => {
+      let parsed: { key?: unknown; label?: unknown; request?: unknown; recipe?: unknown }
+      try { parsed = JSON.parse(raw) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      const unknownField = Object.keys(parsed).find(field => !['key', 'label', 'request', 'recipe'].includes(field))
+      if (unknownField) {
+        fail(res, 'INVALID_PARAMS', `${unknownField} is not accepted by Slate authoring reservations`); return
+      }
+      const key = typeof parsed.key === 'string' ? parsed.key.trim() : ''
+      const label = typeof parsed.label === 'string' ? parsed.label.trim() : ''
+      const request = typeof parsed.request === 'string' ? parsed.request.trim() : ''
+      const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
+      if (!key || key.length > SLATE_AUTHORING_KEY_MAX) {
+        fail(res, 'INVALID_PARAMS', `key must be a non-empty string of at most ${SLATE_AUTHORING_KEY_MAX} characters`); return
+      }
+      if (!label || label.length > SLATE_HEADLINE_MAX) {
+        fail(res, 'INVALID_PARAMS', `label must be a non-empty string of at most ${SLATE_HEADLINE_MAX} characters`); return
+      }
+      if (!request) {
+        fail(res, 'INVALID_PARAMS', 'request must be a non-empty string'); return
+      }
+      if (request.length + recipe.length > SLATE_AUTHORING_REQUEST_MAX) {
+        fail(res, 'BAD_REQUEST', `authoring request exceeds ${SLATE_AUTHORING_REQUEST_MAX} characters`, { status: 413 }); return
+      }
+      const worktree = principal.session.workspace?.path
+      if (!worktree) {
+        fail(res, 'CONFLICT', `Run ${runId} has no writable worktree for Slate authoring`); return
+      }
+      let reserved: Awaited<ReturnType<RunSlateBridge['reserveComposition']>>
+      try {
+        reserved = await slateBridge().reserveComposition(runId, {
+          label,
+          request: { freeform: request, ...(recipe ? { recipe } : {}) },
+          worktree,
+          timeoutMs: ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000,
+        }, {
+          actor: principal.actor,
+          idempotencyKey: key,
+        })
+      } catch (error) {
+        console.error('Slate authoring reservation failed:', error)
+        fail(res, 'INTERNAL', 'could not reserve the Surface')
+        return
+      }
+      if (!reserved.reservation) {
+        fail(res, 'CONFLICT', `could not reserve the Surface: ${reserved.reason ?? 'unknown error'}`); return
+      }
+      const card = reserved.reservation
+      const deadlineAt = card.surface.creation?.deadlineAt
+      if (deadlineAt === undefined) {
+        fail(res, 'INTERNAL', 'reserved Surface is missing its authoring deadline')
+        return
+      }
+      ok(res, {
+        surfaceId: card.surface.id,
+        localId: card.localId,
+        file: join(worktree, ...SLATE_DIR_PARTS, card.file),
+        attemptToken: card.token,
+        deadlineAt,
+        replayed: card.replayed,
+      }, { status: card.replayed ? 200 : 201 })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
   }
 
   // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.
@@ -5029,11 +5296,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-answer'), author: 'user', text: parts.join(' — '), createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       const delivered = await deliverSlatePrompt(
         ctx,
         runId,
-        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()),
+        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase(), owner),
         requestGeneration,
       )
       ok(res, { point: updated, delivered })
@@ -5076,10 +5344,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const reply: Reply = { id: shortId('slate-reply'), author, text: trimmed, createdAt: Date.now() }
       const updated = await appendSlateReply(runId, pid, reply)
       if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+      const owner = slateInteractionOwner(runId, pid)
 
       // Only a USER reply delivers — the anti-loop guard (R15).
       const delivered = author === 'user'
-        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()), requestGeneration)
+        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase(), owner), requestGeneration)
         : false
       ok(res, { point: updated, reply, delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
@@ -5125,59 +5394,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const point = ctx.docStore.getSlatePoint(runId, pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
 
-    // U6: the durable path. When the refresh engine is running and this point has a
+    // THE DURABLE PATH. When the refresh engine is running and this point has a
     // canonical Surface behind it, the request becomes a JOB rather than a prompt —
-    // it survives the owner exiting and a server restart, it is bounded by the
-    // worker cap, and its result has to pass the observation barrier before the
-    // Surface may claim current.
+    // it survives the owner exiting and a server restart, and its result has to pass
+    // the observation barrier before the Surface may claim current.
     //
-    // The legacy nudge below is the fallback, not the plan's "temporary kill
-    // switch" — that is `refresh.autonomousWorkers`, which lives inside the
-    // coordinator and still produces a durable job. This branch is only for a run
-    // with no canonical record at all.
+    // The nudge below is for a run with NO canonical record at all. It delivers to
+    // the run's own live agent and creates nothing (plan U1, KTD3): the one-shot
+    // author fast path that used to sit here spawned a fresh headless `claude -p`
+    // per refresh, which is a refresh-created process by another name.
     const coordinator = ctx.refreshCoordinator
     const canonical = ctx.docStore.surfaceForRunAlias(runId, pid)
     if (coordinator && canonical) {
-      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
-      const call = { actor: resolveActor(req) }
-      // U3 owns current → queued; U6 owns the job that services it. A Surface
-      // already queued or refreshing is left alone by `refreshRequest`, and asking
-      // for a job anyway is right: the coordinator adopts the existing one rather
-      // than making a second.
-      const requested = await service.refreshRequest(canonical.id, {}, call)
-      const alreadyWorking = !requested.ok
-        && (requested.error.reason === 'already-queued' || requested.error.reason === 'already-refreshing')
-      if (!requested.ok && !alreadyWorking) {
-        fail(res, statusFor(requested.error), requested.error.message, {
-          details: requested.error.reason ? { reason: requested.error.reason } : undefined,
-        })
-        return true
-      }
-      const job = await coordinator.requestFor(canonical.id)
-      // `delivered` is reported alongside so the existing client spinner keeps its
-      // contract: a queued job IS delivery — the host has taken responsibility for
-      // it — and the freshness badge now carries the detail the spinner could not.
-      ok(res, { delivered: true, queued: !!job, jobId: job?.id, surfaceId: canonical.id })
+      // RESOLVE THE ALIAS AND DELEGATE — that is the whole of this branch (KTD4).
+      // It used to drive the `current → queued` transition itself and then ask for a
+      // job, which meant two places knew how a refresh starts and could disagree;
+      // most visibly when the second one declined, leaving a Surface badged `queued`
+      // with nothing behind it. The canonical handler owns the intent vocabulary, the
+      // human-principal check, the bulk-check narrowing, and the join, so this route
+      // and `/api/surfaces/:id/refresh` cannot drift apart.
+      const raw = await readBody(req).then(t => { try { return JSON.parse(t || '{}') } catch { return {} } })
+      const svc = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      await handleRefreshIntent(ctx, req, res, corsHeaders, canonical.id, raw, svc)
       return true
     }
 
-    // Source-derived (carries a self-contained recipe) → spawn a fresh one-shot author OFF
-    // the main agent's path (feat: multi-agent Slate). Recipe-less / session-derived surfaces
-    // fall through to the unchanged main-agent nudge below — which also covers the backlog.
-    if (point.refresh && ctx.sessionConfig?.slate.author.enabled) {
-      const { dispatched } = dispatchSurfaceAuthor({
-        sessionsDir: ctx.sessionConfig.dirs.sessions,
-        config: ctx.sessionConfig.slate.author,
-        runId,
-        prompt: slateRefreshPromptText(point, serverBase()),
-        label: point.id,
-        // Inject credentials explicitly — the child gets a scoped env and has no
-        // login shell to re-export anything. Same source managed sessions use.
-        secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
-      })
-      if (dispatched) { ok(res, { dispatched: true }); return true }
-      // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
-    }
+    // No canonical record: nudge the run's OWN live agent, the same way reply and
+    // answer do. Best-effort, and `delivered: false` is not an error.
     const delivered = await deliverSlatePrompt(
       ctx,
       runId,
@@ -5188,31 +5431,112 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // POST /api/runs/:id/slate/compose — deliver an authoring prompt to the run's agent
-  // so it composes a NEW surface (plan U4, KTD4/KTD6). Body: { prompt?, freeform? } —
-  // `prompt` from a catalog template, `freeform` from the user's own words; at least
-  // one must be non-blank (an empty body is INVALID_PARAMS). Persists NOTHING: the agent
-  // authors the surface by writing its `.tinstar/slate/<slug>.json`, reusing the Slate's
-  // one file-in model. Best-effort delivery via the same sendPrompt path; delivered:false
-  // on an unreachable session is NOT an error. Anchored regex, matched BEFORE the greedy
-  // PATCH /api/runs/ handler.
+  // POST /api/runs/:id/slate/surfaces/:pid/retry — restart authoring on the same
+  // failed card with a new current token and the saved request.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/surfaces\/[^/]+\/retry$/.test(url.split('?')[0] ?? '')) {
+    const parts = (url.split('?')[0] ?? url).split('/')
+    const runId = decodeURIComponent(parts[3]!)
+    const localId = decodeURIComponent(parts[6]!)
+    const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+    const prior = ctx.docStore.surfaceForRunAlias(runId, localId)
+    if (!prior?.creation || prior.presentation !== 'compose-card') {
+      fail(res, 'NOT_FOUND', 'compose card not found'); return true
+    }
+    const key = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : randomUUID()
+    const token = `attempt-${createHash('sha256').update(`${prior.id}\0${key}`).digest('hex').slice(0, 24)}`
+    // Lost-response replay: the first retry already moved the card and dispatched.
+    if (prior.creation.phase === 'authoring' && prior.creation.token === token) {
+      ok(res, { surface: prior, slateSurface: slateSurfaceFromCanonical(prior, localId), localId, replayed: true }); return true
+    }
+    if (prior.creation.phase !== 'failed') {
+      fail(res, 'CONFLICT', 'only a failed compose card can be retried'); return true
+    }
+    const now = Date.now()
+    const retried = await service.retryComposition(prior.id, {
+      token,
+      expectedRev: prior.rev,
+      deadlineAt: now + (ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000),
+    }, { actor: slateActor(), idempotencyKey: key, at: now })
+    if (!retried.ok) {
+      fail(res, 'CONFLICT', retried.error.message); return true
+    }
+    const current = retried.data.surfaces[0]!.surface
+    const request = current.creation?.request ?? {}
+    const template = request.templateId ? SURFACE_CATALOG.find(item => item.id === request.templateId) : undefined
+    const destination = current.source ? parseSlateFileLocator(current.source.locator) : null
+    if (!destination || !current.creation) {
+      await service.failComposition(current.id, {
+        token, expectedRev: current.rev, code: 'dispatch-failed',
+        message: 'This card no longer has a valid authoring destination.',
+      }, { actor: slateActor() })
+      const failed = ctx.docStore.getSurface(current.id) ?? current
+      ok(res, { surface: failed, slateSurface: slateSurfaceFromCanonical(failed, localId), localId, dispatched: false }); return true
+    }
+    const composePrompt = slateComposePromptText({
+      prompt: template?.prompt,
+      freeform: request.freeform,
+      recipe: request.recipe,
+      destination: { file: destination.file, localId, attemptToken: token },
+    }, serverBase())
+    const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
+    if (ctx.sessionConfig?.slate.author.enabled && requestGeneration !== null) {
+      const lease = acquirePersistedSessionBackendLease(ctx, runId, requestGeneration)
+      if (lease) {
+        try {
+          const author = dispatchSurfaceAuthor({
+            sessionsDir: ctx.sessionConfig.dirs.sessions,
+            config: ctx.sessionConfig.slate.author,
+            runId,
+            prompt: composePrompt,
+            label: localId,
+            secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
+          })
+          if (author.dispatched) {
+            ctx.composeCoordinator?.watch(current.id, token, author.completion)
+            ok(res, { surface: current, slateSurface: slateSurfaceFromCanonical(current, localId), localId, dispatched: true }); return true
+          }
+        } finally {
+          lease.release()
+        }
+      }
+    }
+    const delivered = await deliverSlatePrompt(ctx, runId, composePrompt, requestGeneration)
+    if (!delivered) {
+      const latest = ctx.docStore.getSurface(current.id)
+      if (latest) await service.failComposition(latest.id, {
+        token, expectedRev: latest.rev, code: 'delivery-failed',
+        message: 'The author was unavailable. Retry when this session is reachable.',
+      }, { actor: slateActor() })
+    }
+    const settled = ctx.docStore.getSurface(current.id) ?? current
+    ok(res, { surface: settled, slateSurface: slateSurfaceFromCanonical(settled, localId), localId, delivered })
+    return true
+  }
+
+  // POST /api/runs/:id/slate/compose — reserve the real card first, then author into
+  // its exact source destination. The visible saved card is the acceptance receipt.
   if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/compose$/.test(url.split('?')[0] ?? '')) {
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/compose'.length))
     const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
-      let parsed: { prompt?: unknown; freeform?: unknown; recipe?: unknown }
+      let parsed: { templateId?: unknown; freeform?: unknown; recipe?: unknown }
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
-      const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim() : ''
+      const templateId = typeof parsed.templateId === 'string' ? parsed.templateId.trim() : ''
+      const template = templateId ? SURFACE_CATALOG.find(item => item.id === templateId) : undefined
+      if (templateId && !template) {
+        fail(res, 'INVALID_PARAMS', `unknown surface template ${JSON.stringify(templateId)}`); return
+      }
+      const prompt = template?.prompt ?? ''
       const freeform = typeof parsed.freeform === 'string' ? parsed.freeform.trim() : ''
       // Optional user-supplied refresh recipe (create-time capture) — makes the new
       // surface handoff-able to a one-shot author at birth.
       const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
       if (!prompt && !freeform) {
-        fail(res, 'INVALID_PARAMS', 'compose requires a prompt or freeform text'); return
+        fail(res, 'INVALID_PARAMS', 'compose requires a template or freeform text'); return
       }
       // Bound the delivered text — the siblings cap their inputs; an unbounded
       // freeform would blast an oversized prompt into the agent's session.
@@ -5220,14 +5544,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (prompt.length + freeform.length + recipe.length > SLATE_COMPOSE_MAX) {
         fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
       }
-      // The compose instruction IS a recipe for a NEW surface, so it's source-derived:
-      // offload to a one-shot author when enabled, else the unchanged main-agent nudge.
-      const composePrompt = slateComposePromptText({ prompt, freeform, recipe }, serverBase())
+      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      const bridge = new RunSlateBridge(ctx.docStore, service)
+      const worktree = getSession(ctx.sessionConfig?.dirs.sessions ?? '', runId)?.workspace?.path
+        || ctx.docStore.getRun(runId)?.worktree
+      const idempotencyKey = typeof req.headers['idempotency-key'] === 'string'
+        ? req.headers['idempotency-key']
+        : randomUUID()
+      const label = template?.name || freeform.replace(/\s+/g, ' ').slice(0, 80) || 'New surface'
+      const reserved = await bridge.reserveComposition(runId, {
+        label,
+        request: {
+          ...(template ? { templateId: template.id } : {}),
+          ...(freeform ? { freeform } : {}),
+          ...(recipe ? { recipe } : {}),
+        },
+        ...(worktree ? { worktree } : {}),
+        timeoutMs: ctx.sessionConfig?.slate.author.timeoutMs ?? 120_000,
+      }, { actor: slateActor(), idempotencyKey })
+      if (!reserved.reservation) {
+        fail(res, 'CONFLICT', `could not reserve the surface: ${reserved.reason ?? 'unknown error'}`); return
+      }
+      const card = reserved.reservation
+      if (card.replayed) {
+        ok(res, {
+          surface: card.surface,
+          slateSurface: slateSurfaceFromCanonical(card.surface, card.localId),
+          localId: card.localId,
+          replayed: true,
+        }); return
+      }
+      const composePrompt = slateComposePromptText({
+        prompt, freeform, recipe,
+        destination: { file: card.file, localId: card.localId, attemptToken: card.token },
+      }, serverBase())
       if (ctx.sessionConfig?.slate.author.enabled && requestGeneration !== null) {
         const authorLease = acquirePersistedSessionBackendLease(ctx, runId, requestGeneration)
         if (authorLease) {
           try {
-            const { dispatched } = dispatchSurfaceAuthor({
+            const author = dispatchSurfaceAuthor({
               sessionsDir: ctx.sessionConfig.dirs.sessions,
               config: ctx.sessionConfig.slate.author,
               runId,
@@ -5235,14 +5590,37 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               label: 'compose',
               secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
             })
-            if (dispatched) { ok(res, { dispatched: true }); return }
+            if (author.dispatched) {
+              ctx.composeCoordinator?.watch(card.surface.id, card.token, author.completion)
+              ok(res, {
+                surface: card.surface,
+                slateSurface: slateSurfaceFromCanonical(card.surface, card.localId),
+                localId: card.localId,
+                dispatched: true,
+              }); return
+            }
           } finally {
             authorLease.release()
           }
         }
       }
       const delivered = await deliverSlatePrompt(ctx, runId, composePrompt, requestGeneration)
-      ok(res, { delivered })
+      if (!delivered) {
+        const current = ctx.docStore.getSurface(card.surface.id)
+        if (current) await service.failComposition(current.id, {
+          token: card.token,
+          expectedRev: current.rev,
+          code: 'delivery-failed',
+          message: 'The author was unavailable. Retry when this session is reachable.',
+        }, { actor: slateActor() })
+      }
+      const settled = ctx.docStore.getSurface(card.surface.id) ?? card.surface
+      ok(res, {
+        surface: settled,
+        slateSurface: slateSurfaceFromCanonical(settled, card.localId),
+        localId: card.localId,
+        delivered,
+      })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
@@ -5412,7 +5790,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const newSubs = computeNatsSubscriptions({
             sessionName: existing.sessionId,
             spaceId: existing.spaceId,
-            taskId: patchWithoutAttention.taskId,
+            project: existing.scope?.project ?? existing.repo ?? null,
+            worktree: existing.scope?.worktree ?? existing.worktree ?? null,
           }, ctx.docStore)
 
           const { add, remove } = diffSubscriptions(oldSubs, newSubs)
@@ -5825,15 +6204,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        const explicitPrompt = validateExplicitWorkPrompt(prompt, OBJECTIVE_MAX)
+        if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
         const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
-          resolvedHand ? resolveHandPrompts(resolvedHand, prompt) : { initialPrompt: prompt, systemPrompt: null }
+          resolvedHand
+            ? resolveHandPrompts(resolvedHand, explicitPrompt.text)
+            : { initialPrompt: explicitPrompt.text, systemPrompt: null }
 
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
 
         try {
           const result = await createSessionInternal({
-            name, project, worktree, worktreePath, prompt: handInitialPrompt, skipPermissions,
+            name, project, worktree, worktreePath, prompt: handInitialPrompt,
+            objective: explicitPrompt.text, skipPermissions,
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
@@ -5843,6 +6228,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!result.ok) {
             switch (result.error.code) {
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'INVALID_WORK_PROMPT': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
@@ -5891,8 +6277,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
           const resolvedProject = settings?.resolved?.project
 
+          const explicitPrompt = validateExplicitWorkPrompt(overrides.prompt, OBJECTIVE_MAX)
+          if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
+
           const params: CreateSessionParams = {
             ...overrides,
+            prompt: explicitPrompt.text,
+            objective: explicitPrompt.text,
             project: overrides.project ?? resolvedProject,
             taskId,
             epicId: overrides.epicId ?? task.epicId,
@@ -5917,6 +6308,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
             if (result.error.code === 'MISSING_NAME') return fail(res, 'BAD_REQUEST', result.error.message)
+            if (result.error.code === 'INVALID_WORK_PROMPT') return fail(res, 'BAD_REQUEST', result.error.message)
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
             if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
               return fail(res, 'BAD_REQUEST', result.error.message)
@@ -6169,7 +6561,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 if (claimedPort) tmuxBackend.releasePort(port)
                 throw err
               }
-              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+              updateSession(sessDir, session.name, {
+                port: result.port,
+                ttydPid: result.ttydPid ?? null,
+                managedInstructions: result.managedInstructions,
+              })
               const ttydGeneration = currentSessionBackendGeneration(
                 sessDir,
                 session.name,
@@ -6255,7 +6651,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             )
           }
           try {
-            const { killed } = await reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+            const { killed } = await reapSessionNatsChannelServer(name)
             // Clear the orphan flag; the next health probe re-establishes truth.
             updateSession(sessDir, name, { natsControlOrphanedAt: null })
             const run = ctx.docStore.getRun(name)
@@ -6678,9 +7074,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 // Resolve NATS from the tombstone's task context (fresh epoch —
                 // the dead session's old subject tree is gone). computeNatsSubscriptions
                 // degrades to a DM-only inbox if the task no longer exists.
-                const natsCtx = { sessionName: name, spaceId: ctx.docStore.activeSpaceId || null, taskId: tombstone.taskId || null, epicId: null, initiativeId: null }
+                const natsCtx = {
+                  sessionName: name,
+                  spaceId: ctx.docStore.activeSpaceId || null,
+                  project: tombstone.project || null,
+                  worktree: null,
+                }
                 const nats: { enabled: boolean; subscriptions: string[] } | null =
-                  (tombstone.taskId || natsCtx.spaceId)
+                  (tombstone.project || natsCtx.spaceId)
                     ? { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
                     : null
                 reviveResolvedNats = nats
@@ -6706,7 +7107,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   provider: reviveProvider,
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
                 })
-                updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
+                updateSession(sessDir, name, {
+                  port: startResult.port,
+                  ttydPid: startResult.ttydPid ?? null,
+                  managedInstructions: startResult.managedInstructions,
+                })
                 const ttydGeneration = currentSessionBackendGeneration(
                   sessDir,
                   name,
@@ -7066,6 +7471,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         provider = (ctx.providerRegistry ?? defaultProviderRegistry)
           .resolveTemplate(resolvedTemplate)
         providerTelemetryEnabled(provider, resolvedTemplate)
+        validateProviderManagedInstructions(provider)
       } catch (err) {
         return fail(res, 'BRIDGE_UNAVAILABLE', (err as Error).message)
       }
@@ -7112,14 +7518,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fullPrompt = `${introMessage}\n\n---\n\n${promptOverride}`
       }
 
-      // Resolve the parent's run to get taskId for NATS subject computation
+      // Resolve the parent's run so organizational scope and legacy display
+      // metadata can be inherited by the hand.
       const parentRun = ctx.docStore.getAllRuns().find(r => r.sessionId === parentName)
       const taskId = parentRun?.taskId
+      const effectiveRepo = repoOverride ?? parentSession.project
 
       // Inherit workspace from parent session, unless overridden
       const workspace = worktreePathOverride
         ? { path: worktreePathOverride, worktree: true, branch: null, basePath: null }
         : parentSession.workspace
+      const overrideWorktree = worktreePathOverride
+        ? (await detectBranch(worktreePathOverride)) ?? basename(worktreePathOverride)
+        : null
+      const effectiveScope = worktreePathOverride
+        ? (effectiveRepo ? { project: effectiveRepo, worktree: overrideWorktree! } : {})
+        : (parentRun?.scope ?? {
+            ...(effectiveRepo ? { project: effectiveRepo } : {}),
+            ...(parentRun?.worktree ? { worktree: parentRun.worktree } : {}),
+          })
 
       // Build NATS subscriptions for the spawned session. Parent NATS is an
       // inherited convenience, not an explicit child request, so capability-
@@ -7129,9 +7546,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const natsCtx = {
           sessionName: spawnedName,
           spaceId: ctx.docStore.activeSpaceId || null,
-          taskId: taskId || null,
-          epicId: parentRun?.epic || null,
-          initiativeId: parentRun?.initiative || null,
+          project: effectiveScope.project ?? null,
+          worktree: effectiveScope.worktree ?? null,
         }
         const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
         natsConfig = { enabled: true, subscriptions }
@@ -7153,9 +7569,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ? buildNatsSubject(
             parentName,
             ctx.docStore,
-            parentRun?.taskId,
-            parentRun?.epic || undefined,
-            parentRun?.initiative || undefined,
+            parentRun?.scope?.project ?? parentRun?.repo,
+            parentRun?.scope?.worktree ?? parentRun?.worktree,
           )
         : undefined
 
@@ -7287,9 +7702,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
-      // Resolve effective repo (override or inherit)
-      const effectiveRepo = repoOverride ?? parentSession.project
-
       const spawnReservation = reserveSessionName(
         sessDir,
         cfg.sessions.prefix,
@@ -7373,7 +7785,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           appendSystemPrompt: handSystemPrompt,
         })
         const sessionPort = result.port
-        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
+        updateSession(sessDir, spawnedName, {
+          port: sessionPort,
+          ttydPid: result.ttydPid ?? null,
+          state: 'running',
+          appendSystemPrompt: handSystemPrompt,
+          managedInstructions: result.managedInstructions,
+        })
         const ttydGeneration = currentSessionBackendGeneration(
           sessDir,
           spawnedName,
@@ -7396,7 +7814,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Build NATS subject for the run
         const natsSubject = natsConfig?.enabled
-          ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
+          ? buildNatsSubject(
+              spawnedName,
+              ctx.docStore,
+              effectiveScope.project,
+              effectiveScope.worktree,
+            )
           : undefined
 
         // Create a run entity linked to the same task and worktree as the parent (unless overridden)
@@ -7411,11 +7834,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           background,
           blocked: false,
           sessionId: spawnedName,
+          scope: effectiveScope,
           initiative: parentRun?.initiative ?? '',
           epic: parentRun?.epic ?? '',
           task: taskId ?? '',
           repo: effectiveRepo ?? '',
-          worktree: worktreePathOverride ?? parentRun?.worktree ?? '',
+          worktree: effectiveScope.worktree ?? '',
           touchedFiles: [],
           recapEntries: [],
           rawLogs: '',

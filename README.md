@@ -29,7 +29,7 @@ The goal is **doneness at a glance** — look at the canvas and immediately know
 
 Paste this into Claude Code:
 
-> Install and launch Tinstar for me. Run `npx tinstar` and fix any missing dependencies it reports until it starts successfully.
+> Install and launch Tinstar for me. Run `npx tinstar` and fix any missing dependencies it reports until it starts successfully. Say yes when it offers to install the Claude statusline hook. Then run `npx tinstar doctor` and fix anything it flags.
 
 ### Manual install
 
@@ -37,7 +37,23 @@ Paste this into Claude Code:
 npx tinstar
 ```
 
-The CLI checks for dependencies (Claude Code, tmux, ttyd, lsof), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
+The CLI checks for dependencies (Claude Code, tmux, ttyd, lsof), **offers to install the Claude Code statusline hook** (say yes — see below), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
+
+Verify the install any time with `npx tinstar doctor`, which reports anything onboarding skipped.
+
+### The statusline hook
+
+Claude Code reports its context-window utilization exactly one way: it pipes its session state to whatever command you register under `statusLine`. Tinstar ships a shim that forwards that to the server, and **it is what makes the per-session context meter and the quota HUD work.** Without it those read `--` forever, with nothing in the UI explaining why.
+
+`npx tinstar` offers to install it during onboarding. To do it yourself, or on a machine that already onboarded:
+
+```bash
+npx tinstar install-statusline            # ~/.claude/settings.json
+npx tinstar install-statusline --force    # replace an existing statusLine (backed up)
+npx tinstar install-statusline --port 5300  # non-default Tinstar port
+```
+
+It copies the shim to `~/.config/tinstar/cc-quota-statusline.sh` and adds a `statusLine` key to `~/.claude/settings.json`, preserving every other key. Already-running Claude sessions pick it up on their next render; the meter fills within a couple of seconds. Codex sessions need none of this — their context data is read straight from the rollout files.
 
 Tinstar binds **loopback only** (`127.0.0.1` and `::1`). It has no authentication layer, so an address other than loopback has to be asked for rather than assumed — `tinstar --host <address>` serves that address as well (`127.0.0.1` is always kept alongside it, so host-local hooks and every `tinstar` subcommand keep working). Agent terminals are loopback-only unconditionally and are reachable only through the server. See [release notes v5.4](docs/release-notes-v5-4.md) if you are upgrading and a LAN URL stopped answering.
 
@@ -56,21 +72,22 @@ A *run* — one agent doing one task — gets a single card on the canvas, carry
 
 - **Changed files** — a live diff panel with +/- counters and a file tree: the work the agent is doing, as it does it. Hide viewed-only files to cut clutter.
 - **Terminal / recap** — the center toggles between a distilled recap and the raw ttyd scrollback (honesty preserved, not hidden — one click away). Every session is a real Claude Code or Codex terminal on the canvas, with crisp sub-pixel rendering, not a headless process behind a tab.
-- **Telemetry** — cost, tokens, and cache-hit sparklines, plus a **context-fullness meter**: a treemap of how the agent's context window is allocated (messages, system prompt, tools, memory, skills) that goes amber at 75% and red at 85%. "How close is this agent to running out of room to think?" used to live in your head, or nowhere until it bit you. Now it's a colored bar.
+- **Telemetry** — cost, tokens, and cache-hit sparklines, plus a **context-fullness meter**: a treemap of how the agent's context window is allocated (messages, system prompt, tools, memory, skills) that goes amber at 75% and red at 85%. "How close is this agent to running out of room to think?" used to live in your head, or nowhere until it bit you. Now it's a colored bar. (For Claude sessions this needs the [statusline hook](#the-statusline-hook) — a meter stuck on `--` means it isn't installed.)
 
 Run Claude Code and Codex side by side; define reusable launch configs for any agent CLI with **CLI Templates**, surfaced through a unified agent dropdown. Real-time SSE status (`running`, `idle`, `needs_attention`) tells you which agents need you. Full lifecycle — create, stop, resume, delete tmux-backed sessions; `tinstar doctor` validates dependencies. Fire off a prompt, see the state change, move on — switching between ten sessions costs no context, because the context is on the screen.
 
 ## Organize Your Work
 
-By default, work nests as **Initiative → Epic → Task → Run**. The left sidebar shows that nesting as a live tree, always in sync with the canvas — click a card and its ancestors expand and highlight; double-click and the canvas flies to it. This is flexible — rename the three upper tiers per space (e.g. Project / Feature / Story) in the **Entity Labels** tab of Space Settings.
+Every canvas widget can carry a lightweight organizational scope: **Project → Worktree**. The left sidebar derives a live tree from that scope. Sessions created for a project or worktree are placed correctly from the start, and widgets or hands spawned by a session inherit its full scope.
 
 The hierarchy isn't bureaucracy — it's the backbone that keeps a growing fleet legible:
 
 - **The canvas and sidebar stay navigable.** You move by structure instead of hunting through a flat list of twenty sessions.
-- **Agents inherit context.** A session created under a task belongs to that task; multi-agent NATS channels are scoped along the same hierarchy (`tinstar.<space>.<init>.<epic>.<task>.<agent>`), so agents can talk to siblings and ancestors automatically.
-- **"Doneness at a glance" scales.** Containers group related work, so you read progress at the level of an epic, not one session at a time.
+- **Placement is cheap.** Drag a hierarchy entry onto a Project or Worktree to assign its scope. The hierarchy updates immediately without moving the canvas widget.
+- **Agents inherit context.** Multi-agent NATS channels follow the same hierarchy (`tinstar.<space>.<project>.<worktree>.<agent>`), so worktree peers share a broadcast channel.
+- **Layout stays intentional.** One explicit **Organize** action projects current scope into Project/Worktree containers using the existing reset-layout packing behavior. Unscoped widgets remain standalone peers.
 
-Beyond the default tiers: nest sessions into recursive **group** containers, attach an **external URL** to any entity, and use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty containers off with `H` to cut clutter.
+Use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty scope targets off with `H` to cut clutter.
 
 ## The inbox
 
@@ -123,8 +140,11 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **Claude Code** — installed and authenticated (`claude auth login`)
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
+  - Debian/Ubuntu's `apt install ttyd` also enables a standalone `ttyd.service` at boot, which serves a login shell on a fixed port. Tinstar does not use it — it spawns its own ttyd per session — so disable it: `sudo systemctl disable --now ttyd.service`. `tinstar doctor` warns when it finds it enabled.
 - **lsof** — verifies that each web terminal serves the intended session (`brew install lsof` / `apt install lsof`)
 - **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
+- **bun** — *only for multi-agent NATS channels* — runs the per-session channel MCP server (`curl -fsSL https://bun.sh/install | bash`). Sessions launch it by absolute path from `nats.bunPath` (default `~/.bun/bin/bun`), so a bun elsewhere on `$PATH` is not enough. Without it, NATS itself looks healthy but every agent's channel MCP dies at spawn.
+- **jq** and **curl** — used by the [statusline hook](#the-statusline-hook) that feeds the context meter and quota HUD (`brew install jq` / `apt install jq`; curl is usually preinstalled)
 
 ## Ports
 

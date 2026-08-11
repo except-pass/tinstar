@@ -6,7 +6,7 @@
 //   · an expandable THREAD (SurfaceThread) with a reply input,
 //   · a soft RESOLVE checkbox (the resolve affordance is NOT the point's identity —
 //     resolving keeps the thread readable), and
-//   · an interactive body (Choice/TextInput/Submit) when the file declares controls,
+//   · an interactive body (Choice/TextInput/Submit/Decision) when the file declares controls,
 //     rendered through the shared control components with form state keyed per
 //     control-component id (R13); a Submit routes to the answer endpoint.
 // A single ADD-A-POINT input at the foot lets the user open a new point.

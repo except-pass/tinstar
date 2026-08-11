@@ -1,5 +1,5 @@
 import type { DocumentStore } from '../stores/document-store'
-import type { EntitySettings, GroupingDimension, ResolvedSettings } from '../../domain/types'
+import type { EntitySettings, LegacyEntityDimension, ResolvedSettings } from '../../domain/types'
 
 /**
  * Resolve entity settings by walking the hierarchy bottom-up.
@@ -7,7 +7,7 @@ import type { EntitySettings, GroupingDimension, ResolvedSettings } from '../../
  */
 export function resolveEntitySettings(
   entityId: string,
-  entityType: GroupingDimension,
+  entityType: LegacyEntityDimension,
   docStore: DocumentStore,
 ): ResolvedSettings | null {
   const resolved: EntitySettings = {}
@@ -39,13 +39,13 @@ export function resolveEntitySettings(
 
 interface AncestorEntry {
   settings: EntitySettings | undefined
-  type: GroupingDimension
+  type: LegacyEntityDimension
   name: string
 }
 
 function buildAncestorChain(
   entityId: string,
-  entityType: GroupingDimension,
+  entityType: LegacyEntityDimension,
   docStore: DocumentStore,
 ): AncestorEntry[] {
   const chain: AncestorEntry[] = []

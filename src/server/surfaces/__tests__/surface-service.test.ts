@@ -184,6 +184,66 @@ describe('create', () => {
   })
 })
 
+describe('compose creation lifecycle', () => {
+  const reservation = {
+    id: 'sf-compose-1',
+    spaceId: SPACE,
+    home: { kind: 'canvas' as const, spaceId: SPACE },
+    runId: 'run-1',
+    localId: 'compose-1',
+    label: 'Open points',
+    request: { templateId: 'open-points' },
+    token: 'attempt-1',
+    deadlineAt: 31_000,
+    source: { adapter: 'slate-file', locator: 'file:compose-1.json#compose-1', generation: 0, state: 'missing' as const },
+  }
+
+  it('reserves one durable card and replays the same idempotent request', async () => {
+    const h = harness()
+    const call = ctx({ idempotencyKey: 'compose-key' })
+    const first = unwrap(await h.svc.reserveComposition(reservation, call))
+    const again = unwrap(await h.svc.reserveComposition(reservation, call))
+    expect(first.surfaces[0]!.surface).toMatchObject({
+      id: reservation.id,
+      order: 1_000,
+      presentation: 'compose-card',
+      creation: { phase: 'authoring', attempt: 1, token: 'attempt-1' },
+    })
+    expect(again.replayed).toBe(true)
+    expect(h.docStore.getAllSurfaces()).toHaveLength(1)
+  })
+
+  it('keeps identity and order through failure, retry, and completion and refuses an old token', async () => {
+    const h = harness()
+    const created = unwrap(await h.svc.reserveComposition(reservation, ctx())).surfaces[0]!.surface
+    const failed = unwrap(await h.svc.failComposition(reservation.id, {
+      token: 'attempt-1', expectedRev: created.rev, code: 'author-failed', message: 'Could not create this card.',
+    }, ctx({ at: 2_000 }))).surfaces[0]!.surface
+    const retried = unwrap(await h.svc.retryComposition(reservation.id, {
+      token: 'attempt-2', expectedRev: failed.rev, deadlineAt: 32_000,
+    }, ctx({ at: 3_000 }))).surfaces[0]!.surface
+    expect(retried).toMatchObject({ id: created.id, order: created.order, creation: { phase: 'authoring', attempt: 2 } })
+
+    const stale = await h.svc.completeComposition(reservation.id, {
+      token: 'attempt-1', expectedRev: retried.rev, content: { headline: 'stale' },
+    }, ctx({ at: 4_000 }))
+    expect(err(stale).reason).toBe('superseded')
+
+    const ready = unwrap(await h.svc.completeComposition(reservation.id, {
+      token: 'attempt-2', expectedRev: retried.rev, content: { headline: 'No open points' },
+    }, ctx({ at: 5_000 }))).surfaces[0]!.surface
+    expect(ready).toMatchObject({
+      id: created.id,
+      order: created.order,
+      presentation: 'compose-card',
+      content: { headline: 'No open points' },
+      creation: { phase: 'ready', attempt: 2, token: 'attempt-2' },
+    })
+    expect(ready.creation).not.toHaveProperty('request')
+    expect(ready.creation).not.toHaveProperty('failure')
+  })
+})
+
 describe('update-content', () => {
   it('changes nothing and returns the current record on a stale revision', async () => {
     const h = harness()
@@ -345,7 +405,7 @@ describe('claims (plan U1, R1)', () => {
     }, ctx({ at: 3_000 })))
     expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
     expect(done.surfaces[0]!.surface.content.claims).toEqual([claim])
-    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+    expect(done.surfaces[0]!.surface.content.recipe).toEqual({ kind: 'agent', prompt: 'rebuild me' })
   })
 
   it('sorts params so reordering keys is not an edit', async () => {
@@ -1082,19 +1142,29 @@ describe('recoverable deletion (KTD15)', () => {
   })
 })
 
-describe('refresh-request', () => {
+// THE SERVICE NO LONGER HAS A `refreshRequest` MUTATOR (plan U5, KTD4).
+//
+// It moved `current → queued` at a human's request and REFUSED when a refresh was
+// already in flight — semantics R14 reverses, because a second ask now joins the
+// attempt rather than conflicting with it. Two mutators that both queue a refresh,
+// disagreeing about the busy case, is exactly the duplicate entry point the plan
+// forbids. `enqueueRefresh` is the one that remains, and the coordinator's
+// `humanIntent` is the only thing that calls it.
+describe('enqueue-refresh — the one queueing transition', () => {
   it('queues a Surface and reports whether the host can rebuild it unattended', async () => {
     const h = harness()
-    await h.create('needs a rebuild', { content: { headline: 'needs a rebuild', recipe: 'run the suite' } })
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
+    await h.create('needs a rebuild', {
+      content: { headline: 'needs a rebuild', recipe: { kind: 'agent', prompt: 'run the suite' } },
+    })
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
     expect(r.surfaces[0]!.surface.freshness.phase).toBe('queued')
     expect(r.surfaces[0]!.capabilities.refreshRecipe).toBe(true)
   })
 
-  it('accepts a request with no recipe but says it is a nudge', async () => {
+  it('accepts a Surface with no recipe but says it is a nudge', async () => {
     const h = harness()
     await h.create('no recipe')
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
     expect(r.surfaces[0]!.surface.freshness.phase).toBe('queued')
     expect(r.surfaces[0]!.capabilities.refreshRecipe).toBe(false)
   })
@@ -1104,15 +1174,20 @@ describe('refresh-request', () => {
     await h.create('late')
     const surface = h.docStore.getSurface('sf-1')!
     await h.docStore.commitSurfaceContent({ ...surface, freshness: { phase: 'current', overdue: true }, rev: 2 })
-    const r = unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
-    expect(r.surfaces[0]!.surface.freshness).toEqual({ phase: 'queued', overdue: true })
+    const r = unwrap(await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx()))
+    expect(r.surfaces[0]!.surface.freshness).toMatchObject({ phase: 'queued', overdue: true })
   })
 
-  it('refuses to re-queue work that is already in flight', async () => {
+  it('says a refresh is available even while one is in flight, because a second ask JOINS it', async () => {
+    // The capability used to report `refresh: false` here, which disabled the
+    // control whose behaviour R14 now defines. A capability that lies is worse than
+    // an absent one: the caller has no reason to check.
     const h = harness()
-    await h.create('busy')
-    unwrap(await h.svc.refreshRequest('sf-1', {}, ctx()))
-    expect(err(await h.svc.refreshRequest('sf-1', {}, ctx())).reason).toBe('already-queued')
+    const created = await h.create('busy')
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx())
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: h.docStore.getSurface('sf-1')!.rev }, ctx())
+    expect(h.docStore.getSurface('sf-1')!.freshness.phase).toBe('refreshing')
+    expect(unwrap(h.svc.get(created.id)).capabilities.refresh).toBe(true)
   })
 })
 
@@ -1300,6 +1375,39 @@ describe('durable integration', () => {
     expect(third.docStore.getSurfaceRoots(SPACE).map(s => s.id)).toEqual(['sf-1'])
     expect(third.docStore.getSurface('sf-1')).not.toHaveProperty('deleted')
     third.sse.destroy()
+  })
+
+  it('persists the compose lifecycle through failure, retry, completion, and restart', async () => {
+    const first = live()
+    const base = {
+      id: 'sf-compose-1', spaceId: SPACE, home: { kind: 'canvas' as const, spaceId: SPACE },
+      runId: 'run-1', localId: 'compose-1', label: 'Open points',
+      request: { templateId: 'open-points' }, token: 'attempt-1', deadlineAt: 31_000,
+      source: {
+        adapter: 'slate-file', locator: 'file:compose-1.json#compose-1', generation: 0, state: 'missing' as const,
+      },
+    }
+    const authoring = unwrap(await first.svc.reserveComposition(base, ctx())).surfaces[0]!.surface
+    const failed = unwrap(await first.svc.failComposition(base.id, {
+      token: 'attempt-1', expectedRev: authoring.rev, code: 'author-failed', message: 'Could not create this card.',
+    }, ctx({ at: 2_000 }))).surfaces[0]!.surface
+    const retrying = unwrap(await first.svc.retryComposition(base.id, {
+      token: 'attempt-2', expectedRev: failed.rev, deadlineAt: 32_000,
+    }, ctx({ at: 3_000 }))).surfaces[0]!.surface
+    unwrap(await first.svc.completeComposition(base.id, {
+      token: 'attempt-2', expectedRev: retrying.rev, content: { headline: 'No open points' },
+    }, ctx({ at: 4_000 })))
+    first.sse.destroy()
+
+    const second = live()
+    const reloaded = second.docStore.getSurface(base.id)!
+    expect(reloaded).toMatchObject({
+      id: base.id, order: authoring.order, presentation: 'compose-card',
+      content: { headline: 'No open points' },
+      creation: { phase: 'ready', attempt: 2, token: 'attempt-2' },
+    })
+    expect(reloaded.creation).not.toHaveProperty('request')
+    second.sse.destroy()
   })
 
   it('a duplicate idempotency key re-applies nothing and emits no second batch', async () => {
@@ -1544,6 +1652,10 @@ describe('parity coverage', () => {
   it('has a service method for every operation in the union', () => {
     const methods: Record<SurfaceMutation['op'], keyof SurfaceService> = {
       'create': 'create',
+      'reserve-compose': 'reserveComposition',
+      'retry-compose': 'retryComposition',
+      'complete-compose': 'completeComposition',
+      'fail-compose': 'failComposition',
       'observe-source': 'observeSource',
       'mark-source-missing': 'markSourceMissing',
       'update-content': 'updateContent',
@@ -1553,8 +1665,7 @@ describe('parity coverage', () => {
       'group': 'group',
       'reparent': 'reparent',
       'ungroup': 'ungroup',
-      'refresh-request': 'refreshRequest',
-      'mark-possibly-stale': 'markPossiblyStale',
+        'mark-possibly-stale': 'markPossiblyStale',
       'enqueue-refresh': 'enqueueRefresh',
       'begin-refresh': 'beginRefresh',
       'complete-refresh': 'completeRefresh',
@@ -1673,6 +1784,189 @@ describe('the author proposes, the user disposes (status honesty)', () => {
     }, ctx({ at: 3_000 })))
     expect(done.surfaces[0]!.surface.content.headline).toBe('rebuilt')
     expect(done.surfaces[0]!.surface.content.proposal?.state).toBe('working')
-    expect(done.surfaces[0]!.surface.content.recipe).toBe('rebuild me')
+    expect(done.surfaces[0]!.surface.content.recipe).toEqual({ kind: 'agent', prompt: 'rebuild me' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Freshness evidence: what is KNOWN vs when it was last CHECKED (R3/R15-R18, KTD5).
+//
+// A Surface shows two facts, and one timestamp could never tell them apart: the
+// content's own age, and the age of the last time the host looked. The common case
+// is the one that proves it — a check that succeeds and changes nothing must move
+// exactly one of them.
+// ---------------------------------------------------------------------------
+
+describe('last-known and last-checked evidence', () => {
+  /** A Surface taken all the way to `refreshing`, ready for a completion. */
+  async function refreshing(h: Harness, at = 2_000): Promise<Surface> {
+    await h.create('Coverage 88%')
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-1' }, ctx({ at }))
+    const queued = h.docStore.getSurface('sf-1')!
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-1', expectedRev: queued.rev }, ctx({ at }))
+    return h.docStore.getSurface('sf-1')!
+  }
+
+  it('stamps both fields at birth, so no record is ever without evidence', async () => {
+    const h = harness()
+    const created = await h.create('hello')
+    expect(created.freshness.lastKnownAt).toBe(created.createdAt)
+    // Explicitly null rather than absent: an omitted key is dropped from an SSE
+    // delta, so "never checked" has to be a value a client can actually receive.
+    expect(created.freshness.lastCheck).toBeNull()
+  })
+
+  it('an UNCHANGED successful check advances lastCheck and leaves lastKnownAt alone', async () => {
+    // THE COMMON CASE, and the whole reason the two fields exist. 110 of 121 measured
+    // refreshes changed nothing; each one is honestly "we confirmed at 10:47 that the
+    // 09:12 answer still holds", and a single timestamp would have said "10:47" and
+    // quietly relabelled month-old content as fresh.
+    const h = harness()
+    const before = await refreshing(h)
+    const knownAt = before.freshness.lastKnownAt
+
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: before.source?.generation ?? 0,
+      check: { startedAt: 2_000, execution: 'host', reason: 'its verification interval elapsed' },
+    }, ctx({ at: 3_000 })))
+
+    const f = done.surfaces[0]!.surface.freshness
+    expect(f.lastKnownAt).toBe(knownAt)
+    expect(f.lastCheck).toMatchObject({
+      outcome: 'succeeded', execution: 'host', startedAt: 2_000, finishedAt: 3_000,
+      reason: 'its verification interval elapsed',
+    })
+    expect(done.surfaces[0]!.surface.content.headline).toBe('Coverage 88%')
+  })
+
+  it('a REPLACEMENT advances both, atomically', async () => {
+    const h = harness()
+    const before = await refreshing(h)
+    const done = unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: before.source?.generation ?? 0,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 3_000 })))
+
+    const s = done.surfaces[0]!.surface
+    expect(s.content.headline).toBe('Coverage 92%')
+    expect(s.freshness.lastKnownAt).toBe(3_000)
+    expect(s.freshness.lastCheck?.outcome).toBe('succeeded')
+    expect(s.freshness.phase).toBe('current')
+  })
+
+  it('a FAILED check preserves the content and records why', async () => {
+    const h = harness()
+    await refreshing(h)
+    unwrap(await h.svc.failRefresh('sf-1', {
+      jobId: 'job-1', message: 'the coverage tool is not installed',
+    }, ctx({ at: 3_000 })))
+
+    const s = h.docStore.getSurface('sf-1')!
+    expect(s.content.headline).toBe('Coverage 88%')   // last known, still readable
+    expect(s.freshness.lastKnownAt).toBe(s.createdAt) // and still honestly dated
+    expect(s.freshness.lastCheck).toMatchObject({ outcome: 'failed', finishedAt: 3_000 })
+    expect(s.freshness.lastCheck?.detail).toMatch(/not installed/)
+  })
+
+  it('UNAVAILABLE is a distinct outcome from failed, because it calls for something different', async () => {
+    // "Jira is down" and "your agent has exited" both leave the card stale, and a
+    // reader does different things about them. Collapsing them would hide that.
+    const h = harness()
+    await refreshing(h)
+    unwrap(await h.svc.failRefresh('sf-1', {
+      jobId: 'job-1', outcome: 'unavailable',
+      message: 'its foreground agent is not running, so nobody could rebuild it',
+      check: { execution: 'owner', reason: 'you navigated to it' },
+    }, ctx({ at: 3_000 })))
+
+    const f = h.docStore.getSurface('sf-1')!.freshness
+    expect(f.lastCheck?.outcome).toBe('unavailable')
+    expect(f.lastCheck?.execution).toBe('owner')
+    expect(h.docStore.getSurface('sf-1')!.content.headline).toBe('Coverage 88%')
+  })
+
+  it('SUPERSEDED is a completed check with a non-current outcome, not an error', async () => {
+    // KTD10. The host looked, got an answer, and the answer described a world that
+    // had already moved. The Surface stays dirty and keeps its content.
+    const h = harness()
+    const before = await refreshing(h)
+    const stale = await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-1', expectedRev: before.rev,
+      observedGeneration: (before.source?.generation ?? 0) - 1,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 3_000 }))
+
+    expect(err(stale).reason).toBe('superseded')
+    const s = h.docStore.getSurface('sf-1')!
+    expect(s.content.headline).toBe('Coverage 88%')
+    expect(s.freshness.phase).toBe('possibly-stale')
+    expect(s.freshness.lastCheck?.outcome).toBe('superseded')
+    expect(s.freshness.lastKnownAt).toBe(s.createdAt)
+  })
+
+  it('the four outcomes are distinguishable from the record alone, without logs', async () => {
+    // R3's readable requirement, asserted as a set rather than one at a time: a UI
+    // that has to tell these apart can, and cannot accidentally render two of them
+    // the same way.
+    const outcomes = new Set<string>()
+    for (const build of [
+      async (h: Harness, before: Surface) => {
+        await h.svc.completeRefresh('sf-1', {
+          jobId: 'j', expectedRev: before.rev, observedGeneration: before.source?.generation ?? 0,
+        }, ctx({ at: 3_000 }))
+      },
+      async (h: Harness) => { await h.svc.failRefresh('sf-1', { jobId: 'j', message: 'boom' }, ctx({ at: 3_000 })) },
+      async (h: Harness) => {
+        await h.svc.failRefresh('sf-1', { jobId: 'j', outcome: 'unavailable', message: 'gone' }, ctx({ at: 3_000 }))
+      },
+      async (h: Harness, before: Surface) => {
+        await h.svc.completeRefresh('sf-1', {
+          jobId: 'j', expectedRev: before.rev, observedGeneration: (before.source?.generation ?? 0) - 1,
+        }, ctx({ at: 3_000 }))
+      },
+    ]) {
+      const h = harness()
+      const before = await refreshing(h)
+      await build(h, before)
+      outcomes.add(h.docStore.getSurface('sf-1')!.freshness.lastCheck!.outcome)
+    }
+    expect([...outcomes].sort()).toEqual(['failed', 'succeeded', 'superseded', 'unavailable'])
+  })
+
+  it('queueing answers nothing, so it does not overwrite the last completed check', async () => {
+    // A check that has not finished has not answered anything. Overwriting the last
+    // one that did would destroy evidence to produce none.
+    const h = harness()
+    await refreshing(h)
+    await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
+    const failed = h.docStore.getSurface('sf-1')!.freshness.lastCheck
+
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-2' }, ctx({ at: 4_000 }))
+    expect(h.docStore.getSurface('sf-1')!.freshness.phase).toBe('queued')
+    expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck).toEqual(failed)
+  })
+
+  it('a later success CLEARS a prior failure rather than leaving both readable', async () => {
+    const h = harness()
+    await refreshing(h)
+    await h.svc.failRefresh('sf-1', { jobId: 'job-1', message: 'boom' }, ctx({ at: 3_000 }))
+    expect(h.docStore.getSurface('sf-1')!.freshness.lastCheck?.outcome).toBe('failed')
+
+    await h.svc.enqueueRefresh('sf-1', { jobId: 'job-2' }, ctx({ at: 4_000 }))
+    const queued = h.docStore.getSurface('sf-1')!
+    await h.svc.beginRefresh('sf-1', { jobId: 'job-2', expectedRev: queued.rev }, ctx({ at: 4_000 }))
+    const now = h.docStore.getSurface('sf-1')!
+    unwrap(await h.svc.completeRefresh('sf-1', {
+      jobId: 'job-2', expectedRev: now.rev, observedGeneration: now.source?.generation ?? 0,
+      content: { headline: 'Coverage 92%' },
+    }, ctx({ at: 5_000 })))
+
+    const f = h.docStore.getSurface('sf-1')!.freshness
+    expect(f.lastCheck?.outcome).toBe('succeeded')
+    // The failure itself is gone from the record — a successful barrier answers it,
+    // and a card showing both would be showing a problem that no longer exists.
+    expect(f.failure).toBeUndefined()
   })
 })

@@ -28,6 +28,26 @@ function subscribe(sessionId: string, cb: () => void): () => void {
   }
 }
 
+/**
+ * Record a prompt without requiring the composer to be mounted. Session
+ * creation uses this to preserve the initial prompt before provisioning (and
+ * therefore before ttyd) has completed.
+ */
+export function pushPromptHistory(sessionId: string, text: string): void {
+  const trimmed = text.trim()
+  if (!sessionId || !trimmed) return
+  const current = store.get(sessionId) ?? []
+  const next = [trimmed, ...current].slice(0, MAX_ITEMS)
+  store.set(sessionId, next)
+  notify(sessionId)
+}
+
+/** Test-only reset for the module-scoped prompt store. */
+export function _resetPromptHistoryForTests(): void {
+  store.clear()
+  listeners.clear()
+}
+
 export interface PromptHistory {
   history: readonly string[]
   push: (text: string) => void
@@ -48,12 +68,7 @@ export function usePromptHistory(sessionId: string | undefined): PromptHistory {
   const push = useCallback(
     (text: string) => {
       if (!sessionId) return
-      const trimmed = text.trim()
-      if (!trimmed) return
-      const current = store.get(sessionId) ?? []
-      const next = [trimmed, ...current].slice(0, MAX_ITEMS)
-      store.set(sessionId, next)
-      notify(sessionId)
+      pushPromptHistory(sessionId, text)
     },
     [sessionId],
   )

@@ -16,7 +16,7 @@ tags:
 applies_when:
   - "Authoring or editing a Slate surface JSON file under a run workdir's .tinstar/slate/"
   - "Building A2UI content for a surface and needing the host component vocabulary"
-  - "A surface silently fails to appear (invalid content dropped by parseA2uiContent)"
+  - "A directly authored surface fails to appear (invalid content dropped by parseA2uiContent)"
   - "Deciding surface kind (diagram vs open-point) via the anchor field"
   - "Validating authored surface files before shipping"
 ---
@@ -25,7 +25,9 @@ applies_when:
 
 ## Context
 
-Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how the surface's `kind` gets chosen you have to read `document-store.ts` (`projectRunToSlate`). And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. Worse, every validation gate in that chain fails *silently* — a wrong shape produces no error, just a missing panel. This reference collapses those six reads into one authoritative page: the file schema, the A2UI vocabulary, and the `kind` rule, in one place.
+Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how the surface's `kind` gets chosen you have to read `document-store.ts` (`projectRunToSlate`). And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. This reference collapses those six reads into one authoritative page: the file schema, the A2UI vocabulary, and the `kind` rule, in one place.
+
+There are now two authoring paths with different failure behavior. A direct file written by an agent can still be dropped at validation and leave only a log. **Add surface** is host-assigned: Tinstar first saves a visible card, tells the author its exact file, id, and attempt token, then moves that card to ready or failed. The saved card—not process dispatch—is the acceptance receipt.
 
 ## Guidance
 
@@ -35,12 +37,12 @@ Write JSON files to `<run-workdir>/.tinstar/slate/*.json`. The dir is resolved a
 
 A file may hold **one object or an array of objects** — the watcher accepts either (`Array.isArray(parsed) ? parsed : [parsed]`). All `*.json` in the dir are read in sorted-filename order and flattened into one point list.
 
-The watcher watches the dir (inotify plus a ~3s poll backstop), validates each entry through the same funnel notices use, and projects the result onto `run.slate`, which reaches the client over SSE. Latency from write to render is well under the poll cadence.
+The watcher watches the dir (inotify plus a ~3s poll backstop), validates each entry through the same funnel notices use, and reconciles it into the canonical Surface store. `run.slate` is a derived browser projection of those saved Surfaces and reaches the client over SSE. Latency from write to render is well under the poll cadence.
 
-**Failure model (matters because it's silent):**
+**Failure model:**
 - A **file-level** fault (zero-byte, unreadable, unparseable JSON, or a JSON value that is neither array nor object) is treated as a *torn write*: the watcher **retains the last-valid projection** and logs once. It does not clear the surface.
-- An **entry-level** fault (missing `headline`, or a `content` that fails A2UI validation) **drops that one entry** and keeps the rest.
-- An empty dir or an explicit empty array **clears** the run's Slate (retract).
+- An **entry-level** fault (missing `headline`, or a `content` that fails A2UI validation) drops that direct entry and keeps the rest. If it names the exact file and id of an active Add surface attempt, the saved card instead becomes a visible, retryable failure.
+- An empty dir or an explicit empty array marks file bindings as missing; it does **not** delete saved Surfaces or their threads.
 - Oversized files (>32 KiB by default) are skipped unread; symlinks are ignored (an `lstat` reports `isFile:false`), so a symlink can't smuggle a file in from outside the worktree.
 
 ### The file field table
@@ -51,10 +53,11 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 |-------|------|----------|-------|
 | `headline` | string (non-empty) | **Yes** | The one-line title. A missing/empty headline drops the whole entry. |
 | `id` | string (non-empty) | No | Stable identity for merge-by-id. Reuse the same `id` across writes to amend a surface without clobbering its store-owned thread/status. |
+| `attemptToken` | string (non-empty) | Only for host-assigned Add surface work | Tinstar supplies this with an exact file and `id`. Copy it exactly. It prevents a late or retried authoring attempt from overwriting the current card. Do not invent one for direct file authoring. |
 | `author` | `'agent' \| 'user' \| 'process'` | No | Any other value drops the entry. Use **`'agent'`** for agent-authored surfaces. (See "Why This Matters" — mislabeling has behavioral consequences around self-prompting and staleness.) |
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
-| `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
+| `refresh` | string, or `{ kind, … }` | No | **The ONE recipe that rebuilds this whole surface.** A plain string is an **agent** recipe: only a person navigating to or interacting with the surface runs it. An object `{ "kind": "host", "handler": "http-status"\|"unit-landed", "params": { … } }` is a **host** check the host runs by itself. Anything else is kept as *unreadable* and refused with a message naming what was wrong — see "Two kinds of recipe" below. |
 | `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
 | `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
 | `proposal` | `{ state, detail? }` | No | **What you claim about the work** — `working`, `blocked`, `resolved`, or `superseded`, plus one short line. A hint the card renders beside the status; it never *becomes* the status. See "Say what you know about the work" below. |
@@ -93,6 +96,7 @@ The host catalog (`a2ui/catalog.tsx`) is a bounded, read-only set. A `component`
 | `Choice` | — | control props | Host-themed choice control (interactive) |
 | `TextInput` | — | control props | Host-themed text input (interactive) |
 | `Submit` | — | control props | Host-themed submit control (interactive) |
+| `Decision` | — (leaf; a control, not a display block) | `options: [{ id, label, gain?, cost?, wrongIf? }]` (**2+ required** — one option is not a decision), `risks?: [{ label, severity?, likelihood?, discoverability?, note? }]`, `reversal?: { action?, damage?, note? }`, `horizon?: { span?, until }`, `comment?: { label?, placeholder? }` | One open decision as a card (interactive): a radio per option with its `gain`/`cost`/`wrongIf` lines beneath, then OPTIONAL `Risks`/`Reversal`/`Horizon` sections. Every scale runs fine → alarming, including `discoverability`: `severity` `annoying`\|`costly`\|`severe`, `likelihood` `unlikely`\|`possible`\|`likely`, `discoverability` `obvious`\|`subtle`\|`silent`, `reversal.action` `trivial`\|`cheap`\|`costly`\|`one-way` (how long to undo the ACTION), `reversal.damage` `minutes`\|`hours`\|`days`\|`weeks+` (how long to undo the DAMAGE — often a different number), `horizon.span` `until-next-commit`\|`until-this-ships`\|`while-the-code-lives`\|`permanent`. `horizon.until` is **required** whenever `span` is set — the line naming what survives an undo. An unrecognised scale word renders verbatim and uncolored, never coerced up or down. A comment box is **always** rendered at the card's foot even when `comment` is omitted (default label `"Anything else?"`, empty placeholder); the author may customize `label`/`placeholder` but not remove it, and it binds to the surface's one shared text field — do not also add a `TextInput` on the same surface. Fewer than two usable options degrades the **whole** block to the fallback marker (same posture as an unusable `Stepper`); a malformed `risks`/`reversal`/`horizon` block degrades **alone**, without taking the options down with it. At most **8 options** (`MAX_DECISION_OPTIONS`) and **12 risks** (`MAX_DECISION_RISKS`) are drawn per card; entries past either cap are dropped with a `+N more entries not shown` notice as that section's last row — the same posture as Stepper's overflow row, minus its "not scanned" case (Decision has only the one hard-cap truncation cause). |
 | `FollowUp` | — | — | **Renders nothing inline** — it's a declaration surfaced in the notice ask panel, not a body element. The catalog *knows* the type (no "unsupported" marker). |
 
 **Children-by-id rule** (`childIdsOf`): layout/list types (`Column`, `Row`, `List`) carry a `children` array of ids; `Card` carries a single `child` id. Everything else is a leaf. The renderer resolves ids against the flat `components` list and recurses.
@@ -116,14 +120,14 @@ To author a standalone diagram surface, set `anchor: { kind: 'surface' }`. To au
 
 ## Why This Matters
 
-Every gate in the pipeline fails **silently** — no throw, no error surfaced to the author:
+Direct file authoring remains deliberately conservative:
 
 - A wrong file shape (bad JSON, neither array-nor-object, an oversized file) is treated as a *torn write* and the watcher keeps showing the **old** projection. Your new surface simply never appears, and the run looks unchanged.
 - A missing `headline` or invalid A2UI `content` **drops that entry** while keeping its siblings — so a file can partially render, hiding which entry failed.
 - An unknown `component` string degrades to a fallback rather than erroring.
 - An unsafe `Link` url quietly downgrades to plain text.
 
-Because nothing tells you *why* a surface didn't render, authoring blind costs a full write-watch-inspect round-trip per mistake — and the failure mode (a stale or absent panel) looks identical to "the watcher hasn't picked it up yet." Getting the file shape, the A2UI envelope, and the `kind` rule right on the *first* write is the difference between one iteration and several.
+That makes getting the file shape, the A2UI envelope, and the `kind` rule right on the first write important for direct authoring. Add surface has a stronger contract: the card appears as soon as its saved shell is accepted, shows authoring while content is pending, and becomes ready or failed in place. Retry keeps the same card identity and position; only the newest attempt token may complete it.
 
 The `author` field also carries behavioral weight: it's threaded through to staleness handling (a `process`-authored surface whose writer goes silent gets marked stalled by a server sweep) and provenance. Using `'agent'` for agent-authored panels keeps a surface from being treated as a live-process spinner or from feeding back into the run's own prompting loop.
 
@@ -133,7 +137,7 @@ Reach for this reference any time you:
 - Author or edit a `.tinstar/slate/*.json` file for a run.
 - Build an "Explain"-style or composed surface that an agent emits into the Slate.
 - Add a surface template to a catalog of reusable Slate surfaces.
-- Debug a surface that isn't appearing (walk the silent-failure list above).
+- Debug a directly authored surface that isn't appearing, or a host-assigned card that failed.
 
 ## Examples
 
@@ -252,7 +256,39 @@ The client surfaces the age of each panel ("updated 3m ago", ambering when unten
 
 ## The vacuum test: source-derived vs session-derived
 
-Under multi-agent authoring the `refresh` recipe stops being a convenience and becomes the **authoring contract a fresh, context-free author executes.** When a surface carries a self-contained recipe, refreshing it spawns a one-shot author (a headless child in the run's workdir) that runs the recipe and rewrites the file — the run's main agent is never involved.
+## Two kinds of recipe, and who is allowed to run them
+
+A surface has **one recipe**, it replaces the **whole surface**, and the recipe's *kind*
+— not your `refreshPolicy` — decides who may run it.
+
+| You write | Kind | Who runs it | When |
+|---|---|---|---|
+| `"refresh": "Re-read the open PRs and rewrite this surface."` | **agent** | the surface's existing foreground agent | only when a person navigates to, interacts with, or explicitly refreshes it |
+| `"refresh": { "kind": "host", "handler": "http-status", "params": { "url": "https://…" } }` | **host** | the host itself, no model and no session | on its own, under a shared provider budget |
+| anything else | **unreadable** | nobody | never — the host says what was wrong instead |
+
+**A string recipe can never become proactive.** However it is worded — even if it
+literally says `http-status` — prose parses as an *agent* recipe. Machine authority
+comes from naming a handler in the host's closed list, which is code you cannot write
+from a file, and a name outside that list is refused and quoted back to you rather
+than guessed at. This is deliberate: the only thing that can grant unattended
+execution is something an author has no way to forge.
+
+**`"policy": "automatic"` grants nothing.** Policy governs *invalidation* — which
+observations mark your surface dirty. It has never governed execution and now
+visibly does not: an `automatic` agent recipe is marked dirty by a commit and then
+waits for a person, which is exactly the point.
+
+**What that means for you as an author.** A surface whose prose must be rewritten is
+an agent recipe, and it refreshes when a human opens it — so write the recipe to
+survive that delay, and keep the surface honest in the meantime (it will show its
+last-known content with an honest age). A surface whose answer is a machine fact — an
+endpoint's status, whether a plan unit landed — should be a host recipe, because the
+host will keep it warm for free.
+
+Under multi-agent authoring the `refresh` recipe is still the **authoring contract a
+fresh, context-free author executes** — it just executes on a human's cue rather than
+on a timer.
 
 So apply the **vacuum test** to every living surface: *could this recipe produce a sensible refresh in a vacuum, with no session context?*
 
@@ -414,7 +450,22 @@ Every newly authored surface should declare at least one claim. It is a conventi
 }
 ```
 
-Note there is **no `refresh` recipe**. A landing does not make this card false — the rail re-derives itself from the new value — so there is nothing for a rebuild to do. A moved value on a recipe-less surface records the delta and marks it for a human glance, and queues no agent. Give a claim-bearing card a recipe only when a moved value genuinely requires *prose* to be rewritten.
+Note the recipe is a **host** one. A claim-bound rail is the host writing part of your
+card, so the question is whether the host would be editing underneath somebody else:
+
+- **host recipe** — the host owns the rebuild outright. The rail binds.
+- **no recipe** — nothing rebuilds the card at all, so there is no competing writer.
+  The rail binds. (The card still records the delta and marks itself for a glance; it
+  just queues no agent.)
+- **agent recipe** — *you* own the prose and will rewrite it, so the host does **not**
+  bind the rail. The claims still detect drift and mark the surface dirty; they simply
+  do not edit your body. Otherwise one card would say two things — a rail describing
+  today and prose describing whenever you last looked — with nothing marking which
+  half was older.
+
+So give a claim-bearing card an *agent* recipe only when a moved value genuinely
+requires **prose** to be rewritten, and expect to write the rail's statuses yourself
+when you do.
 
 **(b) An infra card with a single claim.**
 

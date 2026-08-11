@@ -1,9 +1,19 @@
-// The durable refresh engine (plan U6, R13-R18, KTD10/KTD11).
+// The durable refresh engine (R13-R18, KTD10).
 //
 // WHAT THIS OWNS: turning typed triggers into durable jobs, deciding which of those
 // jobs may run right now, dispatching them, and — the part that matters most —
 // refusing to call a Surface current unless the host has just re-observed its
 // sources and found nothing newer than the result it is about to commit.
+//
+// WHAT IT MAY NOT DO (plan U1, KTD3). It cannot create a managed session, a tmux
+// pane, or a terminal port, and there is no dependency it could reach one through:
+// `launchWorker`/`retireWorker` are gone from {@link RefreshCoordinatorDeps}, so a
+// coordinator constructed with ANY deps object — the real wiring or a test double —
+// structurally has no such capability. The one recipient of work is a foreground
+// session that already exists, reached through `deliverToOwner`. When there is no
+// live owner, that is the answer: the Surface keeps its last-known content and
+// records that a fresh result could not be obtained (R13/R17). It is never a reason
+// to make one.
 //
 // THE ONE INVARIANT WORTH RESTATING (KTD10). "The refresh finished" and "the
 // Surface is current" are DIFFERENT CLAIMS. A worker that ran for four minutes
@@ -24,8 +34,10 @@
 // Server-only and React-free.
 
 import type {
-  Surface, SurfaceClaim, SurfaceContent, SurfacePrincipalRef, SurfaceRefreshDeclaration, SurfaceStaleReason,
+  Surface, SurfaceClaim, SurfaceContent, SurfacePrincipalRef,
+  SurfaceRefreshDeclaration, SurfaceRefreshRecipe, SurfaceStaleReason,
 } from '../../domain/types'
+import type { HostRefreshOutcome } from './host-refresh-registry'
 import { log } from '../logger'
 import { serializeByKey } from '../sessions/backends/serializeByKey'
 import {
@@ -41,6 +53,7 @@ import {
   type SurfaceRefreshJobStore,
 } from './surface-refresh-jobs'
 import {
+  agentRecipePrompt,
   claimsObserveTriggerKind,
   coalesceGeneration,
   deriveDueAt,
@@ -50,42 +63,26 @@ import {
   type SurfaceTriggerEvent,
 } from './surface-trigger-matcher'
 import type { WitnessOutcome } from './witness-registry'
+import { legacyJobsReconciled } from '../observability/refresh-metrics'
 
-/** A worker's staged output, after the caller has validated it. */
+/** An executor's staged output, after the caller has validated it. */
 export interface StagedRefreshResult {
-  /** Authored content the worker produced. Absent means "I looked and nothing
+  /** Authored content the executor produced. Absent means "I looked and nothing
    *  needed to change" — a legitimate outcome that must still complete the job
    *  explicitly rather than leave a spinner running (R17). */
   content?: SurfaceContent
-  /** Free text the worker wrote about what it did, for the failure path. */
+  /** Free text the executor wrote about what it did, for the failure path. */
   note?: string
-  /** Present when the worker reports it could NOT do the job. */
+  /** Present when the executor reports it could NOT do the job. */
   error?: string
 }
 
-/** What a launch attempt produced. */
-export type WorkerLaunch =
-  | {
-    ok: true
-    sessionName: string
-    /** The launched session's INCARNATION — its conversation id, or its creation
-     *  stamp when it has none. Persisted onto the dispatch so restart recovery can
-     *  require that the session it adopts is the same incarnation this job
-     *  launched, not a later one that reused the name. */
-    incarnation?: string
-  }
-  | { ok: false; message: string }
-
 export interface RefreshCoordinatorConfig {
-  /** Fleet-wide cap on concurrently RUNNING background workers. */
-  maxConcurrentWorkers: number
-  /** Wall-clock bound on one worker before its job is failed. */
-  workerTimeoutMs: number
+  /** Wall-clock bound on one refresh attempt before its job is failed. A timeout
+   *  records a failed check and creates no successor (R18). */
+  attemptTimeoutMs: number
   /** Verification interval for a Surface that asked for one without saying how long. */
   defaultIntervalMs: number
-  /** KTD11's rollout kill switch. False ⇒ no background worker is ever launched
-   *  and every dispatch falls back to owner delivery. */
-  autonomousWorkers: boolean
 }
 
 export interface RefreshCoordinatorDeps {
@@ -100,18 +97,12 @@ export interface RefreshCoordinatorDeps {
    *  land, which is not an error — the owner may simply be asleep. */
   deliverToOwner: (input: { sessionName: string; prompt: string; job: SurfaceRefreshJob }) => Promise<boolean>
   /** Is this managed session alive right now? Liveness must mean a PROCESS, not a
-   *  record: a session file outlives the tmux process it describes. */
+   *  record: a session file outlives the tmux process it describes.
+   *
+   *  THE ONLY QUESTION THE HOST ASKS ABOUT SESSIONS. There is deliberately no
+   *  dependency here that could create, adopt, or retire one (plan U1, KTD3). */
   isLiveSession: (name: string) => boolean
-  /** The incarnation this session is currently on, or undefined when there is no
-   *  session. Compared against the one a dispatch recorded, so restart recovery
-   *  cannot adopt a different session that happens to share the name. */
-  sessionIncarnation: (name: string) => string | undefined
-  /** Launch a background managed session that runs the recipe and writes
-   *  `job.stagingPath`. Only called when `autonomousWorkers` is on. */
-  launchWorker: (input: { job: SurfaceRefreshJob; surface: Surface; prompt: string }) => Promise<WorkerLaunch>
-  /** Retire a worker session through the normal Graveyard path. */
-  retireWorker: (sessionName: string) => Promise<void>
-  /** Read a staged artifact, or null when the worker has not written one yet. */
+  /** Read a staged artifact, or null when the executor has not written one yet. */
   readStaged: (path: string) => Promise<StagedRefreshResult | null>
   /** Discard a consumed staging artifact. Best-effort. */
   clearStaged: (path: string) => Promise<void>
@@ -119,13 +110,29 @@ export interface RefreshCoordinatorDeps {
    *  this Surface, advancing any generation that changed. Must complete before a
    *  result may claim current. */
   observeSources: (surface: Surface) => Promise<void>
-  /** Build the self-contained instruction a worker or owner receives. */
+  /** Build the self-contained instruction the foreground owner receives. */
   buildPrompt: (input: { surface: Surface; job: SurfaceRefreshJob; stagingPath: string }) => string
-  /** Run ONE claim's witness and report what it saw (plan U4, R9).
+  /** Run one machine-only host recipe, under the shared lookup broker (R7/R8).
    *
-   *  Injected for the same reason `launchWorker` and `observeSources` are: it reaches
-   *  a subprocess (`git fetch`) and the network, and the state machine that decides
-   *  WHEN to check a claim has to be testable without either.
+   *  Injected for the same reason everything else here is: it reaches `git` and the
+   *  network. What it deliberately CANNOT reach — a model, a session, a terminal, an
+   *  agent — is enforced at the registry, whose deps object is its entire world.
+   *
+   *  Must never reject. A `deferred` result means the broker had no slot: nothing
+   *  ran, so nothing is recorded and the job stays queued for a later pass. */
+  runHostRecipe: (input: {
+    surface: Surface
+    recipe: Extract<SurfaceRefreshRecipe, { kind: 'host' }>
+  }) => Promise<HostRefreshOutcome>
+  /** Run ONE claim's witness and report what it saw, or that the broker had no slot
+   *  for it (R8/R9, KTD6).
+   *
+   *  Injected for the same reason `observeSources` is: it reaches a subprocess
+   *  (`git fetch`) and the network, and the state machine that decides WHEN to check
+   *  a claim has to be testable without either.
+   *
+   *  A `deferred` result is NOT an observation and must not be recorded as one — see
+   *  {@link DeferredLookup}. Everything else is a completed check's answer.
    *
    *  Must never reject — `runWitness` in the registry already guarantees that, and it
    *  matters here because a rejection would take down a pass that is looking at other
@@ -133,7 +140,22 @@ export interface RefreshCoordinatorDeps {
    *  wiring can forget, and the symptom of forgetting this one is a fleet of cards
    *  that quietly never check themselves — the exact failure this plan exists to end,
    *  reintroduced as a missing key. */
-  runWitness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome>
+  runWitness: (input: { surface: Surface; claim: SurfaceClaim }) => Promise<WitnessOutcome | DeferredLookup>
+}
+
+/**
+ * The broker declined to spend a slot on this lookup (R8, KTD6).
+ *
+ * A FOURTH ANSWER THAT IS NOT AN OUTCOME. `value`, `unresolved`, and `failed` all
+ * describe a lookup that HAPPENED; this one describes one that did not. Recording it
+ * as an outcome would be two lies at once — it would claim the host looked, and,
+ * because a recorded check advances the deadline, it would hide the backlog the
+ * deferral exists to make visible. So the pass skips it entirely and asks again on
+ * the next sweep, which is seconds away.
+ */
+export interface DeferredLookup {
+  status: 'deferred'
+  detail: string
 }
 
 /** One Surface's claims, snapshotted at collect so the run outside the lock and the
@@ -160,7 +182,7 @@ export const COORDINATOR_PRINCIPAL: SurfacePrincipalRef = {
 }
 
 /** How long a dispatch lease is held before another sweep may reclaim it. Longer
- *  than one sweep and shorter than a worker timeout, so a coordinator that died
+ *  than one sweep and shorter than an attempt timeout, so a coordinator that died
  *  mid-dispatch does not strand its job until the timeout. */
 export const LEASE_MS = 60_000
 
@@ -195,6 +217,17 @@ export interface RefreshPassReport {
   unresolved: { surfaceId: string; claimId: string }[]
 }
 
+/** What one human intent did (R11/R14). `joined` is the answer R14 asks for: the
+ *  attempt already running IS the answer, and a second one was not created. */
+export type HumanIntentResult =
+  | { status: 'started'; job: SurfaceRefreshJob }
+  | { status: 'joined'; job: SurfaceRefreshJob }
+  /** No live foreground agent. The Surface keeps its content and records the check. */
+  | { status: 'unavailable' }
+  /** Nothing here can be executed — no recipe, or one the host cannot read. */
+  | { status: 'not-executable' }
+  | { status: 'unknown-surface' }
+
 function emptyReport(): RefreshPassReport {
   return {
     marked: [], queued: [], coalesced: [], dispatched: [], heldByCap: [],
@@ -218,18 +251,13 @@ const ENTRY_KEY = 'refresh-coordinator'
  * is well inside the shortest verification interval an author may ask for
  * ({@link MIN_INTERVAL_MS}). Bigger buys nothing: the steady state is that almost
  * nothing is due.
- *
- * Deliberately NOT `maxConcurrentWorkers`, which the plan's open question offers as
- * the one-fewer-knob alternative. That number bounds managed sessions and the ttyd
- * ports they claim; this one bounds subprocesses and HTTP requests. Sharing them
- * would mean tightening the fleet cap silently throttled detection, and detection is
- * the half that is supposed to be generous.
  */
 export const WITNESS_BUDGET_PER_PASS = 8
 
-/** How many witnesses run at once inside a pass. Four, matching the shipped
- *  `maxConcurrentWorkers` default, so a sweep can never have more outstanding
- *  subprocesses than the fleet it is supposed to be cheaper than. */
+/** How many witnesses run at once inside a pass. Four: enough that one slow
+ *  `git fetch` does not idle the pass, few enough that a sweep cannot put more
+ *  outstanding subprocesses on the box than a person would expect from a dashboard
+ *  that is supposed to be idle. */
 export const WITNESS_CONCURRENCY = 4
 
 /** The shortest gap between two looks at the same Surface, whatever else says it is
@@ -240,22 +268,18 @@ export const WITNESS_CONCURRENCY = 4
 export const WITNESS_MIN_GAP_MS = MIN_INTERVAL_MS
 
 /**
- * How many OWNER deliveries one dispatch pass may make (KTD9, R16).
- *
- * ITS OWN COUNTER, and the two obvious alternatives are both wrong.
- * `runningWorkerCount()` counts only `dispatch.kind === 'worker'` and every one of
- * the 175 jobs in the live table dispatched as `owner`, so moving the existing cap
- * check above the owner branch would gate against a constant zero. And counting owner
- * deliveries in the worker cap re-creates the documented starvation regression on
- * {@link SurfaceRefreshJobStore.runningWorkerCount}, where an owner delivery held a
- * fleet slot on every sweep after the one that dispatched it.
+ * How many OWNER deliveries one dispatch pass may make (R16).
  *
  * PER PASS RATHER THAN CONCURRENT, because an owner delivery is a prompt — it is
  * finished the moment it lands, and there is nothing to still be holding. What was
  * unbounded was the burst: a commit fires every Surface bound to that worktree, and
  * ten Surfaces became ten prompts into one working session. Three per pass at the
- * five-second sweep drains that in four sweeps, without anybody's conversation being
- * buried.
+ * five-second sweep drains that without anybody's conversation being buried.
+ *
+ * A BACKSTOP RATHER THAN THE POLICY, now that agent recipes run only on discrete
+ * human intent (R11/R12): the burst this bounds should no longer be reachable, and a
+ * pass that ever hits this cap is evidence that something is dispatching agent work
+ * the human did not ask for.
  */
 export const OWNER_DELIVERIES_PER_PASS = 3
 
@@ -382,24 +406,71 @@ export class SurfaceRefreshCoordinator {
   }
 
   /**
-   * Schedule a job for a Surface a human explicitly asked for.
+   * THE ONE OPERATION THAT AUTHORIZES AGENT WORK (R11/R14, KTD4).
    *
-   * Separate from `note` because the route has already moved the Surface to
-   * `queued` through `SurfaceService.refreshRequest` — U3 owns that transition and
-   * re-deriving it here would double-commit it. This only creates the durable job
-   * that services it, and it works for `manual` and `mark-stale` Surfaces too:
-   * being asked is the one thing every policy honours (R18's "manual recovery
-   * available whenever automatic refresh cannot complete").
+   * A human deliberately navigated to, interacted with, or explicitly refreshed a
+   * dirty Surface. That — and nothing else in this file — is what may put a prompt in
+   * somebody's conversation. No timer, no commit, no deadline, no browser lifecycle
+   * event reaches this method, which is why "leaving Tinstar open overnight costs
+   * nothing" is a property of the code rather than a hope about its callers.
+   *
+   * IDEMPOTENT, and that is R14 in one word. Repeated navigation while a refresh is
+   * running JOINS the attempt already in flight — it does not create a second agent,
+   * a second job, or a second execution. The join is decided on the durable record
+   * rather than in React state, because a user action can race an SSE frame and the
+   * client's idea of "already refreshing" is exactly the thing that would be stale.
+   *
+   * Works for `manual` and `mark-stale` Surfaces too: being asked is the one thing
+   * every policy honours (R18's manual recovery).
    */
-  async requestFor(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
-    return this.entry(() => this.requestForNow(surfaceId))
+  async humanIntent(surfaceId: string): Promise<HumanIntentResult> {
+    return this.entry(() => this.humanIntentNow(surfaceId))
   }
 
-  private async requestForNow(surfaceId: string): Promise<SurfaceRefreshJob | undefined> {
+  private async humanIntentNow(surfaceId: string): Promise<HumanIntentResult> {
     const surface = this.surface(surfaceId)
-    if (!surface) return undefined
-    const report = emptyReport()
+    if (!surface) return { status: 'unknown-surface' }
     const at = this.deps.now()
+
+    // ALREADY IN FLIGHT ⇒ JOIN IT. Checked first, before any state transition, so a
+    // second click cannot even briefly look like a second attempt.
+    const existing = this.deps.jobs.active(surfaceId)
+    if (existing) return { status: 'joined', job: existing }
+
+    // A HOST SURFACE IS NOT AGENT WORK. Asking for it by hand is legitimate — it
+    // brings the next check forward — but it is the broker's business, not a prompt.
+    if (surface.content.recipe?.kind === 'host') {
+      const report = emptyReport()
+      const job = await this.scheduleFor(surface, surface.freshness.staleReason, report)
+      return job ? { status: 'started', job } : { status: 'not-executable' }
+    }
+
+    const prompt = agentRecipePrompt(surface.content.recipe)
+    if (!prompt) {
+      // No agent recipe to run. Recorded as an honest unavailable check rather than
+      // silently doing nothing, because a button that appears to do nothing is worse
+      // than one that says why.
+      await this.recordUnavailable(surface, this.refreshBlocker(surface)?.reason
+        ?? 'this Surface declares no refresh recipe, so nothing can rebuild it', at)
+      return { status: 'not-executable' }
+    }
+
+    // NO LIVE OWNER ⇒ AN HONEST UNAVAILABLE CHECK, IN THIS CYCLE (R13, AE5). The
+    // caller gets its answer now rather than discovering it a sweep later, and there
+    // is nothing to promote it to: a background executor is what this plan removed.
+    const owner = this.ownerFor(surface)
+    if (!owner || !this.deps.isLiveSession(owner)) {
+      await this.recordUnavailable(
+        surface,
+        owner
+          ? `its foreground agent (${owner}) is not running, so nobody could rebuild it`
+          : 'no foreground agent owns this Surface, so nobody could rebuild it',
+        at,
+      )
+      return { status: 'unavailable' }
+    }
+
+    const report = emptyReport()
     const reason: SurfaceStaleReason = surface.freshness.staleReason ?? {
       kind: 'human-intent',
       key: `human-intent ${surfaceId} ${at}`,
@@ -407,7 +478,30 @@ export class SurfaceRefreshCoordinator {
       generation: surface.source?.generation ?? 0,
       at,
     }
-    return this.scheduleFor(surface, reason, report)
+    const job = await this.scheduleFor(surface, reason, report, { intentAt: at })
+    return job ? { status: 'started', job } : { status: 'not-executable' }
+  }
+
+  /** The session that would receive this Surface's agent work, if any. Bound owner
+   *  first, then the run — the same order the rest of the file reads them in. */
+  private ownerFor(surface: Surface): string | undefined {
+    return surface.owner?.kind === 'session' ? surface.owner.id : surface.provenance?.runId
+  }
+
+  /**
+   * Record that there was no authorized way to refresh this Surface (R13/R17).
+   *
+   * CONTENT UNTOUCHED, and the mutator is the one that guarantees it. The Surface
+   * keeps its last-known result, gains a completed `unavailable` check saying why,
+   * and waits — for its next allowed opportunity, or for the next human action.
+   */
+  private async recordUnavailable(surface: Surface, message: string, at: number): Promise<void> {
+    if (surface.freshness.lastCheck?.outcome === 'unavailable'
+      && surface.freshness.failure?.message === message) return
+    await this.deps.service.failRefresh(surface.id, {
+      jobId: '', message, outcome: 'unavailable',
+      check: { startedAt: at, execution: 'owner', reason: 'you asked for it' },
+    }, this.ctx(at))
   }
 
   /**
@@ -418,7 +512,10 @@ export class SurfaceRefreshCoordinator {
    * triggers during a refresh produces one successor, not one per trigger.
    */
   private async scheduleFor(
-    surface: Surface, reason: SurfaceStaleReason | undefined, report: RefreshPassReport,
+    surface: Surface,
+    reason: SurfaceStaleReason | undefined,
+    report: RefreshPassReport,
+    opts: { intentAt?: number } = {},
   ): Promise<SurfaceRefreshJob | undefined> {
     const at = this.deps.now()
     // A PERMANENTLY BLOCKED SURFACE GETS NO JOB AT ALL. Creating one and failing it
@@ -434,6 +531,18 @@ export class SurfaceRefreshCoordinator {
       report.blocked.push({ jobId: '', reason: permanent.reason })
       return undefined
     }
+    // WHICH EXECUTOR THIS ATTEMPT BELONGS TO, decided from the parsed recipe kind and
+    // nothing else (R6/KTD2). A recipe-LESS or UNREADABLE Surface falls through to
+    // the blocker path below, which records WHY where a reader can see it — "nothing
+    // happened and nobody said why" is the state this whole plan exists to end.
+    const execution: 'host' | 'owner' = surface.content.recipe?.kind === 'host' ? 'host' : 'owner'
+    // AN AGENT ATTEMPT REQUIRES A HUMAN (R11/R12). Without an intent stamp there is
+    // nobody's permission behind it, and a job created here by a timer or a commit
+    // would become a prompt in somebody's conversation on the next sweep — the exact
+    // fan-out this plan exists to end. `humanIntent` is the only caller that passes
+    // one.
+    if (execution === 'owner' && opts.intentAt === undefined) return undefined
+
     const generation = surface.source?.generation ?? 0
     const existing = this.deps.jobs.active(surface.id)
     if (existing) {
@@ -463,6 +572,8 @@ export class SurfaceRefreshCoordinator {
       ...(runId ? { runId } : {}),
       ...(worktree ? { worktree } : {}),
       state: 'queued',
+      execution,
+      ...(opts.intentAt !== undefined ? { intentAt: opts.intentAt } : {}),
       reason: reason ?? {
         kind: 'human-intent', key: `human-intent ${surface.id} ${at}`,
         detail: 'you asked for it', generation, at,
@@ -531,11 +642,20 @@ export class SurfaceRefreshCoordinator {
     if (!bound && !provenance) {
       return { reason: 'no worktree is recorded, so there is nowhere authorized to run a refresh', permanent: false }
     }
-    if (!surface.content.recipe) {
+    const recipe = surface.content.recipe
+    if (!recipe) {
       return {
         reason: 'this Surface declares no refresh recipe, so nothing can rebuild it without a human',
         permanent: false,
       }
+    }
+    // AN UNREADABLE RECIPE FAILS TOWARD THE HUMAN AND STOPS (KTD1). The host will not
+    // guess what the author meant, and it will not fall back to running the text as
+    // an instruction — that guess is the authority leak the closed union exists to
+    // close. Reported so the author can see what was wrong instead of watching a
+    // Surface quietly never refresh.
+    if (recipe.kind === 'unreadable') {
+      return { reason: `its refresh recipe cannot be read: ${recipe.detail}`, permanent: false }
     }
     return undefined
   }
@@ -837,7 +957,7 @@ export class SurfaceRefreshCoordinator {
     if (!surface) return []
     const out: WitnessObservationInput[] = []
     for (const claim of task.claims) {
-      let outcome: WitnessOutcome
+      let outcome: WitnessOutcome | DeferredLookup
       try {
         outcome = await this.deps.runWitness({ surface, claim })
       } catch (err) {
@@ -845,6 +965,10 @@ export class SurfaceRefreshCoordinator {
         // the pass — and must not be recorded as a value either.
         outcome = { status: 'unresolved', detail: `the witness runner threw: ${(err as Error).message}` }
       }
+      // DEFERRED IS NOT AN OBSERVATION (R8). Nothing looked, so nothing is recorded —
+      // no value, no problem, no stamp. `commitWitness` never sees it, which is what
+      // keeps a budget from quietly reading as "we checked and could not tell".
+      if (outcome.status === 'deferred') continue
       out.push({ claimId: claim.id, outcome })
     }
     return out
@@ -929,10 +1053,10 @@ export class SurfaceRefreshCoordinator {
       }
 
       // A SOURCE THAT VANISHED MID-FLIGHT ends the job now rather than at the
-      // worker timeout. The result has nowhere to commit, so ten more minutes of a
-      // managed session in the user's worktree buys a failure that is already
-      // certain — and the Surface spends every one of those minutes badged
-      // `refreshing`, which is the single most misleading state it can show.
+      // attempt timeout. The result has nowhere to commit, so ten more minutes of
+      // waiting buys a failure that is already certain — and the Surface spends every
+      // one of those minutes badged `refreshing`, which is the single most misleading
+      // state it can show.
       const gone = this.refreshBlocker(surface)
       if (gone?.permanent) {
         await this.failJob(job, gone.reason, report)
@@ -948,24 +1072,20 @@ export class SurfaceRefreshCoordinator {
       }
 
       if (!staged) {
-        // A session that has VANISHED is finished whatever the clock says — waiting
+        // AN OWNER THAT HAS VANISHED is finished whatever the clock says — waiting
         // out the timeout on a session that is already gone would leave the Surface
-        // spinning for minutes with nothing behind it. Applies to an OWNER dispatch
-        // as well as to a worker: an owner that exited mid-turn is exactly as
-        // incapable of writing the result as a dead worker.
-        const target = job.dispatch?.kind === 'blocked' ? undefined : job.dispatch?.target
+        // spinning for minutes with nothing behind it. An owner that exited mid-turn
+        // is exactly as incapable of writing the result as one that never started.
+        const target = job.dispatch?.kind === 'owner' ? job.dispatch.target : undefined
         if (target && !this.deps.isLiveSession(target)) {
-          await this.failJob(
-            job,
-            job.dispatch?.kind === 'owner'
-              ? `its owner session (${target}) exited without writing a result`
-              : 'its refresh worker exited without writing a result',
-            report,
-          )
+          await this.failJob(job, `its foreground agent (${target}) exited without writing a result`, report)
           continue
         }
-        if (job.dispatch && now - job.dispatch.at > cfg.workerTimeoutMs) {
-          await this.failJob(job, `no result after ${Math.round(cfg.workerTimeoutMs / 1000)}s`, report)
+        // THE TIMEOUT CREATES NO SUCCESSOR (R18). It records a failed check and
+        // stops; the Surface goes back to waiting for its next allowed opportunity,
+        // which for an agent recipe means the next discrete human action.
+        if (job.dispatch && now - job.dispatch.at > cfg.attemptTimeoutMs) {
+          await this.failJob(job, `no result after ${Math.round(cfg.attemptTimeoutMs / 1000)}s`, report)
         }
         continue
       }
@@ -1005,10 +1125,14 @@ export class SurfaceRefreshCoordinator {
         observedGeneration: job.targetGeneration,
         ...(live.baseContentDigest ? { expectedContentDigest: live.baseContentDigest } : {}),
         ...(staged.content ? { content: staged.content } : {}),
+        check: {
+          ...(job.dispatch ? { startedAt: job.dispatch.at } : {}),
+          execution: 'owner',
+          reason: job.reason.detail,
+        },
       }, this.ctx(this.deps.now()))
 
       await this.deps.clearStaged(job.stagingPath).catch(() => { /* best effort */ })
-      await this.retire(job)
 
       if (completed.ok) {
         this.deps.jobs.update(job.id, {
@@ -1023,12 +1147,12 @@ export class SurfaceRefreshCoordinator {
           state: 'superseded', result: { ok: false, message: completed.error.message },
         }, this.deps.now())
         report.superseded.push(job.id)
-        // Exactly ONE successor, for the newest pending generation. The Surface is
-        // back at possibly-stale and holds no active job, so this creates one.
-        const pending = this.surface(job.surfaceId)
-        if (pending && effectiveDeclaration(pending).policy === 'automatic') {
-          await this.scheduleFor(pending, pending.freshness.staleReason, report)
-        }
+        // NO AUTOMATIC SUCCESSOR FOR AGENT WORK (R11/R18). A supersession leaves the
+        // Surface dirty and visibly so; scheduling another attempt here would put a
+        // second prompt in somebody's conversation that nobody asked for, which is
+        // precisely the ambient execution this plan removed. It waits for the next
+        // discrete human action. Host work re-schedules itself in `runHostJob`,
+        // where doing so costs a bounded machine lookup and no attention at all.
         continue
       }
       await this.failJob(job, completed.error.message, report)
@@ -1036,29 +1160,24 @@ export class SurfaceRefreshCoordinator {
   }
 
   /**
-   * Launch queued work, up to the cap.
+   * Hand queued work to the one recipient that exists: a live foreground owner.
    *
-   * THE CAP IS THE FLEET BOUND. The plan's per-Surface rule ("only one job executes
-   * per Surface") bounds nothing when a hundred Surfaces go stale at once, and every
-   * managed session claims a ttyd port. Excess jobs stay `queued` and launch
-   * NOTHING — they are not failed, not deferred to a timer, and not given a port
-   * they might not get to use.
+   * THERE IS NO SECOND BRANCH (plan U1, KTD3). This loop used to end with "…and if
+   * no owner is available, launch a background managed session", and that fallback
+   * is what turned a trigger fan-out into a fleet of tmux panes. A queued job whose
+   * owner is not live now ends here as an `unavailable` outcome: the Surface keeps
+   * its last-known content, records that a fresh result could not be obtained, and
+   * waits for the next allowed opportunity (R13/R17/R18).
    */
   private async dispatch(report: RefreshPassReport): Promise<void> {
-    const cfg = this.deps.config()
     // Oldest first: a job that has waited through several sweeps should not lose
-    // its slot to one created this pass.
+    // its turn to one created this pass.
     const queued = this.deps.jobs.list()
       .filter(j => j.state === 'queued')
       .sort((a, b) => a.createdAt - b.createdAt)
 
-    // WORKERS, not running jobs. See `SurfaceRefreshJobStore.runningWorkerCount`:
-    // counting by state alone made an owner delivery consume a cap slot on every
-    // sweep after the one that dispatched it, silently starving the background fleet.
-    let running = this.deps.jobs.runningWorkerCount()
-    // And the OTHER half of that, which the narrowing left unbounded (KTD9, R16). See
-    // `OWNER_DELIVERIES_PER_PASS`: this counter is per pass and separate on purpose,
-    // and `runningWorkerCount` stays worker-only.
+    // See `OWNER_DELIVERIES_PER_PASS`. Per pass rather than concurrent: a delivery
+    // is finished the moment it lands, so there is nothing left to hold a slot.
     let ownerDeliveries = 0
     for (const job of queued) {
       const now = this.deps.now()
@@ -1110,68 +1229,171 @@ export class SurfaceRefreshCoordinator {
         continue
       }
 
-      const prompt = this.deps.buildPrompt({ surface, job, stagingPath: job.stagingPath })
+      // HOST WORK RUNS HERE, UNDER THE BROKER (R7/R8). No prompt, no session, no
+      // process — one bounded machine lookup that either answers, says it could not,
+      // or says the budget had no room for it.
+      if (job.execution === 'host') {
+        await this.runHostJob(job, surface, report)
+        continue
+      }
 
-      // AN AVAILABLE OWNER RECEIVES WORK DIRECTLY (KTD11). This costs no port and
-      // no session, so it is NOT counted against the WORKER cap — that cap bounds the
-      // background fleet, which is what competes for ports. It is counted against its
-      // own budget, because what it does cost is a prompt in somebody's live
-      // conversation, and ten Surfaces bound to one worktree became ten prompts into
-      // one working session on a single commit.
+      // AGENT WORK REQUIRES A HUMAN'S STAMP (R11/R12, KTD4). Defence in depth: only
+      // `humanIntent` creates a job carrying one, so a job that reached here without
+      // one was made by something that had nobody's permission. Failed rather than
+      // silently dropped, so it cannot sit active and block the Surface forever.
+      if (job.intentAt === undefined) {
+        await this.failJob(job, 'this refresh was scheduled without a human asking for it', report)
+        continue
+      }
+
+      // THE ONE RECIPIENT. A foreground session the human is already talking to,
+      // which costs no port and no new process. It is bounded by its own per-pass
+      // budget because what it DOES cost is a prompt in somebody's live conversation.
       const owner = surface.owner?.kind === 'session' ? surface.owner.id : job.runId
-      if (owner && this.deps.isLiveSession(owner)) {
-        if (ownerDeliveries >= OWNER_DELIVERIES_PER_PASS) {
-          // Held, not failed and not transferred to a worker: the owner is alive and
-          // is still the right recipient, the queue is durable, and the next sweep is
-          // five seconds away.
-          report.heldByCap.push(job.id)
-          continue
-        }
-        const began = await this.begin(job, surface)
-        if (!began) continue
-        ownerDeliveries++
-        const delivered = await this.deps.deliverToOwner({ sessionName: owner, prompt, job })
-        this.deps.jobs.update(job.id, {
-          dispatch: { kind: 'owner', target: owner, at: now },
-          ...(delivered ? {} : { result: { ok: false, message: 'the owner session did not accept the work' } }),
-        }, now)
-        if (!delivered) {
-          await this.failJob(this.deps.jobs.get(job.id)!, 'the owner session did not accept the work', report)
-          continue
-        }
-        report.dispatched.push(job.id)
+      if (!owner || !this.deps.isLiveSession(owner)) {
+        // NO FALLBACK LIVES HERE (R13). Recording the honest outcome is the whole
+        // behaviour: the Surface keeps its last-known content, says a fresh result
+        // could not be obtained, and waits for its next allowed opportunity. There is
+        // no background executor to promote this to, and adding one back would
+        // restore the exact architecture this unit removed.
+        await this.failJob(
+          job,
+          owner
+            ? `its foreground agent (${owner}) is not running, so nobody could rebuild it`
+            : 'no foreground agent owns this Surface, so nobody could rebuild it',
+          report,
+        )
         continue
       }
-
-      if (!cfg.autonomousWorkers) {
-        // The kill switch. Nothing is launched and the job stays queued, so turning
-        // it back on resumes exactly where it left off rather than losing the work.
+      if (ownerDeliveries >= OWNER_DELIVERIES_PER_PASS) {
+        // Held, not failed: the owner is alive and is still the right recipient, the
+        // queue is durable, and the next sweep is five seconds away.
         report.heldByCap.push(job.id)
         continue
       }
-      if (running >= cfg.maxConcurrentWorkers) {
-        report.heldByCap.push(job.id)
-        continue
-      }
-
+      const prompt = this.deps.buildPrompt({ surface, job, stagingPath: job.stagingPath })
       const began = await this.begin(job, surface)
       if (!began) continue
-      const launch = await this.deps.launchWorker({ job, surface, prompt })
-      if (!launch.ok) {
-        await this.failJob(this.deps.jobs.get(job.id)!, launch.message, report)
+      ownerDeliveries++
+      const delivered = await this.deps.deliverToOwner({ sessionName: owner, prompt, job })
+      this.deps.jobs.update(job.id, {
+        dispatch: { kind: 'owner', target: owner, at: now },
+        ...(delivered ? {} : { result: { ok: false, message: 'the owner session did not accept the work' } }),
+      }, now)
+      if (!delivered) {
+        await this.failJob(this.deps.jobs.get(job.id)!, 'the owner session did not accept the work', report)
         continue
       }
-      this.deps.jobs.update(job.id, {
-        dispatch: {
-          kind: 'worker',
-          target: launch.sessionName,
-          ...(launch.incarnation ? { incarnation: launch.incarnation } : {}),
-          at: now,
-        },
-      }, now)
-      running++
       report.dispatched.push(job.id)
     }
+  }
+
+  /**
+   * Run one host job to completion inside this pass (R7/R8, KTD6/KTD10).
+   *
+   * THE ORDER IS THE INTERESTING PART. The lookup happens FIRST, before the Surface
+   * is moved to `refreshing`, because the broker may decline: a deferral must leave
+   * the record exactly as it was — no phase change, no revision, no check — and a
+   * Surface badged `refreshing` for a lookup that never ran would be the most
+   * misleading state available. Only once there is a real answer does the job begin,
+   * which is also what snapshots the content digest the barrier compares against.
+   *
+   * The barrier is unchanged and still mandatory: re-observe the sources, then let
+   * `completeRefresh` compare the revision, the generation, and the digest inside the
+   * transaction that would commit. A machine result gets no more trust than an
+   * agent's.
+   */
+  private async runHostJob(job: SurfaceRefreshJob, surface: Surface, report: RefreshPassReport): Promise<void> {
+    const recipe = surface.content.recipe
+    if (recipe?.kind !== 'host') {
+      // The recipe changed under the job. Whatever it is now, this attempt was
+      // authorized against something else.
+      await this.failJob(job, 'its refresh recipe changed while this check was queued', report)
+      return
+    }
+    const startedAt = this.deps.now()
+    let outcome: HostRefreshOutcome
+    try {
+      outcome = await this.deps.runHostRecipe({ surface, recipe })
+    } catch (err) {
+      // The registry never rejects. A wiring that does must not take down a pass that
+      // is also looking at other Surfaces.
+      outcome = { status: 'failed', detail: `the host check threw: ${(err as Error).message}` }
+    }
+
+    if (outcome.status === 'deferred') {
+      // NOTHING HAPPENED, so nothing is written. The job stays queued and the next
+      // sweep asks again; recording a check here would claim the host looked and
+      // would advance the deadline past the backlog it is meant to expose (R8).
+      report.heldByCap.push(job.id)
+      return
+    }
+
+    const check = { startedAt, execution: 'host' as const, reason: job.reason.detail }
+    if (outcome.status === 'unavailable' || outcome.status === 'failed') {
+      const at = this.deps.now()
+      this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message: outcome.detail } }, at)
+      await this.deps.service.failRefresh(job.surfaceId, {
+        jobId: job.id, message: outcome.detail,
+        ...(outcome.status === 'unavailable' ? { outcome: 'unavailable' as const } : {}),
+        check,
+      }, this.ctx(at))
+      report.failed.push({ jobId: job.id, reason: outcome.detail })
+      return
+    }
+
+    const began = await this.begin(job, surface)
+    if (!began) return
+
+    // THE BARRIER, identical to the agent path's. A host result computed against a
+    // repository that moved while the lookup ran describes a world that no longer
+    // exists, and machine provenance does not change that.
+    try {
+      await this.deps.observeSources(surface)
+    } catch (err) {
+      await this.failJob(job, `sources could not be re-observed: ${(err as Error).message}`, report)
+      return
+    }
+    const observed = this.surface(job.surfaceId)
+    if (!observed) {
+      await this.finishJob(job, 'cancelled', 'its Surface no longer exists', report)
+      return
+    }
+    const live = this.deps.jobs.get(job.id) ?? job
+    const at = this.deps.now()
+    const completed = await this.deps.service.completeRefresh(observed.id, {
+      jobId: job.id,
+      expectedRev: observed.rev,
+      observedGeneration: job.targetGeneration,
+      ...(live.baseContentDigest ? { expectedContentDigest: live.baseContentDigest } : {}),
+      // `unchanged` commits NO content, which is what makes it advance `lastCheck`
+      // and leave `lastKnownAt` alone (KTD5) — the common answer, honestly recorded.
+      ...(outcome.status === 'replaced' ? { content: outcome.content } : {}),
+      check,
+    }, this.ctx(at))
+
+    if (completed.ok) {
+      this.deps.jobs.update(job.id, {
+        state: 'completed',
+        result: { ok: true, ...(outcome.detail ? { message: outcome.detail } : {}) },
+      }, this.deps.now())
+      report.completed.push(job.id)
+      return
+    }
+    if (completed.error.reason === 'superseded') {
+      this.deps.jobs.update(job.id, {
+        state: 'superseded', result: { ok: false, message: completed.error.message },
+      }, this.deps.now())
+      report.superseded.push(job.id)
+      // ONE successor, and only for host work: an agent Surface left dirty by a
+      // supersession waits for the next human action rather than being re-scheduled.
+      const pending = this.surface(job.surfaceId)
+      if (pending?.content.recipe?.kind === 'host') {
+        await this.scheduleFor(pending, pending.freshness.staleReason, report)
+      }
+      return
+    }
+    await this.failJob(job, completed.error.message, report)
   }
 
   /**
@@ -1206,27 +1428,30 @@ export class SurfaceRefreshCoordinator {
     return true
   }
 
-  private async retire(job: SurfaceRefreshJob): Promise<void> {
-    if (job.dispatch?.kind !== 'worker' || !job.dispatch.target) return
-    try {
-      await this.deps.retireWorker(job.dispatch.target)
-    } catch (err) {
-      log.warn('refresh', `could not retire worker ${job.dispatch.target}: ${(err as Error).message}`)
-    }
-  }
-
-  private async failJob(job: SurfaceRefreshJob, message: string, report: RefreshPassReport): Promise<void> {
-    await this.retire(job)
+  private async failJob(
+    job: SurfaceRefreshJob,
+    message: string,
+    report: RefreshPassReport,
+    outcome: 'failed' | 'unavailable' = 'failed',
+  ): Promise<void> {
     await this.deps.clearStaged(job.stagingPath).catch(() => { /* best effort */ })
-    this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message } }, this.deps.now())
-    await this.deps.service.failRefresh(job.surfaceId, { jobId: job.id, message }, this.ctx(this.deps.now()))
+    const at = this.deps.now()
+    this.deps.jobs.update(job.id, { state: 'failed', result: { ok: false, message } }, at)
+    await this.deps.service.failRefresh(job.surfaceId, {
+      jobId: job.id, message,
+      ...(outcome === 'unavailable' ? { outcome } : {}),
+      check: {
+        ...(job.dispatch ? { startedAt: job.dispatch.at } : {}),
+        execution: job.execution,
+        reason: job.reason.detail,
+      },
+    }, this.ctx(at))
     report.failed.push({ jobId: job.id, reason: message })
   }
 
   private async finishJob(
     job: SurfaceRefreshJob, state: 'cancelled' | 'completed', message: string, report: RefreshPassReport,
   ): Promise<void> {
-    await this.retire(job)
     this.deps.jobs.update(job.id, { state, result: { ok: state === 'completed', message } }, this.deps.now())
     if (state === 'cancelled') report.failed.push({ jobId: job.id, reason: message })
   }
@@ -1236,24 +1461,19 @@ export class SurfaceRefreshCoordinator {
   /**
    * Reconstruct in-flight work after a restart.
    *
-   * WHAT THIS MAY NOT DO is the point: it may not declare anything current. A
-   * `running` job whose worker survived the restart is adopted — but ONLY if the
-   * session is genuinely LIVE and is still on the incarnation this job recorded,
-   * because a session name is reusable and adopting a stranger that happens to
-   * share it would attribute someone else's output to this job. Everything else is
-   * failed with a reason, which leaves its Surface visibly failed rather than
-   * quietly stale.
+   * NOTHING IS ADOPTED (plan U1, KTD8). A delivered owner prompt may outlive the
+   * server, and the host has no way to tell "the agent is still working on it" from
+   * "the agent read it, moved on, and will never write the staging file". So a
+   * `running` attempt is FAILED as unavailable rather than adopted: its Surface keeps
+   * its content, shows an honest failed check, and waits for a new discrete human
+   * action. That is strictly better than a spinner nobody will ever clear.
    *
-   * BOTH HALVES OF THAT SENTENCE USED TO BE FALSE, which is why they are spelled
-   * out. `isLiveSession` was a `readFileSync` of a session record that outlives its
-   * tmux process, so a worker that died with the host was adopted and had its lease
-   * renewed. And no incarnation was persisted at all — the launcher built one and
-   * the wiring discarded it — so the match was on the NAME the docstring says is
-   * not enough. A job that recorded no incarnation (written before this) falls back
-   * to name plus liveness rather than being failed for the omission.
+   * This used to adopt a live background worker whose incarnation still matched. With
+   * no background executor left there is nothing to adopt, and the incarnation match
+   * that made adoption safe went with it.
    *
-   * `queued` jobs need no repair at all: they never launched anything, so the next
-   * sweep dispatches them exactly as it would have.
+   * `queued` jobs need no repair at all: they never dispatched anything, so the next
+   * sweep handles them exactly as it would have.
    */
   async recover(): Promise<RefreshPassReport> {
     return this.entry(() => this.recoverNow())
@@ -1261,6 +1481,7 @@ export class SurfaceRefreshCoordinator {
 
   private async recoverNow(): Promise<RefreshPassReport> {
     const report = emptyReport()
+    await this.reconcileLegacyJobs(report)
     for (const job of this.deps.jobs.list()) {
       if (!ACTIVE_JOB_STATES.includes(job.state)) continue
       const surface = this.surface(job.surfaceId)
@@ -1270,31 +1491,66 @@ export class SurfaceRefreshCoordinator {
       }
       if (job.state === 'queued') continue
 
-      const dispatch = job.dispatch?.kind === 'worker' ? job.dispatch : undefined
-      const target = dispatch?.target
-      // A recorded incarnation must still match. Absent (an older job record) falls
-      // back to liveness alone rather than failing work that is genuinely still
-      // running for want of a field it never had.
-      const sameIncarnation = !dispatch?.incarnation
-        || dispatch.incarnation === this.deps.sessionIncarnation(dispatch.target ?? '')
-      if (target && this.deps.isLiveSession(target) && sameIncarnation) {
-        // A live matching incarnation. Renew the lease and leave it to the sweep,
-        // which will harvest it through the same barrier as any other worker.
-        this.deps.jobs.update(job.id, {
-          lease: { owner: COORDINATOR_PRINCIPAL.id, until: this.deps.now() + LEASE_MS },
-        }, this.deps.now())
+      // HOST ATTEMPTS RESUME (KTD8). A machine lookup that was interrupted can simply
+      // be asked again — it costs one bounded, brokered request and nobody's
+      // attention — so the job goes back to the queue rather than being failed, and
+      // the broker's budgets govern when it actually runs.
+      if (job.execution === 'host') {
+        this.deps.jobs.update(job.id, { state: 'queued', dispatch: undefined, lease: undefined }, this.deps.now())
+        report.queued.push(job.id)
         continue
       }
+
+      // OWNER ATTEMPTS DO NOT. A delivered prompt may have outlived the server, and
+      // the host cannot tell "the agent is still working on it" from "the agent read
+      // it, moved on, and will never write the staging file". Failed as unavailable
+      // and left waiting for a NEW human action, which is strictly better than a
+      // spinner nobody will ever clear.
+      const target = job.dispatch?.kind === 'owner' ? job.dispatch.target : undefined
       await this.failJob(
         job,
         target
-          ? sameIncarnation
-            ? `its refresh worker (${target}) did not survive the restart`
-            : `session ${target} is live but is a different incarnation than this refresh launched`
+          ? `the host restarted while ${target} was rebuilding this; ask for it again when you need it fresh`
           : 'the host restarted while this refresh was in flight',
         report,
+        'unavailable',
       )
     }
     return report
+  }
+
+  /**
+   * Settle the Surfaces whose jobs the store terminalized at hydration (KTD8).
+   *
+   * The store can only fix its own table. These Surfaces were left holding an active
+   * job that named a background session which no longer exists, so without this they
+   * would sit `refreshing` forever — and `scheduleFor` would coalesce every later
+   * trigger onto the dead job rather than doing anything.
+   *
+   * FAIL THEN RE-DIRTY, in that order and both deliberately. The failure is what
+   * records WHY the content stopped advancing, and the re-dirty is what makes the
+   * Surface eligible again — for a host recipe on its next allowed pass, or for the
+   * next human who navigates to it. Neither mutator touches content: the last-known
+   * result stays exactly where it was (R17).
+   */
+  private async reconcileLegacyJobs(report: RefreshPassReport): Promise<void> {
+    for (const entry of this.deps.jobs.takeLegacyReconciliations()) {
+      legacyJobsReconciled.inc()
+      const surface = this.surface(entry.surfaceId)
+      if (!surface) continue
+      const at = this.deps.now()
+      await this.deps.service.failRefresh(
+        entry.surfaceId, { jobId: entry.jobId, message: entry.message }, this.ctx(at),
+      )
+      // Keyed on the JOB, so a table that somehow presented the same reconciliation
+      // twice commits the dirty mark once.
+      await this.deps.service.markPossiblyStale(entry.surfaceId, {
+        kind: 'human-intent',
+        key: `legacy-refresh-reconciled ${entry.jobId}`,
+        detail: 'the refresh that was rebuilding it was retired with the background-worker architecture',
+        at,
+      }, this.ctx(at))
+      report.failed.push({ jobId: entry.jobId, reason: entry.message })
+    }
   }
 }

@@ -82,16 +82,23 @@ export const test = base.extend<
  * conflicts when both fixtures are active in the same worker.
  */
 const PLUGIN_PORT_OFFSET = 100
+const pluginDataDir = (workerInfo: WorkerInfo) =>
+  join(tmpdir(), `tinstar-pw${workerInfo.workerIndex}-${process.pid}`)
 
 export const pluginTest = base.extend<
   { context: BrowserContext; page: Page },
-  { serverUrl: string }
+  { serverUrl: string; serverDataDir: string }
 >({
+  serverDataDir: [
+    async ({}, use, workerInfo: WorkerInfo) => use(pluginDataDir(workerInfo)),
+    { scope: 'worker' },
+  ],
   serverUrl: [
     async ({}, use, workerInfo: WorkerInfo) => {
       const workerIndex = workerInfo.workerIndex
       const port = BASE_PORT + PLUGIN_PORT_OFFSET + workerIndex
-      const dataDir = join(tmpdir(), `tinstar-pw${workerIndex}-${Date.now()}`)
+      const dataDir = pluginDataDir(workerInfo)
+      await rm(dataDir, { recursive: true, force: true })
       const child = spawn('npx', ['tsx', 'src/server/standalone.ts'], {
         cwd: repoRoot,
         env: {

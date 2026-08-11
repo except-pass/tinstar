@@ -14,6 +14,7 @@
 // derail the agent into abandoning what it was doing.
 import type { Point } from '../domain/types'
 import type { Reply } from '../domain/pinSet'
+import type { RunAuthoringSurface } from './run-authoring'
 
 /** How many of the most recent thread messages a prompt carries — bounds the
  *  delivered prompt regardless of how long a chatty point's thread grows (mirrors
@@ -28,13 +29,15 @@ const GUARDRAIL =
 /** The thread rendered for a prompt: one line per message, oldest first, windowed
  *  to the last SLATE_PROMPT_THREAD_WINDOW messages. */
 export function slateThreadSoFar(replies: Reply[]): string {
-  return replies.slice(-SLATE_PROMPT_THREAD_WINDOW).map(m => `[${m.author}] ${m.text}`).join('\n')
+  return replies.slice(-SLATE_PROMPT_THREAD_WINDOW).map(m => `[${m.author}] ${oneLine(m.text)}`).join('\n')
 }
 
 /** The curl block telling the agent how to reply onto a point's thread. */
 function replyCurl(point: Point, origin: string): string[] {
+  const runId = encodeURIComponent(point.runId)
+  const pointId = encodeURIComponent(point.id)
   return [
-    `curl -s -X POST '${origin}/api/runs/${point.runId}/slate/points/${point.id}/replies' \\`,
+    `curl -s -X POST '${origin}/api/runs/${runId}/slate/points/${pointId}/replies' \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -d '{"author":"agent","text":"YOUR REPLY"}'`,
   ]
@@ -47,6 +50,50 @@ function replyCurl(point: Point, origin: string): string[] {
  *  single space so the headline stays one quoted line. */
 function oneLine(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
+}
+
+export type SlateInteractionOwner = Pick<RunAuthoringSurface, 'surfaceId' | 'localId' | 'target'>
+
+/** Tell the foreground agent which durable work object owns this interaction and
+ * exactly how that owner may be amended now. Values are JSON-quoted so paths,
+ * identities, and refusal reasons cannot add prompt lines of their own. */
+function ownerLines(owner: SlateInteractionOwner | null, origin: string): string[] {
+  if (!owner) {
+    return [
+      'The host could not resolve this interaction\'s current Surface owner.',
+      'Act on the interaction, then read the run\'s Slate authoring context before amending or reserving anything.',
+    ]
+  }
+  const identity =
+    `This interaction belongs to canonical Surface ${JSON.stringify(owner.surfaceId)} ` +
+    `(run-local id ${JSON.stringify(owner.localId)}).`
+  const target = owner.target
+  let amend: string[]
+  if (target.kind === 'slate-file') {
+    amend = [
+      `After acting, amend this same Surface by atomically rewriting ${JSON.stringify(target.file)} ` +
+        `with id ${JSON.stringify(target.localId)}.`,
+      ...(target.attemptToken
+        ? [`Include its current attemptToken ${JSON.stringify(target.attemptToken)}.`]
+        : []),
+    ]
+  } else if (target.kind === 'canonical-content') {
+    amend = [
+      `After acting, amend this same Surface through PATCH ${JSON.stringify(`${origin}${target.endpoint}`)} ` +
+        `with expectedRev ${target.expectedRev}.`,
+      'If that revision is stale, read the run\'s Slate authoring context again and retry against the current owner.',
+    ]
+  } else {
+    amend = [
+      `Its content target is currently unavailable: ${JSON.stringify(target.reason)}.`,
+      'Keep this Surface as the owner and read the run\'s Slate authoring context again before attempting a write.',
+    ]
+  }
+  return [
+    identity,
+    ...amend,
+    'Create another Surface only if the interaction introduces a genuinely distinct work object.',
+  ]
 }
 
 /** Prompt for a brand-new USER-added point (POST /slate/points). */
@@ -63,15 +110,21 @@ export function slatePointPromptText(point: Point, origin: string): string {
 
 /** Prompt for a USER reply on a point's thread (POST /slate/points/:pid/replies).
  *  `point` must already carry the appended reply as the last thread entry. */
-export function slateReplyPromptText(point: Point, origin: string): string {
+export function slateReplyPromptText(
+  point: Point,
+  origin: string,
+  owner: SlateInteractionOwner | null,
+): string {
   const thread = point.replies ?? []
   const latest = thread[thread.length - 1]?.text ?? ''
   const lines: string[] = [
     `The user replied on a point on your run's Slate: "${oneLine(point.headline)}" (point ${point.id}).`,
     '',
-    `Their message: ${latest}`,
+    `Their message: ${oneLine(latest)}`,
     '',
     GUARDRAIL,
+    '',
+    ...ownerLines(owner, origin),
   ]
   if (thread.length > 1) {
     lines.push(
@@ -93,26 +146,41 @@ export function slateAnswerPromptText(
   chosenLabels: string[],
   text: string | undefined,
   origin: string,
+  owner: SlateInteractionOwner | null,
 ): string {
   const lines: string[] = [
     `The user answered a control on your run's Slate: "${oneLine(point.headline)}" (point ${point.id}).`,
   ]
-  if (chosenLabels.length > 0) lines.push(`They chose: ${chosenLabels.join(', ')}`)
-  if (text) lines.push(`They added: ${text}`)
-  lines.push('', GUARDRAIL, '', 'Reply on its thread once you have acted:', ...replyCurl(point, origin))
+  if (chosenLabels.length > 0) lines.push(`They chose: ${chosenLabels.map(oneLine).join(', ')}`)
+  if (text) lines.push(`They added: ${oneLine(text)}`)
+  lines.push(
+    '',
+    GUARDRAIL,
+    '',
+    ...ownerLines(owner, origin),
+    '',
+    'Reply on its thread once you have acted:',
+    ...replyCurl(point, origin),
+  )
   return lines.join('\n')
 }
 
 /** Prompt for a REFRESH nudge (POST /slate/surfaces/:pid/refresh). Refresh persists
  *  NOTHING (plan KTD2): this text is delivered best-effort and the surface regenerates
- *  through the normal file→watcher→projection path. When the surface carries a
- *  file-owned `refresh` recipe, the delivered text IS that recipe verbatim, plus a
- *  one-line instruction to rewrite the surface's `.tinstar/slate` file; otherwise a
- *  bare regenerate-nudge naming the surface. `_origin` is unused (regeneration is
- *  file-based, not a curl) but kept for signature parity with the other builders. */
+ *  through the normal file→watcher→projection path. When the surface carries an AGENT
+ *  recipe, the delivered text IS that recipe verbatim, plus a one-line instruction to
+ *  rewrite the surface's `.tinstar/slate` file; otherwise a bare regenerate-nudge
+ *  naming the surface.
+ *
+ *  A HOST recipe produces the bare nudge, deliberately. It is machine work with no
+ *  instruction to deliver, and rendering its handler name into somebody's
+ *  conversation would put a host identifier where an author's sentence belongs.
+ *  `_origin` is unused (regeneration is file-based, not a curl) but kept for
+ *  signature parity with the other builders. */
 export function slateRefreshPromptText(point: Point, _origin: string): string {
-  const body = point.refresh
-    ? [point.refresh, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
+  const recipe = point.refresh?.kind === 'agent' ? point.refresh.prompt : undefined
+  const body = recipe
+    ? [recipe, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
     : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite the .tinstar/slate file that defines it.`]
   // Carry the GUARDRAIL like every other Slate prompt: the recipe is file-authored
   // (an untrusted repo/branch/process could plant one), so frame it as a note, not a
@@ -180,7 +248,12 @@ export function slateObjectivePromptText(objective: string, _origin?: string): s
  *  text; at least one is present (the route rejects an empty body). `_origin` is unused
  *  (authoring is file-based) but kept for signature parity. */
 export function slateComposePromptText(
-  parts: { prompt?: string; freeform?: string; recipe?: string },
+  parts: {
+    prompt?: string
+    freeform?: string
+    recipe?: string
+    destination: { file: string; localId: string; attemptToken: string }
+  },
   _origin: string,
 ): string {
   const head = parts.prompt ? `Author a Slate surface. ${parts.prompt}` : 'Author a Slate surface.'
@@ -194,9 +267,13 @@ export function slateComposePromptText(
     `Set this surface's refresh recipe (how it stays fresh — name its source, derivation, and output) to: ${oneLine(parts.recipe)}`,
   )
   lines.push(
+    `Write exactly one JSON object to .tinstar/slate/${oneLine(parts.destination.file)}.`,
+    `It must use id ${JSON.stringify(oneLine(parts.destination.localId))} and include ` +
+      `attemptToken ${JSON.stringify(oneLine(parts.destination.attemptToken))}.`,
     parts.recipe
-      ? 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and the refresh recipe above.'
-      : 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
+      ? 'Include a headline, A2UI content, and the refresh recipe above.'
+      : 'Include a headline, A2UI content, and an optional refresh recipe.',
+    'Do not choose another filename, id, or attempt token. The saved card accepts only this destination.',
     '',
     GUARDRAIL,
   )

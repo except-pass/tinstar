@@ -39,13 +39,15 @@ import { DocumentStore } from '../../stores/document-store'
 import { seedRunSlate } from '../../stores/__tests__/seedRunSlate'
 import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
 import { SurfaceService } from '../../surfaces/surface-service'
+import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../../domain/types'
 
 /** The A2UI body the seeded surfaces carry — one Text node, valid per the catalog. */
 const TEXT = { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] } as never
-import type { Point, Run } from '../../../domain/types'
+import type { Point, Run, SurfaceRefreshRecipe } from '../../../domain/types'
 
 interface Harness {
   docStore: DocumentStore
+  ctx: RouteContext
   /** The temp config root, so a test can plant a worktree the routes will read. */
   root: string
   fetch(path: string, init?: RequestInit): Promise<Response>
@@ -86,6 +88,7 @@ function createTestServer(root: string): Harness {
     resolve()
   }))
   return {
+    ctx,
     docStore,
     root,
     async fetch(path, init) {
@@ -145,6 +148,304 @@ async function createPoint(srv: Harness, over: Record<string, unknown> = {}): Pr
   const body = await res.json() as { data: { point: Point } }
   return body.data.point.id
 }
+
+const agentHeaders = (runId = RUN): Record<string, string> => ({
+  'x-tinstar-actor': runId,
+  'x-tinstar-actor-kind': 'session',
+})
+
+describe('run-scoped Slate authoring API', () => {
+  it('requires the target run session before revealing authoring context', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN, workspace: { path: srv.root } })
+
+    const absent = await srv.fetch(`/api/runs/${RUN}/slate/authoring/context`)
+    expect(absent.status).toBe(403)
+
+    const process = await srv.fetch(`/api/runs/${RUN}/slate/authoring/context`, {
+      headers: { 'x-tinstar-actor': RUN, 'x-tinstar-actor-kind': 'process' },
+    })
+    expect(process.status).toBe(403)
+
+    const otherRun = await srv.fetch(`/api/runs/${RUN}/slate/authoring/context`, {
+      headers: agentHeaders('some-other-run'),
+    })
+    expect(otherRun.status).toBe(403)
+  }))
+
+  it('projects the Objective and visible work objects with exact amendment targets', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockImplementation((_dir, name) => name === RUN
+      ? { name: RUN, workspace: { path: srv.root } }
+      : null)
+    const service = new SurfaceService(srv.docStore)
+    const bridge = new RunSlateBridge(srv.docStore, service)
+    await bridge.upsertUserPoint(
+      RUN,
+      { id: OBJECTIVE_POINT_ID, headline: 'Make the Slate primary' },
+      { kind: 'human', id: 'test' },
+    )
+    await bridge.upsertUserPoint(
+      RUN,
+      { id: 'decision', headline: 'Choose the interaction model' },
+      { kind: 'session', id: RUN },
+    )
+    await seedRunSlate(srv.docStore, RUN, [{
+      id: 'research',
+      headline: 'Current findings',
+      file: 'research.json',
+    }])
+    await bridge.upsertUserPoint(
+      RUN,
+      { id: 'deleted', headline: 'Do not show me' },
+      { kind: 'session', id: RUN },
+    )
+    await bridge.deletePoint(RUN, 'deleted', { kind: 'session', id: RUN })
+    const reserve = async (key: string, label: string) => {
+      const result = await bridge.reserveComposition(RUN, {
+        label,
+        request: { freeform: `Maintain ${label}` },
+        worktree: srv.root,
+        timeoutMs: 60_000,
+      }, { actor: { kind: 'session', id: RUN }, idempotencyKey: key })
+      expect(result.reservation).toBeDefined()
+      return result.reservation!
+    }
+    const authoring = await reserve('authoring', 'Still authoring')
+    const failed = await reserve('failed', 'Failed card')
+    await service.failComposition(failed.surface.id, {
+      token: failed.token,
+      expectedRev: srv.docStore.getSurface(failed.surface.id)!.rev,
+      code: 'invalid-content',
+      message: 'The assigned output was invalid.',
+    }, { actor: { kind: 'session', id: RUN } })
+    const ready = await reserve('ready', 'Ready card')
+    await service.completeComposition(ready.surface.id, {
+      token: ready.token,
+      expectedRev: srv.docStore.getSurface(ready.surface.id)!.rev,
+      content: { headline: 'Ready card' },
+    }, { actor: { kind: 'session', id: RUN } })
+
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/authoring/context`, {
+      headers: agentHeaders(),
+    })
+    expect(res.status).toBe(200)
+    const payload = await res.json() as { data: {
+      objective: { localId: string; headline: string } | null
+      surfaces: Array<{
+        surfaceId: string
+        localId: string
+        headline: string
+        contentAuthority: string
+        target: Record<string, unknown>
+        capabilities: { updateContent: boolean }
+        creation?: { phase: string }
+      }>
+    } }
+    expect(payload.data.objective).toMatchObject({
+      localId: OBJECTIVE_POINT_ID,
+      headline: 'Make the Slate primary',
+    })
+    expect(payload.data.surfaces.map(surface => surface.localId).sort()).toEqual([
+      'decision', 'research', authoring.localId, failed.localId, ready.localId,
+    ].sort())
+    expect(payload.data.surfaces.find(surface => surface.localId === 'decision')).toMatchObject({
+      contentAuthority: 'canonical-direct',
+      target: {
+        kind: 'canonical-content',
+        method: 'PATCH',
+        expectedRev: expect.any(Number),
+      },
+      capabilities: { updateContent: true },
+    })
+    expect(payload.data.surfaces.find(surface => surface.localId === 'research')).toMatchObject({
+      contentAuthority: 'source-binding',
+      target: {
+        kind: 'slate-file',
+        file: join('/tmp', RUN, '.tinstar', 'slate', 'research.json'),
+        localId: 'research',
+      },
+      capabilities: { updateContent: true },
+    })
+    expect(payload.data.surfaces.find(surface => surface.localId === authoring.localId)).toMatchObject({
+      creation: { phase: 'authoring' },
+      target: {
+        kind: 'slate-file',
+        localId: authoring.localId,
+        attemptToken: authoring.token,
+      },
+    })
+    expect(payload.data.surfaces.find(surface => surface.localId === failed.localId)).toMatchObject({
+      creation: { phase: 'failed' },
+      target: { kind: 'slate-file', localId: failed.localId },
+    })
+    expect(payload.data.surfaces.find(surface => surface.localId === failed.localId)?.target)
+      .not.toHaveProperty('attemptToken')
+    expect(payload.data.surfaces.find(surface => surface.localId === ready.localId)).toMatchObject({
+      creation: { phase: 'ready' },
+      target: { kind: 'slate-file', localId: ready.localId },
+    })
+    expect(payload.data.surfaces.find(surface => surface.localId === ready.localId)?.target)
+      .not.toHaveProperty('attemptToken')
+  }))
+
+  it('reserves a visible source destination idempotently without prompting or dispatching', withServer(async srv => {
+    seedRun(srv.docStore)
+    const refreshAccess = vi.fn()
+    srv.ctx.refreshCoordinator = new Proxy({}, {
+      get: (_target, property) => {
+        refreshAccess(property)
+        throw new Error('live authoring must not call refresh')
+      },
+    }) as RouteContext['refreshCoordinator']
+    getSession.mockImplementation((_dir, name) => name === RUN
+      ? { name: RUN, workspace: { path: srv.root } }
+      : null)
+    const reserve = (key: string) => srv.fetch(`/api/runs/${RUN}/slate/authoring/reservations`, {
+      method: 'POST',
+      headers: agentHeaders(),
+      body: JSON.stringify({
+        key,
+        label: 'Open questions',
+        request: 'Keep the open questions current as the investigation evolves.',
+      }),
+    })
+
+    const first = await reserve('open-questions')
+    expect(first.status).toBe(201)
+    const firstBody = await first.json() as { data: {
+      surfaceId: string
+      localId: string
+      file: string
+      attemptToken: string
+      deadlineAt: number
+      replayed: boolean
+    } }
+    expect(firstBody.data).toMatchObject({
+      surfaceId: expect.any(String),
+      localId: expect.stringMatching(/^compose-/),
+      file: join(srv.root, '.tinstar', 'slate', `${firstBody.data.localId}.json`),
+      attemptToken: expect.stringMatching(/^attempt-/),
+      deadlineAt: expect.any(Number),
+      replayed: false,
+    })
+    expect(srv.docStore.getSurface(firstBody.data.surfaceId)).toMatchObject({
+      creation: { phase: 'authoring' },
+    })
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    expect(refreshAccess).not.toHaveBeenCalled()
+
+    const replay = await reserve('open-questions')
+    expect(replay.status).toBe(200)
+    expect((await replay.json() as { data: typeof firstBody.data }).data).toMatchObject({
+      surfaceId: firstBody.data.surfaceId,
+      localId: firstBody.data.localId,
+      attemptToken: firstBody.data.attemptToken,
+      replayed: true,
+    })
+
+    const distinct = await reserve('risks')
+    expect(distinct.status).toBe(201)
+    expect((await distinct.json() as { data: { surfaceId: string } }).data.surfaceId)
+      .not.toBe(firstBody.data.surfaceId)
+  }))
+
+  it('lets an agent fixture amend an existing owner and reserve only a missing work object', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockImplementation((_dir, name) => name === RUN
+      ? { name: RUN, workspace: { path: srv.root } }
+      : null)
+    const bridge = new RunSlateBridge(srv.docStore, new SurfaceService(srv.docStore))
+    const existing = await bridge.upsertUserPoint(
+      RUN,
+      { id: 'open-points', headline: 'Open points' },
+      { kind: 'session', id: RUN },
+    )
+    expect(existing.point).toBeDefined()
+    const existingSurfaceId = srv.docStore.getSurfacesForRunAlias(RUN)
+      .find(surface => surface.content.headline === 'Open points')!.id
+
+    const actOnWorkObject = async (headline: string, key: string) => {
+      const contextResponse = await srv.fetch(`/api/runs/${RUN}/slate/authoring/context`, {
+        headers: agentHeaders(),
+      })
+      const context = await contextResponse.json() as { data: { surfaces: Array<{
+        headline: string
+        target:
+          | { kind: 'canonical-content'; endpoint: string; expectedRev: number }
+          | { kind: 'slate-file'; file: string; localId: string; attemptToken?: string }
+          | { kind: 'unavailable'; reason: string }
+      }> } }
+      const owner = context.data.surfaces.find(surface => surface.headline === headline)
+      if (!owner) {
+        return srv.fetch(`/api/runs/${RUN}/slate/authoring/reservations`, {
+          method: 'POST',
+          headers: agentHeaders(),
+          body: JSON.stringify({ key, label: headline, request: `Maintain ${headline}` }),
+        })
+      }
+      expect(owner.target.kind).toBe('canonical-content')
+      if (owner.target.kind !== 'canonical-content') throw new Error('fixture expected a canonical owner')
+      return srv.fetch(owner.target.endpoint, {
+        method: 'PATCH',
+        headers: agentHeaders(),
+        body: JSON.stringify({
+          expectedRev: owner.target.expectedRev,
+          headline: `${headline} — current`,
+        }),
+      })
+    }
+
+    const amended = await actOnWorkObject('Open points', 'open-points')
+    expect(amended.status).toBe(200)
+    expect(srv.docStore.getSurface(existingSurfaceId)?.content.headline)
+      .toBe('Open points — current')
+    expect(srv.docStore.getSlatePointsForRun(RUN)).toHaveLength(1)
+
+    const reserved = await actOnWorkObject('Risks', 'risks')
+    expect(reserved.status).toBe(201)
+    expect(srv.docStore.getSlatePointsForRun(RUN)).toHaveLength(2)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+  }))
+
+  it('rejects bad identity, input, missing runs, and missing worktrees before reservation', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockImplementation((_dir, name) => name === RUN
+      ? { name: RUN, workspace: { path: null } }
+      : null)
+
+    const missingRun = await srv.fetch('/api/runs/missing/slate/authoring/reservations', {
+      method: 'POST',
+      headers: agentHeaders('missing'),
+      body: JSON.stringify({ key: 'one', label: 'One', request: 'Make one' }),
+    })
+    expect(missingRun.status).toBe(404)
+
+    const mismatched = await srv.fetch(`/api/runs/${RUN}/slate/authoring/reservations`, {
+      method: 'POST',
+      headers: agentHeaders('other'),
+      body: JSON.stringify({ key: 'one', label: 'One', request: 'Make one' }),
+    })
+    expect(mismatched.status).toBe(403)
+
+    const invalid = await srv.fetch(`/api/runs/${RUN}/slate/authoring/reservations`, {
+      method: 'POST',
+      headers: agentHeaders(),
+      body: JSON.stringify({ key: '', label: '', request: 'x'.repeat(9 * 1024) }),
+    })
+    expect(invalid.status).toBe(400)
+
+    const noWorktree = await srv.fetch(`/api/runs/${RUN}/slate/authoring/reservations`, {
+      method: 'POST',
+      headers: agentHeaders(),
+      body: JSON.stringify({ key: 'one', label: 'One', request: 'Make one' }),
+    })
+    expect(noWorktree.status).toBe(409)
+    expect(srv.docStore.getSlatePointsForRun(RUN)).toHaveLength(0)
+  }))
+})
 
 describe('POST /api/runs/:id/slate/points', () => {
   it('creates a user-authored point (author user, source user) — EVENTUAL, never prompts', withServer(async srv => {
@@ -251,6 +552,39 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     expect(stored.replies![0]!.author).toBe('user')
     expect(stored.replies![0]!.text).toContain('Deploy now')
     expect(stored.replies![0]!.text).toContain('go for it')
+
+    const owner = srv.docStore.surfaceForRunAlias(RUN, pid)!
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain(`canonical Surface "${owner.id}"`)
+    expect(prompt).toContain(`run-local id "${pid}"`)
+    expect(prompt).toContain(`/api/surfaces/${owner.id}/content`)
+    expect(prompt).toContain(`expectedRev ${owner.rev}`)
+    expect(prompt).toContain('amend this same Surface')
+
+    const amendment = await srv.fetch(`/api/surfaces/${owner.id}/content`, {
+      method: 'PATCH',
+      body: JSON.stringify({ expectedRev: owner.rev, headline: 'Open points — acted on' }),
+    })
+    expect(amendment.status).toBe(200)
+    expect(srv.docStore.surfaceForRunAlias(RUN, pid)).toMatchObject({
+      id: owner.id,
+      content: { headline: 'Open points — acted on' },
+      thread: { replies: [{ text: expect.stringContaining('go for it') }] },
+    })
+  }))
+
+  it('persists the answer before attempting best-effort delivery', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = await createPoint(srv, { content: answerableContent() })
+    getSession.mockReturnValue({ name: RUN })
+    sendPrompt.mockImplementationOnce(async () => {
+      expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(1)
+    })
+
+    const res = await answer(srv, pid, { choices: ['opt-a'] })
+
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
   }))
 
   it('an ended session returns delivered:false with 200, answer still persisted', withServer(async srv => {
@@ -353,6 +687,25 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(2)
   }))
 
+  it('directs a source-bound reply to the exact existing file owner', withServer(async srv => {
+    seedRun(srv.docStore)
+    await seedRunSlate(srv.docStore, RUN, [{
+      id: 'research', headline: 'Current findings', file: 'research.json', body: TEXT,
+    }])
+    getSession.mockReturnValue({ name: RUN })
+
+    const res = await reply(srv, 'research', { author: 'user', text: 'Add the new benchmark.' })
+
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    const owner = srv.docStore.surfaceForRunAlias(RUN, 'research')!
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain(`canonical Surface "${owner.id}"`)
+    expect(prompt).toContain(`atomically rewriting "${join('/tmp', RUN, '.tinstar', 'slate', 'research.json')}"`)
+    expect(prompt).toContain('with id "research"')
+    expect(prompt).toContain('Create another Surface only if')
+  }))
+
   it('a process reply does not deliver either', withServer(async srv => {
     seedRun(srv.docStore)
     const pid = await createPoint(srv, { headline: 'open q' })
@@ -435,14 +788,14 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   // Seed a FILE-projected surface: `refresh` is file-owned, so it arrives via the
   // watcher projection, NOT the user-point POST route (which never carries a recipe).
-  async function seedSurface(srv: Harness, over: { recipe?: string } = {}): Promise<string> {
+  async function seedSurface(srv: Harness, over: { recipe?: SurfaceRefreshRecipe } = {}): Promise<string> {
     await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-1', headline: 'a surface', body: TEXT, ...over }])
     return 'srf-1'
   }
 
   it('with a recipe delivers the recipe VERBATIM and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'Re-run the blind PR eval and rewrite the file' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'Re-run the blind PR eval and rewrite the file' } })
     getSession.mockReturnValue({ name: RUN }) // reachable
     sendPrompt.mockClear()
 
@@ -475,7 +828,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   it('an unreachable session returns delivered:false + 200 and persists nothing', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } })
     getSession.mockReturnValue(null) // session gone
 
     const res = await refresh(srv, pid)
@@ -487,7 +840,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
 
   it('rejects a cross-run pid (point.runId !== URL runId) with 404, nothing delivered', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' }) // belongs to RUN
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } }) // belongs to RUN
     getSession.mockReturnValue({ name: RUN })
     // POST under a DIFFERENT run id — the cross-run guard must reject it.
     const res = await srv.fetch(`/api/runs/OTHER-run/slate/surfaces/${pid}/refresh`, { method: 'POST' })
@@ -517,7 +870,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
   // NOT eat it — it returns the refresh envelope).
   it('is matched by the anchored regex — a generic handler does not eat it', withServer(async srv => {
     seedRun(srv.docStore)
-    const pid = await seedSurface(srv, { recipe: 'recipe' })
+    const pid = await seedSurface(srv, { recipe: { kind: 'agent', prompt: 'recipe' } })
     getSession.mockReturnValue({ name: RUN })
     const res = await refresh(srv, pid)
     expect(res.status).toBe(200)
@@ -566,22 +919,29 @@ describe('POST /api/runs/:id/slate/compose', () => {
   const compose = (srv: Harness, payload: unknown) =>
     srv.fetch(`/api/runs/${RUN}/slate/compose`, { method: 'POST', body: JSON.stringify(payload) })
 
-  it('delivers the composed authoring prompt (prompt + freeform interpolated)', withServer(async srv => {
+  it('saves the card before delivering the resolved template and exact destination', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN }) // reachable
     sendPrompt.mockClear()
 
-    const res = await compose(srv, { prompt: 'Build a PR review surface', freeform: 'focus on the migration' })
+    const res = await compose(srv, { templateId: 'pr-review', freeform: 'focus on the migration' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    const body = await res.json() as {
+      ok: boolean
+      data: { delivered: boolean; slateSurface: { rev?: number } }
+    }
     expect(body.ok).toBe(true)
     expect(body.data.delivered).toBe(true)
+    expect(body.data.slateSurface.rev).toBeTypeOf('number')
     expect(sendPrompt).toHaveBeenCalledTimes(1)
     expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
     const prompt = sendPrompt.mock.calls[0]![2] as string
-    expect(prompt).toContain('Build a PR review surface') // template prompt interpolated
+    expect(prompt).toContain('two-column "PR review"') // server-resolved template prompt
     expect(prompt).toContain('focus on the migration')    // freeform interpolated
     expect(prompt).toContain('.tinstar/slate/')           // authoring-to-file instruction
+    expect(prompt).toContain('attemptToken')
+    const card = srv.docStore.getRun(RUN)!.slate![0]!
+    expect(card).toMatchObject({ presentation: 'compose-card', creation: { phase: 'authoring' } })
   }))
 
   it('a freeform-only body delivers the freeform text', withServer(async srv => {
@@ -594,62 +954,103 @@ describe('POST /api/runs/:id/slate/compose', () => {
     expect(sendPrompt.mock.calls[0]![2]).toContain('a checklist of deploy steps')
   }))
 
-  it('an empty body (no prompt, no freeform) is INVALID_PARAMS, nothing delivered', withServer(async srv => {
+  it('an empty body (no template, no freeform) is INVALID_PARAMS, nothing delivered', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN })
-    const res = await compose(srv, { prompt: '   ', freeform: '' })
+    const res = await compose(srv, { templateId: '   ', freeform: '' })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
     expect(sendPrompt).not.toHaveBeenCalled()
   }))
 
-  it('an unreachable session returns delivered:false + 200 (persists nothing)', withServer(async srv => {
+  it('an unreachable session returns a visible failed card', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue(null) // session gone
-    const res = await compose(srv, { prompt: 'Author a Dataflow surface' })
+    const res = await compose(srv, { templateId: 'dataflow' })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
+    expect(srv.docStore.getRun(RUN)!.slate![0]!.creation?.phase).toBe('failed')
+  }))
+
+  it('replays one submission as one card and retries failure in the same slot', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null)
+    const headers = { 'Idempotency-Key': 'same-compose-request' }
+    const first = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
+      method: 'POST', headers, body: JSON.stringify({ templateId: 'open-points' }),
+    })
+    const firstBody = await first.json() as { data: { localId: string; surface: { id: string } } }
+    const replay = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
+      method: 'POST', headers, body: JSON.stringify({ templateId: 'open-points' }),
+    })
+    expect(replay.status).toBe(200)
+    expect(srv.docStore.getRun(RUN)!.slate).toHaveLength(1)
+
+    const failed = srv.docStore.surfaceForRunAlias(RUN, firstBody.data.localId)!
+    expect(failed.creation?.phase).toBe('failed')
+    getSession.mockReturnValue({ name: RUN })
+    const retried = await srv.fetch(
+      `/api/runs/${RUN}/slate/surfaces/${firstBody.data.localId}/retry`,
+      { method: 'POST', headers: { 'Idempotency-Key': 'retry-1' } },
+    )
+    expect(retried.status).toBe(200)
+    const current = srv.docStore.surfaceForRunAlias(RUN, firstBody.data.localId)!
+    expect(current.id).toBe(firstBody.data.surface.id)
+    expect(current.order).toBe(failed.order)
+    expect(current.creation).toMatchObject({ phase: 'authoring', attempt: 2 })
+    expect(current.creation?.token).not.toBe(failed.creation?.token)
+    expect(sendPrompt.mock.calls.at(-1)?.[2]).toContain(current.creation!.token)
   }))
 })
 
+// THE COMPOSE AUTHOR IS FOR COMPOSE ONLY (plan U1, KTD3).
+//
+// Refresh used to have its own branch here: a surface carrying a recipe spawned a
+// fresh headless `claude -p` child per refresh — a refresh-created process by
+// another name, reached automatically off a trigger. It is gone. Compose keeps the
+// path, because compose is a human explicitly asking for a Surface that does not
+// exist yet, with no record to hold an attempt and nothing for a barrier to
+// supersede.
 describe('refresh/compose — code-spawned author branch (feat: multi-agent Slate)', () => {
   async function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): Promise<string> {
     await seedRunSlate(srv.docStore, RUN, [{
       id, headline: 'a surface', body: TEXT,
-      recipe: 'Re-run the eval of PR #7 and rewrite this surface',
+      recipe: { kind: 'agent' as const, prompt: 'Re-run the eval of PR #7 and rewrite this surface' },
     }])
     return id
   }
 
-  it('a surface WITH a recipe spawns an author — no main-agent nudge', withServer(async srv => {
+  it('a surface WITH a recipe never spawns an author — it nudges the run\'s live agent', withServer(async srv => {
+    // The plan's negative for this route (R12, R19): no refresh request may reach a
+    // process-creating seam. `dispatchSurfaceAuthor` is the last one that was left.
     seedRun(srv.docStore)
     const pid = await seedSurfaceWithRecipe(srv)
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
-    getSession.mockReturnValue({ name: RUN }) // would be reachable — the author path skips it
-    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
-    expect(res.status).toBe(200)
-    expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)
-    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
-    const arg = dispatchSurfaceAuthor.mock.calls[0]![0] as { runId: string; prompt: string }
-    expect(arg.runId).toBe(RUN)
-    expect(arg.prompt).toContain('Re-run the eval of PR #7') // recipe carried into the author prompt
-    expect(sendPrompt).not.toHaveBeenCalled()                // the run's main agent is untouched
-  }))
-
-  it('a recipe surface falls back to the main agent when the spawn declines', withServer(async srv => {
-    seedRun(srv.docStore)
-    const pid = await seedSurfaceWithRecipe(srv)
-    dispatchSurfaceAuthor.mockReturnValue({ dispatched: false }) // disabled / no workdir / spawn error
     getSession.mockReturnValue({ name: RUN })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
-    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
-    expect(sendPrompt).toHaveBeenCalledTimes(1) // fell back to the unchanged main-agent nudge
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    // The recipe still reaches an agent — the one the human is already talking to.
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]!.join(' ')).toContain('Re-run the eval of PR #7')
   }))
 
-  it('a surface WITHOUT a recipe never spawns an author (session-derived stays main-agent)', withServer(async srv => {
+  it('an unreachable run reports delivered:false rather than spawning something', withServer(async srv => {
+    // The branch that used to justify a background executor. There is no agent to
+    // reach, so the honest answer is that nothing was delivered (R13/R17).
+    seedRun(srv.docStore)
+    const pid = await seedSurfaceWithRecipe(srv)
+    getSession.mockReturnValue(null)
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('a surface WITHOUT a recipe never spawns an author either', withServer(async srv => {
     seedRun(srv.docStore)
     await seedRunSlate(srv.docStore, RUN, [{ id: 'srf-norecipe', headline: 'no recipe', body: TEXT }])
     getSession.mockReturnValue({ name: RUN })
@@ -664,7 +1065,7 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
     getSession.mockReturnValue({ name: RUN })
     dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
     const res = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
-      method: 'POST', body: JSON.stringify({ prompt: 'Build a PR review surface' }),
+      method: 'POST', body: JSON.stringify({ templateId: 'pr-review' }),
     })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)
@@ -918,7 +1319,7 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
   it('413s an oversized objective (nothing persisted, no nudge)', withServer(async srv => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN })
-    const res = await putObjective(srv, 'x'.repeat(601))
+    const res = await putObjective(srv, 'x'.repeat(OBJECTIVE_MAX + 1))
     expect(res.status).toBe(413)
     expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeUndefined()
     expect(sendPrompt).not.toHaveBeenCalled()

@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   buildAgentCommand,
+  prepareManagedInstructionsForLaunch,
   providerLaunchEnvironmentCommands,
   providerTelemetryCommandOptions,
   providerTelemetryEnvironmentCommands,
@@ -14,8 +15,10 @@ import type { CliTemplate } from '../../config'
 import {
   CLAUDE_PROVIDER,
   CODEX_PROVIDER,
+  CURSOR_PROVIDER,
   GENERIC_PROVIDER,
   ProviderCapabilityError,
+  prepareProviderManagedInstructions,
   type TerminalProviderAdapter,
 } from '../../../providers/lifecycle'
 
@@ -63,6 +66,108 @@ describe('buildAgentCommand persona handling', () => {
     })
     expect(cmd.match(/--append-system-prompt/g)?.length).toBe(1)
     expect(cmd).toContain('BE THE MARSHAL')
+  })
+})
+
+describe('buildAgentCommand standing instructions', () => {
+  it('inserts provider-owned flags before the one-shot prompt separator', () => {
+    const cmd = buildAgentCommand({
+      template: tmpl('codex --sandbox workspace-write -- {prompt}', 'codex resume --last'),
+      provider: CODEX_PROVIDER,
+      initialPrompt: 'do the task',
+      managedInstructionFlags: [
+        `--config 'developer_instructions="Use the Slate"'`,
+      ],
+    })
+
+    expect(cmd).toBe(
+      `codex --sandbox workspace-write --config 'developer_instructions="Use the Slate"' -- 'do the task'`,
+    )
+    expect(cmd).not.toContain('--append-system-prompt')
+  })
+
+  it.each([
+    {
+      name: 'Claude',
+      provider: CLAUDE_PROVIDER,
+      template: { ...tmpl('claude --session-id {sessionId} -- {prompt}', 'claude --resume {sessionId}'), adapter: 'claude' },
+      expected: '--append-system-prompt',
+      forbidden: 'developer_instructions',
+    },
+    {
+      name: 'Codex',
+      provider: CODEX_PROVIDER,
+      template: { ...tmpl('codex --sandbox workspace-write -- {prompt}', 'codex resume --last'), adapter: 'codex' },
+      expected: 'developer_instructions',
+      forbidden: '--append-system-prompt',
+    },
+    {
+      name: 'Cursor',
+      provider: CURSOR_PROVIDER,
+      template: { ...tmpl('agent --yolo -- {prompt}', 'agent --yolo resume'), adapter: 'cursor' },
+      expected: '--plugin-dir',
+      forbidden: '--append-system-prompt',
+    },
+  ])('uses only $name provider syntax on create and resume', ({ provider, template, expected, forbidden }) => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'tinstar-managed-command-'))
+    const prepared = prepareProviderManagedInstructions(provider, {
+      sessionDir,
+      version: 'test/v1',
+      content: "Use Slate -- don't duplicate 'cards'",
+    })
+
+    for (const resume of [false, true]) {
+      const command = buildAgentCommand({
+        provider,
+        template,
+        sessionId: 'sid',
+        resume,
+        initialPrompt: resume ? null : 'do it',
+        managedInstructionFlags: prepared.launchFlags,
+      })
+      expect(command).toContain(expected)
+      expect(command).not.toContain(forbidden)
+      if (!resume) expect(command).toContain("-- 'do it'")
+    }
+  })
+
+  it('preserves hostile standing instruction values as opaque provider flags', () => {
+    const flag = `--append-system-prompt 'Slate says '\''no -- turn cards'\'''`
+    const cmd = buildAgentCommand({
+      template: tmpl('claude --session-id {sessionId} -- {prompt}', 'claude --resume {sessionId}'),
+      sessionId: 'sid',
+      initialPrompt: 'start',
+      managedInstructionFlags: [flag],
+    })
+
+    expect(cmd).toBe(`claude --session-id sid ${flag} -- 'start'`)
+  })
+
+  it('lets an existing generic session resume with an explicit unsupported receipt', () => {
+    const root = mkdtempSync(join(tmpdir(), 'tinstar-generic-resume-'))
+    const config = {
+      dirs: { sessions: join(root, 'sessions') },
+    } as Parameters<typeof prepareManagedInstructionsForLaunch>[0]['config']
+
+    expect(prepareManagedInstructionsForLaunch({
+      config,
+      provider: GENERIC_PROVIDER,
+      sessionName: 'historical-generic',
+      resume: true,
+    })).toEqual({
+      flags: [],
+      receipt: {
+        version: 'slate-first-live-authoring/v1',
+        mechanism: 'unsupported',
+        status: 'unsupported',
+      },
+    })
+    expect(() => prepareManagedInstructionsForLaunch({
+      config,
+      provider: GENERIC_PROVIDER,
+      sessionName: 'new-generic',
+      resume: false,
+    })).toThrow('Generic terminal CLI has no managed standing-instruction mechanism')
   })
 })
 
@@ -365,6 +470,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
             },
           },
           telemetry: { state: 'unsupported', reason: 'not needed for this test' },
+          managedInstructions: { state: 'unsupported', reason: 'not needed for this test' },
         },
         defaultTelemetry: false,
         transcript: null,

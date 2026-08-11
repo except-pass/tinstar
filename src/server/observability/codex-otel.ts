@@ -393,9 +393,28 @@ function otelValue(input: unknown): unknown {
   return input
 }
 
+/**
+ * OTLP encodes an unset nanosecond timestamp as 0, and Codex leaves
+ * `timeUnixNano` unset — the real clock arrives in `observedTimeUnixNano`.
+ * Treating the sentinel as a real time stamped every event 1970-01-01, which
+ * made each one instantly stale AND collapsed the dedup key so two turns with
+ * matching token counts swallowed each other. Zero means absent, so return null
+ * and let the caller fall through to the next field.
+ *
+ * The JSON mapping permits either a decimal string or a number here, so accept
+ * both rather than trusting one emitter's choice.
+ */
+function nanosOf(value: unknown): string | null {
+  const raw = typeof value === 'number' && Number.isFinite(value)
+    ? String(value)
+    : stringValue(value)
+  if (!raw || !/^\d+$/u.test(raw)) return null
+  return /^0+$/u.test(raw) ? null : raw
+}
+
 function timestampOf(record: Record<string, unknown>): string | null {
-  const nanos = stringValue(record.timeUnixNano) ?? stringValue(record.observedTimeUnixNano)
-  if (nanos && /^\d+$/u.test(nanos)) {
+  const nanos = nanosOf(record.timeUnixNano) ?? nanosOf(record.observedTimeUnixNano)
+  if (nanos) {
     try { return new Date(Number(BigInt(nanos) / 1_000_000n)).toISOString() } catch { return null }
   }
   const timestamp = stringValue(record.timestamp)

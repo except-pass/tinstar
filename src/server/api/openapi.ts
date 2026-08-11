@@ -1,3 +1,34 @@
+import { HOST_RECIPE_KINDS, OBJECTIVE_MAX } from '../../domain/types'
+import { REFRESH_INTENTS } from './surfaceRoutes'
+
+/** The typed refresh recipe, as an author may write it (R1/R6/R7, KTD1). Shared by
+ *  the create/update bodies and the Surface schema so the two cannot drift. */
+const RECIPE_SCHEMA = {
+  oneOf: [
+    { type: 'string', description: 'Prose. Read as an AGENT recipe: only a human\'s deliberate navigation or interaction runs it.' },
+    {
+      type: 'object',
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['agent', 'host'] },
+        prompt: { type: 'string', description: 'agent only: the instruction delivered to the foreground agent.' },
+        handler: {
+          type: 'string', enum: [...HOST_RECIPE_KINDS],
+          description: 'host only: a registered machine check. The ONLY proactive-eligible form.',
+        },
+        params: {
+          type: 'object', additionalProperties: { type: 'string' },
+          description: 'host only: flat string parameters.',
+        },
+      },
+    },
+  ],
+  description:
+    'The ONE recipe that rebuilds this whole Surface. The kind decides who may run it: a host '
+    + 'handler from the closed list may run proactively; anything else, including all prose, runs '
+    + 'only on a discrete human action. An unrecognised handler is refused, never guessed at.',
+}
+
 /** OpenAPI 3.0 specification for the Tinstar API */
 export const spec = {
   openapi: '3.0.3',
@@ -200,7 +231,7 @@ export const spec = {
             properties: {
               name: { type: 'string', description: 'Session name (unique identifier)' },
               cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
-              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              prompt: { type: 'string', maxLength: OBJECTIVE_MAX, description: 'Caller-authored work sent to the agent and saved as the initial Objective' },
               project: { type: 'string', description: 'Override the resolved project' },
               color: { type: 'string' },
               nats: { type: 'object', properties: { enabled: { type: 'boolean' }, subscriptions: { type: 'array', items: { type: 'string' } } } },
@@ -253,6 +284,57 @@ export const spec = {
         responses: { 200: { description: 'Updated' }, 400: { description: 'Invalid name/attention shape or non-boolean background' }, 404: { description: 'Run not found' } },
       },
     },
+    '/api/runs/{id}/slate/authoring/context': {
+      get: {
+        tags: ['Runs', 'Surfaces'],
+        summary: 'Read the current Slate authoring context for a run',
+        description: 'Returns the Objective separately from visible work objects, including the exact file or revision-gated API target needed to amend each Surface. Requires x-tinstar-actor-kind: session and an x-tinstar-actor matching the target run. These headers prevent accidental cross-run writes in the trusted-local model; they are routing identity, not authentication.',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'x-tinstar-actor', in: 'header', required: true, schema: { type: 'string' }, description: 'Managed session name; must equal the run id.' },
+          { name: 'x-tinstar-actor-kind', in: 'header', required: true, schema: { type: 'string', enum: ['session'] } },
+        ],
+        responses: {
+          200: { description: 'Objective and visible work-object authoring targets', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringContextResponse' } } } },
+          403: { description: 'Missing, non-session, mismatched, or unmanaged session principal' },
+          404: { description: 'Run not found' },
+        },
+      },
+    },
+    '/api/runs/{id}/slate/authoring/reservations': {
+      post: {
+        tags: ['Runs', 'Surfaces'],
+        summary: 'Reserve one visible Slate card for foreground authoring',
+        description: 'Reserves the existing durable compose-card lifecycle and returns its assigned source destination. It does not dispatch an author, prompt the foreground session, or schedule refresh. Reuse the same stable key after a lost response; use a new key only for a genuinely distinct work object.',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'x-tinstar-actor', in: 'header', required: true, schema: { type: 'string' }, description: 'Managed session name; must equal the run id.' },
+          { name: 'x-tinstar-actor-kind', in: 'header', required: true, schema: { type: 'string', enum: ['session'] } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['key', 'label', 'request'],
+            additionalProperties: false,
+            properties: {
+              key: { type: 'string', minLength: 1, maxLength: 200, description: 'Stable identity for this distinct work object. Reuse on retry.' },
+              label: { type: 'string', minLength: 1, maxLength: 200 },
+              request: { type: 'string', minLength: 1, description: 'What this foreground authoring attempt should put on the Surface.' },
+              recipe: { type: 'string', description: 'Optional agent refresh recipe retained with the composition request.' },
+            },
+          } } },
+        },
+        responses: {
+          201: { description: 'New visible reservation', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringReservationResponse' } } } },
+          200: { description: 'Replay of the existing reservation for this key', content: { 'application/json': { schema: { $ref: '#/components/schemas/RunAuthoringReservationResponse' } } } },
+          400: { description: 'Invalid or oversized input' },
+          403: { description: 'Missing, non-session, mismatched, or unmanaged session principal' },
+          404: { description: 'Run not found' },
+          409: { description: 'Run has no writable worktree or reservation could not be made' },
+        },
+      },
+    },
 
     // ── Sessions ─────────────────────────────────────────
     '/api/sessions': {
@@ -276,7 +358,7 @@ export const spec = {
               project: { type: 'string', description: 'Project name for workspace path' },
               worktree: { type: 'boolean', default: false },
               worktreePath: { type: 'string', description: 'Existing worktree path (if not creating new)' },
-              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              prompt: { type: 'string', maxLength: OBJECTIVE_MAX, description: 'Caller-authored work sent to the agent and saved as the initial Objective' },
               skipPermissions: { type: 'boolean', default: true },
               cliTemplate: { type: 'string', description: 'Stable CLI template ID (not its renameable display name)' },
               taskId: { type: 'string' },
@@ -804,7 +886,7 @@ export const spec = {
             expectedRev: { type: 'integer' },
             headline: { type: 'string' },
             body: { type: 'object', nullable: true },
-            recipe: { type: 'string', nullable: true },
+            recipe: { ...RECIPE_SCHEMA, nullable: true },
             expectedWatermark: { type: 'string' },
           },
         } } } },
@@ -849,10 +931,45 @@ export const spec = {
     '/api/surfaces/{id}/refresh': {
       post: {
         tags: ['Surfaces'],
-        summary: 'Request a refresh',
-        description: 'Moves freshness to `queued`. An `overdue` flag is carried through, never cleared — only a successful verification clears it. Refused while a refresh is already queued or running.',
+        summary: 'Start or join the one refresh of this Surface',
+        description:
+          'THE ONLY WAY A SURFACE REFRESHES. `intent` says why, and it is the permission model: '
+          + '`navigate`, `interact`, and `explicit` mean a person is looking at this Surface now, and only '
+          + 'they may run an agent recipe; `bulk-check` is a cheap sweep that may run machine (host) checks '
+          + 'and never delivers a prompt.\n\n'
+          + 'A human intent requires a human principal — a session, job, or process caller may observe '
+          + "freshness and may execute work a human already authorized, but may not mint the authorization "
+          + 'itself. Within Tinstar\'s trusted-local model this is a workflow boundary, not authentication.\n\n'
+          + 'Repeated intent JOINS the attempt already running rather than starting a second one. '
+          + '`navigate`/`interact` on a Surface that is already current do nothing and say so. '
+          + 'When no foreground agent is live, the response reports `unavailable` in the same cycle and the '
+          + 'Surface keeps its last-known content — nothing is spawned to go looking for one. '
+          + '`overdue` is carried through every transition and cleared only by a successful verification.',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'Queued' }, 409: { description: 'Already queued or refreshing' } },
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            intent: {
+              type: 'string',
+              enum: [...REFRESH_INTENTS],
+              default: 'explicit',
+              description:
+                'Why this refresh is being asked for. Defaults to `explicit` so a body-less POST from the ⟳ '
+                + 'button keeps working; a client sending navigate/interact is claiming LESS authority, never more.',
+            },
+          },
+        } } } },
+        responses: {
+          200: {
+            description:
+              'The outcome: `started`, `joined`, `unavailable` (no live foreground agent), `not-executable` '
+              + '(no runnable recipe), or `skipped` (already current, or a bulk check passing over agent work). '
+              + 'Carries the Surface\'s freshness as of after the operation.',
+          },
+          403: { description: 'A non-human principal attempted a human intent' },
+          404: { description: 'No such Surface' },
+          503: { description: 'The refresh engine is not running on this host' },
+        },
       },
     },
     '/api/surfaces/{id}/ungroup': {
@@ -1190,7 +1307,7 @@ export const spec = {
         properties: {
           headline: { type: 'string' },
           body: { type: 'object', description: 'A2UI content from the bounded component catalog; validated at the boundary' },
-          recipe: { type: 'string', description: 'Self-contained instruction that rebuilds this Surface. Absent means refresh degrades to a nudge.' },
+          recipe: RECIPE_SCHEMA,
         },
       },
       State: {
@@ -1311,6 +1428,89 @@ export const spec = {
         properties: {
           ok: { type: 'boolean', enum: [true] },
           data: { nullable: true },
+        },
+      },
+      RunAuthoringTarget: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['kind', 'file', 'localId'],
+            properties: {
+              kind: { type: 'string', enum: ['slate-file'] },
+              file: { type: 'string', description: 'Absolute assigned Slate file path.' },
+              localId: { type: 'string' },
+              attemptToken: { type: 'string', description: 'Required in the authored entry while composition is in the authoring phase.' },
+            },
+          },
+          {
+            type: 'object',
+            required: ['kind', 'method', 'endpoint', 'expectedRev'],
+            properties: {
+              kind: { type: 'string', enum: ['canonical-content'] },
+              method: { type: 'string', enum: ['PATCH'] },
+              endpoint: { type: 'string' },
+              expectedRev: { type: 'integer' },
+            },
+          },
+          {
+            type: 'object',
+            required: ['kind', 'reason'],
+            properties: {
+              kind: { type: 'string', enum: ['unavailable'] },
+              reason: { type: 'string' },
+            },
+          },
+        ],
+      },
+      RunAuthoringSurface: {
+        type: 'object',
+        required: ['surfaceId', 'localId', 'headline', 'author', 'status', 'contentAuthority', 'target', 'capabilities', 'freshness'],
+        properties: {
+          surfaceId: { type: 'string', description: 'Canonical Surface identity.' },
+          localId: { type: 'string', description: 'Identity within this run Slate.' },
+          headline: { type: 'string' },
+          author: { type: 'string', enum: ['agent', 'user', 'process'] },
+          status: { type: 'string', enum: ['open', 'discussing', 'waiting', 'resolved', 'dismissed'] },
+          contentAuthority: { type: 'string', enum: ['source-binding', 'canonical-direct'] },
+          target: { $ref: '#/components/schemas/RunAuthoringTarget' },
+          capabilities: { type: 'object', description: 'Effective operations for this actor, including blocked reasons.' },
+          freshness: { type: 'object', description: 'Current last-known freshness state.' },
+          creation: { type: 'object', description: 'Durable compose lifecycle when this Surface was reserved.' },
+        },
+      },
+      RunAuthoringContextResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: {
+            type: 'object',
+            required: ['runId', 'objective', 'surfaces'],
+            properties: {
+              runId: { type: 'string' },
+              objective: { allOf: [{ $ref: '#/components/schemas/RunAuthoringSurface' }], nullable: true },
+              surfaces: { type: 'array', items: { $ref: '#/components/schemas/RunAuthoringSurface' } },
+            },
+          },
+        },
+      },
+      RunAuthoringReservationResponse: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          data: {
+            type: 'object',
+            required: ['surfaceId', 'localId', 'file', 'attemptToken', 'deadlineAt', 'replayed'],
+            properties: {
+              surfaceId: { type: 'string' },
+              localId: { type: 'string' },
+              file: { type: 'string', description: 'Absolute file to write atomically.' },
+              attemptToken: { type: 'string', description: 'Token required in the reserved entry.' },
+              deadlineAt: { type: 'integer', format: 'int64', description: 'Unix epoch milliseconds.' },
+              replayed: { type: 'boolean' },
+            },
+          },
         },
       },
       Run: {
