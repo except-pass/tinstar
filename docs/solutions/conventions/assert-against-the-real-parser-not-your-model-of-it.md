@@ -66,7 +66,7 @@ fixture that real `visudo` actually rejects. The first candidate,
 `will ALL=(root) NOPASSWD`, parses successfully — `visudo` reads the trailing
 `NOPASSWD` as a reference to an undefined `Cmnd_Alias`, warns, and exits 0.
 The working fixture, used in
-`tests/cli/reach-grant.test.ts:245-250`, is the unbalanced
+`tests/cli/reach-grant.test.ts:259-264`, is the unbalanced
 `will ALL=(root`. The correct set of characters to escape (`,`, `:`, `=`,
 `\`) was itself determined empirically — writing candidate rules to a temp
 file and running `visudo -cf` against each — rather than read off the
@@ -103,16 +103,20 @@ instead of correctness against the real target.
 
 The fix is cheap relative to the failure mode:
 
-1. **Invoke the real tool.** `tests/cli/reach-grant.test.ts:210-230`
+1. **Invoke the real tool.** `tests/cli/reach-grant.test.ts:224-244`
    (`visudoCheck`) writes the generated rule to a temp file and shells out to
    `visudo -cf` — the actual parser, not a model of it.
-2. **Skip, don't fake, when the tool is absent.** `visudoAvailable()`
-   (`tests/cli/reach-grant.test.ts:200-208`) probes for `visudo` on PATH and
-   the tests use `it.skip` when it's missing
-   (`tests/cli/reach-grant.test.ts:233`) — a CI box without `visudo`
-   installed gets a skipped test, not a silently-green fake one.
+2. **Skip, don't fake, when the tool is absent — but don't let CI skip.**
+   `visudoAvailable()` (`tests/cli/reach-grant.test.ts:199-222`) probes for
+   `visudo` on PATH and the tests use `it.skip` when it's missing
+   (`tests/cli/reach-grant.test.ts:247`) — a developer box without `visudo`
+   gets a skipped test, not a silently-green fake one. That is right locally and
+   wrong in CI, where a skip would silently delete the only coverage of a bug
+   that already shipped once: `TINSTAR_REQUIRE_LIVE_VISUDO=1` turns absence into
+   a failure instead, and ci.yml sets it. Honest absence is fine on a laptop; on
+   the gate it has to be loud.
 3. **Prove the check is not vacuous with a fixture you've watched it
-   reject.** `tests/cli/reach-grant.test.ts:245-250` asserts a malformed rule
+   reject.** `tests/cli/reach-grant.test.ts:259-264` asserts a malformed rule
    is rejected — and the fixture had to be swapped once, because the first
    one turned out to parse. The lesson generalizes past this bug: a
    not-vacuous fixture is itself a claim about the external tool's behavior,
@@ -192,7 +196,7 @@ literal `http://127.0.0.1:5273` in the fixture contains the same unescaped
 
 **After** — the real parser is invoked, gated on availability, and proven
 non-vacuous with a fixture that was actually watched failing
-(`tests/cli/reach-grant.test.ts:232-259`):
+(`tests/cli/reach-grant.test.ts:246-273`):
 
 ```ts
 function visudoCheck(rule: string): { ok: boolean; output: string } {
@@ -249,3 +253,9 @@ runtime path still refuses to write a rule the real parser rejects.
   — same family one step out: a test double stands in for ground truth and the
   suite reports success on defects the double cannot see. There the double is a
   mocked collaborator rather than a reimplemented grammar.
+- `docs/solutions/conventions/route-tests-inherit-the-real-config-root.md` — the other
+  half of the same coin, and the one most easily confused with this doc. Invoking the
+  real consumer is about the ORACLE (what you check correctness against). It is not
+  licence to let the code under test reach live state: a test that drove a real handler
+  against the real config root rewrote an operator's stored settings and could have torn
+  down their remote access. Real oracle, isolated environment — both, always.

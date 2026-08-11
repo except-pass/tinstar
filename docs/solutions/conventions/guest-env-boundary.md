@@ -272,3 +272,13 @@ sessions on one socket and look for them on another.
   **real** tmux session's **real** shell env. Asserts `NODE_ENV` is *absent*,
   not merely non-production. Includes a deliberately-leaky control case so the
   suite can't pass vacuously.
+
+## Related
+
+- `docs/solutions/conventions/route-tests-inherit-the-real-config-root.md` — the same
+  failure genus one layer in. This doc's `kill-server` anecdote (a test that killed the
+  developer's live tmux sessions) and that one (a test that rewrote the developer's stored
+  reach preference) are the same lesson reached twice by different routes: a child process
+  inheriting the parent's environment, versus a test inheriting a process-global config
+  path. Both conclude that isolation must be structural, because the failure mode is
+  forgetting.

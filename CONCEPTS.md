@@ -36,7 +36,17 @@ The mechanism that re-dispatches named server-sent events from a single shared e
 ### Reach
 Remote reachability for an operator's own other devices, obtained by putting an external provider in front of the loopback listener rather than by widening what Tinstar binds. Membership of the provider's network *is* the authorization: Tinstar issues no credential of its own and adds no login, so "reachable" and "a member of that network" mean the same thing. Distinct from naming an extra bind address, which genuinely exposes the port to anything that can route to it.
 
-Reach is opt-in and the opt-in is durable — it is a stored preference, not a running process, so a restart re-establishes it without asking again. Two things are therefore tracked separately: the operator's preference, and the live mapping the provider currently serves. A clean shutdown takes down the mapping and never the preference; erasing the preference is how reach would silently fail to come back. Because the provider is configured rather than supervised, drift after an unclean stop is repaired by reconciling recorded state against what the provider is actually serving, and only one instance on a host may hold the mapping.
+Reach is opt-in and the opt-in is durable — it is a stored preference, not a running process, so a restart re-establishes it without asking again. Two things are therefore tracked separately: the operator's preference, and the live mapping the provider currently serves. A clean shutdown takes down the mapping and never the preference; erasing the preference is how reach would silently fail to come back. Because the provider is configured rather than supervised, drift after an unclean stop is repaired by reconciling recorded state against what the provider is actually serving, and only one instance on a host may hold the mapping. Reporting reach as off is a claim to have checked and found nothing of one's own published — an instance with no authority over the mapping refuses instead, because downstream cleanup treats off as confirmation.
+
+### Stranded
+Reach that an operator asked to end, where the provider may still be publishing the URL. The preference is off and the mapping is still recorded, so the two disagree in the direction that leaves the host reachable. Distinct from off, which asserts the mapping is gone, and from active, which asserts the operator still wants it.
+
+Stranded exists as its own state because collapsing it into off is what makes exposure invisible: a caller that reads off as confirmation will go on to release the privilege needed to finish the teardown, removing the means of repair. It does not clear itself — the recorded mapping is what a later retry and the diagnostic command both key on, so it persists across restarts until someone acts on it.
+
+### Config root
+The directory that scopes one backend's entire persisted state, and the unit of separation between two backends sharing a host. It is not merely where files live: an instance's identity is derived from it, so the config root decides which instance owns a recorded mapping and may take it down.
+
+Two consequences follow. A second backend given its own config root is a genuinely separate instance and cannot disturb the first. A process that resolves the *default* config root when it did not mean to — a test, a rehearsal harness — inherits the primary's identity along with its files, so ownership checks keyed on that identity will wave it through.
 
 ## Surfaces
 
