@@ -109,7 +109,10 @@ import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
 import type { SlashUsage } from '../sessions/slashUsage'
 import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
-import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+import { resolveCorsHeaders } from './cors'
+import { currentOriginAllowlist } from './originAllowlist'
+import { isUpgradeOriginAllowed } from '../sessionProxy'
+import { getReachCoordinator } from '../reach'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import { handleSurfaceRoutes, handleRefreshIntent, resolveActor } from './surfaceRoutes'
 import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
@@ -136,8 +139,13 @@ import {
 } from '../messaging/live-recipient-resolution'
 import { projectLegacySessionContextWindow } from '../providers/legacy-observation-projections'
 
+/**
+ * The environment allowlist plus the origins seeded at bind and registered by
+ * reach. Never empty in normal operation, which is what keeps the wildcard
+ * branch of resolveCorsHeaders out of reach — see api/originAllowlist.ts.
+ */
 function currentCorsAllowlist(): string[] {
-  return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+  return currentOriginAllowlist()
 }
 
 function validateCliTemplateProvider(
@@ -1770,6 +1778,12 @@ async function createReservedSession(
 }
 
 export interface RouteContext {
+  /**
+   * The port the HTTP listener actually bound, set once the server is up.
+   * Reach must front what is listening, and listenAll walks past a busy port —
+   * the configured port would leave a remote URL pointing at nothing.
+   */
+  boundPort?: number
   docStore: DocumentStore
   otelStore: OTelStore
   sse: SSEBroadcaster
@@ -2616,6 +2630,56 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       session.model = resolveSessionModel(session)
     }
     json(res, { ...ctx.docStore.snapshot(), sessions })
+    return true
+  }
+
+  // GET /api/reach — reach state. Read-only and unprivileged.
+  if (method === 'GET' && url === '/api/reach') {
+    ok(res, await getReachCoordinator().status())
+    return true
+  }
+
+  // POST /api/reach — the operator's opt-in. The preference is what persists;
+  // establishing follows it on every start (R6).
+  if (method === 'POST' && url === '/api/reach') {
+    // This route changes what the host is reachable FROM, so it is gated where
+    // the read path is not. Both halves matter and neither is sufficient alone:
+    //
+    //  - The content-type check forces a CORS preflight. Without it a `text/plain`
+    //    POST is a "simple request" that any page can send with no preflight at
+    //    all, and CORS would then hide only the RESPONSE — the side effect of
+    //    publishing this host on the tailnet has already happened by then.
+    //  - The Origin check is what answers "no" to that preflight. An ABSENT
+    //    Origin still passes: `tinstar reach on` is not a browser, and it is the
+    //    only supported way to turn reach on.
+    const contentType = (req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
+    if (contentType !== 'application/json') {
+      fail(res, 'BAD_REQUEST', 'Content-Type must be application/json', { status: 415 })
+      return true
+    }
+    const origin = req.headers.origin
+    if (!isUpgradeOriginAllowed(origin, currentOriginAllowlist())) {
+      fail(res, 'FORBIDDEN', `origin ${origin ?? '(none)'} may not change reach`)
+      return true
+    }
+    // readBody returns the raw string; every other write route parses it here.
+    let body: { enabled?: unknown } | null = null
+    try { body = JSON.parse(await readBody(req)) as { enabled?: unknown } } catch { /* reported below */ }
+    if (typeof body?.enabled !== 'boolean') {
+      fail(res, 'BAD_REQUEST', 'body must be {"enabled": true|false}')
+      return true
+    }
+    const coordinator = getReachCoordinator()
+    // The port that ACTUALLY bound, not the configured one: reach must front
+    // what is listening, and the listener walks past a busy port.
+    const status = body.enabled
+      ? await coordinator.enable(ctx.boundPort ?? 5273)
+      : await coordinator.disable()
+    if (status.state === 'refused') {
+      fail(res, 'BAD_REQUEST', status.detail ?? 'reach refused')
+      return true
+    }
+    ok(res, status)
     return true
   }
 

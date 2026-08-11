@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import type { ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { createServer } from 'node:http'
+import { connect } from 'node:net'
+import { networkInterfaces } from 'node:os'
 import { log } from '../../logger'
+import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
+import { TTYD_MIN_VERSION } from '../../externalFloors'
 import {
   allTtydIncumbentsStrict,
   clearTtydStartCancellationReasonForTests,
+  findPort,
+  healthCheck,
+  releasePort,
+  setTerminalBindAddress,
+  terminalBindAddress,
+  ttydSpawnArgv,
+  ttydVersionRefusal,
+  ttydVersionRefusalNow,
   inspectAllTtydIncumbents,
   inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
@@ -14,6 +27,7 @@ import {
   onTtydRestart,
   orphanTtydPidsToReap,
   startTtydWithDeps,
+  ttydBindAddressFromArgs,
   tmuxTargetFromArgs,
   startTtydForTokenAttempt,
   stopManagedTtyd,
@@ -59,6 +73,7 @@ function fakeStartDeps(
     }) as unknown as typeof setTimeout,
     tmuxAlive: async () => true,
     enqueueRestart: vi.fn(async () => child.pid),
+    versionRefusal: () => null,
     ...overrides,
   }
 }
@@ -89,7 +104,7 @@ describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
 describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
   it('reclaims our own previous ttyd on the port', () => {
     const r = ttydPidsToReclaim(
-      [{ pid: 100, tmuxTarget: 'tinstar-mysession' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-mysession', bindAddress: '127.0.0.1' }],
       'tinstar-mysession',
     )
     expect(r.kill).toEqual([100])
@@ -97,31 +112,31 @@ describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
   })
 
   it('reclaims a ttyd whose tmux target we could not identify', () => {
-    const r = ttydPidsToReclaim([{ pid: 101, tmuxTarget: null }], 'tinstar-mysession')
+    const r = ttydPidsToReclaim([{ pid: 101, tmuxTarget: null, bindAddress: '127.0.0.1' }], 'tinstar-mysession')
     expect(r.kill).toEqual([101])
     expect(r.foreign).toEqual([])
   })
 
   it('does NOT kill a ttyd serving a different session — that is the kill-war', () => {
     const r = ttydPidsToReclaim(
-      [{ pid: 200, tmuxTarget: 'tinstar-other' }],
+      [{ pid: 200, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
       'tinstar-mysession',
     )
     expect(r.kill).toEqual([])
-    expect(r.foreign).toEqual([{ pid: 200, tmuxTarget: 'tinstar-other' }])
+    expect(r.foreign).toEqual([{ pid: 200, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }])
   })
 
   it('splits a mixed set correctly', () => {
     const r = ttydPidsToReclaim(
       [
-        { pid: 1, tmuxTarget: 'tinstar-mine' },
-        { pid: 2, tmuxTarget: 'tinstar-other' },
-        { pid: 3, tmuxTarget: null },
+        { pid: 1, tmuxTarget: 'tinstar-mine', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' },
+        { pid: 3, tmuxTarget: null, bindAddress: '127.0.0.1' },
       ],
       'tinstar-mine',
     )
     expect(r.kill.sort()).toEqual([1, 3])
-    expect(r.foreign).toEqual([{ pid: 2, tmuxTarget: 'tinstar-other' }])
+    expect(r.foreign).toEqual([{ pid: 2, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }])
   })
 })
 
@@ -203,7 +218,7 @@ describe('verified ttyd session surfaces', () => {
       })
 
     await expect(inspectTtydIncumbentsOnPort(6123, run)).resolves.toEqual([
-      { pid: 101, tmuxTarget: 'tinstar-ours' },
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
     ])
   })
 
@@ -361,12 +376,12 @@ describe('verified ttyd session surfaces', () => {
 
   it('requires the expected PID to attach to the exact tmux target', () => {
     expect(ttydIncumbentMatchesSession(
-      [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+      [{ pid: 101, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
       101,
       'tinstar-ours',
     )).toBe(false)
     expect(ttydIncumbentMatchesSession(
-      [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
       101,
       'tinstar-ours',
     )).toBe(true)
@@ -391,7 +406,7 @@ describe('verified ttyd session surfaces', () => {
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
         incumbentsOnPort: async () =>
-          [{ pid: 101, tmuxTarget: 'tinstar-other' }],
+          [{ pid: 101, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' }],
         healthCheck: async () => true,
       },
     )).resolves.toBe('unhealthy')
@@ -414,7 +429,7 @@ describe('verified ttyd session surfaces', () => {
       { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
       {
         incumbentsOnPort: async () =>
-          [{ pid: 101, tmuxTarget: 'tinstar-ours' }],
+          [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
         healthCheck: async () => true,
       },
     )).resolves.toBe('verified')
@@ -592,11 +607,11 @@ describe('fenced ttyd start attempts', () => {
   it('kills an incumbent found by both inventories only once', async () => {
     const deps = fakeStartDeps({
       incumbentsOnPort: async () => [
-        { pid: 100, tmuxTarget: opts.tmuxName },
+        { pid: 100, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
       ],
       allIncumbents: async () => [
-        { pid: 100, tmuxTarget: opts.tmuxName },
-        { pid: 101, tmuxTarget: opts.tmuxName },
+        { pid: 100, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
+        { pid: 101, tmuxTarget: opts.tmuxName, bindAddress: '127.0.0.1' },
       ],
     })
 
@@ -1055,8 +1070,8 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
   it('reaps every ttyd attached to exactly our session, on any port', () => {
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-foo' }, // current
-        { pid: 2, tmuxTarget: 'tinstar-foo' }, // orphan from a prior restart (other port)
+        { pid: 1, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' }, // current
+        { pid: 2, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' }, // orphan from a prior restart (other port)
       ],
       'tinstar-foo',
     )
@@ -1067,9 +1082,9 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
     // Reclaiming the parent must not kill the ttyd serving tinstar-foo-reviewer-*.
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-foo' },
-        { pid: 2, tmuxTarget: 'tinstar-foo-reviewer-ab12' },
-        { pid: 3, tmuxTarget: 'tinstar-foo-general-purpose-cd34' },
+        { pid: 1, tmuxTarget: 'tinstar-foo', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: 'tinstar-foo-reviewer-ab12', bindAddress: '127.0.0.1' },
+        { pid: 3, tmuxTarget: 'tinstar-foo-general-purpose-cd34', bindAddress: '127.0.0.1' },
       ],
       'tinstar-foo',
     )
@@ -1079,8 +1094,8 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
   it('ignores ttyds for other sessions and unidentifiable ones', () => {
     const pids = ttydPidsForSession(
       [
-        { pid: 1, tmuxTarget: 'tinstar-other' },
-        { pid: 2, tmuxTarget: null },
+        { pid: 1, tmuxTarget: 'tinstar-other', bindAddress: '127.0.0.1' },
+        { pid: 2, tmuxTarget: null, bindAddress: '127.0.0.1' },
       ],
       'tinstar-foo',
     )
@@ -1092,7 +1107,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('reaps a tinstar ttyd whose tmux session is dead (the squatter)', () => {
     // The whole leak: tmux is gone but ttyd still holds the port.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 100, tmuxTarget: 'tinstar-dead' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-dead', bindAddress: '127.0.0.1' }],
       new Set<string>(), // no live tmux sessions
       'tinstar-',
     )
@@ -1103,7 +1118,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
     // Live tmux = in use, no matter who spawned it. This is the load-bearing
     // invariant that avoids the cross-backend kill-war.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 100, tmuxTarget: 'tinstar-alive' }],
+      [{ pid: 100, tmuxTarget: 'tinstar-alive', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-alive']),
       'tinstar-',
     )
@@ -1115,7 +1130,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
     // backend never tracked. We must not kill it — predicate keys off liveness,
     // not "is it in my tracked set".
     const pids = orphanTtydPidsToReap(
-      [{ pid: 200, tmuxTarget: 'tinstar-otherbackend' }],
+      [{ pid: 200, tmuxTarget: 'tinstar-otherbackend', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-otherbackend']),
       'tinstar-',
     )
@@ -1125,7 +1140,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('does not touch non-tinstar ttyds even when their target is dead', () => {
     // The user's own `ttyd -p X bash -c "tmux attach -t my-notes"` must survive.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 300, tmuxTarget: 'my-notes' }],
+      [{ pid: 300, tmuxTarget: 'my-notes', bindAddress: '127.0.0.1' }],
       new Set<string>(),
       'tinstar-',
     )
@@ -1134,7 +1149,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
 
   it('ignores ttyds with no tmux target (e.g. `ttyd htop`)', () => {
     const pids = orphanTtydPidsToReap(
-      [{ pid: 400, tmuxTarget: null }],
+      [{ pid: 400, tmuxTarget: null, bindAddress: '127.0.0.1' }],
       new Set<string>(),
       'tinstar-',
     )
@@ -1144,7 +1159,7 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('reaps orphaned hand sessions too (they carry the prefix)', () => {
     // A dead child-hand session is just as much a squatter as a top-level one.
     const pids = orphanTtydPidsToReap(
-      [{ pid: 500, tmuxTarget: 'tinstar-foo-reviewer-ab12' }],
+      [{ pid: 500, tmuxTarget: 'tinstar-foo-reviewer-ab12', bindAddress: '127.0.0.1' }],
       new Set(['tinstar-foo']), // parent alive, hand dead
       'tinstar-',
     )
@@ -1154,15 +1169,540 @@ describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () 
   it('partitions a realistic mixed fleet', () => {
     const pids = orphanTtydPidsToReap(
       [
-        { pid: 1, tmuxTarget: 'tinstar-live' },     // alive   → keep
-        { pid: 2, tmuxTarget: 'tinstar-ghost' },    // dead    → reap
-        { pid: 3, tmuxTarget: 'tinstar-ghost2' },   // dead    → reap
-        { pid: 4, tmuxTarget: 'someones-tmux' },    // foreign → keep
-        { pid: 5, tmuxTarget: null },               // unknown → keep
+        { pid: 1, tmuxTarget: 'tinstar-live', bindAddress: '127.0.0.1' },     // alive   → keep
+        { pid: 2, tmuxTarget: 'tinstar-ghost', bindAddress: '127.0.0.1' },    // dead    → reap
+        { pid: 3, tmuxTarget: 'tinstar-ghost2', bindAddress: '127.0.0.1' },   // dead    → reap
+        { pid: 4, tmuxTarget: 'someones-tmux', bindAddress: '127.0.0.1' },    // foreign → keep
+        { pid: 5, tmuxTarget: null, bindAddress: '127.0.0.1' },               // unknown → keep
       ],
       new Set(['tinstar-live']),
       'tinstar-',
     )
     expect(pids.sort((a, b) => a - b)).toEqual([2, 3])
+  })
+})
+
+/** The address argument ttyd is told to bind, read out of a built argv. */
+function bindArgFrom(argv: string[]): string | null {
+  const flag = argv.indexOf('-i')
+  return flag === -1 ? null : (argv[flag + 1] ?? null)
+}
+
+/**
+ * These are the only proofs of the containment guarantee that run against a
+ * real ttyd rather than an argv assertion. Skipping them silently is how a
+ * suite goes green having tested nothing, so CI installs ttyd and sets
+ * TINSTAR_REQUIRE_LIVE_TTYD=1 to turn a missing binary into a failure instead.
+ */
+function ttydInstalled(): boolean {
+  let version: string
+  try {
+    version = execFileSync('ttyd', ['--version'], { encoding: 'utf-8', stdio: 'pipe' })
+  } catch {
+    if (process.env.TINSTAR_REQUIRE_LIVE_TTYD === '1') {
+      throw new Error(
+        'TINSTAR_REQUIRE_LIVE_TTYD=1 but ttyd is not installed: the live '
+        + 'containment proofs would silently skip.',
+      )
+    }
+    return false
+  }
+  // Presence is not floor-compliance. A runner image carrying a pre-1.7.4 ttyd
+  // would run these proofs against a binary `startTtydForTokenAttempt` refuses
+  // to spawn — green here, and green for a build that can never ship.
+  const refusal = ttydVersionRefusal(version)
+  if (refusal) {
+    if (process.env.TINSTAR_REQUIRE_LIVE_TTYD === '1') {
+      throw new Error(`TINSTAR_REQUIRE_LIVE_TTYD=1 but ${refusal}`)
+    }
+    return false
+  }
+  return true
+}
+
+function firstNonLoopbackIPv4(): string | null {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address
+    }
+  }
+  return null
+}
+
+/** tmux exits non-zero for an absent session; that is the ordinary case here. */
+function tmuxQuietly(args: string[]): void {
+  try {
+    execFileSync('tmux', args, { stdio: 'ignore' })
+  } catch { /* no such session */ }
+}
+
+/**
+ * Status, or 'error' when the request never completes. ttyd's refusal reads
+ * differently depending on the client: curl sees `407`, Node's fetch sees the
+ * connection torn down and throws. Both are "not ok", which is all the
+ * readiness probe needs — but a test asserting the literal 407 would be
+ * asserting curl's view of the world from inside Node.
+ */
+async function statusOf(
+  port: number,
+  headers: Record<string, string>,
+): Promise<number | 'error'> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/`, { headers })
+    return res.status
+  } catch {
+    return 'error'
+  }
+}
+
+/**
+ * Raw handshake bytes, not a WebSocket client: ttyd's refusal is a closed
+ * connection rather than a status line, and a client library would surface
+ * that as an opaque error instead of the wire truth.
+ */
+function rawUpgrade(
+  port: number,
+  headers: Record<string, string>,
+): Promise<string> {
+  return new Promise((resolve) => {
+    const lines = [
+      'GET /ws HTTP/1.1',
+      `Host: 127.0.0.1:${port}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Version: 13',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      'Sec-WebSocket-Protocol: tty',
+      ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+      '', '',
+    ].join('\r\n')
+    let buf = ''
+    const sock = connect({ host: '127.0.0.1', port, timeout: 4_000 }, () => {
+      sock.write(lines)
+    })
+    sock.on('data', chunk => {
+      buf += chunk.toString()
+      if (buf.includes('\r\n\r\n')) { sock.destroy(); resolve(buf) }
+    })
+    sock.on('timeout', () => { sock.destroy(); resolve(buf || 'TIMEOUT') })
+    sock.on('close', () => resolve(buf || 'CLOSED'))
+    sock.on('error', () => { sock.destroy(); resolve(buf || 'CLOSED') })
+  })
+}
+
+function connectFails(host: string, port: number): Promise<string> {
+  return new Promise((resolve) => {
+    const sock = connect({ host, port, timeout: 1_500 })
+    sock.on('connect', () => { sock.destroy(); resolve('connected') })
+    sock.on('timeout', () => { sock.destroy(); resolve('timeout') })
+    sock.on('error', (err: NodeJS.ErrnoException) => {
+      sock.destroy()
+      resolve(err.code ?? 'error')
+    })
+  })
+}
+
+async function waitForListener(port: number, timeoutMs = 5_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let out = ''
+  while (Date.now() < deadline) {
+    out = execFileSync('ss', ['-tln']).toString()
+    const line = out.split('\n').find(l => l.includes(`:${port} `))
+    if (line) return line
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error(`no listener on port ${port} within ${timeoutMs}ms; ss said:\n${out}`)
+}
+
+describe('terminal bind address — every spawned ttyd is loopback-only', () => {
+  const opts = {
+    sessionName: 'bind-addr',
+    tmuxName: 'tinstar-bind-addr',
+    port: 6321,
+  }
+
+  afterEach(() => {
+    setTerminalBindAddress('127.0.0.1')
+    stopManagedTtyd(opts.sessionName, {
+      cancellationReason: 'session stop requested',
+    })
+  })
+
+  it('defaults to the IPv4 loopback literal', () => {
+    expect(terminalBindAddress()).toBe('127.0.0.1')
+    expect(bindArgFrom(ttydSpawnArgv(opts))).toBe('127.0.0.1')
+  })
+
+  it('reflects a non-default address once the boot setter runs', () => {
+    setTerminalBindAddress('127.0.0.2')
+    expect(bindArgFrom(ttydSpawnArgv(opts))).toBe('127.0.0.2')
+  })
+
+  it('keeps the argv shape the tmux-target parser reads', () => {
+    // The interface flag must not shadow ttyd's own -t options or the trailing
+    // `tmux attach -t =<name>`, which identity inspection parses back out.
+    const argv = ttydSpawnArgv(opts)
+    expect(tmuxTargetFromArgs(['ttyd', ...argv].join(' '))).toBe(opts.tmuxName)
+    expect(argv).toContain('-W')
+    expect(argv[argv.indexOf('-p') + 1]).toBe(String(opts.port))
+  })
+
+  it('spawns the same interface argument on the restart-after-exit path', async () => {
+    const argvs: string[][] = []
+    const children = [fakeChild(811), fakeChild(812)]
+    let spawnCount = 0
+    const scheduled: Array<(...args: unknown[]) => void> = []
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn((o) => {
+        argvs.push(ttydSpawnArgv(o))
+        return children[spawnCount++]!
+      }),
+      tmuxAlive: vi.fn(async () => true),
+      schedule: vi.fn((callback) => {
+        scheduled.push(callback)
+        return {} as NodeJS.Timeout
+      }) as unknown as typeof setTimeout,
+    })
+    // Production's restart path re-enters the same attempt with the same opts.
+    deps.enqueueRestart = (o, token) =>
+      startTtydForTokenAttempt(o, token, () => true, deps)
+
+    const attempt = startTtydWithDeps(opts, deps)
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+    await expect(attempt).resolves.toBe(811)
+
+    children[0]!.emit('exit', 1)
+    await vi.waitFor(() => expect(deps.tmuxAlive).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+    await vi.waitFor(() => expect(argvs).toHaveLength(2))
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1))
+    scheduled.shift()!()
+
+    expect(argvs.map(bindArgFrom)).toEqual(['127.0.0.1', '127.0.0.1'])
+  })
+
+  it('spawns the same interface argument on the reattach path', async () => {
+    const argvs: string[][] = []
+    const deps = fakeStartDeps({
+      spawnProcess: vi.fn((o) => {
+        argvs.push(ttydSpawnArgv(o))
+        return fakeChild(820 + argvs.length)
+      }),
+    })
+
+    // Reattach after a backend restart lands the session on a fresh port.
+    await expect(startTtydForTokenAttempt(
+      opts, Symbol('initial'), () => true, deps,
+    )).resolves.toBe(821)
+    await expect(startTtydForTokenAttempt(
+      { ...opts, port: opts.port + 1 }, Symbol('reattach'), () => true, deps,
+    )).resolves.toBe(822)
+
+    expect(argvs.map(bindArgFrom)).toEqual(['127.0.0.1', '127.0.0.1'])
+  })
+
+  const liveIt = ttydInstalled() ? it : it.skip
+
+  liveIt('binds only loopback when a real ttyd is spawned', async () => {
+    // An argv assertion cannot tell an accepted bind address from a silently
+    // ignored one, so this one proves it against a live process. The port comes
+    // from findPort, whose probe binds 127.0.0.1 — if the probe and the spawn
+    // disagreed about the interface, the spawned terminal would fail to bind.
+    const port = await findPort({ label: 'ttyd-bind-proof', start: 41_311, count: 40 })
+    const argv = ttydSpawnArgv({
+      sessionName: 'bind-proof',
+      tmuxName: 'tinstar-bind-proof-nonexistent',
+      port,
+    })
+    const child = spawn('ttyd', argv, { stdio: 'ignore' })
+    try {
+      const line = await waitForListener(port)
+      expect(line).toContain(`127.0.0.1:${port}`)
+      expect(line).not.toContain(`0.0.0.0:${port}`)
+      expect(line).not.toContain(`*:${port}`)
+
+      const lan = firstNonLoopbackIPv4()
+      if (lan) {
+        expect(await connectFails(lan, port)).not.toBe('connected')
+      }
+      expect(await connectFails('127.0.0.1', port)).toBe('connected')
+    } finally {
+      child.kill('SIGKILL')
+      releasePort(port)
+    }
+  }, 20_000)
+})
+
+describe('ttyd version floor — refused at spawn, not just reported', () => {
+  it('admits a build at or above the floor', () => {
+    expect(ttydVersionRefusal('ttyd version 1.7.4')).toBeNull()
+    expect(ttydVersionRefusal('ttyd version 1.8.0')).toBeNull()
+  })
+
+  it('refuses a build below the floor, naming installed and required', () => {
+    // Below the floor, -i and -H are ignored rather than honoured: the terminal
+    // binds every interface and accepts anyone, with no error anywhere. That is
+    // precisely the exposure this work closes, so it must refuse, not warn.
+    const refusal = ttydVersionRefusal('ttyd version 1.6.3')
+    expect(refusal).toContain('1.6.3')
+    expect(refusal).toContain(TTYD_MIN_VERSION)
+  })
+
+  it('compares numerically, so 1.7.10 is above 1.7.4', () => {
+    expect(ttydVersionRefusal('ttyd version 1.7.10')).toBeNull()
+  })
+
+  it('refuses rather than guesses when the version cannot be read', () => {
+    // An unreadable version is not evidence of a good one.
+    expect(ttydVersionRefusal('')).toContain(TTYD_MIN_VERSION)
+    expect(ttydVersionRefusal(null)).toContain(TTYD_MIN_VERSION)
+  })
+
+  it('refuses before touching an incumbent, so a doomed spawn kills nothing', async () => {
+    // Ordering, not just outcome. The refusal has to land before the inventories
+    // resolve: reversing it would tear down a working terminal on behalf of a
+    // replacement this very function then declines to start.
+    const deps = fakeStartDeps({
+      versionRefusal: () => 'ttyd 1.6.3 is below the required 1.7.4',
+      incumbentsOnPort: vi.fn(async () => []),
+      allIncumbents: vi.fn(async () => []),
+    })
+    await expect(startTtydForTokenAttempt(
+      { sessionName: 'vf', tmuxName: 'tinstar-vf', port: 6399 },
+      Symbol('start'),
+      () => true,
+      deps,
+    )).rejects.toThrow('1.6.3')
+    expect(deps.incumbentsOnPort).not.toHaveBeenCalled()
+    expect(deps.allIncumbents).not.toHaveBeenCalled()
+    expect(deps.killProcess).not.toHaveBeenCalled()
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('re-probes on every spawn rather than trusting a boot-time answer', () => {
+    // A cached PASS is the dangerous direction. Below the floor `-i` and `-H`
+    // are accepted and ignored, so a binary swapped under a long-running server
+    // would keep spawning wide-open terminals against a verdict reached at boot.
+    // A cached REFUSAL is merely useless — it outlives the upgrade its own
+    // message instructs the operator to perform.
+    let probes = 0
+    const reads = ['ttyd version 1.7.4', 'ttyd version 1.6.3', null]
+    const read = () => { const v = reads[probes]; probes += 1; return v ?? null }
+
+    // Probe count first: a memoizing implementation fails HERE, naming the
+    // actual defect, instead of tripping a type error downstream on a cached
+    // null and reporting something unrelated.
+    const verdicts = [ttydVersionRefusalNow(read), ttydVersionRefusalNow(read), ttydVersionRefusalNow(read)]
+    expect(probes).toBe(3)
+
+    expect(verdicts[0]).toBeNull()
+    expect(verdicts[1]).toContain('1.6.3')
+    expect(verdicts[2]).toContain(TTYD_MIN_VERSION)
+  })
+})
+
+describe('terminal auth header — every Tinstar hop presents it', () => {
+  const opts = {
+    sessionName: 'hdr',
+    tmuxName: 'tinstar-hdr',
+    port: 6321,
+  }
+
+  it('spawns ttyd with the auth-header flag', () => {
+    const argv = ttydSpawnArgv(opts)
+    expect(argv[argv.indexOf('-H') + 1]).toBe(TERMINAL_AUTH_HEADER)
+  })
+
+  it('keeps the argv shape both incumbent parsers read', () => {
+    const argv = ttydSpawnArgv(opts)
+    const line = ['ttyd', ...argv].join(' ')
+    expect(tmuxTargetFromArgs(line)).toBe(opts.tmuxName)
+    expect(ttydBindAddressFromArgs(line)).toBe('127.0.0.1')
+  })
+
+  it('presents the header on the readiness probe', async () => {
+    // KTD14: -H gates ALL of ttyd's HTTP, not just the upgrade. A probe without
+    // the header reads 407 — not ok — so every session would fail readiness and
+    // no terminal would ever publish, while a test asserting only the upgrade
+    // path stayed green.
+    const seen: Array<Record<string, string>> = []
+    const server = createServer((req, res) => {
+      seen.push(req.headers as Record<string, string>)
+      if (!req.headers[TERMINAL_AUTH_HEADER.toLowerCase()]) {
+        res.writeHead(407)
+        res.end()
+        return
+      }
+      res.writeHead(200)
+      res.end('ok')
+    })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      await expect(healthCheck(port, { timeout: 2_000, interval: 100 }))
+        .resolves.toBe(true)
+      expect(seen[0]?.[TERMINAL_AUTH_HEADER.toLowerCase()]).toBeTruthy()
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(r => { server.close(() => r()) })
+    }
+  })
+
+  it('reports unhealthy against a gate it cannot satisfy', async () => {
+    // The negative half: prove the gate is live rather than vacuous by serving
+    // 407 to everything, including a correctly-headered probe.
+    const server = createServer((_req, res) => { res.writeHead(407); res.end() })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      await expect(healthCheck(port, { timeout: 600, interval: 100 }))
+        .resolves.toBe(false)
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(r => { server.close(() => r()) })
+    }
+  })
+
+  const liveHeaderIt = ttydInstalled() ? it : it.skip
+
+  liveHeaderIt('refuses a direct upgrade without the header, against a real ttyd', async () => {
+    // Whether -H covers the WebSocket upgrade at all is not documented — ttyd's
+    // help calls it an auth-proxy header and says nothing about upgrades. Only
+    // a live process can answer it, so this scenario never runs against a mock.
+    const port = await findPort({ label: 'ttyd-header-proof', start: 41_411, count: 40 })
+    const tmuxName = 'tinstar-header-proof'
+    // A live tmux target, because ttyd stops serving once its command exits —
+    // the bind proof upstream only needs a socket, this one needs responses.
+    tmuxQuietly(['kill-session', '-t', tmuxName])
+    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, 'sleep 120'])
+    const argv = ttydSpawnArgv({ sessionName: 'header-proof', tmuxName, port })
+    const child = spawn('ttyd', argv, { stdio: 'ignore' })
+    try {
+      await waitForListener(port)
+
+      // Plain HTTP: gated. Not 200 either way is the load-bearing half.
+      expect(await statusOf(port, {})).not.toBe(200)
+      expect(await statusOf(port, { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE })).toBe(200)
+
+      // The upgrade, which is the half nobody had measured.
+      const bare = await rawUpgrade(port, {})
+      expect(bare).not.toContain('101')
+      const withHeader = await rawUpgrade(port, {
+        [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE,
+      })
+      expect(withHeader).toContain('101 Switching Protocols')
+      expect(withHeader).toContain('tty')
+
+      // And the probe Tinstar actually uses reaches it.
+      await expect(healthCheck(port, { timeout: 3_000, interval: 100 }))
+        .resolves.toBe(true)
+    } finally {
+      child.kill('SIGKILL')
+      tmuxQuietly(['kill-session', '-t', tmuxName])
+      releasePort(port)
+    }
+  }, 25_000)
+})
+
+describe('inherited terminal bind — parsing an incumbent back out of ps args', () => {
+  it('reads the interface argument the spawner wrote', () => {
+    const argv = ttydSpawnArgv({
+      sessionName: 'inherited',
+      tmuxName: 'tinstar-inherited',
+      port: 6321,
+    })
+    expect(ttydBindAddressFromArgs(['/usr/bin/ttyd', ...argv].join(' ')))
+      .toBe('127.0.0.1')
+  })
+
+  it('returns null for a ttyd spawned before the bind flag existed', () => {
+    expect(ttydBindAddressFromArgs(
+      'ttyd -W -p 6321 -t titleFixed=Tinstar bash -c tmux attach -t =tinstar-old',
+    )).toBe(null)
+  })
+
+  it('reads a non-loopback bind rather than assuming loopback', () => {
+    expect(ttydBindAddressFromArgs(
+      'ttyd -W -i 0.0.0.0 -p 6321 bash -c tmux attach -t =tinstar-wide',
+    )).toBe('0.0.0.0')
+  })
+
+  it('returns null rather than throwing on an unexpected argument shape', () => {
+    expect(ttydBindAddressFromArgs('')).toBe(null)
+    expect(ttydBindAddressFromArgs('ttyd')).toBe(null)
+    // A trailing flag with no value must not yield the empty string.
+    expect(ttydBindAddressFromArgs('ttyd -W -i')).toBe(null)
+  })
+})
+
+describe('inherited terminal bind — adoption requires the configured bind', () => {
+  afterEach(() => {
+    setTerminalBindAddress('127.0.0.1')
+  })
+
+  it('adopts an incumbent whose bind matches the configured one', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
+      101,
+      'tinstar-ours',
+    )).toBe(true)
+  })
+
+  it('refuses an incumbent left by a build that had no bind flag', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+  })
+
+  it('refuses an incumbent bound to a different address', () => {
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '0.0.0.0' }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+  })
+
+  it('tracks the configured bind rather than the loopback literal', () => {
+    setTerminalBindAddress('127.0.0.2')
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' }],
+      101,
+      'tinstar-ours',
+    )).toBe(false)
+    expect(ttydIncumbentMatchesSession(
+      [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.2' }],
+      101,
+      'tinstar-ours',
+    )).toBe(true)
+  })
+
+  it('carries the parsed bind onto the incumbent record', async () => {
+    const run = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args.includes('-ti')) return { stdout: '101\n', stderr: '' }
+      if (args[1] === 'comm=') return { stdout: 'ttyd\n', stderr: '' }
+      return {
+        stdout: 'ttyd -W -i 127.0.0.1 -p 6123 bash -c tmux attach -t =tinstar-ours\n',
+        stderr: '',
+      }
+    })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run as never)).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' },
+    ])
+  })
+
+  it('refuses a mismatched incumbent at the readiness gate', async () => {
+    await expect(verifyTtydSessionSurface(
+      { port: 6123, pid: 101, tmuxName: 'tinstar-ours' },
+      {
+        incumbentsOnPort: async () =>
+          [{ pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '0.0.0.0' }],
+        healthCheck: async () => true,
+      },
+    )).resolves.toBe('unhealthy')
   })
 })

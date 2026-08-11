@@ -22,6 +22,13 @@ import {
   TTYD_NON_CAUSAL_INTERRUPTION,
 } from './ttyd-diagnostics'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
+import { LOOPBACK_BIND_ADDRESS } from '../../bind'
+import {
+  TTYD_MIN_VERSION,
+  compareVersions,
+  parseVersionTriplet,
+} from '../../externalFloors'
+import { TERMINAL_AUTH_HEADER, TERMINAL_AUTH_VALUE } from '../../sessionProxy'
 import { log } from '../../logger'
 import {
   defaultProviderRegistry,
@@ -318,6 +325,28 @@ export function setInteractivePortWindow(window: PortWindow | null): void {
 
 export function interactivePortWindow(): PortWindow | null {
   return interactiveWindow
+}
+
+/** The address every spawned ttyd binds, registered once at boot beside the
+ *  interactive port window. Loopback by default so a terminal is never reachable
+ *  from another host just because nobody configured a bind — and so unit tests
+ *  that never call the setter still assert the shipped posture.
+ *
+ *  It lives at module scope rather than in spawn options because dashboard HTTP
+ *  config is deliberately withheld from spawned guest processes (see
+ *  docs/solutions/conventions/guest-env-boundary.md), so a ttyd cannot inherit
+ *  it, and threading it through options would touch every restart path. */
+let ttydBindAddress: string = LOOPBACK_BIND_ADDRESS
+
+/** Declare which address spawned terminals bind. Called from server boot with
+ *  the same setting that governs the dashboard listener, so the two cannot
+ *  drift apart. */
+export function setTerminalBindAddress(address: string): void {
+  ttydBindAddress = address
+}
+
+export function terminalBindAddress(): string {
+  return ttydBindAddress
 }
 
 /**
@@ -1349,10 +1378,13 @@ export async function reattachTmuxSession(
   // if the lifecycle becomes stale during this await, the caller must be able
   // to release its claim without this helper silently recreating it.
 
-  // Adopt only a ttyd attached to this exact tmux target. A foreign ttyd (or
-  // any unrelated HTTP listener) must never make this session look healthy.
+  // Adopt only a ttyd attached to this exact tmux target and bound where we
+  // would bind it. A foreign ttyd (or any unrelated HTTP listener) must never
+  // make this session look healthy, and neither must one inherited from a
+  // lifecycle that exposed it more widely than this one would.
   const incumbent = (await deps.incumbentsOnPort(opts.port)).find(
-    candidate => candidate.tmuxTarget === tmuxName,
+    candidate => candidate.tmuxTarget === tmuxName
+      && ttydIncumbentBindMatches(candidate),
   )
   if (incumbent && await deps.verifySurface({
     port: opts.port,
@@ -1612,9 +1644,23 @@ export interface TtydIncumbent {
   pid: number
   /** tmux session this ttyd attaches (e.g. "tinstar-foo"), or null if unknown. */
   tmuxTarget: string | null
+  /** Address this ttyd bound, or null when it carries no interface argument —
+   *  which is how every terminal inherited from a pre-containment build reads. */
+  bindAddress: string | null
 }
 
-/** Exact process/target identity required before publishing a terminal port. */
+/**
+ * Whether an inherited terminal binds the address this server would spawn it
+ * with. A terminal that outlives its server keeps whatever exposure it was
+ * started with, so adopting one on identity alone would let a pre-containment
+ * ttyd — reachable on every interface — go on serving under a build whose whole
+ * point is that it cannot. Mismatches fall through to the respawn path.
+ */
+export function ttydIncumbentBindMatches(incumbent: TtydIncumbent): boolean {
+  return incumbent.bindAddress === terminalBindAddress()
+}
+
+/** Exact process/target/bind identity required before publishing a terminal port. */
 export function ttydIncumbentMatchesSession(
   incumbents: readonly TtydIncumbent[],
   pid: number | undefined,
@@ -1622,7 +1668,9 @@ export function ttydIncumbentMatchesSession(
 ): boolean {
   return pid !== undefined
     && incumbents.some(
-      incumbent => incumbent.pid === pid && incumbent.tmuxTarget === tmuxName,
+      incumbent => incumbent.pid === pid
+        && incumbent.tmuxTarget === tmuxName
+        && ttydIncumbentBindMatches(incumbent),
     )
 }
 
@@ -1641,6 +1689,24 @@ export function tmuxTargetFromArgs(args: string): string | null {
   if (!m) return null
   const target = m[1]!
   return target.startsWith('=') ? target.slice(1) : target
+}
+
+/**
+ * Extract the address a running ttyd bound from its full `ps -o args=` line —
+ * the inherited-terminal counterpart of {@link ttydSpawnArgv}'s `-i`, kept
+ * adjacent to {@link tmuxTargetFromArgs} so the two parsers cannot drift from
+ * the one argv that writes what they both read.
+ *
+ * Takes the FIRST `-i`, because ttyd's own options always precede the command
+ * it runs. A ttyd spawned without `-i` whose command happens to contain one
+ * therefore parses a bogus address — which fails the bind match and gets the
+ * terminal replaced. That is the safe direction: this parser's mistakes cost a
+ * respawn, never an adoption. Null means no interface argument at all, which is
+ * how every ttyd spawned before this flag existed reads.
+ */
+export function ttydBindAddressFromArgs(args: string): string | null {
+  const m = args.match(/(?:^|\s)-i\s+(\S+)/)
+  return m ? m[1]! : null
 }
 
 let ttydIdentityInspectionState: 'unknown' | 'available' | 'unavailable' = 'unknown'
@@ -1909,7 +1975,11 @@ async function inspectTtydPid(
       ['-o', 'args=', '-p', String(pid)],
       { timeout: 2_000 },
     )
-    return { pid, tmuxTarget: tmuxTargetFromArgs(args) }
+    return {
+      pid,
+      tmuxTarget: tmuxTargetFromArgs(args),
+      bindAddress: ttydBindAddressFromArgs(args),
+    }
   } catch (err) {
     if (isCleanInspectionMiss(err)) return null
     throw err
@@ -2153,6 +2223,90 @@ export interface StartTtydAttemptDeps {
     opts: StartTtydOptions,
     startToken: symbol,
   ) => Promise<number | undefined>
+  /** Null when the installed ttyd may be spawned; the refusal message otherwise. */
+  versionRefusal: () => string | null
+}
+
+/**
+ * The exact argv every ttyd is spawned with — the single place a terminal's
+ * network exposure is decided.
+ *
+ * `-i` takes the IPv4 loopback literal rather than an interface name (portable:
+ * the loopback interface is `lo` on Linux and `lo0` on macOS) and rather than a
+ * unix socket (which would remove the port that port reclaim, orphan sweeps,
+ * readiness probes and the /s/{name} proxy all key on). ttyd's help documents
+ * only interface names and socket paths for `-i`, but an IP literal binds
+ * exactly that address — verified on ttyd 1.7.4.
+ *
+ * `-H` closes the remaining hole loopback leaves: any local process could still
+ * open a writable shell by hitting the port directly. It gates ALL of ttyd's
+ * HTTP, upgrade included, so every Tinstar hop must present the header — see
+ * {@link healthCheck}, which is the one that would otherwise fail silently.
+ */
+/**
+ * Whether this ttyd may be spawned at all — the message to refuse with, or null.
+ *
+ * R23. The containment guarantee is entirely `-i` and `-H`. A build predating
+ * either does not error on the flag; it IGNORES it, binds every interface, and
+ * accepts anyone — the exact exposure this work closes, with nothing anywhere
+ * reporting a problem. Doctor reporting the floor is not enough, because doctor
+ * is something an operator runs and a spawn is something that just happens.
+ *
+ * An unreadable version refuses too: absence of a version is not evidence of a
+ * good one, and the cost of being wrong is a world-reachable shell.
+ */
+export function ttydVersionRefusal(versionOutput: string | null): string | null {
+  const installed = parseVersionTriplet(versionOutput ?? '')
+  if (!installed) {
+    return `cannot determine the installed ttyd version, and ttyd ${TTYD_MIN_VERSION} `
+      + 'or newer is required: below it the loopback bind and auth-header flags '
+      + 'are silently ignored, leaving terminals reachable from any host. '
+      + 'Install ttyd and retry.'
+  }
+  if (compareVersions(installed, TTYD_MIN_VERSION) < 0) {
+    return `ttyd ${installed} is below the required ${TTYD_MIN_VERSION}: below it `
+      + 'the loopback bind and auth-header flags are silently ignored, leaving '
+      + `terminals reachable from any host. Upgrade ttyd to ${TTYD_MIN_VERSION} or newer.`
+  }
+  return null
+}
+
+/**
+ * Probed fresh on every spawn. Deliberately NOT memoized.
+ *
+ * The floor is a containment control, not a capability hint: below 1.7.4 the
+ * `-i` and `-H` flags are accepted and ignored, so a terminal binds every
+ * interface and admits anyone. A cached PASS is the dangerous direction — a
+ * binary upgraded, downgraded, or repackaged under a long-running server would
+ * keep spawning against a determination made at boot, which is exactly the
+ * exposure the floor exists to stop. A cached REFUSAL is merely useless: it
+ * outlives the upgrade its own message tells the operator to perform.
+ *
+ * The probe costs ~20ms and runs once per terminal spawn, so there is nothing
+ * to buy back here.
+ */
+export function ttydVersionRefusalNow(
+  readVersion: () => string | null = () => {
+    try {
+      return execSync('ttyd --version', { encoding: 'utf-8', timeout: 5_000, stdio: 'pipe' })
+    } catch {
+      return null
+    }
+  },
+): string | null {
+  return ttydVersionRefusal(readVersion())
+}
+
+export function ttydSpawnArgv(opts: StartTtydOptions): string[] {
+  return [
+    '-W',
+    '-i', terminalBindAddress(),
+    '-H', TERMINAL_AUTH_HEADER,
+    '-p', String(opts.port),
+    '-t', 'titleFixed=Tinstar',
+    '-t', 'theme={"background":"#000000"}',
+    'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
+  ]
 }
 
 const startTtydAttemptDeps: StartTtydAttemptDeps = {
@@ -2160,19 +2314,14 @@ const startTtydAttemptDeps: StartTtydAttemptDeps = {
   allIncumbents: allTtydIncumbentsStrict,
   stopManaged: stopManagedTtyd,
   killProcess: pid => process.kill(pid, 'SIGTERM'),
-  spawnProcess: opts => spawn('ttyd', [
-    '-W',
-    '-p', String(opts.port),
-    '-t', 'titleFixed=Tinstar',
-    '-t', 'theme={"background":"#000000"}',
-    'bash', '-c', `tmux attach -t ${exactTmuxSessionTarget(opts.tmuxName)}`,
-  ], {
+  spawnProcess: opts => spawn('ttyd', ttydSpawnArgv(opts), {
     stdio: 'ignore',
     env: tmuxClientEnv(),
   }),
   schedule: setTimeout,
   tmuxAlive: tmuxHasSession,
   enqueueRestart: enqueueTtydStart,
+  versionRefusal: () => ttydVersionRefusalNow(),
 }
 
 function enqueueTtydStart(
@@ -2313,6 +2462,11 @@ export async function startTtydForTokenAttempt(
   if (!isCurrent()) {
     throw new TtydStartSupersededError(opts.sessionName, 'preflight')
   }
+
+  // Checked before the inventories, because reclaiming a port for a terminal we
+  // are about to refuse to spawn would kill a working incumbent for nothing.
+  const versionRefusal = deps.versionRefusal()
+  if (versionRefusal) throw new Error(versionRefusal)
 
   // Resolve both inventories before taking any destructive action. Operational
   // lsof/pgrep/ps failures therefore abort this attempt without killing a
@@ -2803,9 +2957,16 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
     const controller = new AbortController()
     const abortTimer = setTimeout(() => controller.abort(), remaining)
     try {
+      // The header is not optional here. `-H` gates every ttyd request, so an
+      // unauthenticated probe reads 407 — not ok — and the session never
+      // reports ready. A test that only asserts the upgrade path stays green
+      // through that, which is why this hop is called out in KTD14.
       const response = await fetch(
         `http://localhost:${port}/`,
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          headers: { [TERMINAL_AUTH_HEADER]: TERMINAL_AUTH_VALUE },
+        },
       )
       if (response.ok) return true
     } catch {

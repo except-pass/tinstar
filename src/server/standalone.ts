@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 
 // Parse --cors-origins as early as possible so that downstream module imports
@@ -29,7 +29,16 @@ import {
   describeSingletonFailure,
   formatSingletonFailureForConsole,
 } from './infra/lock'
+import { openListeners, resolveBindTargets } from './bind'
+import { announceBindChangeOnce } from './bindNotice'
+import { seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
+import { getReachCoordinator } from './reach'
 import { decideStaticServe } from './staticServe'
+import {
+  createSessionRequestHandler,
+  createSessionUpgradeHandler,
+  handleSessionProxyError,
+} from './sessionProxy'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -38,12 +47,12 @@ interface ServerOptions {
   clientDir: string
   open?: boolean
   /**
-   * Optional bind address(es). When omitted/empty, Node binds to the
-   * unspecified address (all interfaces). Pass an array (e.g. `['127.0.0.1',
-   * '<tailscale-ip>']`) to bind multiple specific interfaces — useful for
-   * keeping local CLI/hooks talking to loopback while exposing the UI on
-   * tailscale, without opening the primary LAN interface. For backwards-
-   * compat a single string is still accepted.
+   * Optional bind address(es). When omitted/empty the server binds the
+   * loopback pair only — reaching it from another device is an explicit act,
+   * not the state you get by doing nothing. Pass an array (e.g. `['127.0.0.1',
+   * '<tailscale-ip>']`) to bind multiple specific interfaces; 127.0.0.1 is
+   * force-added to any explicit set so host-local hooks keep working. For
+   * backwards-compat a single string is still accepted.
    */
   host?: string | string[]
   /**
@@ -99,32 +108,18 @@ export function startServer(opts: ServerOptions) {
   }
 
   proxy.on('error', (err, _req, res) => {
-    log.warn('proxy', `proxy error: ${err.message}`)
-    if (res && 'writeHead' in res) {
-      const sRes = res as import('node:http').ServerResponse
-      if (safeWriteHead(sRes, 502, { 'Content-Type': 'text/plain' })) sRes.end('Session proxy error')
-    }
+    handleSessionProxyError(err, res, message => log.warn('proxy', message))
   })
+
+  // The port the server actually bound (listenAll may bump it), read fresh on
+  // every upgrade so the allowed-origin list matches the live URL.
+  let boundPort = opts.port
 
   const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? '/'
 
     // 1. Session proxy — runs BEFORE static files
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
-    if (sessionMatch) {
-      const sessionName = sessionMatch[1]!
-      const run = ctx.docStore.getRun(sessionName)
-      if (!run?.port) {
-        if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
-          res.end(`Session "${sessionName}" not found or has no port`)
-        }
-        return
-      }
-      // Strip the /s/{name} prefix before proxying
-      req.url = sessionMatch[2] || '/'
-      proxy.web(req, res, { target: `http://localhost:${run.port}` })
-      return
-    }
+    if (sessionRequestHandler(req, res)) return
 
     // 2. API requests
     try {
@@ -180,22 +175,23 @@ export function startServer(opts: ServerOptions) {
     if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
   }
 
-  const upgradeHandler = (req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
-    const url = req.url ?? '/'
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
-    if (!sessionMatch) {
-      socket.destroy()
-      return
-    }
-    const sessionName = sessionMatch[1]!
-    const run = ctx.docStore.getRun(sessionName)
-    if (!run?.port) {
-      socket.destroy()
-      return
-    }
-    req.url = sessionMatch[2] || '/'
-    proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
-  }
+  const sessionRequestHandler = createSessionRequestHandler({
+    getRun: name => ctx.docStore.getRun(name),
+    proxyWeb: (req, res, options) => proxy.web(req, res, options),
+    onNoTarget: (sessionName, res) => {
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
+        res.end(`Session "${sessionName}" not found or has no port`)
+      }
+    },
+  })
+
+  const upgradeHandler = createSessionUpgradeHandler({
+    getRun: name => ctx.docStore.getRun(name),
+    allowedOrigins: () => sessionUpgradeOrigins(boundPort),
+    proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
+    onRefused: detail => log.warn('proxy', `upgrade refused (${detail.reason})`, detail),
+    onClientSocketError: detail => log.warn('proxy', `upgrade client socket error: ${detail.error}`, detail),
+  })
 
   function makeServer(): Server {
     const s = createServer(requestHandler)
@@ -232,44 +228,52 @@ export function startServer(opts: ServerOptions) {
 
   process.on('exit', () => { removePortFile(); removeHostFile(); removePidFile() })
 
-  // Normalize hosts to an array. Empty array → bind to the unspecified address
-  // (one listener, all interfaces). Multi-entry → one listener per address,
-  // all on the same port. The first entry is the "preferred" host used for
-  // the server.host file and the browser-open URL.
-  const hosts: string[] = Array.isArray(opts.host)
-    ? opts.host.filter(h => h && h.length > 0)
-    : (opts.host ? [opts.host] : [])
+  // One listener per address, all on the same port. No explicit host no longer
+  // means the unspecified address — see resolveBindTargets for why that default
+  // was the whole exposure.
+  const bind = resolveBindTargets(opts.host)
 
-  // Always bind 127.0.0.1 alongside any explicit host so localhost-pointing
-  // hooks (project .claude/settings.json, the cc-quota statusline) keep
-  // working when the server is exposed on a specific external interface.
-  // Skip when a wildcard already covers localhost.
-  const coversLocalhost = hosts.some(h => h === '0.0.0.0' || h === '::' || h === '127.0.0.1' || h === 'localhost')
-  if (hosts.length > 0 && !coversLocalhost) {
-    hosts.push('127.0.0.1')
-  }
+  // Seeded BEFORE the listeners accept. onAllListening seeds again with the
+  // port that actually bound; doing it only there left a window in which a
+  // request arriving between bind and seed saw an empty allowlist and got the
+  // wildcard. The assignment is idempotent, so seeding twice costs nothing.
+  seedOriginAllowlist(opts.port)
+
+  // An operator who never reads release notes still learns why their LAN URL
+  // stopped answering. A docstore in the config root is what says this install
+  // ran an older version, so a first-ever start stays quiet.
+  const noticeMarker = join(configDir, 'bind-notice')
+  announceBindChangeOnce(
+    {
+      read: () => existsSync(noticeMarker) ? readFileSync(noticeMarker, 'utf8').trim() : null,
+      write: value => writeFileSync(noticeMarker, value),
+    },
+    message => {
+      log.warn('server', message)
+      console.log(`\n${message}\n`)
+    },
+    { existingInstall: existsSync(join(configDir, 'docstore.json')) },
+  )
 
   async function listenAll(port: number, isRetry = false): Promise<void> {
-    const targets: Array<string | undefined> = hosts.length > 0 ? hosts : [undefined]
-    const opened: Server[] = []
     try {
-      for (const h of targets) {
-        const s = makeServer()
-        await new Promise<void>((resolve, reject) => {
-          const onErr = (err: NodeJS.ErrnoException) => { s.removeListener('listening', onOk); reject(err) }
-          const onOk = () => { s.removeListener('error', onErr); resolve() }
-          s.once('error', onErr)
-          s.once('listening', onOk)
-          if (h) s.listen(port, h)
-          else s.listen(port)
-        })
-        opened.push(s)
+      const bound: string[] = []
+      const opened = await openListeners(
+        bind.targets,
+        port,
+        makeServer,
+        (target, err) => log.warn(
+          'server',
+          `skipping best-effort bind on ${target.host}: ${err.code ?? err.message}`,
+        ),
+      )
+      for (const s of opened) {
         s.on('error', (err) => log.warn('server', `listener error: ${err.message}`))
+        const addr = s.address()
+        bound.push(typeof addr === 'object' && addr ? addr.address : String(addr))
       }
-      onAllListening(port)
+      onAllListening(port, bound)
     } catch (err) {
-      // Roll back any listeners that already bound at this port.
-      for (const s of opened) { try { s.close() } catch { /* best effort */ } }
       const e = err as NodeJS.ErrnoException
       if (e?.code === 'EADDRINUSE') {
         if (process.env.TINSTAR_NO_PORT_FALLBACK === '1') {
@@ -292,15 +296,32 @@ export function startServer(opts: ServerOptions) {
     }
   }
 
-  function onAllListening(port: number) {
-    const preferredHost = hosts[0] ?? 'localhost'
-    const url = `http://${preferredHost}:${port}`
+  function onAllListening(port: number, bound: string[]) {
+    boundPort = port
+    // Published so the reach opt-in route fronts the port that actually bound.
+    ctx.boundPort = port
+    const url = `http://${bind.preferredHost}:${port}`
     writePortFile(port)
-    writeHostFile(hosts[0] ?? '127.0.0.1')
+    writeHostFile(bind.hostFileValue)
     writePidFile()
-    const bindNote = hosts.length > 0 ? ` (bound to ${hosts.join(', ')})` : ''
+    // Report what actually bound, not what was asked for: the IPv6 loopback is
+    // best-effort, and a note that names an address nobody can reach is worse
+    // than no note.
+    const bindNote = ` (bound to ${bound.join(', ')})`
     log.info('server', `Tinstar running at ${url}${bindNote}`)
     console.log(`\n  Tinstar running at ${url}${bindNote}\n`)
+    // Seed the browser-origin allowlist with what this server actually is. It
+    // must never be empty: an empty allowlist answers every origin with a
+    // wildcard, which on a containment-only install would hand the whole canvas
+    // API to any page the operator visits.
+    seedOriginAllowlist(port)
+    // Reach fronts the port that ACTUALLY bound. listenAll may have walked past
+    // a busy one, and fronting the configured port would leave the remote URL
+    // pointing at nothing while localhost worked fine. A host that never opted
+    // in does nothing here.
+    void getReachCoordinator().onListening(port).catch(err => {
+      log.warn('reach', `reconcile failed: ${(err as Error).message}`)
+    })
     if (opts.open) {
       import('node:child_process').then(({ execFile }) => {
         const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
@@ -327,7 +348,10 @@ if (isDirectRun) {
   const args = process.argv.slice(2)
   const portIdx = args.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : parseInt(process.env.TINSTAR_BACKEND_PORT ?? '5273')
-  // Support repeated --host flags and/or a comma-separated list.
+  // Support repeated --host flags and/or a comma-separated list. Like
+  // bin/tinstar.js, this carries no default of its own — an empty list means
+  // "whatever resolveBindTargets decides", so the two entry points cannot
+  // disagree about what no `--host` means.
   const hosts: string[] = []
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--host' && args[i + 1]) {
