@@ -214,6 +214,36 @@ function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
   return true
 }
 
+function recapSemanticKey(entry: RecapEntry): string {
+  return JSON.stringify({
+    type: entry.type,
+    content: entry.content,
+    timestamp: entry.timestamp ?? null,
+    statusKind: entry.statusKind ?? null,
+    durationMs: entry.durationMs ?? null,
+    diff: entry.diff ?? null,
+    toolUses: entry.toolUses ?? null,
+  })
+}
+
+/** Keep the first occurrence of a recap event. Stable source IDs handle normal
+ * replay; the semantic key repairs histories written by older parsers whose IDs
+ * were random on every read. Exactness is intentional so repeated prompts from
+ * distinct turns remain distinct whenever their timestamp or metadata differs. */
+function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
+  const ids = new Set<string>()
+  const semantics = new Set<string>()
+  const normalized: RecapEntry[] = []
+  for (const entry of entries) {
+    const semanticKey = recapSemanticKey(entry)
+    if (ids.has(entry.id) || semantics.has(semanticKey)) continue
+    ids.add(entry.id)
+    semantics.add(semanticKey)
+    normalized.push(entry)
+  }
+  return normalized
+}
+
 function noticeEqual(a: Notice, b: Notice): boolean {
   return (
     a.id === b.id &&
@@ -347,6 +377,7 @@ export class DocumentStore {
           console.warn('[docstore] skipping corrupt run entry on load:', r)
           continue
         }
+        r.recapEntries = normalizeRecapEntries(Array.isArray(r.recapEntries) ? r.recapEntries : [])
         this.runs.set(r.id, r)
       }
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
@@ -588,7 +619,9 @@ export class DocumentStore {
   addRecapEntry(runId: string, entry: RecapEntry): void {
     const run = this.runs.get(runId)
     if (!run) return
-    run.recapEntries.push(entry)
+    const normalized = normalizeRecapEntries([...run.recapEntries, entry])
+    if (normalized.length === run.recapEntries.length) return
+    run.recapEntries = normalized
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
