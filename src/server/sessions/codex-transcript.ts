@@ -205,27 +205,71 @@ export interface CodexUserMessageScan {
   identity: string | null
   /** Byte boundary after the last complete JSONL record inspected. */
   nextOffset: number
+  /**
+   * True when the window contained a legacy (codex-cli <= 0.146.0)
+   * `event_msg`/`user_message` record. That format is no longer parsed for
+   * evidence; a scan that sees it can never confirm, so callers should fail
+   * loudly (upgrade codex) instead of retrying into duplicate deliveries.
+   */
+  sawLegacyUserInput: boolean
 }
 
+function joinedContentText(content: unknown, textType: string): string | null {
+  if (!Array.isArray(content)) return null
+  const parts: string[] = []
+  for (const item of content) {
+    if (item && typeof item === 'object'
+      && (item as { type?: unknown }).type === textType
+      && typeof (item as { text?: unknown }).text === 'string') {
+      parts.push((item as { text: string }).text)
+    }
+  }
+  return parts.length > 0 ? parts.join('') : null
+}
+
+interface UserInputLineInspection {
+  evidence: CodexUserMessageEvidence | null
+  legacy: boolean
+}
+
+/**
+ * Codex CLI 0.147.0 records terminal user input twice: as a `response_item`
+ * with role "user" and as an `event_msg`/`item_completed` whose item is a
+ * `UserMessage`. Either record carries the exact submitted bytes, so either
+ * one is acceptable evidence. The pre-0.147 `event_msg`/`user_message` shape
+ * is deliberately not evidence — it marks an unsupported codex version.
+ */
 function userMessageEvidence(
   line: string,
   matches: (message: string) => boolean,
-): CodexUserMessageEvidence | null {
-  if (!line.trim()) return null
+): UserInputLineInspection {
+  if (!line.trim()) return { evidence: null, legacy: false }
   try {
     const event = JSON.parse(line)
+    if (event.type === 'event_msg' && event.payload?.type === 'user_message') {
+      return { evidence: null, legacy: true }
+    }
     const message = event.type === 'event_msg'
-      && event.payload?.type === 'user_message'
-      && typeof event.payload.message === 'string'
-      ? event.payload.message
-      : null
-    if (message === null || !matches(message)) return null
+      && event.payload?.type === 'item_completed'
+      && event.payload.item?.type === 'UserMessage'
+      ? joinedContentText(event.payload.item.content, 'text')
+      : event.type === 'response_item'
+        && event.payload?.type === 'message'
+        && event.payload.role === 'user'
+        ? joinedContentText(event.payload.content, 'input_text')
+        : null
+    if (message === null || !matches(message)) {
+      return { evidence: null, legacy: false }
+    }
     return {
-      message,
-      timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
+      evidence: {
+        message,
+        timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
+      },
+      legacy: false,
     }
   } catch {
-    return null
+    return { evidence: null, legacy: false }
   }
 }
 
@@ -245,7 +289,13 @@ export async function scanCodexUserMessages(
     file = await openFile(transcriptPath, 'r')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { available: false, evidence: null, identity: null, nextOffset: 0 }
+      return {
+        available: false,
+        evidence: null,
+        identity: null,
+        nextOffset: 0,
+        sawLegacyUserInput: false,
+      }
     }
     throw error
   }
@@ -257,6 +307,7 @@ export async function scanCodexUserMessages(
       ? 0
       : (startOffset >= 0 && startOffset <= size ? startOffset : 0)
     let committedOffset = position
+    let sawLegacyUserInput = false
     let carry = Buffer.alloc(0)
     const chunk = Buffer.alloc(256 * 1024)
 
@@ -272,13 +323,20 @@ export async function scanCodexUserMessages(
       let lineStart = 0
       let newline = combined.indexOf(0x0a, lineStart)
       while (newline >= 0) {
-        const evidence = userMessageEvidence(
+        const inspection = userMessageEvidence(
           combined.subarray(lineStart, newline).toString('utf8'),
           matches,
         )
+        sawLegacyUserInput ||= inspection.legacy
         committedOffset = bufferStart + newline + 1
-        if (evidence) {
-          return { available: true, evidence, identity, nextOffset: committedOffset }
+        if (inspection.evidence) {
+          return {
+            available: true,
+            evidence: inspection.evidence,
+            identity,
+            nextOffset: committedOffset,
+            sawLegacyUserInput,
+          }
         }
         lineStart = newline + 1
         newline = combined.indexOf(0x0a, lineStart)
@@ -288,14 +346,29 @@ export async function scanCodexUserMessages(
     }
 
     if (carry.length > 0) {
-      const evidence = userMessageEvidence(carry.toString('utf8'), matches)
-      if (evidence) return { available: true, evidence, identity, nextOffset: size }
+      const inspection = userMessageEvidence(carry.toString('utf8'), matches)
+      sawLegacyUserInput ||= inspection.legacy
+      if (inspection.evidence) {
+        return {
+          available: true,
+          evidence: inspection.evidence,
+          identity,
+          nextOffset: size,
+          sawLegacyUserInput,
+        }
+      }
       try {
         JSON.parse(carry.toString('utf8'))
         committedOffset = size
       } catch { /* retain the incomplete record for the next scan */ }
     }
-    return { available: true, evidence: null, identity, nextOffset: committedOffset }
+    return {
+      available: true,
+      evidence: null,
+      identity,
+      nextOffset: committedOffset,
+      sawLegacyUserInput,
+    }
   } finally {
     await file.close()
   }

@@ -8,6 +8,12 @@ import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { getConfigRoot } from './configRoot.js'
 import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
+import {
+  MIN_SUPPORTED_CODEX_VERSION,
+  compareVersions,
+  parseCodexVersion,
+  unconfirmedAcceptedFailures,
+} from './codexSupport.js'
 
 // ── Formatting ──
 
@@ -207,6 +213,23 @@ async function doctor() {
         return { status: 'fail', label: 'claude — not found', detail: 'agent sessions will not start' }
       }
     })(),
+    // codex is optional, but below the floor its rollouts cannot confirm
+    // deliveries: every NATS message to a Codex session would fail after
+    // duplicate injections, so an outdated install is a hard fail.
+    (() => {
+      const out = cmdVersion('codex', ['--version'])
+      if (!out) return { status: 'skip', label: 'codex — not installed', detail: 'Codex sessions unavailable (optional)' }
+      const version = parseCodexVersion(out)
+      if (!version) return { status: 'warn', summarize: true, label: 'codex — unrecognized version output', detail: out.slice(0, 60) }
+      if (compareVersions(version, MIN_SUPPORTED_CODEX_VERSION) < 0) {
+        return {
+          status: 'fail',
+          label: `codex ${version} — below supported ${MIN_SUPPORTED_CODEX_VERSION}`,
+          detail: 'its rollout format predates the delivery scanner; message delivery to Codex sessions will fail — upgrade codex',
+        }
+      }
+      return { status: 'pass', label: `codex ${version}` }
+    })(),
   ]
   const ttydService = checkStandaloneTtydService()
   if (ttydService) sysChecks.push(ttydService)
@@ -404,6 +427,39 @@ async function doctor() {
     }
     if (orphanCount === 0) {
       printCheck({ status: 'pass', label: 'no orphan runs' })
+    }
+  }
+
+  // Delivery ledger — terminal failures where the terminal accepted every
+  // injection but the recipient transcript never yielded confirmation
+  // evidence. Genuine non-delivery fails differently (recipient replaced,
+  // submission error), so this pattern is the fingerprint of a provider
+  // transcript-format change: the scanner went blind, redelivered, and gave
+  // up. Surface it so the next codex schema change is a doctor warning, not
+  // days of silent duplicate deliveries.
+  const LEDGER = join(ROOT, 'delivery-ledger.json')
+  if (existsSync(LEDGER)) {
+    try {
+      const ledger = JSON.parse(readFileSync(LEDGER, 'utf-8'))
+      const suspects = unconfirmedAcceptedFailures(ledger.deliveries)
+      if (suspects.length > 0) {
+        const sample = suspects[0]
+        const recipient = `${sample.recipient?.providerId ?? '?'}/${sample.recipient?.sessionId ?? '?'}`
+        const c = {
+          status: 'warn',
+          summarize: true,
+          label: `${suspects.length} ${suspects.length === 1 ? 'delivery' : 'deliveries'} accepted by the terminal but never confirmed`,
+          detail: `e.g. ${sample.id} → ${recipient}; provider transcript format may have changed — check the provider CLI version`,
+        }
+        printCheck(c)
+        issues.push(c)
+      } else {
+        printCheck({ status: 'pass', label: 'no unconfirmed-but-accepted delivery failures' })
+      }
+    } catch (err) {
+      const c = { status: 'fail', label: 'delivery-ledger.json — corrupt', detail: err.message }
+      printCheck(c)
+      issues.push(c)
     }
   }
 
