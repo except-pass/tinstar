@@ -19,6 +19,11 @@ import {
   discoverTranscript,
   scanCodexUserMessages,
 } from '../../sessions/codex-transcript'
+import {
+  legacyRolloutUserMessage,
+  rolloutUserInputItemCompleted,
+  rolloutUserInputResponseItem,
+} from '../../sessions/__tests__/codex-rollout-shapes'
 
 const NOW = '2026-08-01T12:00:00.000Z'
 
@@ -653,6 +658,27 @@ describe('Codex terminal delivery', () => {
     expect(d.submitPrompt).toHaveBeenCalledOnce()
   })
 
+  it('fails non-retryable when the rollout records input in the legacy pre-0.147 shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-'))
+    const transcript = join(dir, 'rollout.jsonl')
+    const d = deps()
+    d.resolveTranscript.mockResolvedValue(transcript)
+    const adapter = new CodexDeliveryAdapter(d)
+    const accepted = await adapter.accept(request())
+    if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
+    const deliveredPrompt = d.submitPrompt.mock.calls[0]![0]
+    // Old codex records exactly the injected bytes — but in the retired shape.
+    // Retrying can never confirm, so the delivery must fail loudly instead of
+    // being re-injected as a duplicate.
+    appendFileSync(transcript, `${JSON.stringify(legacyRolloutUserMessage(deliveredPrompt))}\n`)
+
+    expect(await adapter.confirm(accepted)).toMatchObject({
+      state: 'failed',
+      retryable: false,
+      reason: 'The Codex CLI writes a legacy rollout format Tinstar no longer reads; upgrade the codex CLI',
+    })
+  })
+
   it('confirms only an exact router envelope recorded as a rollout user_message', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-'))
     const transcript = join(dir, 'rollout.jsonl')
@@ -670,11 +696,10 @@ describe('Codex terminal delivery', () => {
     if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
     const deliveredPrompt = d.submitPrompt.mock.calls[0]![0]
     appendFileSync(transcript, [
-      JSON.stringify({
-        timestamp: NOW,
-        type: 'event_msg',
-        payload: { type: 'user_message', message: `The body mentions ${accepted.messageId}, but is not an envelope.` },
-      }),
+      JSON.stringify(rolloutUserInputItemCompleted(
+        `The body mentions ${accepted.messageId}, but is not an envelope.`,
+        NOW,
+      )),
       '',
     ].join('\n'))
 
@@ -690,23 +715,15 @@ describe('Codex terminal delivery', () => {
       { ...envelope, recipient: { ...envelope.recipient, incarnation: 'forged-recipient' } },
     ]
     for (const corrupted of corruptions) {
-      appendFileSync(transcript, `${JSON.stringify({
-        timestamp: NOW,
-        type: 'event_msg',
-        payload: {
-          type: 'user_message',
-          message: `${CODEX_MESSAGE_ENVELOPE_MARKER} ${JSON.stringify(corrupted)}`,
-        },
-      })}\n`)
+      appendFileSync(transcript, `${JSON.stringify(rolloutUserInputItemCompleted(
+        `${CODEX_MESSAGE_ENVELOPE_MARKER} ${JSON.stringify(corrupted)}`,
+        NOW,
+      ))}\n`)
       expect(await adapter.confirm(accepted)).toMatchObject({ state: 'pending' })
     }
 
     appendFileSync(transcript, [
-      JSON.stringify({
-        timestamp: NOW,
-        type: 'event_msg',
-        payload: { type: 'user_message', message: deliveredPrompt },
-      }),
+      JSON.stringify(rolloutUserInputItemCompleted(deliveredPrompt, NOW)),
       '',
     ].join('\n'))
     expect(await adapter.confirm({
@@ -749,16 +766,12 @@ describe('Codex terminal delivery', () => {
     }))
     if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
     const deliveredPrompt = d.submitPrompt.mock.calls[0]![0]
-    writeFileSync(wrongTranscript, `${JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message: 'another session in this worktree' },
-    })}\n`)
-    writeFileSync(correctTranscript, `${JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message: deliveredPrompt },
-    })}\n`)
+    writeFileSync(wrongTranscript, `${JSON.stringify(
+      rolloutUserInputItemCompleted('another session in this worktree', NOW),
+    )}\n`)
+    writeFileSync(correctTranscript, `${JSON.stringify(
+      rolloutUserInputItemCompleted(deliveredPrompt, NOW),
+    )}\n`)
 
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
     now += 5_000
@@ -778,11 +791,9 @@ describe('Codex terminal delivery', () => {
     const adapter = new CodexDeliveryAdapter(d)
     const accepted = await adapter.accept(request())
     if (accepted.state !== 'accepted') throw new Error('fixture was not accepted')
-    writeFileSync(transcript, `${JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message: 'a different message' },
-    })}\n`)
+    writeFileSync(transcript, `${JSON.stringify(
+      rolloutUserInputResponseItem('a different message', NOW),
+    )}\n`)
 
     await expect(adapter.confirm(accepted)).resolves.toMatchObject({ state: 'pending' })
     now += 5_000
@@ -803,11 +814,9 @@ describe('Codex terminal delivery', () => {
     const adapter = new CodexDeliveryAdapter(d)
     const first = await adapter.accept(request({ attempt: 1 }))
     if (first.state !== 'accepted') throw new Error('first fixture was not accepted')
-    writeFileSync(firstTranscript, `${JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message: d.submitPrompt.mock.calls[0]![0] },
-    })}\n`)
+    writeFileSync(firstTranscript, `${JSON.stringify(
+      rolloutUserInputItemCompleted(d.submitPrompt.mock.calls[0]![0], NOW),
+    )}\n`)
     await expect(adapter.confirm(first)).resolves.toMatchObject({ state: 'confirmed' })
 
     const second = await adapter.accept(request({
@@ -816,11 +825,12 @@ describe('Codex terminal delivery', () => {
       attempt: 1,
     }))
     if (second.state !== 'accepted') throw new Error('second fixture was not accepted')
-    writeFileSync(secondTranscript, `${JSON.stringify({
-      timestamp: new Date(now).toISOString(),
-      type: 'event_msg',
-      payload: { type: 'user_message', message: d.submitPrompt.mock.calls[1]![0] },
-    })}\n`)
+    writeFileSync(secondTranscript, `${JSON.stringify(
+      rolloutUserInputItemCompleted(
+        d.submitPrompt.mock.calls[1]![0],
+        new Date(now).toISOString(),
+      ),
+    )}\n`)
     now += 5_000
 
     await expect(adapter.confirm(second)).resolves.toMatchObject({ state: 'confirmed' })
@@ -830,11 +840,9 @@ describe('Codex terminal delivery', () => {
   it('preserves exact user-message evidence across a UTF-8 chunk boundary', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-utf8-'))
     const transcript = join(dir, 'rollout.jsonl')
-    const eventFor = (message: string) => JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message },
-    })
+    const eventFor = (message: string) => JSON.stringify(
+      rolloutUserInputItemCompleted(message, NOW),
+    )
     const marker = 'é-boundary'
     const probe = eventFor(marker)
     const markerByteOffset = Buffer.byteLength(probe.slice(0, probe.indexOf(marker)))
@@ -858,11 +866,9 @@ describe('Codex terminal delivery', () => {
   it('incrementally scans appended records without skipping an incomplete trailing record', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-incremental-'))
     const transcript = join(dir, 'rollout.jsonl')
-    const eventFor = (message: string) => JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message },
-    })
+    const eventFor = (message: string) => JSON.stringify(
+      rolloutUserInputItemCompleted(message, NOW),
+    )
     writeFileSync(transcript, `${eventFor('older message')}\n`)
 
     const first = await scanCodexUserMessages(transcript, 0, message => message === 'target')
@@ -898,11 +904,9 @@ describe('Codex terminal delivery', () => {
   it('restarts an incremental scan when the transcript identity changes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-delivery-rotation-'))
     const transcript = join(dir, 'rollout.jsonl')
-    const eventFor = (message: string) => JSON.stringify({
-      timestamp: NOW,
-      type: 'event_msg',
-      payload: { type: 'user_message', message },
-    })
+    const eventFor = (message: string) => JSON.stringify(
+      rolloutUserInputItemCompleted(message, NOW),
+    )
     writeFileSync(transcript, `${eventFor('old')}\n`)
     const first = await scanCodexUserMessages(transcript, 0, message => message === 'target')
     renameSync(transcript, join(dir, 'rollout.previous.jsonl'))
