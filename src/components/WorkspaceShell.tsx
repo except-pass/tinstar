@@ -908,12 +908,11 @@ function WorkspaceShellInner() {
   // Click on canvas widget → select in hierarchy + expand ancestors in Canvas.
   const handleSelectRun = useCallback((runId: string, additive = false) => {
     const nodeId = `run-${runId}`
-    // Focus navigation leaves the hierarchy's collapse state alone. This also
-    // keeps its session order stable across consecutive next/previous chords.
-    if (!focusMode) {
-      const ancestors = findAncestorIds(sidebarTree, nodeId)
-      if (ancestors.length > 0) expandAll(ancestors)
-    }
+    // A cycled Focus workspace can live below a collapsed project/worktree.
+    // Reveal its full path so the selected hierarchy row is actually rendered.
+    // expandAll is additive, so already-open branches and their ordering stay put.
+    const ancestors = findAncestorIds(sidebarTree, nodeId)
+    if (ancestors.length > 0) expandAll(ancestors)
     if (additive) {
       toggleSelect(nodeId, 'run')
     } else {

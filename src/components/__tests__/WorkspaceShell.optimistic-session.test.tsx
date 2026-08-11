@@ -3,11 +3,17 @@ import { act, render, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RunRepository, TaxonomyRepository } from '../../domain/repositories'
+import type { Run } from '../../domain/types'
 
 const harness = vi.hoisted(() => ({
   backend: null as unknown as Record<string, unknown>,
   createSessionProps: null as null | Record<string, unknown>,
   infiniteCanvasProps: null as null | Record<string, unknown>,
+  globalHotkeys: null as null | Record<string, () => void>,
+  focusMode: false,
+  select: vi.fn(),
+  toggleSelect: vi.fn(),
+  expandAll: vi.fn(),
 }))
 
 vi.mock('../../hooks/useBackendState', () => ({ useBackendState: () => harness.backend }))
@@ -21,7 +27,11 @@ vi.mock('../../hooks/useHiddenRuns', () => ({
   }),
 }))
 vi.mock('../../hooks/useOnboardingState', () => ({ useOnboardingState: () => ({ active: null }) }))
-vi.mock('../../hotkeys/useGlobalHotkeys', () => ({ useGlobalHotkeys: () => undefined }))
+vi.mock('../../hotkeys/useGlobalHotkeys', () => ({
+  useGlobalHotkeys: (handlers: Record<string, () => void>) => {
+    harness.globalHotkeys = handlers
+  },
+}))
 vi.mock('../../hotkeys/contextRouter', () => ({ useContextRouter: () => undefined }))
 vi.mock('../../hotkeys/actionHandlerRegistry', () => ({
   triggerWidgetFlourish: vi.fn(),
@@ -30,7 +40,7 @@ vi.mock('../../hotkeys/actionHandlerRegistry', () => ({
 }))
 vi.mock('../../lib/uiPrefs', () => ({
   PREFS_STORAGE_KEY: 'tinstar-test-prefs',
-  getPref: vi.fn(() => undefined),
+  getPref: vi.fn((key: string) => key === 'focusMode' ? harness.focusMode : undefined),
   setPref: vi.fn(),
 }))
 vi.mock('../../context/ConfigContext', () => ({
@@ -42,10 +52,10 @@ vi.mock('../../widgets', () => ({ pluginsReady: Promise.resolve() }))
 vi.mock('../SelectionProvider', () => ({
   SelectionProvider: ({ children }: { children: ReactNode }) => children,
   useSelection: () => ({
-    select: vi.fn(),
-    toggleSelect: vi.fn(),
+    select: harness.select,
+    toggleSelect: harness.toggleSelect,
     deselect: vi.fn(),
-    expandAll: vi.fn(),
+    expandAll: harness.expandAll,
     selectedCount: 0,
     state: { selectedType: null, selectedIds: new Set<string>() },
   }),
@@ -111,6 +121,11 @@ describe('WorkspaceShell optimistic session lifecycle', () => {
   beforeEach(() => {
     harness.createSessionProps = null
     harness.infiniteCanvasProps = null
+    harness.globalHotkeys = null
+    harness.focusMode = false
+    harness.select.mockReset()
+    harness.toggleSelect.mockReset()
+    harness.expandAll.mockReset()
     harness.backend = {
       runRepo: new RunRepository([]),
       taxRepo: new TaxonomyRepository([], [], [], []),
@@ -156,5 +171,31 @@ describe('WorkspaceShell optimistic session lifecycle', () => {
     })
     expect(placementCreated).toHaveBeenCalledOnce()
     expect(placementCreated).toHaveBeenCalledWith('optimistic-run')
+  })
+
+  it('expands hierarchy ancestors when cycling to a run workspace in Focus mode', async () => {
+    harness.focusMode = true
+    harness.backend = {
+      ...harness.backend,
+      runRepo: new RunRepository([{
+        id: 'run-one',
+        sessionId: 'session-one',
+        status: 'idle',
+        spaceId: 'space-1',
+        scope: { project: 'tinstar', worktree: 'hierarchyexpand' },
+      } as Run]),
+      readyQueue: ['session-one'],
+    }
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(harness.globalHotkeys).not.toBeNull())
+
+    act(() => harness.globalHotkeys?.onCycleReadyPrev?.())
+
+    expect(harness.expandAll).toHaveBeenCalledWith([
+      'project-tinstar',
+      'worktree-tinstar--hierarchyexpand',
+    ])
+    expect(harness.select).toHaveBeenCalledWith('run-run-one', 'run')
   })
 })
