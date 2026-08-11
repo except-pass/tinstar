@@ -4,6 +4,7 @@ import { getDimensionIcon } from '../../domain/dimension-meta'
 import type { GroupingDimension } from '../../domain/types'
 import { hexToRgba } from '../../components/runAccent'
 import { useDimensionMeta } from '../../hooks/useDimensionMeta'
+import { DimensionIcon } from '../../components/DimensionIcon'
 
 const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
@@ -56,7 +57,8 @@ export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps)
         onDragStart={(e) => e.preventDefault()}
       >
         <span className="text-xs font-display uppercase tracking-wider flex-1" style={{ color: hexToRgba(accent, 0.7) }}>
-          {icon} {node.label}
+          <DimensionIcon icon={icon} className="mr-1 text-xs" />
+          <span>{node.label}</span>
         </span>
         {onMenuOpen && (
           <button
