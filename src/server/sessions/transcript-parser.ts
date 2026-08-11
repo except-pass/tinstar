@@ -64,7 +64,7 @@ type OffsetState = {
 }
 const offsets = new Map<string, OffsetState>()
 
-function stableDigest(...parts: string[]): string {
+export function stableRecapDigest(...parts: string[]): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 24)
 }
 
@@ -396,7 +396,7 @@ function extractRecord(obj: Record<string, unknown>): ParsedRecord | null {
   if (type === 'user') {
     const text = extractUserText(obj)
     return text ? {
-      type: 'user', id: nativeId ?? stableDigest('user', timestamp, text),
+      type: 'user', id: nativeId ?? stableRecapDigest('user', timestamp, text),
       text, timestamp, toolUses: 0,
     } : null
   }
@@ -408,7 +408,7 @@ function extractRecord(obj: Record<string, unknown>): ParsedRecord | null {
     if (!text && toolUses === 0) return null
     const agentText = text ?? ''
     return {
-      type: 'agent', id: nativeId ?? stableDigest('agent', timestamp, agentText, String(toolUses)),
+      type: 'agent', id: nativeId ?? stableRecapDigest('agent', timestamp, agentText, String(toolUses)),
       text: agentText, timestamp, toolUses,
     }
   }

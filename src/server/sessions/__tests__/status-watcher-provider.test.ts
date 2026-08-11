@@ -274,7 +274,7 @@ describe('StatusWatcher provider transcripts', () => {
     )
   })
 
-  it('lets an adapter retain recap parsing on unchanged idle observations', async () => {
+  it('polls recap entries on unchanged idle observations', async () => {
     const transcriptPath = join(scratch, 'boundary.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const parseRecapEntries = vi.fn(() => [{
@@ -297,7 +297,6 @@ describe('StatusWatcher provider transcripts', () => {
           discover: async () => transcriptPath,
           readStatus: () => ({ state: 'idle' }),
           parseRecapEntries,
-          parseRecapWhileIdle: true,
           resetOffset: vi.fn(),
         },
       },

@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { log } from '../logger'
-import { readTail } from './transcript-parser'
+import { readTail, stableRecapDigest } from './transcript-parser'
 import type { RecapEntry } from '../../types'
 import type {
   ProviderQuota,
@@ -754,14 +754,21 @@ type CodexRecapState = {
   carry: string
   currentTurnId: string | null
   startedAtMs: number | null
-  promptRepresentations: Map<string, Set<'event' | 'response'>>
+  promptRepresentations: Map<string, 'event' | 'response'>
   completion: CodexCompletion | null
 }
 
 const codexOffsets = new Map<string, CodexRecapState>()
 
-function codexDigest(...parts: string[]): string {
-  return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 24)
+function newCodexRecapState(): CodexRecapState {
+  return {
+    byteOffset: 0,
+    carry: '',
+    currentTurnId: null,
+    startedAtMs: null,
+    promptRepresentations: new Map(),
+    completion: null,
+  }
 }
 
 function epochMs(value: unknown): number | null {
@@ -799,23 +806,9 @@ export function parseCodexRecapEntries(sessionName: string, transcriptPath: stri
   if (!existsSync(transcriptPath)) return []
 
   const size = statSync(transcriptPath).size
-  let state = codexOffsets.get(sessionName) ?? {
-    byteOffset: 0,
-    carry: '',
-    currentTurnId: null,
-    startedAtMs: null,
-    promptRepresentations: new Map(),
-    completion: null,
-  }
+  let state = codexOffsets.get(sessionName) ?? newCodexRecapState()
   if (size < state.byteOffset) {
-    state = {
-      byteOffset: 0,
-      carry: '',
-      currentTurnId: null,
-      startedAtMs: null,
-      promptRepresentations: new Map(),
-      completion: null,
-    }
+    state = newCodexRecapState()
   }
 
   const entries: RecapEntry[] = []
@@ -873,14 +866,12 @@ export function parseCodexRecapEntries(sessionName: string, transcriptPath: stri
             } else if (obj.type === 'event_msg' && p?.type === 'user_message' && typeof p.message === 'string') {
               const content = p.message.trim()
               if (!content) continue
-              const turnId = state.currentTurnId ?? `unknown-${codexDigest(ts)}`
+              const turnId = state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
               const key = `${turnId}\0${content}`
-              const sources = state.promptRepresentations.get(key) ?? new Set()
-              if (sources.has('response')) continue
-              sources.add('event')
-              state.promptRepresentations.set(key, sources)
+              if (state.promptRepresentations.get(key) === 'response') continue
+              state.promptRepresentations.set(key, 'event')
               entries.push({
-                id: `codex:turn:${turnId}:user:${codexDigest(content)}`,
+                id: `codex:turn:${turnId}:user:${stableRecapDigest(content)}`,
                 type: 'user', content, timestamp: ts,
               })
             } else if (obj.type === 'response_item' && p) {
@@ -889,19 +880,17 @@ export function parseCodexRecapEntries(sessionName: string, transcriptPath: stri
               const metadata = p.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined
               const turnId = typeof metadata?.turn_id === 'string'
                 ? metadata.turn_id
-                : state.currentTurnId ?? `unknown-${codexDigest(ts)}`
+                : state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
               state.currentTurnId = turnId
               const key = `${turnId}\0${content}`
-              const sources = state.promptRepresentations.get(key) ?? new Set()
-              if (sources.has('event')) continue
-              sources.add('response')
-              state.promptRepresentations.set(key, sources)
-              const messageId = typeof p.id === 'string' ? p.id : codexDigest(turnId, ts, content)
+              if (state.promptRepresentations.get(key) === 'event') continue
+              state.promptRepresentations.set(key, 'response')
+              const messageId = typeof p.id === 'string' ? p.id : stableRecapDigest(turnId, ts, content)
               entries.push({ id: `codex:message:${messageId}`, type: 'user', content, timestamp: ts })
             } else if (obj.type === 'event_msg' && p?.type === 'task_complete' && typeof p.last_agent_message === 'string') {
               const turnId = typeof p.turn_id === 'string'
                 ? p.turn_id
-                : state.currentTurnId ?? `unknown-${codexDigest(ts)}`
+                : state.currentTurnId ?? `unknown-${stableRecapDigest(ts)}`
               const completedAtMs = epochMs(p.completed_at) ?? epochMs(ts)
               const explicitDuration = typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0
                 ? p.duration_ms

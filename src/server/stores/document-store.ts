@@ -249,6 +249,13 @@ function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
   return normalized
 }
 
+function hasRecapEntry(entries: RecapEntry[], candidate: RecapEntry): boolean {
+  if (entries.some(entry => entry.id === candidate.id)) return true
+  if (!hasLegacyRandomRecapId(candidate)) return false
+  const semanticKey = recapSemanticKey(candidate)
+  return entries.some(entry => hasLegacyRandomRecapId(entry) && recapSemanticKey(entry) === semanticKey)
+}
+
 function noticeEqual(a: Notice, b: Notice): boolean {
   return (
     a.id === b.id &&
@@ -624,9 +631,8 @@ export class DocumentStore {
   addRecapEntry(runId: string, entry: RecapEntry): void {
     const run = this.runs.get(runId)
     if (!run) return
-    const normalized = normalizeRecapEntries([...run.recapEntries, entry])
-    if (normalized.length === run.recapEntries.length) return
-    run.recapEntries = normalized
+    if (hasRecapEntry(run.recapEntries, entry)) return
+    run.recapEntries.push(entry)
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
