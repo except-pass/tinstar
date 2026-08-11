@@ -219,9 +219,24 @@ function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   )
 }
 
-function StatusMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
+function formatRecapDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes === 0) return `${seconds}s`
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`
+}
+
+function StatusMessage({ entry, accent, working = false }: { entry: RecapEntry; accent: string; working?: boolean }) {
+  const completed = entry.statusKind === 'completed'
+  const label = completed && entry.durationMs !== undefined
+    ? `Completed in ${formatRecapDuration(entry.durationMs)}`
+    : entry.content
   return (
-    <div className="flex items-center gap-3 py-1">
+    <div
+      className="flex items-center gap-3 py-1"
+      data-testid={working ? 'recap-working-status' : completed ? 'recap-completed-status' : undefined}
+    >
       <div
         className="h-px flex-1"
         style={{ background: `linear-gradient(to right, transparent, ${hexToRgba(accent, 0.15)})` }}
@@ -230,11 +245,15 @@ function StatusMessage({ entry, accent }: { entry: RecapEntry; accent: string })
         className="flex items-center gap-2 text-2xs font-mono tracking-wide uppercase"
         style={{ color: hexToRgba(accent, 0.5) }}
       >
-        <span
-          className="w-1.5 h-1.5 rounded-full animate-pulse-glow"
-          style={{ background: accent, boxShadow: `0 0 4px ${accent}` }}
-        />
-        {entry.content}
+        {completed ? (
+          <span className="material-symbols-outlined text-xs" aria-hidden="true">check_circle</span>
+        ) : (
+          <span
+            className="w-1.5 h-1.5 rounded-full animate-pulse-glow"
+            style={{ background: accent, boxShadow: `0 0 4px ${accent}` }}
+          />
+        )}
+        {label}
       </div>
       <div
         className="h-px flex-1"
@@ -964,7 +983,7 @@ export function PromptComposer({
   composerFocusTrigger,
 }: PromptComposerProps) {
   const TABS = ['recap', 'terminal'] as const
-  const fallbackTab: 'recap' | 'terminal' = defaultTab ?? (port ? 'terminal' : 'recap')
+  const fallbackTab: 'recap' | 'terminal' = defaultTab ?? 'recap'
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(fallbackTab)
   const activeTab = controlledTab
     ?? (activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? fallbackTab) : internalActiveTab)
@@ -979,7 +998,7 @@ export function PromptComposer({
     if (contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
-  }, [activeTab])
+  }, [activeTab, recapEntries, status])
 
   return (
     <section
@@ -1041,6 +1060,13 @@ export function PromptComposer({
                 case 'status': return <StatusMessage key={entry.id} entry={entry} accent={accent} />
               }
             })}
+            {status === 'running' && (
+              <StatusMessage
+                entry={{ id: 'recap-working', type: 'status', content: 'Working' }}
+                accent={accent}
+                working
+              />
+            )}
           </div>
         </div>
       ) : (
