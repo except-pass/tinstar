@@ -18,6 +18,7 @@ import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
+import { DimensionIcon } from './DimensionIcon'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
 
 /** widgetType → resolved icon, so plugin-widget hierarchy rows show the plugin's own icon. */
@@ -266,6 +267,11 @@ function SidebarNode({
   // and skips the entity-style kebab menu (Start Session / Add Child / etc.).
   const isPluginWidget = pluginWidgetIds?.has(node.entityId) === true
   const isWorkWidget = (node.type in WORK_WIDGET_META) || isPluginWidget
+  const fallbackIcon = WORK_WIDGET_META[node.type]?.icon ?? (
+    isPluginWidget
+      ? ''
+      : <DimensionIcon icon={dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type)} />
+  )
   const isScopeGroup = node.type === 'project' || node.type === 'worktree' || node.type === 'unscoped'
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   // Background run rendered in the tree ⇒ toggle-revealed or attention
@@ -415,7 +421,7 @@ function SidebarNode({
                 : (node.agentIcon ?? '▶'))
             : isPluginWidget && isIconUrl(pluginIconByType.get(node.type))
               ? <AgentIcon icon={pluginIconByType.get(node.type)} className="w-4 h-4" />
-              : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
+              : fallbackIcon}
         </span>
 
         {/* Color dot */}
@@ -1028,7 +1034,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           {dimensions.map((dim, i) => (
             <span key={dim} className="flex items-center gap-0.5 shrink-0">
               {i > 0 && <span className="text-2xs text-slate-600 mx-0.5">&gt;</span>}
-              <span className="text-2xs" aria-hidden>{dimensionIconMap[dim] ?? ''}</span>
+              <DimensionIcon icon={dimensionIconMap[dim] ?? ''} className="text-2xs" />
               <span className="text-2xs text-slate-500 truncate">{dimensionLabelMap[dim] ?? dim}</span>
             </span>
           ))}
@@ -1166,7 +1172,11 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           }}
           data-testid="drag-ghost"
         >
-          {dimensionIconMap[dragState.nodeType as GroupingDimension] ?? getDimensionIcon(dragState.nodeType)} {dragState.label}
+          <DimensionIcon
+            icon={dimensionIconMap[dragState.nodeType as GroupingDimension] ?? getDimensionIcon(dragState.nodeType)}
+            className="mr-1"
+          />
+          {dragState.label}
         </div>
       )}
     </div>

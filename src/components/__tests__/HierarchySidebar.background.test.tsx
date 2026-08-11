@@ -9,6 +9,8 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import type { TreeNode } from '../../domain/types'
 import HierarchySidebar from '../HierarchySidebar'
 
+const sidebarDrag = vi.hoisted(() => ({ dragState: null as null | Record<string, unknown> }))
+
 vi.mock('../../lib/uiPrefs', () => ({
   getPref: vi.fn(() => undefined),
   setPref: vi.fn(),
@@ -39,7 +41,7 @@ vi.mock('../SelectionProvider', () => ({
 
 vi.mock('../../hooks/useSidebarDrag', () => ({
   useSidebarDrag: () => ({
-    dragState: null,
+    dragState: sidebarDrag.dragState,
     dropTarget: null,
     scrollContainerRef: { current: null },
     dragInitiated: { current: false },
@@ -50,7 +52,10 @@ vi.mock('../../hooks/useSidebarDrag', () => ({
 }))
 
 vi.mock('../../hooks/useDimensionMeta', () => ({
-  useDimensionMeta: () => [],
+  useDimensionMeta: () => [
+    { internalType: 'project', label: 'Project', icon: 'folder' },
+    { internalType: 'worktree', label: 'Worktree', icon: 'account_tree' },
+  ],
 }))
 
 vi.mock('../../hotkeys/ConstellationContext', () => ({
@@ -87,6 +92,7 @@ vi.mock('../agentIcon', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  sidebarDrag.dragState = null
 })
 
 function runNode(id: string, overrides: Partial<TreeNode> = {}): TreeNode {
@@ -100,6 +106,18 @@ function runNode(id: string, overrides: Partial<TreeNode> = {}): TreeNode {
     activeCount: 0,
     status: 'idle',
     ...overrides,
+  }
+}
+
+function projectNode(id: string): TreeNode {
+  return {
+    id: `project-${id}`,
+    label: id,
+    type: 'project',
+    entityId: id,
+    children: [],
+    runCount: 1,
+    activeCount: 1,
   }
 }
 
@@ -212,5 +230,32 @@ describe('HierarchySidebar background row marking', () => {
   it('renders no badges when backgroundRunIds is absent', () => {
     renderSidebar({ tree: [runNode('r1')] })
     expect(screen.queryByTestId('sidebar-background-badge-run-r1')).toBeNull()
+  })
+})
+
+describe('HierarchySidebar dimension icons', () => {
+  it('renders Material Symbols ligatures as icons in the breadcrumb and tree rows', () => {
+    renderSidebar({
+      tree: [projectNode('cmsandbox')],
+      dimensions: ['project', 'worktree'],
+    })
+
+    for (const glyph of screen.getAllByText('folder')) {
+      expect(glyph).toHaveClass('material-symbols-outlined')
+    }
+    expect(screen.getByText('account_tree')).toHaveClass('material-symbols-outlined')
+  })
+
+  it('renders the dragged dimension ligature as a Material Symbol', () => {
+    sidebarDrag.dragState = {
+      nodeId: 'project-cmsandbox',
+      nodeType: 'project',
+      label: 'cmsandbox',
+      currentY: 100,
+    }
+    renderSidebar({ dimensions: ['project', 'worktree'] })
+
+    const ghost = screen.getByTestId('drag-ghost')
+    expect(ghost.querySelector('.material-symbols-outlined')).toHaveTextContent('folder')
   })
 })
