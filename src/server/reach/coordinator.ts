@@ -14,9 +14,16 @@ import {
 
 /** What `revokeOurMapping` observed — not what it intended. */
 type RevokeOutcome =
+  /** Nothing recorded at all — there was genuinely nothing of ours to take down. */
   | { kind: 'nothing' }
   | { kind: 'revoked' }
   | { kind: 'failed'; url: string; detail: string }
+  /**
+   * A mapping IS recorded but it belongs to another instance. Distinct from
+   * 'nothing': we revoked nothing in both cases, but here something is still
+   * published, so answering 'off' would spend a host-global grant we do not own.
+   */
+  | { kind: 'foreign'; url: string }
 
 export interface ReachCoordinatorOptions {
   configRoot: string
@@ -91,12 +98,29 @@ export class ReachCoordinator {
 
   /** Turns the opt-in off, and takes down our mapping if we hold one. */
   async disable(): Promise<ReachStatus> {
-    if (this.disabled) return { state: 'off' }
+    // 'off' is a claim that this instance CHECKED and nothing of ours is
+    // published. An instance with reach disabled checked nothing, so it may not
+    // make that claim: the CLI treats 'off' as confirmation and deletes the
+    // host-global sudoers grant, which a second backend legitimately holding a
+    // mapping still needs.
+    if (this.disabled) {
+      return {
+        state: 'refused',
+        detail: 'reach is disabled for this instance, so it cannot confirm any mapping is down',
+      }
+    }
     // The preference records the operator's wish and is written first: that much
     // is never in doubt, even when the provider will not cooperate.
     writeReachPreference(this.configRoot, { enabled: false, provider: this.provider.name })
     const outcome = await this.revokeOurMapping()
     if (outcome.kind === 'failed') return this.stranded(outcome.url, outcome.detail)
+    if (outcome.kind === 'foreign') {
+      return {
+        state: 'refused',
+        detail: `${this.provider.name} serves ${outcome.url} for another instance — `
+          + 'this one revoked nothing, so the privilege grant must stay',
+      }
+    }
     return { state: 'off' }
   }
 
@@ -217,7 +241,8 @@ export class ReachCoordinator {
    */
   private async revokeOurMapping(): Promise<RevokeOutcome> {
     const recorded = readReachMapping(this.configRoot)
-    if (!mappingIsOurs(recorded, this.instanceId) || !recorded) return { kind: 'nothing' }
+    if (!recorded) return { kind: 'nothing' }
+    if (!mappingIsOurs(recorded, this.instanceId)) return { kind: 'foreign', url: recorded.url }
     try {
       await this.provider.revoke({ port: recorded.port, url: recorded.url })
     } catch (err) {

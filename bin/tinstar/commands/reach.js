@@ -126,13 +126,25 @@ async function reachOff() {
 
   let ok = false
   let body = null
+  let unreachable = false
   try {
     ({ ok, body } = await api('/api/reach', {
       method: 'POST',
       body: JSON.stringify({ enabled: false }),
     }))
   } catch {
-    ok = false
+    // Distinct from a server that answered and said no. Both keep the grant, but
+    // conflating them tells an operator to check the wrong thing — and the
+    // server now has real reasons to refuse (a disabled instance, a mapping
+    // owned by another one) whose message is the whole point.
+    unreachable = true
+  }
+
+  if (!ok && !unreachable) {
+    console.error(`${RED}✗${RESET} the server refused to take the mapping down: `
+      + `${body?.error?.message ?? 'no reason given'}`)
+    console.error(`${DIM}Keeping the privilege grant, since nothing was revoked.${RESET}`)
+    process.exit(1)
   }
 
   if (!ok) {

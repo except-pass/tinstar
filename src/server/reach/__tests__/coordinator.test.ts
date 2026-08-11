@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ReachCoordinator } from '../coordinator'
 import type { ReachProvider, ReachProviderMapping } from '../provider'
-import { readReachMapping, readReachPreference } from '../state'
+import { readReachMapping, readReachPreference, writeReachMapping } from '../state'
 import {
   currentOriginAllowlist,
   resetOriginAllowlistForTests,
@@ -201,6 +201,40 @@ describe('ReachCoordinator — one holder per host', () => {
     expect(first.calls.establish).toEqual([5273])
     expect(first.mappings).toHaveLength(1)
     expect((await restarted.status()).state).toBe('active')
+  })
+
+  it('refuses rather than claiming off when it has no authority to revoke', async () => {
+    // A --no-reach instance took the early return and answered a confident 'off'
+    // while doing nothing. The CLI reads 'off' as "confirmed down" and deletes the
+    // HOST-GLOBAL sudoers grant — so a second backend that legitimately holds a
+    // mapping loses the privilege it needs, on the word of an instance that never
+    // looked. 'off' has to mean "I checked", not "I did not participate".
+    const p = fakeProvider()
+    const reach = new ReachCoordinator({
+      configRoot: root,
+      provider: p.provider,
+      disabled: true,
+      now: () => '2026-08-06T00:00:00.000Z',
+    })
+    const status = await reach.disable()
+    expect(status.state).toBe('refused')
+    expect(status.detail ?? '').toMatch(/disabled/i)
+  })
+
+  it('refuses rather than claiming off when the live mapping is not ours', async () => {
+    // Same hazard from the other direction: another instance's mapping is
+    // recorded, we revoke nothing, and answering 'off' spends a grant that is
+    // not ours to spend.
+    const p = fakeProvider()
+    const reach = coordinator(p.provider)
+    await reach.enable(5273)
+    // Rewrite the record so it belongs to a different instance.
+    const mapping = readReachMapping(root)!
+    writeReachMapping(root, { ...mapping, instanceId: 'some-other-instance' })
+
+    const status = await reach.disable()
+    expect(status.state).toBe('refused')
+    expect(p.calls.revoke).toEqual([])
   })
 
   it('reports stranded, not off, when the revoke fails', async () => {

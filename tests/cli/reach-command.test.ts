@@ -97,6 +97,20 @@ describe('tinstar reach off', () => {
     expect(preference()?.enabled).toBe(false)
   })
 
+  it('keeps the grant when the server refuses, and says so was a refusal', async () => {
+    // A refusal is not an outage. The server refuses when it has no authority to
+    // confirm a teardown — a disabled instance, or a mapping owned by another —
+    // and that reason is the actionable part. Telling the operator the server is
+    // unreachable would point them at the wrong problem entirely.
+    response = { ok: false, body: { error: { message: 'reach is disabled for this instance' } } }
+    expect(await reach('off')).toBe('exit:1')
+    expect(grant.removed).toBe(0)
+    const said = (console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .map(c => String(c[0])).join('\n')
+    expect(said).toMatch(/refused/i)
+    expect(said).not.toMatch(/could not reach the server/i)
+  })
+
   it('still clears the opt-in when the server is unreachable, and keeps the grant', async () => {
     // The case the operator cares about: server down, and they want to be sure
     // reach is not coming back. The preference is a local file, so the CLI can
