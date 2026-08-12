@@ -194,6 +194,20 @@ export interface TinstarConfig {
      *  plus this. */
     defaultIntervalMs: number
   }
+  /**
+   * Canonical Surface lifecycle bounds (plan R31 / KTD15).
+   *
+   * Deletion moves a Surface into the recovery store; retention here is what keeps
+   * that store from growing without bound. Automatic purge past the bound is the
+   * only irreversible path, and it still goes through `SurfaceService.purge`.
+   */
+  surfaces: {
+    /** How long a deleted Surface stays recoverable before automatic purge.
+     *  `0` disables the sweeper. */
+    recoveryRetentionMs: number
+    /** How often the recovery sweeper runs. */
+    recoverySweepMs: number
+  }
 }
 
 /** The ttyd port window user-initiated sessions draw from. */
@@ -394,6 +408,13 @@ export const BASE_CONFIG = {
     // Surface earns one regardless of where its claims look.
     defaultIntervalMs: 6 * 60 * 60_000,
   },
+  surfaces: {
+    // Seven days matches the plan's "bounded and stated" recovery retention (R31).
+    // Operators who want a longer undo window raise it in config.json; `0` turns
+    // the sweeper off entirely.
+    recoveryRetentionMs: 7 * 24 * 60 * 60_000,
+    recoverySweepMs: 60 * 60_000,
+  },
 }
 
 // --- Public API ---
@@ -515,6 +536,19 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       defaultIntervalMs: merged.refresh.defaultIntervalMs,
       maxConcurrentLookups: merged.refresh.maxConcurrentLookups,
       maxConcurrentLookupsPerProvider: merged.refresh.maxConcurrentLookupsPerProvider,
+    },
+    // Picked field by field for the same reason as `refresh`: a typo'd key in
+    // config.json must not invent a second erase path by landing on the frozen
+    // object under a name this process does not understand.
+    surfaces: {
+      recoveryRetentionMs: typeof (merged.surfaces as { recoveryRetentionMs?: unknown } | undefined)
+        ?.recoveryRetentionMs === 'number'
+        ? (merged.surfaces as { recoveryRetentionMs: number }).recoveryRetentionMs
+        : BASE_CONFIG.surfaces.recoveryRetentionMs,
+      recoverySweepMs: typeof (merged.surfaces as { recoverySweepMs?: unknown } | undefined)
+        ?.recoverySweepMs === 'number'
+        ? (merged.surfaces as { recoverySweepMs: number }).recoverySweepMs
+        : BASE_CONFIG.surfaces.recoverySweepMs,
     },
   }
 

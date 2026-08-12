@@ -2,6 +2,7 @@ import type { Plugin } from 'vite'
 import { EventBus } from './event-bus'
 import { DocumentStore, runNeedsStatusCorrection } from './stores/document-store'
 import { bootSurfaces } from './stores/surface-boot'
+import { startRecoveryRetentionSweep } from './surfaces/recovery-retention'
 import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
@@ -1667,6 +1668,24 @@ export function initBackend(): RouteContext {
           .catch(err => log.warn('refresh', `sweep failed: ${(err as Error).message}`))
           .finally(() => { sweeping = false })
       }, cfg.refresh.sweepMs)
+
+      // Recovery-store retention (R31). Own SurfaceService: same rationale as the
+      // refresh coordinator — no shared per-call state with request handlers.
+      if (cfg.surfaces.recoveryRetentionMs > 0) {
+        startRecoveryRetentionSweep({
+          docStore,
+          retentionMs: cfg.surfaces.recoveryRetentionMs,
+          sweepMs: cfg.surfaces.recoverySweepMs,
+          service: new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() }),
+        })
+        log.info(
+          'recovery-retention',
+          `enabled; purge recovery roots older than ${cfg.surfaces.recoveryRetentionMs}ms`,
+          { sweepMs: cfg.surfaces.recoverySweepMs },
+        )
+      } else {
+        log.info('recovery-retention', 'disabled (surfaces.recoveryRetentionMs <= 0)')
+      }
 
       // The `git-revision` trigger source. Rides the same cadence as the git-diff
       // reconcile above rather than adding a third timer, and reports the HEAD it

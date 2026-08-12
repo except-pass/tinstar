@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RecapEntry, Run } from '../../../domain/types'
-import { DocumentStore } from '../document-store'
+import { DocumentStore, MAX_RECAP_ENTRIES } from '../document-store'
 
 function makeRun(recapEntries: RecapEntry[] = []): Run {
   return {
@@ -45,6 +45,37 @@ describe('DocumentStore recap entries', () => {
     store.addRecapEntry('run-1', { id: 'prompt-2', type: 'user', content: 'Again', timestamp: '2026-08-11T12:00:00.000Z' })
 
     expect(store.getRun('run-1')?.recapEntries).toHaveLength(2)
+  })
+
+  it(`keeps only the newest ${MAX_RECAP_ENTRIES} recap entries across add and upsert`, () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+
+    for (let i = 0; i < MAX_RECAP_ENTRIES + 25; i++) {
+      store.addRecapEntry('run-1', {
+        id: `e-${i}`,
+        type: 'agent',
+        content: `msg ${i}`,
+        timestamp: `2026-08-11T12:00:${String(i % 60).padStart(2, '0')}.000Z`,
+      })
+    }
+
+    const afterAdds = store.getRun('run-1')!.recapEntries
+    expect(afterAdds).toHaveLength(MAX_RECAP_ENTRIES)
+    expect(afterAdds[0]?.id).toBe('e-25')
+    expect(afterAdds.at(-1)?.id).toBe(`e-${MAX_RECAP_ENTRIES + 24}`)
+
+    store.upsertRun('run-1', makeRun([
+      ...Array.from({ length: MAX_RECAP_ENTRIES + 10 }, (_, i) => ({
+        id: `u-${i}`,
+        type: 'user' as const,
+        content: `u ${i}`,
+      })),
+    ]))
+    const afterUpsert = store.getRun('run-1')!.recapEntries
+    expect(afterUpsert).toHaveLength(MAX_RECAP_ENTRIES)
+    expect(afterUpsert[0]?.id).toBe('u-10')
+    expect(afterUpsert.at(-1)?.id).toBe(`u-${MAX_RECAP_ENTRIES + 9}`)
   })
 
   it('normalizes exact legacy duplicates on load and preserves chronology', () => {

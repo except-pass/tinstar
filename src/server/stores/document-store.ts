@@ -230,10 +230,22 @@ function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.id)
 }
 
+/**
+ * Bound how many recap entries a run keeps in memory, on disk, and on the wire.
+ *
+ * The board SSE snapshot and every run delta ship the full `recapEntries` array,
+ * and the PromptComposer remounts markdown for each entry on parent re-render.
+ * An unbounded history makes typing and window switches feel sluggish long before
+ * RAM is the problem. Keep the newest entries — older turns are still in the
+ * agent transcript if someone needs them.
+ */
+export const MAX_RECAP_ENTRIES = 50
+
 /** Keep the first occurrence of a recap event. Stable source IDs handle normal
  * replay; the semantic key repairs histories written by older parsers whose IDs
  * were random on every read. Exactness is intentional so repeated prompts from
- * distinct turns remain distinct whenever their timestamp or metadata differs. */
+ * distinct turns remain distinct whenever their timestamp or metadata differs.
+ * After dedupe, retain only the newest {@link MAX_RECAP_ENTRIES}. */
 function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
   const ids = new Set<string>()
   const legacySemantics = new Set<string>()
@@ -246,7 +258,9 @@ function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
     if (legacyRandomId) legacySemantics.add(semanticKey)
     normalized.push(entry)
   }
-  return normalized
+  return normalized.length > MAX_RECAP_ENTRIES
+    ? normalized.slice(normalized.length - MAX_RECAP_ENTRIES)
+    : normalized
 }
 
 function hasRecapEntry(entries: RecapEntry[], candidate: RecapEntry): boolean {
@@ -575,10 +589,17 @@ export class DocumentStore {
   // --- Runs ---
 
   upsertRun(id: string, data: Run): void {
+    // Cap/dedupe here so every write path (load, PATCH, watchers) keeps the
+    // same bound — not only addRecapEntry. Without this, a fat PATCH or an
+    // older docstore reload could reintroduce unbounded history onto the wire.
+    const next: Run = {
+      ...data,
+      recapEntries: normalizeRecapEntries(data.recapEntries),
+    }
     const prev = this.runs.get(id)
-    if (prev && runShallowEqual(prev, data)) return
-    this.runs.set(id, data)
-    this.changes.emit('change', { entity: 'run', id, data })
+    if (prev && runShallowEqual(prev, next)) return
+    this.runs.set(id, next)
+    this.changes.emit('change', { entity: 'run', id, data: next })
   }
 
   getRun(id: string): Run | undefined {
@@ -633,6 +654,9 @@ export class DocumentStore {
     if (!run) return
     if (hasRecapEntry(run.recapEntries, entry)) return
     run.recapEntries.push(entry)
+    if (run.recapEntries.length > MAX_RECAP_ENTRIES) {
+      run.recapEntries = run.recapEntries.slice(run.recapEntries.length - MAX_RECAP_ENTRIES)
+    }
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
