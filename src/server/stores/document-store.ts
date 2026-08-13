@@ -241,16 +241,24 @@ function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
  */
 export const MAX_RECAP_ENTRIES = 50
 
+/** Shared empty list so missing/empty recaps stay reference-equal across upserts. */
+const EMPTY_RECAP_ENTRIES: RecapEntry[] = Object.freeze([]) as RecapEntry[]
+
 /** Keep the first occurrence of a recap event. Stable source IDs handle normal
  * replay; the semantic key repairs histories written by older parsers whose IDs
  * were random on every read. Exactness is intentional so repeated prompts from
  * distinct turns remain distinct whenever their timestamp or metadata differs.
- * After dedupe, retain only the newest {@link MAX_RECAP_ENTRIES}. */
-function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
+ * After dedupe, retain only the newest {@link MAX_RECAP_ENTRIES}.
+ *
+ * Returns the input array reference when nothing changed — `upsertRun`'s equality
+ * short-circuit compares `recapEntries` by identity, so reallocating on every
+ * no-op write would re-broadcast every status tick. */
+function normalizeRecapEntries(entries: RecapEntry[] | null | undefined): RecapEntry[] {
+  const list = Array.isArray(entries) ? entries : EMPTY_RECAP_ENTRIES
   const ids = new Set<string>()
   const legacySemantics = new Set<string>()
   const normalized: RecapEntry[] = []
-  for (const entry of entries) {
+  for (const entry of list) {
     const semanticKey = recapSemanticKey(entry)
     const legacyRandomId = hasLegacyRandomRecapId(entry)
     if (ids.has(entry.id) || (legacyRandomId && legacySemantics.has(semanticKey))) continue
@@ -258,9 +266,16 @@ function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
     if (legacyRandomId) legacySemantics.add(semanticKey)
     normalized.push(entry)
   }
-  return normalized.length > MAX_RECAP_ENTRIES
+  const capped = normalized.length > MAX_RECAP_ENTRIES
     ? normalized.slice(normalized.length - MAX_RECAP_ENTRIES)
     : normalized
+  if (
+    capped.length === list.length
+    && capped.every((entry, i) => entry === list[i])
+  ) {
+    return list
+  }
+  return capped.length === 0 ? EMPTY_RECAP_ENTRIES : capped
 }
 
 function hasRecapEntry(entries: RecapEntry[], candidate: RecapEntry): boolean {
@@ -590,12 +605,10 @@ export class DocumentStore {
 
   upsertRun(id: string, data: Run): void {
     // Cap/dedupe here so every write path (load, PATCH, watchers) keeps the
-    // same bound — not only addRecapEntry. Without this, a fat PATCH or an
-    // older docstore reload could reintroduce unbounded history onto the wire.
-    const next: Run = {
-      ...data,
-      recapEntries: normalizeRecapEntries(data.recapEntries),
-    }
+    // same bound — not only addRecapEntry. Preserve the caller's object when
+    // normalization is a no-op so runShallowEqual can still short-circuit.
+    const recapEntries = normalizeRecapEntries(data.recapEntries)
+    const next = recapEntries === data.recapEntries ? data : { ...data, recapEntries }
     const prev = this.runs.get(id)
     if (prev && runShallowEqual(prev, next)) return
     this.runs.set(id, next)
