@@ -20,18 +20,19 @@ append-only discussion thread and a soft lifecycle. See `CONCEPTS.md` for both t
 
 The Slate is authored one way and answered another, on purpose:
 
-- **File-in authoring.** A surface is created by writing a JSON file into
+- **File-in authoring.** A surface body is created by writing a JSON file into
   `.tinstar/slate/` inside the run's worktree. A server-side watcher validates the file
-  and projects it onto the run. There is no endpoint to author a surface — a plain file
-  write is the entire authoring path, which means any local process (an agent, a shell
-  script, a build wrapper) can paint onto a run's card with no Tinstar client.
+  and projects it onto the run. A foreground agent may first reserve a visible
+  compose-card shell through the authoring reservation endpoint; the returned file,
+  id, and attempt token are then the exact destination for the same file-in body. The
+  reservation creates identity and progress, not an alternate body-authoring API.
 - **HTTP-out answering.** When the user interacts with a surface — submits a control,
   adds a point, or replies on a thread — the browser POSTs to a run-scoped endpoint. The
   server persists the change, then best-effort **injects a prompt into the run's agent
   session** so the agent learns of it. The agent replies on the thread over HTTP.
 
 The consequence is a clean ownership split. **The file owns the surface body**
-(`headline`, the A2UI `content`, `anchor`). **The store owns everything a human or the
+(`headline`, A2UI `content`, grouping, recipes, and claims). **The store owns everything a human or the
 store produced** — the discussion thread, the lifecycle status, and the
 resolve/dismiss timestamps. A file rewrite therefore *amends* a surface without ever
 clobbering a reply the user just typed.
@@ -46,10 +47,13 @@ JSON array of them. Each entry is a point:
 |---|---|---|---|
 | `headline` | yes | file | the point's one-line title (non-empty string) |
 | `id` | recommended | file | stable point identity; reuse it so a rewrite amends rather than duplicates |
+| `attemptToken` | assigned only | host | copy the reservation token exactly on the first valid write; omit it for direct file authoring |
 | `content` | no | file | the surface body as an A2UI component tree (`{ root, components }`) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
-| `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` |
-| `group` | no | file | workbench set id — give the **same** string to a set of related questions and they render side-by-side, one per column (see [The workbench](#the-workbench-asking-a-series-of-questions)) |
+| `anchor` | no | file | legacy input retained for compatibility and id synthesis; canonical projection drops it, so it does not choose layout |
+| `refresh` | no | file | the one recipe that rebuilds the whole Surface; unanswered Decisions must omit it |
+| `claims` | no | file | falsifiable declarations naming what could prove the Surface wrong |
+| `group` | no | file | workbench set id — give the **same** string to related non-decision questions and they render side-by-side, one per column (see [The workbench](#the-workbench-asking-a-series-of-questions)) |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if omitted |
 
 Store-owned fields — `status`, `replies` (the thread), and the lifecycle timestamps —
@@ -78,6 +82,10 @@ track, plus
 readable "couldn't render" fallback within a per-surface error boundary and node budget,
 so one hostile or malformed surface cannot hang or blank the card. A `javascript:` or
 `data:` URL on a `Link` degrades to plain text.
+
+Controls work on direct open-point rows and on ready host-reserved compose cards. The
+compose-card presentation owns layout and authoring lifecycle; it does not make the A2UI
+body read-only.
 
 ## Projection, validation, and lifecycle
 
@@ -117,6 +125,7 @@ the session is gone).
 | `POST /api/runs/:id/slate/points/:pid/replies` | append a reply to a point's thread |
 | `POST /api/runs/:id/slate/points/:pid/answer` | submit a control answer (choices + text) |
 | `POST /api/runs/:id/slate/points/:pid/resolve` \| `/reopen` \| `/dismiss` | explicit lifecycle change |
+| `POST /api/runs/:id/slate/authoring/reservations` | reserve a visible compose-card identity and assigned file/token destination |
 
 The run's goal has its own pair of endpoints — see [The Objective](#the-objective).
 
@@ -132,7 +141,7 @@ first, then addresses the note.
 
 ## The workbench: asking a series of questions
 
-When an agent needs several answers at once, it can lay the questions out **side by
+When an agent needs several related, non-decision answers at once, it can lay the questions out **side by
 side** instead of stacking them. Write each question as its own point — its own `id`, its
 own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in the set the
 **same** `group` string. Two or more **live** points sharing a `group` render as a
@@ -150,13 +159,12 @@ live siblings already justify.
 
 ```json
 [
-  { "id": "q-token-scope", "headline": "Refresh token, or access only?", "group": "auth-decisions",
+  { "id": "q-token-owner", "headline": "Who owns the token endpoint?", "group": "auth-ownership-questions",
     "content": { "root": "root", "components": [
-      { "id": "root", "component": "Column", "children": ["c", "s"] },
-      { "id": "c", "component": "Choice", "mode": "single",
-        "options": [ { "id": "both", "label": "Both" }, { "id": "access", "label": "Access only" } ] },
+      { "id": "root", "component": "Column", "children": ["t", "s"] },
+      { "id": "t", "component": "TextInput", "label": "Team or person" },
       { "id": "s", "component": "Submit", "label": "Answer" } ] } },
-  { "id": "q-migration-owner", "headline": "Who owns the migration?", "group": "auth-decisions",
+  { "id": "q-migration-owner", "headline": "Who owns the migration?", "group": "auth-ownership-questions",
     "content": { "root": "root", "components": [
       { "id": "root", "component": "Column", "children": ["t", "s"] },
       { "id": "t", "component": "TextInput", "label": "Name" },
@@ -170,6 +178,12 @@ a column submits through **its own** `POST …/points/<id>/answer`, gets its own
 others, and the agent receives one prompt per answered question rather than one
 combined blob. Dropping `group` from the file on a later write dissolves the workbench
 back into ordinary rows without touching any thread.
+
+A human decision is not a workbench column. Give each decision its own Surface with a
+`Decision` plus `Submit`, ground verified facts in a source or observation time, label
+hypotheses, and leave the built-in comment available for valid outcomes the listed
+options missed, such as delegation or waiting. Do not attach a refresh recipe while the
+decision is unanswered: the question must remain stable while the human answers it.
 
 The column is deliberately the **question only** — headline, body, controls. The thread,
 the soft resolve, the reorder grip and the hide ✕ all stay on the vertical row, which is

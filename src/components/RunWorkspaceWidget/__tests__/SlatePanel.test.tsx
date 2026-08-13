@@ -194,7 +194,7 @@ describe('SlatePanel compose card lifecycle', () => {
     expect(screen.getByText('finished body')).toBeTruthy()
   })
 
-  it('keeps a reserved Decision + Submit compose-card interactive', async () => {
+  it('keeps a reserved Decision compose-card interactive for an unlisted comment-only outcome', async () => {
     const decision = composed('ready')
     decision.body = {
       root: 'root',
@@ -217,7 +217,6 @@ describe('SlatePanel compose card lifecycle', () => {
 
     const remove = screen.getByRole('radio', { name: /Remove it/ }) as HTMLInputElement
     expect(remove.disabled).toBe(false)
-    fireEvent.click(remove)
     fireEvent.change(screen.getByTestId('decision-comment'), {
       target: { value: 'Delegated externally; waiting for resolution.' },
     })
@@ -228,7 +227,6 @@ describe('SlatePanel compose card lifecycle', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          choices: ['remove'],
           text: 'Delegated externally; waiting for resolution.',
         }),
       }),
@@ -1014,6 +1012,8 @@ describe('SlatePanel refresh (plan U6)', () => {
     expect(
       screen.getByTestId('slate-surface-norecipe').querySelector('[data-testid="fast-path-badge"]'),
     ).toBeNull()
+    expect(screen.getByTestId('fast-path-badge').getAttribute('title')).toMatch(/use the surface refresh control/i)
+    expect(screen.getByTestId('fast-path-badge').getAttribute('title')).not.toMatch(/self-refreshing/i)
   })
 })
 

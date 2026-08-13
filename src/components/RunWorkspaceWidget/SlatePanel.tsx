@@ -605,8 +605,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
   const columns = slateColumnCount(width)
-  // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
-  // too) — a recipe is optional, so all of them are refreshable.
+  // Check-all considers every VISIBLE surface, then filters to host-maintained
+  // recipes. Agent recipes remain per-card, explicit work.
   const visibleSurfaces = matched.filter((s) => showHidden || !hidden.has(s.id))
   /** How many of the visible surfaces the host can check WITHOUT an agent. Drives the
    *  check-all control's label and its disabled state, so a Slate of agent-written
@@ -876,7 +876,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           ) : null
           // Freshness footer: the witness stamp ("checked Xm ago" / "not yet checked"
           // / "nothing to check"), ambering when a witnessed surface has drifted past
-          // the horizon. A ⚡ leads it when the surface self-refreshes from a recipe.
+          // the horizon. A ⚡ leads it when the surface has a rebuild recipe.
           const footer = (
             <div className="mt-1 flex items-center justify-end gap-1.5">
               {/* The host's own verdict sits LEFT of the stamp, because it outranks
@@ -903,11 +903,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // and it never collides with the refresh pulse — that lives on the border
           // and the shadow, this on the ring.
           const isFocused = focusedSurfaceId === surface.id
-          // The SERVER's phase, alongside the client's optimistic spinner. The two
-          // are different claims and both belong: `isRefreshing` means "your click
-          // was sent", `phase` means "the host has a worker on it". A click on an
-          // asleep run shows the first and never the second, which is exactly the
-          // distinction the old bounded-spinner had no way to draw.
+          // The SERVER's phase drives the card edge. The refresh button separately
+          // shows the brief client-owned pending state while its request is on the wire.
           const phase = surface.freshness?.phase
           const live = isRefreshing || phase === 'refreshing'
           const edgeClass = live
