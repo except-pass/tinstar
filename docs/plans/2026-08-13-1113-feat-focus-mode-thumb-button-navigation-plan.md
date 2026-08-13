@@ -9,6 +9,10 @@ execution: code
 deepened: 2026-08-13
 ---
 
+> **Status: SHIPPED** — 2026-08-13 · PR #212 · superseded by nothing
+> This is the decision record. For what the feature does, see [Hotkey System](../features/hotkey-system.md).
+> Do not treat this as current intent; treat it as why the current intent is what it is.
+
 # Focus Mode Thumb Button Navigation - Plan
 
 ## Goal Capsule
