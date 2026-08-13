@@ -37,9 +37,10 @@ only bites at runtime.
 Nothing ambient may deliver one: not a commit, not a deadline, not a browser focus or
 visibility event, not an SSE frame, not a mount effect. Those all fire while nobody is
 looking, and "the app happened to be open" is not permission. A trigger may mark
-content dirty; only a person navigating to, interacting with, or explicitly refreshing
-it may run the thing that costs a model call. Check it on the server as well as in the
-client — the client's job is to send an honest intent, the server's job is to disbelieve
+content dirty; only a person explicitly using the Surface's refresh control may run the
+thing that costs a model call. Reading, selecting, and keyboard navigation are not
+authorization. Check it on the server as well as in the client — the client's job is
+to send an honest intent, the server's job is to disbelieve
 it. (See `src/server/api/surfaceRoutes.ts`, `REFRESH_INTENTS`.)
 
 **2. The spinner belongs to whoever actually knows.**
@@ -100,8 +101,9 @@ file- or user-authored string is interpolated into a delivered prompt.
 ## Examples
 
 ```ts
-// Intent from a REAL event handler, for dirty items only. Never from an effect.
-onPointerDown={() => { setSelected(id); if (isDirty(item)) void sendIntent(item, 'interact') }}
+// Selection is read-only. Refresh intent comes only from the explicit control.
+onPointerDown={() => setSelected(id)}
+onClickRefresh={() => void sendIntent(item, 'explicit')}
 
 // The spinner is the SERVER's state. The only local flag covers the round trip.
 const refreshing = item.freshness?.phase === 'refreshing'

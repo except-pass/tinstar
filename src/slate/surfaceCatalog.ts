@@ -15,6 +15,8 @@ export interface SurfaceTemplate {
   description: string
   /** The authoring prompt delivered to the run's agent. */
   prompt: string
+  /** False when regenerating the surface could invalidate work already in progress. */
+  allowsRefresh?: boolean
 }
 
 /** Seed catalog. Order here is the default (empty-query) order. */
@@ -45,10 +47,11 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
   {
     id: 'open-points',
     name: 'Open points',
-    description: 'The run’s current open questions and decisions as a threaded checklist.',
+    description: 'The run’s related non-decision questions as a threaded checklist.',
     prompt:
       'Author one "Open points" card containing the run’s current unresolved questions ' +
-      'and decisions as a concise A2UI list. If there are none, the visible headline or ' +
+      'as a concise A2UI list. Keep unrelated questions in separate Surfaces, and use a ' +
+      'dedicated Decision Surface for each human choice. If there are none, the visible headline or ' +
       'body must say exactly "No open points". Produce exactly the one assigned entry.',
   },
   {
@@ -64,6 +67,7 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
     id: 'decision',
     name: 'Decision',
     description: 'One open decision: options with their tradeoffs, risks, cost to undo, and how long it matters.',
+    allowsRefresh: false,
     prompt:
       'Author a "Decision" surface for the open decision under discussion, using the ' +
       '`Decision` A2UI component plus a `Submit` sibling. Give it at least two options, ' +
@@ -79,10 +83,14 @@ export const SURFACE_CATALOG: SurfaceTemplate[] = [
       '`horizon: { span, until }` — span is until-next-commit|until-this-ships|' +
       'while-the-code-lives|permanent, and `until` completes "this matters until…". ' +
       'Use permanent when something survives an undo: rows written, mail sent, an API ' +
-      'published, a person who already saw it. The card always renders a comment box at ' +
+      'published, a person who already saw it. State verified facts with their source or ' +
+      'observation time, label uncertain claims as hypotheses, and do not turn an unverified ' +
+      'alert into a leading choice. The card always renders a comment box at ' +
       'its foot (default label "Anything else?"); optionally set `comment: { label, ' +
       'placeholder }` to customize it, but do NOT add a TextInput — the Decision card ' +
-      'already owns the surface\'s one text field. Do not set a `refresh` recipe: refreshing would ' +
+      'already owns the surface\'s one text field. Treat the listed options as likely paths, ' +
+      'not an exhaustive constraint: the comment lets the human supply another valid outcome, ' +
+      'including delegation or waiting. Do not set a `refresh` recipe: refreshing would ' +
       're-derive the very question the user is mid-answer on and rewrite it under them.',
   },
 ]

@@ -120,6 +120,20 @@ describe('SlateComposer (U4)', () => {
     expect(payload.freeform).toBe('a PR review surface')
   })
 
+  it('keeps Decision surfaces stable by removing the refresh recipe affordance and payload', async () => {
+    render(<SlateComposer runId="run-1" onClose={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('composer-recipe'), { target: { value: 're-derive this question' } })
+    fireEvent.click(screen.getByTestId('composer-template-decision'))
+
+    expect(screen.queryByTestId('composer-recipe')).toBeNull()
+    expect(screen.getByTestId('composer-recipe-disabled').textContent).toMatch(/stay stable/i)
+
+    fireEvent.click(screen.getByTestId('composer-submit'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    const [, init] = apiFetch.mock.calls[0]!
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ templateId: 'decision' })
+  })
+
   it('closes after acceptance even when authoring could not be dispatched', async () => {
     const onClose = vi.fn()
     apiFetch.mockImplementation(() => okDelivered(false))

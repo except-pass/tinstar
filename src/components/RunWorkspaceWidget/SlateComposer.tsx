@@ -56,12 +56,13 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange, o
   const [sent, setSent] = useState(false)
 
   const matches = useMemo(() => searchSurfaceCatalog(query), [query])
+  const recipeAllowed = selected?.allowsRefresh !== false
   // Submit needs at least a template or some freeform text (mirrors the server's
   // INVALID_PARAMS guard for an all-blank body).
   const canSubmit = !!selected || freeform.trim().length > 0
 
   // An unsent draft — anything the user would lose if the composer went away.
-  const dirty = canSubmit || recipe.trim().length > 0
+  const dirty = canSubmit || (recipeAllowed && recipe.trim().length > 0)
   const onDraftChangeRef = useRef(onDraftChange)
   useEffect(() => { onDraftChangeRef.current = onDraftChange }, [onDraftChange])
   useEffect(() => {
@@ -104,7 +105,7 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange, o
       const request = {
         ...(selected ? { templateId: selected.id } : {}),
         ...(trimmed ? { freeform: trimmed } : {}),
-        ...(recipe.trim() ? { recipe: recipe.trim() } : {}),
+        ...(recipeAllowed && recipe.trim() ? { recipe: recipe.trim() } : {}),
       }
       const fingerprint = JSON.stringify(request)
       if (submissionRef.current?.fingerprint !== fingerprint) {
@@ -140,7 +141,7 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange, o
     } finally {
       setSubmitting(false)
     }
-  }, [submitting, selected, freeform, recipe, runId, onClose, inline, onAccepted])
+  }, [submitting, selected, freeform, recipe, recipeAllowed, runId, onClose, inline, onAccepted])
 
   return (
     <div
@@ -179,7 +180,11 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange, o
               <button
                 data-testid={`composer-template-${t.id}`}
                 aria-selected={isSel}
-                onClick={() => setSelected(isSel ? null : t)}
+                onClick={() => {
+                  const next = isSel ? null : t
+                  setSelected(next)
+                  if (next?.allowsRefresh === false) setRecipe('')
+                }}
                 className={`w-full rounded-sm border px-2 py-1 text-left ${
                   isSel
                     ? 'border-primary/50 bg-primary/10'
@@ -204,19 +209,25 @@ export function SlateComposer({ runId, onClose, inline = false, onDraftChange, o
         className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
       />
 
-      {/* Create-time recipe — how this surface stays fresh. A good recipe names its
-          source, derivation, and output so a one-shot author can re-run it in a vacuum. */}
-      <label className="flex flex-col gap-0.5">
-        <span className="text-2xs font-mono uppercase tracking-[0.12em] text-ink-low">Stays fresh by… (optional)</span>
-        <textarea
-          data-testid="composer-recipe"
-          rows={2}
-          value={recipe}
-          placeholder="e.g. re-run the blind eval of PR #7 and rewrite the two columns"
-          onChange={(e) => setRecipe(e.target.value)}
-          className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
-        />
-      </label>
+      {/* Decisions stay stable while the human is answering them. Other surfaces may
+          carry a create-time recipe that names the source, derivation, and output. */}
+      {recipeAllowed ? (
+        <label className="flex flex-col gap-0.5">
+          <span className="text-2xs font-mono uppercase tracking-[0.12em] text-ink-low">Stays fresh by… (optional)</span>
+          <textarea
+            data-testid="composer-recipe"
+            rows={2}
+            value={recipe}
+            placeholder="e.g. re-run the blind eval of PR #7 and rewrite the two columns"
+            onChange={(e) => setRecipe(e.target.value)}
+            className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
+          />
+        </label>
+      ) : (
+        <div data-testid="composer-recipe-disabled" className="text-2xs text-ink-low">
+          Decisions stay stable while they’re being answered, so they don’t use refresh recipes.
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <button

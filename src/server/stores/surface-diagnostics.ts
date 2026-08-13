@@ -657,7 +657,7 @@ export function renderRefreshDiagnostics(d: RefreshDiagnostics): string {
   out.push('')
   out.push(`  dirty                ${d.dirty}`)
   out.push(`    host-maintained    ${d.dirtyHostMaintained}   (these come back on their own)`)
-  out.push(`    awaiting a human   ${d.dirtyAwaitingHuman}   (these refresh when somebody opens them)`)
+  out.push(`    awaiting a human   ${d.dirtyAwaitingHuman}   (these refresh when somebody explicitly requests it)`)
   out.push(`  active host checks   ${d.activeHostAttempts}`)
   out.push(`  active agent work    ${d.activeOwnerAttempts}`)
   out.push('')

@@ -1,4 +1,4 @@
-// Deliberate interaction, bound to freshness (R11-R14, KTD4/KTD9/KTD11).
+// Explicit refresh controls, bound to freshness (R11-R14, KTD4/KTD9/KTD11).
 //
 // WHAT CHANGED AND WHY IT MATTERS. This hook used to own the truth about whether a
 // Surface was refreshing: it set a spinner optimistically on click, held it for up to
@@ -8,14 +8,10 @@
 // local state left is a one-request-at-a-time guard covering the round trip, because
 // a second click before the response has nothing yet to read.
 //
-// INTENT IS SENT ONLY FROM A TRUSTED USER EVENT. `onSurfaceIntent` is called from
-// pointer selection, `j`/`k` selection changes, a Surface's own controls, and the ⟳
-// button — all inside real event handlers. It is deliberately NOT called from a mount
-// effect, a focus or visibility listener, an SSE delivery, or an interval, because
-// those fire while nobody is looking and "Tinstar happened to be open" is not
-// permission to spend a model call (R12). The server checks the same thing again: it
-// verifies the Surface is dirty and that the caller is a human principal, so a client
-// bug cannot manufacture authority.
+// INTENT IS SENT ONLY FROM AN EXPLICIT REFRESH CONTROL. Pointer selection and `j`/`k`
+// navigation only move focus; they never rebuild content. The ⟳ button and `r` hotkey
+// send `explicit`, while Check all sends `bulk-check` only for host recipes. Nothing
+// fires from a mount effect, focus/visibility listener, SSE delivery, or interval.
 //
 // "REFRESH ALL" IS A CHEAP CHECK (KTD9). It sends `bulk-check`, which the server runs
 // only against machine (host) recipes; agent Surfaces are left dirty for their owner
@@ -28,7 +24,7 @@ import { apiFetch } from '../../apiClient'
 /** Why a refresh is being asked for. Mirrors the server's closed list — see
  *  `REFRESH_INTENTS` in `src/server/api/surfaceRoutes.ts`, which refuses anything
  *  outside it rather than defaulting. */
-export type SurfaceIntent = 'navigate' | 'interact' | 'explicit' | 'bulk-check'
+export type SurfaceIntent = 'explicit' | 'bulk-check'
 
 /** What the server said about one intent. `skipped` covers both "already current"
  *  and "a bulk check passing over agent work" — neither is an error. */
@@ -45,28 +41,11 @@ export interface SlateRefreshApi {
   unreachableIds: ReadonlySet<string>
   /** True while a cheap check-all is still settling. */
   bulkChecking: boolean
-  /**
-   * Tell the server a person is looking at this Surface.
-   *
-   * Call ONLY from a real event handler. Sending `navigate` on mount, on focus, or
-   * from an SSE effect would be the ambient execution R12 forbids — and the server
-   * would refuse it anyway, which is the point of checking in both places.
-   */
-  onSurfaceIntent: (surface: SlateSurface, intent: SurfaceIntent) => Promise<IntentOutcome> | undefined
   /** The ⟳ control. `explicit` works whatever the phase says (R18). */
   refresh: (surface: SlateSurface) => void
   /** Check every visible Surface CHEAPLY. Host recipes may run; agent Surfaces are
    *  left dirty, and no prompt is delivered for any of them. */
   checkAll: (visible: SlateSurface[]) => void
-}
-
-/** Is this Surface something a human's arrival should refresh? Only a dirty one —
- *  moving around a healthy Slate must cost nothing, which is most of what "leaving
- *  Tinstar open is free" means in practice. The server re-checks this; sending
- *  anyway would just be noise. */
-export function isDirty(surface: SlateSurface): boolean {
-  const phase = surface.freshness?.phase
-  return phase !== undefined && phase !== 'current'
 }
 
 /** Would a cheap check-all do anything for this Surface? Only a host recipe can run
@@ -96,7 +75,7 @@ export function useSlateRefresh(runId: string): SlateRefreshApi {
     })
   }, [])
 
-  const onSurfaceIntent = useCallback(
+  const requestRefresh = useCallback(
     (surface: SlateSurface, intent: SurfaceIntent): Promise<IntentOutcome> | undefined => {
       const id = surface.id
       // ONE REQUEST AT A TIME, and only across the round trip. Past the response the
@@ -141,8 +120,8 @@ export function useSlateRefresh(runId: string): SlateRefreshApi {
   )
 
   const refresh = useCallback(
-    (surface: SlateSurface) => { void onSurfaceIntent(surface, 'explicit') },
-    [onSurfaceIntent],
+    (surface: SlateSurface) => { void requestRefresh(surface, 'explicit') },
+    [requestRefresh],
   )
 
   const checkAll = useCallback(
@@ -153,17 +132,17 @@ export function useSlateRefresh(runId: string): SlateRefreshApi {
       const checkable = visible.filter(isHostMaintained)
       if (checkable.length === 0) return
       setBulkChecking(true)
-      void Promise.all(checkable.map(s => onSurfaceIntent(s, 'bulk-check')))
+      void Promise.all(checkable.map(s => requestRefresh(s, 'bulk-check')))
         .finally(() => setBulkChecking(false))
     },
-    [onSurfaceIntent],
+    [requestRefresh],
   )
 
   // Membership sets are already sets; memoised so consumers get stable identities.
   const pendingIds = useMemo(() => pending, [pending])
   const unreachableIds = useMemo(() => unreachable, [unreachable])
 
-  return { pendingIds, unreachableIds, bulkChecking, onSurfaceIntent, refresh, checkAll }
+  return { pendingIds, unreachableIds, bulkChecking, refresh, checkAll }
 }
 
 /**

@@ -408,13 +408,15 @@ export class SurfaceRefreshCoordinator {
   /**
    * THE ONE OPERATION THAT AUTHORIZES AGENT WORK (R11/R14, KTD4).
    *
-   * A human deliberately navigated to, interacted with, or explicitly refreshed a
-   * dirty Surface. That — and nothing else in this file — is what may put a prompt in
-   * somebody's conversation. No timer, no commit, no deadline, no browser lifecycle
+   * A human explicitly requested a refresh of a dirty Surface. Legacy clients may
+   * still send the older navigate/interact intent labels, but the supported Slate UI
+   * only calls this operation from an explicit refresh control. That — and nothing
+   * else in this file — is what may put a prompt in somebody's conversation. No timer,
+   * no commit, no deadline, no browser lifecycle
    * event reaches this method, which is why "leaving Tinstar open overnight costs
    * nothing" is a property of the code rather than a hope about its callers.
    *
-   * IDEMPOTENT, and that is R14 in one word. Repeated navigation while a refresh is
+   * IDEMPOTENT, and that is R14 in one word. Repeated requests while a refresh is
    * running JOINS the attempt already in flight — it does not create a second agent,
    * a second job, or a second execution. The join is decided on the durable record
    * rather than in React state, because a user action can race an SSE frame and the
