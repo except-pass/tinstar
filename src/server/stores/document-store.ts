@@ -241,9 +241,6 @@ function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
  */
 export const MAX_RECAP_ENTRIES = 50
 
-/** Shared empty list so missing/empty recaps stay reference-equal across upserts. */
-const EMPTY_RECAP_ENTRIES: RecapEntry[] = Object.freeze([]) as RecapEntry[]
-
 /** Keep the first occurrence of a recap event. Stable source IDs handle normal
  * replay; the semantic key repairs histories written by older parsers whose IDs
  * were random on every read. Exactness is intentional so repeated prompts from
@@ -253,12 +250,11 @@ const EMPTY_RECAP_ENTRIES: RecapEntry[] = Object.freeze([]) as RecapEntry[]
  * Returns the input array reference when nothing changed — `upsertRun`'s equality
  * short-circuit compares `recapEntries` by identity, so reallocating on every
  * no-op write would re-broadcast every status tick. */
-function normalizeRecapEntries(entries: RecapEntry[] | null | undefined): RecapEntry[] {
-  const list = Array.isArray(entries) ? entries : EMPTY_RECAP_ENTRIES
+function normalizeRecapEntries(entries: RecapEntry[]): RecapEntry[] {
   const ids = new Set<string>()
   const legacySemantics = new Set<string>()
   const normalized: RecapEntry[] = []
-  for (const entry of list) {
+  for (const entry of entries) {
     const semanticKey = recapSemanticKey(entry)
     const legacyRandomId = hasLegacyRandomRecapId(entry)
     if (ids.has(entry.id) || (legacyRandomId && legacySemantics.has(semanticKey))) continue
@@ -270,12 +266,12 @@ function normalizeRecapEntries(entries: RecapEntry[] | null | undefined): RecapE
     ? normalized.slice(normalized.length - MAX_RECAP_ENTRIES)
     : normalized
   if (
-    capped.length === list.length
-    && capped.every((entry, i) => entry === list[i])
+    capped.length === entries.length
+    && capped.every((entry, i) => entry === entries[i])
   ) {
-    return list
+    return entries
   }
-  return capped.length === 0 ? EMPTY_RECAP_ENTRIES : capped
+  return capped
 }
 
 function hasRecapEntry(entries: RecapEntry[], candidate: RecapEntry): boolean {
@@ -607,9 +603,18 @@ export class DocumentStore {
     // Cap/dedupe here so every write path (load, PATCH, watchers) keeps the
     // same bound — not only addRecapEntry. Preserve the caller's object when
     // normalization is a no-op so runShallowEqual can still short-circuit.
-    const recapEntries = normalizeRecapEntries(data.recapEntries)
-    const next = recapEntries === data.recapEntries ? data : { ...data, recapEntries }
+    //
+    // Partial upserts (tests / create paths) sometimes omit `recapEntries`.
+    // Reuse the previous run's list when present so a missing field does not
+    // allocate a fresh `[]` and force a spurious SSE delta on every tick.
     const prev = this.runs.get(id)
+    let next: Run
+    if (!Array.isArray(data.recapEntries)) {
+      next = { ...data, recapEntries: prev?.recapEntries ?? [] }
+    } else {
+      const recapEntries = normalizeRecapEntries(data.recapEntries)
+      next = recapEntries === data.recapEntries ? data : { ...data, recapEntries }
+    }
     if (prev && runShallowEqual(prev, next)) return
     this.runs.set(id, next)
     this.changes.emit('change', { entity: 'run', id, data: next })
