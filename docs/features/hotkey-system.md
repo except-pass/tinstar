@@ -87,6 +87,12 @@ The server maintains an ordered `string[]` of session names currently ready for 
 | `[` | Previous ready-for-input session |
 | `Shift+]` | Next session (all, regardless of status) |
 | `Shift+[` | Previous session (all) |
+| Mouse Forward (button 4) | Next ready-for-input session in Focus mode |
+| Mouse Back (button 3) | Previous ready-for-input session in Focus mode |
+
+Focus mode consumes the full Back/Forward mouse gesture and dispatches once on
+release, including over the terminal. Canvas mode leaves those buttons to the
+browser's native history behavior.
 
 Note: implemented via `e.code === 'BracketLeft'`/`'BracketRight'` + `e.shiftKey` (not `e.key`) because `Shift+[` produces `{` on standard keyboards.
 
@@ -132,6 +138,8 @@ Active zone shows `ring-2 ring-indigo-500`. If left panel is collapsed, `left-ta
 | `[` | Previous ready-for-input session | global |
 | `Shift+]` | Next session (all) | global |
 | `Shift+[` | Previous session (all) | global |
+| Mouse Forward | Next ready-for-input session in Focus mode | global+iframe |
+| Mouse Back | Previous ready-for-input session in Focus mode | global+iframe |
 | `Ctrl+Shift+\` | Toggle terminal / widget focus | widget+iframe |
 | `Tab` / `Shift+Tab` | Next / previous panel zone | widget |
 | `↑` / `↓` | Move between files | widget |

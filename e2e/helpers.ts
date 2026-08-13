@@ -11,15 +11,13 @@ export async function resetAndWaitForData(page: Page) {
   // Small delay for SSE delta events to arrive
   await page.waitForTimeout(500)
 
-  // Clear layouts, force initiative grouping (default changed to 'task'), and reload
+  // Clear layouts and reload against the freshly seeded simulator state.
   await page.evaluate(() => {
     localStorage.removeItem('tinstar-layouts-v3')
-    localStorage.setItem('tinstar-dimensions', JSON.stringify(['initiative', 'epic', 'task']))
   })
   await page.reload()
 
-  // Wait for ALL simulator initiatives to be visible (not just the first one)
-  await expect(page.getByTestId('sidebar-node-initiative-init-1')).toBeVisible({ timeout: 10000 })
-  await expect(page.getByTestId('sidebar-node-initiative-init-2')).toBeVisible({ timeout: 5000 })
-  await expect(page.getByTestId('sidebar-node-initiative-init-3')).toBeVisible({ timeout: 5000 })
+  // R-241 is a stable member of the simulator fixture and proves the current
+  // server-backed grouping metadata and run snapshot have both rendered.
+  await expect(page.getByTestId('canvas-widget-run-R-241')).toBeVisible({ timeout: 10000 })
 }

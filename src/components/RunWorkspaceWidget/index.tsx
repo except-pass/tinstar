@@ -518,6 +518,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           className={`flex-1 flex flex-col min-w-0 min-h-0 ${focusZone === 'center-tabs' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
         >
           <RunSessionPanel
+            focusMode={focusMode}
             recapEntries={run.recapEntries}
             rawLogs={run.rawLogs}
             port={run.port}

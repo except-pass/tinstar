@@ -56,6 +56,8 @@
     var loadAttempts = 0
     var maxAutoRetries = 3
     var loadTimer = null
+    var focusPresentationActive = false
+    termEl.dataset.focusPresentation = 'canvas'
 
     function showError(msg) {
       errorMsg.textContent = msg
@@ -149,6 +151,13 @@
 
     // Parent asks us to focus the xterm terminal
     window.addEventListener('message', function(e) {
+      if (e.source !== window.parent) return
+      if (e.data && e.data.type === 'terminal-focus-presentation'
+          && e.data.sessionName === session && typeof e.data.active === 'boolean') {
+        focusPresentationActive = e.data.active
+        termEl.dataset.focusPresentation = focusPresentationActive ? 'focus' : 'canvas'
+        return
+      }
       if (e.data && e.data.type === 'terminal-focus') {
         try {
           var win = termEl.contentWindow
@@ -161,6 +170,7 @@
         } catch (_) {}
       }
     })
+    window.parent.postMessage({ type: 'terminal-wrapper-ready', sessionName: session }, '*')
 
     // Intercept Ctrl+Shift+\ and notify parent to release terminal focus.
     var notifyEscapeLocked = false
@@ -189,6 +199,31 @@
       window.parent.postMessage({ type: 'terminal-session-cycle', sessionName: session, action: action }, '*')
       return true
     }
+
+    function mouseCycleAction(e) {
+      if (e.button === 3) return 'ready-prev'
+      if (e.button === 4) return 'ready-next'
+      return null
+    }
+
+    function consumeFocusMouse(e) {
+      var action = mouseCycleAction(e)
+      if (!focusPresentationActive || !action) return false
+      e.preventDefault()
+      e.stopPropagation && e.stopPropagation()
+      if (e.type === 'mouseup') {
+        window.parent.postMessage({ type: 'terminal-session-cycle', sessionName: session, action: action }, '*')
+      }
+      return true
+    }
+
+    function attachMouseCycleListeners(target) {
+      target.addEventListener('mousedown', consumeFocusMouse, true)
+      target.addEventListener('mouseup', consumeFocusMouse, true)
+      target.addEventListener('auxclick', consumeFocusMouse, true)
+    }
+
+    attachMouseCycleListeners(window)
 
     window.addEventListener('keydown', function(e) {
       if (notifyCycle(e)) return
@@ -223,6 +258,7 @@
     // Layer 2b: capture-phase DOM listener (fallback)
     function tryAttachKeydown() {
       try {
+        attachMouseCycleListeners(termEl.contentWindow)
         termEl.contentWindow.addEventListener('keydown', function(e) {
           if (notifyCycle(e)) return
           if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {

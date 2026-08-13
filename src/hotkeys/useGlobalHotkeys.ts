@@ -4,6 +4,7 @@ import { isEditable } from './isEditable'
 import { emitBindingFired } from './bindingFiredBus'
 
 export interface GlobalHotkeyHandlers {
+  isFocusModeActive: () => boolean
   onCycleReadyNext: () => void
   onCycleReadyPrev: () => void
   onCycleAllNext: () => void
@@ -23,6 +24,20 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
   handlersRef.current = handlers
 
   useEffect(() => {
+    function onMouseGesture(e: MouseEvent) {
+      const action = e.button === 3
+        ? handlersRef.current.onCycleReadyPrev
+        : e.button === 4
+          ? handlersRef.current.onCycleReadyNext
+          : null
+
+      if (!action || !handlersRef.current.isFocusModeActive()) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.type === 'mouseup') action()
+    }
+
     function onKeyDown(e: KeyboardEvent) {
       const active = document.activeElement
       const h = handlersRef.current
@@ -110,6 +125,14 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
     }
 
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('mousedown', onMouseGesture, true)
+    window.addEventListener('mouseup', onMouseGesture, true)
+    window.addEventListener('auxclick', onMouseGesture, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('mousedown', onMouseGesture, true)
+      window.removeEventListener('mouseup', onMouseGesture, true)
+      window.removeEventListener('auxclick', onMouseGesture, true)
+    }
   }, [])
 }

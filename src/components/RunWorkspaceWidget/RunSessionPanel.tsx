@@ -5,6 +5,7 @@ import { apiFetch } from '../../apiClient'
 import { PromptComposer } from '../PromptComposer/PromptComposer'
 
 interface Props {
+  focusMode?: boolean
   recapEntries?: RecapEntry[]
   rawLogs?: string
   port?: number | null
@@ -29,23 +30,43 @@ interface Props {
   composerFocusTrigger?: number
 }
 
-export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
+function terminalFrameOrigin(frame: HTMLIFrameElement) {
+  try {
+    return new URL(frame.src, window.location.href).origin
+  } catch {
+    return null
+  }
+}
+
+export function RunSessionPanel({ focusMode = false, recapEntries = [], rawLogs = '', port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
   const accent = resolveRunAccent(color)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const terminalFrameRef = useRef<HTMLIFrameElement>(null)
 
+  const sendFocusPresentation = useCallback(() => {
+    const terminalFrame = terminalFrameRef.current
+    if (!terminalFrame?.contentWindow) return
+    const expectedOrigin = terminalFrameOrigin(terminalFrame)
+    if (!expectedOrigin) return
+    terminalFrame.contentWindow.postMessage({
+      type: 'terminal-focus-presentation',
+      sessionName: sessionId,
+      active: focusMode,
+    }, expectedOrigin === 'null' ? '*' : expectedOrigin)
+  }, [focusMode, sessionId])
+
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       const terminalFrame = terminalFrameRef.current
       if (!terminalFrame || e.source !== terminalFrame.contentWindow) return
-      let expectedOrigin: string
-      try {
-        expectedOrigin = new URL(terminalFrame.src, window.location.href).origin
-      } catch {
+      const expectedOrigin = terminalFrameOrigin(terminalFrame)
+      if (!expectedOrigin) return
+      if (e.origin !== expectedOrigin) return
+      if (e.data?.type === 'terminal-wrapper-ready' && e.data?.sessionName === sessionId) {
+        sendFocusPresentation()
         return
       }
-      if (e.origin !== expectedOrigin) return
       if (e.data?.type === 'terminal-focus-toggle' && e.data?.sessionName === sessionId) {
         onTerminalToggle?.()
       }
@@ -64,7 +85,12 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [sessionId, onTerminalToggle])
+  }, [sessionId, onTerminalToggle, sendFocusPresentation])
+
+  useEffect(() => {
+    // Install the readiness listener above before making the eager attempt.
+    sendFocusPresentation()
+  }, [sendFocusPresentation])
 
   const isTerminated = status === 'stopped'
 
