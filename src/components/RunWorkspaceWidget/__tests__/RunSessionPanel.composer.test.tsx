@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
-import { fireEvent, render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { fireEvent, render, waitFor } from '@testing-library/react'
 import { RunSessionPanel } from '../RunSessionPanel'
 import type { RecapEntry } from '../../../types'
 
@@ -85,6 +85,39 @@ describe('<RunSessionPanel> composer placement', () => {
 })
 
 describe('<RunSessionPanel> terminal wrapper bridge', () => {
+  it('sends Focus presentation only to the owned, same-origin wrapper', async () => {
+    const { container, rerender, unmount } = render(
+      <RunSessionPanel sessionId="run-1" status="idle" port={19999} controlledTab="terminal" focusMode />,
+    )
+    const frame = container.querySelector('iframe') as HTMLIFrameElement
+    const source = frame.contentWindow!
+    const origin = new URL(frame.src).origin
+    const postMessage = vi.spyOn(source, 'postMessage').mockImplementation(() => undefined)
+
+    fireEvent(window, new MessageEvent('message', { source: window, origin, data: { type: 'terminal-wrapper-ready', sessionName: 'run-1' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin: 'https://forged.invalid', data: { type: 'terminal-wrapper-ready', sessionName: 'run-1' } }))
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-wrapper-ready', sessionName: 'other' } }))
+    expect(postMessage).not.toHaveBeenCalled()
+
+    fireEvent(window, new MessageEvent('message', { source, origin, data: { type: 'terminal-wrapper-ready', sessionName: 'run-1' } }))
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'terminal-focus-presentation',
+      sessionName: 'run-1',
+      active: true,
+    }, origin)
+
+    postMessage.mockClear()
+    rerender(
+      <RunSessionPanel sessionId="run-1" status="idle" port={19999} controlledTab="terminal" focusMode={false} />,
+    )
+    await waitFor(() => expect(postMessage).toHaveBeenCalledWith({
+      type: 'terminal-focus-presentation',
+      sessionName: 'run-1',
+      active: false,
+    }, origin))
+    unmount()
+  })
+
   it('forwards only messages from the owned, same-origin terminal wrapper', () => {
     const cycles: string[] = []
     const boundaries: string[] = []

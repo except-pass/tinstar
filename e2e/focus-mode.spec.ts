@@ -254,6 +254,44 @@ test.describe('Focus mode', () => {
     const terminal = wrapper.frameLocator('#term')
     await expect(terminal.locator('.xterm-viewport')).toBeVisible()
     await expect(wrapper.locator('#term')).toHaveAttribute('data-bridge-ready', 'true')
+    await expect(wrapper.locator('#term')).toHaveAttribute('data-focus-presentation', 'focus')
+
+    await page.evaluate(() => {
+      const testWindow = window as Window & { __terminalCycleCount?: number }
+      testWindow.__terminalCycleCount = 0
+      window.addEventListener('tinstar:terminal-session-cycle', () => {
+        testWindow.__terminalCycleCount = (testWindow.__terminalCycleCount ?? 0) + 1
+      })
+    })
+    const wrapperFrame = page.locator('[data-testid="widget-root-R-241"] iframe[title="Session terminal"]')
+    await wrapperFrame.evaluate((frame: HTMLIFrameElement) => frame.contentWindow?.location.reload())
+    await expect(terminal.locator('.xterm-viewport')).toBeVisible()
+    await expect(wrapper.locator('#term')).toHaveAttribute('data-bridge-ready', 'true')
+    await expect(wrapper.locator('#term')).toHaveAttribute('data-focus-presentation', 'focus')
+
+    const terminalForwardDefaults = await terminal.locator('body').evaluate(body => (
+      ['mousedown', 'mouseup', 'auxclick'].map(type => body.dispatchEvent(new MouseEvent(type, {
+        button: 4, bubbles: true, cancelable: true,
+      })))
+    ))
+    expect(terminalForwardDefaults).toEqual([false, false, false])
+    await expect.poll(() => page.evaluate(() => (
+      window as Window & { __terminalCycleCount?: number }
+    ).__terminalCycleCount)).toBe(1)
+    await expect.poll(() => focusedRunTestId(page)).not.toBe('canvas-widget-run-R-241')
+    const forwardTarget = await focusedRunTestId(page)
+
+    const wrapperBackDefaults = await wrapper.locator('body').evaluate(body => (
+      ['mousedown', 'mouseup', 'auxclick'].map(type => body.dispatchEvent(new MouseEvent(type, {
+        button: 3, bubbles: true, cancelable: true,
+      })))
+    ))
+    expect(wrapperBackDefaults).toEqual([false, false, false])
+    await expect.poll(() => page.evaluate(() => (
+      window as Window & { __terminalCycleCount?: number }
+    ).__terminalCycleCount)).toBe(2)
+    await expect.poll(() => focusedRunTestId(page)).not.toBe(forwardTarget)
+    const backTarget = await focusedRunTestId(page)
 
     await terminal.locator('.xterm-viewport').evaluate(viewport => {
       viewport.scrollTop = viewport.scrollHeight
@@ -269,18 +307,14 @@ test.describe('Focus mode', () => {
         code: 'BracketRight', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
       }))
     })
-    await expect.poll(() => focusedRunTestId(page)).not.toBe('canvas-widget-run-R-241')
+    await expect.poll(() => focusedRunTestId(page)).not.toBe(backTarget)
 
     await page.locator('body').focus()
     await page.keyboard.press('Control+Shift+[')
-    await expect.poll(() => focusedRunTestId(page)).toBe('canvas-widget-run-R-241')
+    await expect.poll(() => focusedRunTestId(page)).toBe(backTarget)
 
     await page.evaluate(() => {
-      const testWindow = window as Window & { __terminalCycleCount?: number }
-      testWindow.__terminalCycleCount = 0
-      window.addEventListener('tinstar:terminal-session-cycle', () => {
-        testWindow.__terminalCycleCount = (testWindow.__terminalCycleCount ?? 0) + 1
-      })
+      (window as Window & { __terminalCycleCount?: number }).__terminalCycleCount = 0
     })
     await terminal.locator('body').evaluate(body => {
       for (let index = 0; index < 2; index++) {
@@ -292,6 +326,21 @@ test.describe('Focus mode', () => {
     await expect.poll(() => page.evaluate(() => (
       window as Window & { __terminalCycleCount?: number }
     ).__terminalCycleCount)).toBe(2)
+
+    await page.evaluate(() => {
+      (window as Window & { __terminalCycleCount?: number }).__terminalCycleCount = 0
+    })
+    await page.getByTestId('focus-mode-toggle').click()
+    await expect(wrapper.locator('#term')).toHaveAttribute('data-focus-presentation', 'canvas')
+    const canvasDefaults = await terminal.locator('body').evaluate(body => (
+      ['mousedown', 'mouseup', 'auxclick'].map(type => body.dispatchEvent(new MouseEvent(type, {
+        button: 4, bubbles: true, cancelable: true,
+      })))
+    ))
+    expect(canvasDefaults).toEqual([true, true, true])
+    expect(await page.evaluate(() => (
+      window as Window & { __terminalCycleCount?: number }
+    ).__terminalCycleCount)).toBe(0)
   })
 
   test('falls back after live removal and reaches the empty state when the fleet disappears', async ({ page }) => {

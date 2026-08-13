@@ -867,6 +867,7 @@ function WorkspaceShellInner() {
   }, [])
 
   useGlobalHotkeys({
+    isFocusModeActive,
     onCycleReadyNext: cycleReadyNext,
     onCycleReadyPrev: cycleReadyPrev,
     onCycleAllNext: cycleAllNext,
