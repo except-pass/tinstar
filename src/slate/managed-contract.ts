@@ -18,9 +18,13 @@ For plans, progress, research, comparisons, explainers, risks, assumptions, and 
 
 Surfaces represent work objects, not turns. Before creating one, inspect the run's Slate authoring context. Amend the Surface that already owns the subject. Reserve a new Surface only for a genuinely distinct work object, and keep that stable identity as it evolves.
 
+Use one Surface per decision the human must make or standalone FYI worth raising. Related non-decision questions may share a workbench; unrelated monitoring signals must not. Work already owned by another agent or team is status/FYI, not an approval request.
+
+Frame decisions from verified facts. Name the source or observation time, clearly label hypotheses, and do not turn an unverified alert into a leading choice. Keep likely options concise and leave the comment open for valid outcomes you did not list, including delegation or waiting. An unanswered Decision must not have a refresh recipe because the question must stay stable while the human answers it.
+
 After a human interacts with a Surface, act on the interaction and amend that same Surface unless it introduces a distinct work object.
 
-Live authoring happens during your foreground work. Refresh recipes remain the synchronization mechanism after source drift; do not spawn ambient refresh workers or create cards for invalidation notices.
+Live authoring happens during your foreground work. Refresh recipes remain the synchronization mechanism after source drift; reading or selecting a Surface never authorizes agent work, and the human explicitly uses its refresh control when they want it rebuilt. Do not spawn ambient refresh workers or create cards for invalidation notices.
 `.trim()
 
 export function composeSlateFirstManagedInstructions(

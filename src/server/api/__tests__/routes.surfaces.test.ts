@@ -439,7 +439,7 @@ describe('POST /api/surfaces/:id/refresh — intent', () => {
     const r = await srv.call('POST', `/api/surfaces/${id}/refresh`, { intent: 'bulk-check' })
     expect(r.status).toBe(200)
     expect(r.body.ok && r.body.data.outcome).toBe('skipped')
-    expect(r.body.ok && String(r.body.data.reason)).toMatch(/refreshes when you visit it/)
+    expect(r.body.ok && String(r.body.data.reason)).toMatch(/use its refresh control to update it/)
     expect(coord.asked).toEqual([])
   })
 

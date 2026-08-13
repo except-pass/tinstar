@@ -1,16 +1,18 @@
 ---
 title: "Delivering prompts to a managed agent, and refreshing agent-authored surfaces"
 date: 2026-07-21
+last_updated: 2026-08-13
 category: conventions
 module: slate
-problem_type: architecture
-component: agent_prompt_delivery
+problem_type: convention
+component: assistant
 severity: medium
 tags:
   - slate
   - sendPrompt
   - tmux
   - refresh
+  - explicit-refresh
   - prompt-injection
 applies_when:
   - Delivering any prompt into a managed agent's tmux session (sendPrompt / enter-prompt)
@@ -24,7 +26,7 @@ applies_when:
 ## Context
 
 The Slate lets an agent author *surfaces* by writing files that a watcher projects onto
-the run (see `agent-prompt-delivery` sibling `widget-to-agent-answer-back.md` for the
+the run (see [widget-to-agent-answer-back.md](./widget-to-agent-answer-back.md) for the
 answer-back direction). Adding **refresh** (re-run a surface's author), a **composer**
 (author a new surface from a prompt), and **refresh-all** (fan-out) surfaced four
 disciplines that generalize to *any* code delivering a prompt into a managed agent's
@@ -37,10 +39,13 @@ only bites at runtime.
 Nothing ambient may deliver one: not a commit, not a deadline, not a browser focus or
 visibility event, not an SSE frame, not a mount effect. Those all fire while nobody is
 looking, and "the app happened to be open" is not permission. A trigger may mark
-content dirty; only a person navigating to, interacting with, or explicitly refreshing
-it may run the thing that costs a model call. Check it on the server as well as in the
-client — the client's job is to send an honest intent, the server's job is to disbelieve
-it. (See `src/server/api/surfaceRoutes.ts`, `REFRESH_INTENTS`.)
+content dirty; only a person explicitly using the Surface's refresh control may run the
+thing that costs a model call. Reading, selecting, and keyboard navigation are not
+authorization. The supported client therefore sends only `explicit` from the refresh
+control. The server still authenticates the human principal and accepts the older
+`navigate` / `interact` labels for client compatibility; those labels are not permission
+for new UI callers to conflate selection with execution. (See
+`src/server/api/surfaceRoutes.ts`, `REFRESH_INTENTS`.)
 
 **2. The spinner belongs to whoever actually knows.**
 Do NOT set a "refreshing" flag optimistically on click and bound it with a client timer.
@@ -56,9 +61,9 @@ Serializing delivery to one session is still right (`sendPrompt` is `send-keys` 
 → `send-keys(Enter)`, and concurrent calls at one pane interleave keystrokes). But the
 better fix for a "refresh all" is that it should not deliver prompts at all: make the bulk
 action a CHEAP CHECK that runs only work needing no agent, and leave the rest for their
-owners to visit. A control that fans N prompts into one conversation is a control that
-will eventually be pressed on a Slate of fifty cards. Name it for what it does — "check",
-not "refresh" — and disable it when there is nothing cheap to do.
+owners to refresh explicitly. A control that fans N prompts into one conversation is a
+control that will eventually be pressed on a Slate of fifty cards. Name it for what it
+does — "check", not "refresh" — and disable it when there is nothing cheap to do.
 
 **3b. Bound shared PROVIDER load by identity, not by caller.**
 A per-item budget bounds nothing: twenty cards watching one git ref means twenty fetches
@@ -100,8 +105,9 @@ file- or user-authored string is interpolated into a delivered prompt.
 ## Examples
 
 ```ts
-// Intent from a REAL event handler, for dirty items only. Never from an effect.
-onPointerDown={() => { setSelected(id); if (isDirty(item)) void sendIntent(item, 'interact') }}
+// Selection is read-only. Refresh intent comes only from the explicit control.
+onPointerDown={() => setSelected(id)}
+onClickRefresh={() => void sendIntent(item, 'explicit')}
 
 // The spinner is the SERVER's state. The only local flag covers the round trip.
 const refreshing = item.freshness?.phase === 'refreshing'
@@ -119,6 +125,6 @@ if (result.status === 'deferred') return            // nothing ran ⇒ record NO
 return [recipe ?? `Regenerate surface "${oneLine(headline)}".`, '', GUARDRAIL].join('\n')
 ```
 
-Related: `conventions/widget-to-agent-answer-back.md` (the persist-THEN-deliver answer-back
+Related: [widget-to-agent-answer-back.md](./widget-to-agent-answer-back.md) (the persist-THEN-deliver answer-back
 direction — this doc is its persist-NOTHING refresh counterpart; consider consolidating
 into one "agent prompt delivery" note if a third case appears).

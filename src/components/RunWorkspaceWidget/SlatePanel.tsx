@@ -30,6 +30,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
+import { isAnswerable } from '../../a2ui/controls'
 import { OpenPointsSurface, orderOpenPoints } from './OpenPointsSurface'
 import { partitionWorkbenches } from './WorkbenchSurface'
 import { DiagramSurface } from './DiagramSurface'
@@ -38,7 +39,8 @@ import {
   getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface,
   getMinimizedSlateSurfaces, addMinimizedSlateSurface, removeMinimizedSlateSurface,
 } from '../../lib/uiPrefs'
-import { useSlateRefresh, RefreshButton, isDirty, isHostMaintained } from './slateRefresh'
+import { useSlateRefresh, RefreshButton, isHostMaintained } from './slateRefresh'
+import { usePointAnswerForm } from './usePointAnswerForm'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
 import { SlateCleanButton } from './SlateCleanButton'
@@ -184,6 +186,26 @@ function SlateCheatsheet({ onDismiss }: { onDismiss: () => void }) {
   )
 }
 
+/** A compose reservation stays a standalone card after its authoring lifecycle
+ * completes, but a ready card may still be an answerable work object. Give it the
+ * same run-scoped form used by open-point rows without folding it into their list. */
+function ComposeCardBody({ runId, surface }: { runId: string; surface: SlateSurface }) {
+  const answer = usePointAnswerForm(runId, surface.id)
+  const interactive = isAnswerable(surface.body)
+
+  if (!surface.body) return null
+  return (
+    <>
+      <A2uiRenderer content={surface.body} form={interactive ? answer.form : undefined} />
+      {answer.error && (
+        <div data-testid={`surface-answer-error-${surface.id}`} className="mt-2 text-xs text-hue-error">
+          {answer.error}
+        </div>
+      )}
+    </>
+  )
+}
+
 export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePanel(
   { runId, surfaces = [], width, open = false, onClose, focused = false }: Props,
   ref,
@@ -282,7 +304,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   // unconditionally) can watch the same list the render uses.
   const sorted = useMemo(() => sortSurfaces(gridSurfaces), [gridSurfaces])
   const {
-    pendingIds, unreachableIds, bulkChecking, refresh, checkAll, onSurfaceIntent,
+    pendingIds, unreachableIds, bulkChecking, refresh, checkAll,
   } = useSlateRefresh(runId)
   /** The server's own phase, not a local optimistic flag (plan U6). A spinner now
    *  means the HOST is working on it, and it stops when the host says so rather than
@@ -291,20 +313,6 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     const phase = s.freshness?.phase
     return phase === 'refreshing' || phase === 'queued'
   }, [])
-  /**
-   * A person deliberately reached this Surface (R11, KTD4).
-   *
-   * Called ONLY from pointer selection and the `j`/`k` handlers below — never from a
-   * mount effect, a focus or visibility listener, or an SSE update. Those fire while
-   * nobody is looking, and "Tinstar happened to be open" is not permission to spend a
-   * model call. Dirty-only for the same reason: navigating a healthy Slate must cost
-   * nothing. The server checks both again, so a bug here cannot manufacture authority.
-   */
-  const notifyIntent = useCallback((id: string | null, intent: 'navigate' | 'interact') => {
-    if (!id) return
-    const surface = sorted.find(s => s.id === id)
-    if (surface && isDirty(surface)) void onSurfaceIntent(surface, intent)
-  }, [sorted, onSurfaceIntent])
   // One ticking clock for the whole panel — every surface's "updated Xm ago" reads
   // from this so they agree and there's no timer-per-card.
   const now = useNow()
@@ -471,19 +479,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
       const nextId = i < 0
         ? focusRows[0]!.id
         : focusRows[Math.min(Math.max(i + delta, 0), focusRows.length - 1)]!.id
-      // NAVIGATION IS THE INTENT (R11). `j`/`k` is a person moving through the Slate,
-      // so arriving on a dirty card is the deliberate act that authorizes its one
-      // refresh — the same act as clicking it, and it must mean the same thing.
-      //
-      // Fired from inside the updater but guarded by `nextId !== prev`, so the clamp
-      // at either end (which returns the same id) does NOT re-fire on every keypress.
-      // React may invoke an updater twice in StrictMode; the request is idempotent on
-      // the server — a second one joins the attempt — and the hook's in-flight guard
-      // collapses it anyway.
-      if (nextId !== prev) notifyIntent(nextId, 'navigate')
       return nextId
     })
-  }, [focusRows, notifyIntent])
+  }, [focusRows])
 
   const hideFocused = useCallback(() => {
     const i = focusRows.findIndex((s) => s.id === focusedSurfaceId)
@@ -500,18 +498,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     if (s) refresh(s)
   }, [focusRows, focusedSurfaceId, refresh])
 
-  /**
-   * A pointer landed on a Surface (R11).
-   *
-   * Selection AND intent, in that order, from one real event handler. Clicking the
-   * card you are already on still counts — that is a person saying "this one, now",
-   * and it is how a user asks again for something whose last check failed. Repeats
-   * join the attempt in flight rather than starting another (R14).
-   */
+  /** Pointer selection is navigation only. Rebuilding a Surface requires the
+   * explicit ⟳ control (or the `r` hotkey), so opening a card never spends work. */
   const selectSurface = useCallback((id: string) => {
     setFocusedSurfaceId(id)
-    notifyIntent(id, 'interact')
-  }, [notifyIntent])
+  }, [])
 
   const openComposer = useCallback(() => {
     // On a blank Slate the composer is already on screen (U5) — put the cursor in it
@@ -614,8 +605,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
   const columns = slateColumnCount(width)
-  // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
-  // too) — a recipe is optional, so all of them are refreshable.
+  // Check-all considers every VISIBLE surface, then filters to host-maintained
+  // recipes. Agent recipes remain per-card, explicit work.
   const visibleSurfaces = matched.filter((s) => showHidden || !hidden.has(s.id))
   /** How many of the visible surfaces the host can check WITHOUT an agent. Drives the
    *  check-all control's label and its disabled state, so a Slate of agent-written
@@ -681,7 +672,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
             </span>
           )}
           {/* CHECK, not refresh (KTD9). This runs the machine checks and nothing else:
-              an agent-written surface is left dirty for its owner to visit, because a
+              an agent-written surface is left dirty for an explicit per-card refresh, because a
               button that fanned prompts across a whole Slate is exactly what this work
               removed. The label says "check" because that is what it does — a control
               named for something it deliberately does not do is worse than no control. */}
@@ -690,9 +681,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
             onClick={() => checkAll(visibleSurfaces)}
             disabled={bulkChecking || checkableCount === 0}
             title={checkableCount === 0
-              ? 'Nothing here can be checked without an agent — open a surface to refresh it'
+              ? 'Nothing here can be checked without an agent — use a surface’s ⟳ to refresh it'
               : `Check ${checkableCount} surface${checkableCount === 1 ? '' : 's'} the host can verify on its own. `
-                + 'Agent-written surfaces refresh when you open them.'}
+                + 'Use an agent-written surface’s ⟳ when you want to refresh it.'}
             className="text-ink-ctrl hover:text-ink-high disabled:opacity-70 leading-none"
           >
             <span className={bulkChecking ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
@@ -885,7 +876,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           ) : null
           // Freshness footer: the witness stamp ("checked Xm ago" / "not yet checked"
           // / "nothing to check"), ambering when a witnessed surface has drifted past
-          // the horizon. A ⚡ leads it when the surface self-refreshes from a recipe.
+          // the horizon. A ⚡ leads it when the surface has a rebuild recipe.
           const footer = (
             <div className="mt-1 flex items-center justify-end gap-1.5">
               {/* The host's own verdict sits LEFT of the stamp, because it outranks
@@ -912,11 +903,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // and it never collides with the refresh pulse — that lives on the border
           // and the shadow, this on the ring.
           const isFocused = focusedSurfaceId === surface.id
-          // The SERVER's phase, alongside the client's optimistic spinner. The two
-          // are different claims and both belong: `isRefreshing` means "your click
-          // was sent", `phase` means "the host has a worker on it". A click on an
-          // asleep run shows the first and never the second, which is exactly the
-          // distinction the old bounded-spinner had no way to draw.
+          // The SERVER's phase drives the card edge. The refresh button separately
+          // shows the brief client-owned pending state while its request is on the wire.
           const phase = surface.freshness?.phase
           const live = isRefreshing || phase === 'refreshing'
           const edgeClass = live
@@ -951,10 +939,8 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                   data-freshness={phase}
                   data-focused={isFocused ? 'true' : undefined}
                   className={shellClass}
-                  // POINTER SELECTION IS INTENT (R11). A real pointer event on a dirty
-                  // card is a person saying "this one, now" — the same act as landing on
-                  // it with `j`/`k`, and it has to mean the same thing. Repeats join the
-                  // attempt in flight rather than starting a second (R14).
+                  // Selection is deliberately read-only. Refresh has its own visible
+                  // control; opening this card must never schedule agent work.
                   onPointerDown={() => selectSurface(surface.id)}
                 >
                   {controls}
@@ -1017,7 +1003,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                 data-freshness={phase}
                 data-focused={isFocused ? 'true' : undefined}
                 className={shellClass}
-                // Same seam as the minimized card above: one selection path, one intent.
+                // Same read-only selection seam as the minimized card above.
                 onPointerDown={() => selectSurface(surface.id)}
               >
                 {controls}
@@ -1066,7 +1052,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                 <DiagramSurface runId={runId} surface={surface} />
               ) : surface.body ? (
                 <A2uiErrorBoundary source={surface.body}>
-                  <A2uiRenderer content={surface.body} />
+                  {surface.presentation === 'compose-card' ? (
+                    <ComposeCardBody key={`${runId}:${surface.id}`} runId={runId} surface={surface} />
+                  ) : (
+                    <A2uiRenderer content={surface.body} />
+                  )}
                 </A2uiErrorBoundary>
               ) : (
                 <div className="font-sans text-sm text-ink-high">{surface.headline}</div>

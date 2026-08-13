@@ -1,8 +1,7 @@
-// A quiet ⚡ marking a surface that carries a self-refresh RECIPE. Such a surface
-// re-authors deterministically from its own recipe — a code-spawned author runs it
-// off the main agent's critical path, so refreshing it (or a whole refresh-all
-// fan-out) doesn't wait on a single session. It's the visible answer to "which of
-// these refresh on their own vs. cost the agent a turn?".
+// A quiet ⚡ marking a surface that carries a refresh RECIPE. The recipe makes the
+// surface rebuildable from declared sources; it does not decide when rebuilding is
+// authorized. Agent recipes run only from the explicit per-surface refresh control,
+// while host recipes may participate in the cheap Check-all path.
 //
 // Rendered in low ink, NOT cyan: cyan is reserved for the live edge (an in-flight
 // refresh already lights the card). This is a resting capability marker, not a
@@ -11,8 +10,8 @@ export function FastPathBadge({ className }: { className?: string }) {
   return (
     <span
       data-testid="fast-path-badge"
-      title="Self-refreshing — re-runs from its own recipe, off the main agent's path"
-      aria-label="self-refreshing"
+      title="Recipe-backed — use the surface refresh control to rebuild it from its declared sources"
+      aria-label="refresh recipe available"
       className={`shrink-0 leading-none text-ink-low ${className ?? ''}`}
     >
       ⚡

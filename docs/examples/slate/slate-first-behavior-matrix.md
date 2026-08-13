@@ -45,10 +45,14 @@ Use each returned `surfaceId` to inspect the canonical record and thread through
 | Hard rail | Pass condition |
 |---|---|
 | User decision | The risk choice is on a Surface the user can act on or clearly judge. |
+| Decision stability | The unanswered Decision has no refresh recipe and opening or navigating to it schedules no agent work. |
+| Evidence quality | Verified facts name their basis, uncertain claims are labeled as hypotheses, and the choice is not led by an unverified alert. |
+| Alternative outcome | The Decision comment allows a valid unlisted outcome such as delegation or waiting. |
 | Blocker | Missing legal approval is visible as a blocker needing intervention. |
 | Primary result | The release recommendation and evidence are understandable without reading the transcript. |
 | Verbose output | The 100 diagnostic lines do not become Surface cards or copied Surface content. |
 | Work objects, not turns | Follow-ups amend the analysis/recommendation owner; they do not create one new Surface per turn. Identity history remains stable. |
+| Ownership | Work already owned by another agent or team is status/FYI, not an approval request. |
 | Refresh boundary | No authoring action creates refresh jobs or background sessions. |
 
 Record the result as `pass`, `fail`, or `skipped` for each provider, with:

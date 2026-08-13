@@ -5,6 +5,8 @@ import type { Reply } from '../../domain/pinSet'
 import {
   SLATE_PROMPT_THREAD_WINDOW,
   slateAnswerPromptText,
+  slateComposePromptText,
+  slateExplainPromptText,
   slateObjectivePromptText,
   slateReplyPromptText,
   slateThreadSoFar,
@@ -59,6 +61,28 @@ describe('slateObjectivePromptText', () => {
   it('collapses whitespace runs and trims', () => {
     expect(slateObjectivePromptText('  keep    the   lights   on  '))
       .toContain('"keep the lights on"')
+  })
+})
+
+describe('Slate authoring prompts', () => {
+  it('does not invite an author to invent a refresh recipe', () => {
+    const out = slateComposePromptText({
+      freeform: 'Summarize the rollout.',
+      destination: { file: 'rollout.json', localId: 'rollout', attemptToken: 'attempt-1' },
+    }, 'http://localhost:5273')
+
+    expect(out).toContain('Do not invent a refresh recipe')
+    expect(out).not.toContain('optional refresh recipe')
+  })
+
+  it('teaches explain-session authors to separate decisions, evidence, and externally owned work', () => {
+    const out = slateExplainPromptText()
+
+    expect(out).toContain('one Surface per actionable human decision or standalone FYI')
+    expect(out).toContain('Keep unrelated signals separate')
+    expect(out).toContain('status/FYI, not an approval request')
+    expect(out).toContain('verified facts distinguished from hypotheses')
+    expect(out).toContain('Never put a refresh recipe on an unanswered Decision')
   })
 })
 

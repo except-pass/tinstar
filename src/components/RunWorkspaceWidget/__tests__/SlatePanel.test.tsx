@@ -193,6 +193,45 @@ describe('SlatePanel compose card lifecycle', () => {
     expect(screen.queryByTestId('open-points-surface')).toBeNull()
     expect(screen.getByText('finished body')).toBeTruthy()
   })
+
+  it('keeps a reserved Decision compose-card interactive for an unlisted comment-only outcome', async () => {
+    const decision = composed('ready')
+    decision.body = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['decision', 'submit'] },
+        {
+          id: 'decision',
+          component: 'Decision',
+          options: [
+            { id: 'remove', label: 'Remove it', gain: 'Stops paging.', cost: 'Deletes the alert.', wrongIf: 'Traffic resumes.' },
+            { id: 'hold', label: 'Hold', gain: 'Keeps coverage.', cost: 'Continues paging.', wrongIf: 'The owner confirms it is dead.' },
+          ],
+          comment: { label: 'Another outcome?' },
+        },
+        { id: 'submit', component: 'Submit', label: 'Submit decision' },
+      ],
+    }
+
+    render(<SlatePanel runId="run-1" surfaces={[decision]} />)
+
+    const remove = screen.getByRole('radio', { name: /Remove it/ }) as HTMLInputElement
+    expect(remove.disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('decision-comment'), {
+      target: { value: 'Delegated externally; waiting for resolution.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit decision' }))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(
+      '/api/runs/run-1/slate/points/compose-1/answer',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          text: 'Delegated externally; waiting for resolution.',
+        }),
+      }),
+    ))
+  })
 })
 
 describe('SlatePanel reflow (U1/R2)', () => {
@@ -886,11 +925,14 @@ describe('SlatePanel refresh (plan U6)', () => {
   it('check-all sends BULK-CHECK for host surfaces and nothing at all for agent ones (KTD9)', async () => {
     // THE FAN-OUT THIS PLAN REMOVED. The old button POSTed for every visible card,
     // each of which became a prompt. It now touches only the surfaces the host can
-    // check by itself; an agent-written card is left dirty for its owner to visit.
+    // check by itself; an agent-written card is left dirty for explicit refresh.
     const host = surface('a', 'x', { refresh: { kind: 'host', handler: 'http-status' } })
     const agent = surface('b', 'y', { refresh: { kind: 'agent', prompt: 'rebuild me' } })
     render(<SlatePanel runId="run-1" surfaces={[host, agent]} />)
-    fireEvent.click(screen.getByTestId('slate-refresh-all'))
+    const checkAll = screen.getByTestId('slate-refresh-all')
+    expect(checkAll.title).toMatch(/Use an agent-written surface’s ⟳/)
+    expect(checkAll.title).not.toMatch(/when you open/i)
+    fireEvent.click(checkAll)
 
     expect(screen.getByTestId('slate-refreshing-all')).toBeTruthy()
     await waitFor(() => {
@@ -910,7 +952,7 @@ describe('SlatePanel refresh (plan U6)', () => {
     ]} />)
     const button = screen.getByTestId('slate-refresh-all') as HTMLButtonElement
     expect(button.disabled).toBe(true)
-    expect(button.title).toMatch(/open a surface to refresh it/)
+    expect(button.title).toMatch(/use a surface’s ⟳ to refresh it/)
   })
 
   it('carries the slow cyan pulse class only while the HOST is refreshing a surface', () => {
@@ -970,6 +1012,8 @@ describe('SlatePanel refresh (plan U6)', () => {
     expect(
       screen.getByTestId('slate-surface-norecipe').querySelector('[data-testid="fast-path-badge"]'),
     ).toBeNull()
+    expect(screen.getByTestId('fast-path-badge').getAttribute('title')).toMatch(/use the surface refresh control/i)
+    expect(screen.getByTestId('fast-path-badge').getAttribute('title')).not.toMatch(/self-refreshing/i)
   })
 })
 
@@ -1358,13 +1402,12 @@ describe('SlatePanel drives its own clock (the stamp advances with no new props)
 })
 
 // ---------------------------------------------------------------------------
-// Deliberate interaction, and only deliberate interaction (R11/R12, plan U6).
+// Navigation is read-only; refresh is a separate explicit action (R11/R12, plan U6).
 //
 // EVERY TEST HERE THAT MATTERS IS A NEGATIVE. The promise is that a Slate sitting
 // open costs nothing, so the assertions are about what does NOT reach the network:
-// mounting, re-rendering under SSE traffic, and landing on a card that is already
-// current. The positives exist to keep those honest — if nothing could ever send,
-// they would all pass vacuously.
+// mounting, re-rendering under SSE traffic, and pointer/keyboard navigation. Explicit
+// refresh has its positive coverage in the refresh and keyboard suites above.
 // ---------------------------------------------------------------------------
 
 describe('SlatePanel surface intent (plan U6)', () => {
@@ -1378,18 +1421,19 @@ describe('SlatePanel surface intent (plan U6)', () => {
 
   const dirty = (id: string, text = 'x') =>
     surface(id, text, { freshness: { phase: 'possibly-stale', overdue: false } })
-  const current = (id: string, text = 'x') =>
-    surface(id, text, { freshness: { phase: 'current', overdue: false } })
-
-  const intentsSent = () => apiFetch.mock.calls.map(c => ({
-    path: c[0] as string,
-    intent: JSON.parse(String((c[1] as { body?: string } | undefined)?.body ?? '{}')).intent as string | undefined,
-  }))
-
   it('MOUNTING a Slate full of dirty surfaces sends nothing', async () => {
     // The headline negative. Opening Tinstar is not a request to spend model calls,
     // and an effect that fired on mount would make it one for every dirty card at once.
     render(<SlatePanel runId="run-1" surfaces={[dirty('a'), dirty('b'), dirty('c')]} />)
+    await Promise.resolve()
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('opening a dirty card selects it without scheduling a refresh', async () => {
+    render(<SlatePanel runId="run-1" surfaces={[dirty('a')]} />)
+    fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
+
+    expect(screen.getByTestId('slate-surface-a').getAttribute('data-focused')).toBe('true')
     await Promise.resolve()
     expect(apiFetch).not.toHaveBeenCalled()
   })
@@ -1407,47 +1451,34 @@ describe('SlatePanel surface intent (plan U6)', () => {
     expect(apiFetch).not.toHaveBeenCalled()
   })
 
-  it('a POINTER on a dirty surface sends exactly one INTERACT intent', async () => {
+  it('opening several dirty surfaces only moves the focus ring', async () => {
     render(<SlatePanel runId="run-1" surfaces={[dirty('a'), dirty('b')]} />)
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
-    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
-    expect(intentsSent()).toEqual([
-      { path: '/api/runs/run-1/slate/surfaces/a/refresh', intent: 'interact' },
-    ])
-  })
-
-  it('a pointer on a CURRENT surface sends nothing — moving around a healthy Slate is free', async () => {
-    render(<SlatePanel runId="run-1" surfaces={[current('a'), current('b')]} />)
-    fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
     fireEvent.pointerDown(screen.getByTestId('slate-surface-b'))
+    expect(screen.getByTestId('slate-surface-b').getAttribute('data-focused')).toBe('true')
     await Promise.resolve()
     expect(apiFetch).not.toHaveBeenCalled()
   })
 
-  it('clicking the ALREADY-SELECTED dirty surface counts as interaction', async () => {
-    // A person saying "this one, now" for the second time is still saying it — and
-    // it is how they ask again after a check that failed. The server joins rather
-    // than forking, so repeating is safe.
+  it('clicking the already-selected dirty surface remains read-only', async () => {
     render(<SlatePanel runId="run-1" surfaces={[dirty('a')]} />)
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
-    expect(intentsSent().every(c => c.intent === 'interact')).toBe(true)
+    await Promise.resolve()
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 
-  it('a request already on the wire is not duplicated by a second click', async () => {
-    apiFetch.mockImplementation(() => new Promise<never>(() => {}))
+  it('rapid pointer selections never schedule work', async () => {
     render(<SlatePanel runId="run-1" surfaces={[dirty('a')]} />)
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
     fireEvent.pointerDown(screen.getByTestId('slate-surface-a'))
     await Promise.resolve()
-    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 })
 
-describe('SlatePanel j/k navigation is intent (plan U6, R11)', () => {
+describe('SlatePanel j/k navigation is read-only (plan U6, R11)', () => {
   beforeEach(() => {
     localStorage.clear()
     cleanup()
@@ -1457,7 +1488,6 @@ describe('SlatePanel j/k navigation is intent (plan U6, R11)', () => {
   })
 
   const dirty = (id: string) => surface(id, id, { freshness: { phase: 'possibly-stale', overdue: false } })
-  const paths = () => apiFetch.mock.calls.map(c => c[0] as string)
 
   /** j/k reach the panel through its imperative handle, the same way the widget
    *  drives them — so this exercises the real selection path rather than a keydown
@@ -1468,24 +1498,22 @@ describe('SlatePanel j/k navigation is intent (plan U6, R11)', () => {
     return ref
   }
 
-  it('landing on a dirty surface with `j` sends ONE navigate intent for it', async () => {
+  it('landing on dirty surfaces with `j` moves focus without refreshing', async () => {
     const ref = withHandle([dirty('a'), dirty('b')])
     act(() => ref.current!.focusNext())
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
-    expect(paths()).toEqual(['/api/runs/run-1/slate/surfaces/a/refresh'])
-    expect(JSON.parse(String((apiFetch.mock.calls[0]![1] as { body?: string }).body)).intent).toBe('navigate')
+    expect(document.querySelector('[data-focused="true"]')?.getAttribute('data-testid')).toBe('slate-surface-a')
 
     act(() => ref.current!.focusNext())
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
-    expect(paths()[1]).toBe('/api/runs/run-1/slate/surfaces/b/refresh')
+    expect(document.querySelector('[data-focused="true"]')?.getAttribute('data-testid')).toBe('slate-surface-b')
+    await Promise.resolve()
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 
-  it('holding `j` at the end of the list does not re-fire for the same surface', async () => {
-    // The clamp returns the SAME id, and a key held down would otherwise send one
-    // request per repeat — a fan-out caused by leaning on a key.
+  it('holding `j` at the end of the list remains read-only', async () => {
     const ref = withHandle([dirty('a')])
     for (let i = 0; i < 6; i++) act(() => ref.current!.focusNext())
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    await Promise.resolve()
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 
   it('navigating past CURRENT surfaces sends nothing', async () => {

@@ -160,4 +160,14 @@ describe('SLATE_AUTHOR_CONTRACT covers the Decision scale vocabulary', () => {
     const missing = allValues.filter(v => !SLATE_AUTHOR_CONTRACT.includes(v))
     expect(missing).toEqual([])
   })
+
+  it('keeps composed decisions interactive, stable, and evidence-led', () => {
+    expect(SLATE_AUTHOR_CONTRACT).toContain('host-assigned compose cards')
+    expect(SLATE_AUTHOR_CONTRACT).toMatch(/controls submit\s+normally/)
+    expect(SLATE_AUTHOR_CONTRACT).toContain('ONE Surface per human decision')
+    expect(SLATE_AUTHOR_CONTRACT).toContain('source or observation time')
+    expect(SLATE_AUTHOR_CONTRACT).toContain('label uncertain claims as hypotheses')
+    expect(SLATE_AUTHOR_CONTRACT).toContain('another valid outcome such as delegation or waiting')
+    expect(SLATE_AUTHOR_CONTRACT).toContain('NEVER put a refresh recipe on an unanswered Decision')
+  })
 })

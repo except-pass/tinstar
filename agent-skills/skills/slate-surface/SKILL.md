@@ -79,6 +79,12 @@ Choose based on the work object, not the conversational turn. If an existing Sur
 owns the subject, amend that target and preserve its identity and thread. Reserve only
 when the object is genuinely distinct and Surface-worthy.
 
+Use **one Surface per decision the human must make or standalone FYI worth raising**.
+Related non-decision questions may share a workbench; unrelated monitoring signals must
+not. Work already owned by Serena, another agent, or an external team is a status/FYI,
+not an approval request. Do not create a card merely because another transcript turn
+arrived.
+
 ## Reserve a visible card for a distinct work object
 
 Pick a stable `key` for the work object, not for this attempt or turn. Reuse that same
@@ -115,6 +121,10 @@ below. After the watcher accepts it, the same card becomes ready. Later rewrites
 the same `id` and file; they may retain the token, but never substitute a token from an
 older retry.
 
+A ready reserved card can be answered: `Choice`, `TextInput`, `Decision`, and `Submit`
+use the same run-scoped answer path as an open-point row. The `compose-card`
+presentation controls layout and lifecycle; it does not make the body read-only.
+
 Do **not** use `POST /api/runs/:id/slate/compose` or the user's add-point endpoint for
 agent live authoring: those are user interaction paths and may prompt or dispatch work.
 
@@ -140,10 +150,10 @@ Each entry is a **point** — the primitive the Slate is built from:
 | `attemptToken` | assigned only | host | for a reserved card, copy the returned token exactly until the first valid write makes the card ready; omit it for direct file authoring |
 | `content` | no | file | the surface body: an **A2UI component tree** (see below) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
-| `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` — attach the point to a decision or another surface by id |
+| `anchor` | no | file | Legacy input accepted for compatibility and id synthesis; canonical projection drops it, so do not use it to choose layout |
 | `refresh` | no | file | the ONE recipe that rebuilds this whole surface. A string is prose only *you* can run; `{ "kind": "host", "handler": … }` is a machine check the host runs itself (see "who runs your recipe" below) |
 | `claims` | no | file | what would **prove this surface wrong** — the host checks these itself, with no agent session. Declare at least one on every surface you author; see "Declare at least one claim" below |
-| `group` | no | file | **workbench set id** — give the *same* string to 2+ **question** points and they render side by side, one per column (see below). Open-point entries only; ignored on a `kind: "surface"` anchor |
+| `group` | no | file | **workbench set id** — give the *same* string to 2+ **question** points and they render side by side, one per column (see below) |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if you omit it |
 
 Everything else about a point — its **discussion thread** (`replies`), its **lifecycle
@@ -212,6 +222,15 @@ forever. The `until` string is where you say out loud what survives. Name a **co
 cost on each option — "adds complexity" is filler; say where the complexity lands. And do
 not compute a risk score: the scales are ordinal, an FMEA-style RPN multiplies labels, and
 the host deliberately renders no total.
+
+Write **one Surface per human decision** and do not bundle unrelated signals into it.
+State verified facts with their source or observation time; label uncertain claims as
+hypotheses. An alert whose premise has not been verified is evidence to investigate,
+not a leading approve/deny choice. Listed options are likely paths, not an exhaustive
+constraint: the Decision comment must remain available for another valid outcome such
+as delegation or waiting. Work already owned elsewhere belongs on a status/FYI Surface,
+not in a Decision asking the human to approve it. **Never put a `refresh` recipe on an
+unanswered Decision**: rebuilding it could rewrite the question while the human answers.
 
 An entry whose `content` fails validation is **dropped** (the file's other entries still
 project); an entry with no `content` is a valid **bare headline point**.
@@ -347,7 +366,8 @@ progress.)
 **A surface has one recipe, it replaces the whole surface, and the recipe's KIND decides who may run it.**
 
 - **A string is an `agent` recipe** — prose, delivered to *you*, and only when the user
-  deliberately navigates to, clicks, or explicitly refreshes the surface. Nothing
+  explicitly presses the Surface's refresh control. Reading, selecting, or navigating
+  never spends a model call. Nothing
   ambient runs it: not a commit, not a deadline, not the dashboard being left open.
 - **An object naming a host check** — `{ "kind": "host", "handler": "http-status",
   "params": { "url": "…" } }` — is machine work the host runs by itself, cheaply and
@@ -361,18 +381,18 @@ does not change who runs anything — policy says when a surface is marked **dir
 which is cheap; running the recipe is a separate question with a separate answer.
 
 **What this means for how you write.** Your surface will sit dirty until the user
-reaches for it, so write it to stay useful in the meantime: the card keeps showing what
-it last knew, with an honest "known at / last checked" stamp beside it. Write the recipe
+explicitly refreshes it, so write it to stay useful in the meantime: the card keeps
+showing what it last knew, with an honest "known at / last checked" stamp beside it. Write the recipe
 to pass the **vacuum test** — name its **source** (a PR, files, a query), its
 **derivation** (what to do with the source), and its **output** (what to rewrite).
 `"regenerate this surface"` fails: it assumes context you will not have when the user
-finally opens the card a week later. A surface whose only source is *this session*
+finally refreshes the card a week later. A surface whose only source is *this session*
 (e.g. "explain the session") is session-derived and needs no self-contained recipe.
 Capture the recipe at create time so the surface is born handoff-able.
 
 **Sweep after you ship rather than waiting to be refreshed.** Since nothing refreshes
 your surfaces on a timer any more, a card you leave wrong stays wrong until somebody
-opens it. Re-author what you know changed — that is your push; refresh is the user's
+refreshes it. Re-author what you know changed — that is your push; refresh is the user's
 pull.
 
 ## Declare at least one claim

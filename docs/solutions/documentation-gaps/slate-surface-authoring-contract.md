@@ -17,7 +17,7 @@ applies_when:
   - "Authoring or editing a Slate surface JSON file under a run workdir's .tinstar/slate/"
   - "Building A2UI content for a surface and needing the host component vocabulary"
   - "A directly authored surface fails to appear (invalid content dropped by parseA2uiContent)"
-  - "Deciding surface kind (diagram vs open-point) via the anchor field"
+  - "Understanding direct-file projection versus host-assigned compose-card presentation"
   - "Validating authored surface files before shipping"
 ---
 
@@ -25,7 +25,7 @@ applies_when:
 
 ## Context
 
-Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how the surface's `kind` gets chosen you have to read `document-store.ts` (`projectRunToSlate`). And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. This reference collapses those six reads into one authoritative page: the file schema, the A2UI vocabulary, and the `kind` rule, in one place.
+Authoring a single Slate surface — the small agent-authored panel that renders inside a run's workspace card — currently forces a reader through roughly six files before writing one line of JSON. To learn the on-disk file shape you have to read `slate-watcher.ts` (`toPointInput` and `toAnchor`). To learn what counts as a valid body you have to read `a2ui/schema.ts` (`parseA2uiContent`). To learn which components actually render you have to read `a2ui/catalog.tsx`. To learn how canonical Surfaces project into the run you have to read `run-slate-projection.ts`. And to reconcile the field names you cross-check `domain/types.ts` (`SlateSurface`, `Point`, `PointAnchor`). None of these files documents the whole contract; each owns one slice. This reference collapses those reads into one authoritative page: the file schema, the A2UI vocabulary, and projection/presentation behavior, in one place.
 
 There are now two authoring paths with different failure behavior. A direct file written by an agent can still be dropped at validation and leave only a log. **Add surface** is host-assigned: Tinstar first saves a visible card, tells the author its exact file, id, and attempt token, then moves that card to ready or failed. The saved card—not process dispatch—is the acceptance receipt.
 
@@ -55,10 +55,10 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `id` | string (non-empty) | No | Stable identity for merge-by-id. Reuse the same `id` across writes to amend a surface without clobbering its store-owned thread/status. |
 | `attemptToken` | string (non-empty) | Only for host-assigned Add surface work | Tinstar supplies this with an exact file and `id`. Copy it exactly. It prevents a late or retried authoring attempt from overwriting the current card. Do not invent one for direct file authoring. |
 | `author` | `'agent' \| 'user' \| 'process'` | No | Any other value drops the entry. Use **`'agent'`** for agent-authored surfaces. (See "Why This Matters" — mislabeling has behavioral consequences around self-prompting and staleness.) |
-| `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
+| `anchor` | `{ kind, ref? }` | No | Legacy, accepted for input compatibility and stable id synthesis. Canonical projection does not use it for layout; reserve through the run authoring API when a distinct visible card is required. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
-| `refresh` | string, or `{ kind, … }` | No | **The ONE recipe that rebuilds this whole surface.** A plain string is an **agent** recipe: only a person navigating to or interacting with the surface runs it. An object `{ "kind": "host", "handler": "http-status"\|"unit-landed", "params": { … } }` is a **host** check the host runs by itself. Anything else is kept as *unreadable* and refused with a message naming what was wrong — see "Two kinds of recipe" below. |
-| `refreshPolicy` | object | No | **When the host rebuilds this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
+| `refresh` | string, or `{ kind, … }` | No | **The ONE recipe that rebuilds this whole surface.** A plain string is an **agent** recipe: only an explicit per-Surface refresh runs it; reading and selection are free. An object `{ "kind": "host", "handler": "http-status"\|"unit-landed", "params": { … } }` is a **host** check the host runs by itself. Anything else is kept as *unreadable* and refused with a message naming what was wrong — see "Two kinds of recipe" below. Never put a recipe on an unanswered Decision. |
+| `refreshPolicy` | object | No | **Which observations invalidate this surface.** `{ policy, triggers, intervalMs, sources, signals }` — see "Declare what your surface derives from" below. A host recipe may run automatically; an agent recipe remains dirty until explicit refresh. Unknown trigger names and out-of-vocabulary policies are dropped at parse time; the surface still projects. |
 | `claims` | array | No | What would prove this surface wrong (see [Claims](#claims-what-would-prove-this-surface-wrong) below). **Three-state**: absent, `[]`, and a non-empty list are three different answers. |
 | `proposal` | `{ state, detail? }` | No | **What you claim about the work** — `working`, `blocked`, `resolved`, or `superseded`, plus one short line. A hint the card renders beside the status; it never *becomes* the status. See "Say what you know about the work" below. |
 | `group` | string (non-empty) | No | **Workbench set id.** Give two or more question entries the *same* `group` and they render side-by-side, one per column, instead of as stacked rows (below). A non-string/empty value is silently dropped (the point renders as an ordinary row) — it never drops the entry. |
@@ -79,7 +79,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 
 ### The component vocabulary
 
-The host catalog (`a2ui/catalog.tsx`) is a bounded, read-only set. A `component` string the catalog doesn't know degrades gracefully (renderer's fallback) — never a throw, never a blank card.
+The host catalog (`a2ui/catalog.tsx`) is a bounded set. A `component` string the catalog doesn't know degrades gracefully (renderer's fallback) — never a throw, never a blank card.
 
 | `component` | Children | Notable props | Renders as |
 |-------------|----------|---------------|------------|
@@ -103,20 +103,33 @@ The host catalog (`a2ui/catalog.tsx`) is a bounded, read-only set. A `component`
 
 **The `Link` safeHref rule is a security gate, not a nicety.** A2UI's component schema is `.passthrough()`, so `url` is never scheme-validated upstream. A `javascript:` or `data:` href would execute in Tinstar's origin. `safeHref` allows only `http:`/`https:` protocols and same-origin relative paths (leading `/` or `#`); everything else falls back to a text span.
 
-### The kind-from-anchor rule
+### Projection and presentation
 
-The file **does not** author `kind` directly. `projectRunToSlate` (`document-store.ts`) derives it from the anchor:
+The file **does not** author `kind` or `presentation` directly. Canonical run projection
+emits every non-Objective Surface as `kind: 'open-point'`. Legacy `anchor` input is
+accepted but dropped when file content enters the canonical model; it does not select a
+card layout.
 
-```
-kind = (anchor?.kind === 'surface') ? 'diagram' : 'open-point'
-```
+The supported visible-card path is a run-scoped authoring reservation. It stamps
+`presentation: 'compose-card'` on the canonical Surface and assigns the exact file, id,
+and attempt token that completes it. Ready compose cards keep that card layout and their
+`Choice`, `TextInput`, `Decision`, and `Submit` controls are interactive through the same
+run-scoped answer endpoint as ordinary open points. Direct unreserved files remain valid
+and project as open points. Do not rely on `anchor.kind` for presentation.
 
-- `anchor.kind === 'surface'` → **`diagram`**: a standalone card with its own thread.
-- No anchor, or `anchor.kind` of `'none'`/`'decision'` → **`open-point`**: grouped into the run's open-points list.
+### Decision organization and evidence
 
-To author a standalone diagram surface, set `anchor: { kind: 'surface' }`. To author an open point, omit `anchor` (or use `none`/`decision`).
+Create one Surface per decision the human must make or standalone FYI worth raising;
+never one per transcript turn. Related non-decision questions may share a workbench, but
+unrelated monitoring signals must not. Work already owned by Serena, another agent, or
+an external team is status/FYI rather than an approval request.
 
-> **Drift note:** `SlateSurface.kind`'s JSDoc in `src/domain/types.ts` lists example strings `'open-points' | 'diagram' | 'progress'`, but `projectRunToSlate` actually emits `'open-point'` (singular) and `'diagram'`. Trust the runtime values documented here, not that comment.
+Frame a Decision from verified facts, naming the source or observation time. Label
+uncertain claims as hypotheses and do not turn an unverified alert into a leading
+choice. Options are likely paths, not an exhaustive constraint: leave the built-in
+comment available for a third valid outcome such as delegation or waiting. An unanswered
+Decision must not carry `refresh` or `refreshPolicy`; its question must remain stable
+while the human answers it.
 
 ## Why This Matters
 
@@ -127,7 +140,7 @@ Direct file authoring remains deliberately conservative:
 - An unknown `component` string degrades to a fallback rather than erroring.
 - An unsafe `Link` url quietly downgrades to plain text.
 
-That makes getting the file shape, the A2UI envelope, and the `kind` rule right on the first write important for direct authoring. Add surface has a stronger contract: the card appears as soon as its saved shell is accepted, shows authoring while content is pending, and becomes ready or failed in place. Retry keeps the same card identity and position; only the newest attempt token may complete it.
+That makes getting the file shape and A2UI envelope right on the first write important for direct authoring. Add surface has a stronger contract: the card appears as soon as its saved shell is accepted, shows authoring while content is pending, and becomes ready or failed in place. Retry keeps the same card identity and position; only the newest attempt token may complete it.
 
 The `author` field also carries behavioral weight: it's threaded through to staleness handling (a `process`-authored surface whose writer goes silent gets marked stalled by a server sweep) and provenance. Using `'agent'` for agent-authored panels keeps a surface from being treated as a live-process spinner or from feeding back into the run's own prompting loop.
 
@@ -141,15 +154,16 @@ Reach for this reference any time you:
 
 ## Examples
 
-**(a) A diagram surface** — `anchor: { kind: 'surface' }` yields `kind: 'diagram'`; small Column/List/Text body plus a refresh recipe. Write as `.tinstar/slate/plan-overview.json`:
+**(a) A direct informational surface** — direct files project as open points; use a
+small Column/List/Text body plus a source-specific refresh recipe. Write as
+`.tinstar/slate/plan-overview.json`:
 
 ```json
 {
   "id": "plan-overview",
   "headline": "Rollout plan",
   "author": "agent",
-  "anchor": { "kind": "surface" },
-  "refresh": "Regenerate the rollout plan surface from the current migration status.",
+  "refresh": "Re-read deploy/migration-status.json and rewrite this rollout plan from its current phases.",
   "content": {
     "root": "root",
     "components": [
@@ -163,7 +177,8 @@ Reach for this reference any time you:
 }
 ```
 
-**(b) An open-points array file** — no `anchor`, so each entry projects to `kind: 'open-point'`. One file, multiple points. Write as `.tinstar/slate/questions.json`:
+**(b) An open-points array file** — each direct entry projects to `kind: 'open-point'`.
+One file, multiple points. Write as `.tinstar/slate/questions.json`:
 
 ```json
 [
@@ -263,7 +278,7 @@ A surface has **one recipe**, it replaces the **whole surface**, and the recipe'
 
 | You write | Kind | Who runs it | When |
 |---|---|---|---|
-| `"refresh": "Re-read the open PRs and rewrite this surface."` | **agent** | the surface's existing foreground agent | only when a person navigates to, interacts with, or explicitly refreshes it |
+| `"refresh": "Re-read the open PRs and rewrite this surface."` | **agent** | the surface's existing foreground agent | only when a person explicitly uses its refresh control |
 | `"refresh": { "kind": "host", "handler": "http-status", "params": { "url": "https://…" } }` | **host** | the host itself, no model and no session | on its own, under a shared provider budget |
 | anything else | **unreadable** | nobody | never — the host says what was wrong instead |
 
@@ -280,7 +295,7 @@ visibly does not: an `automatic` agent recipe is marked dirty by a commit and th
 waits for a person, which is exactly the point.
 
 **What that means for you as an author.** A surface whose prose must be rewritten is
-an agent recipe, and it refreshes when a human opens it — so write the recipe to
+an agent recipe, and it refreshes only when a human explicitly requests it — so write the recipe to
 survive that delay, and keep the surface honest in the meantime (it will show its
 last-known content with an honest age). A surface whose answer is a machine fact — an
 endpoint's status, whether a plan unit landed — should be a host recipe, because the
@@ -303,8 +318,8 @@ The recipe says *how* to rebuild a surface. `refreshPolicy` says *when*: `trigge
 
 ```jsonc
 {
-  "id": "decision-6",
-  "headline": "DECISION 6 — File a prevention ticket for the reassignment leftovers?",
+  "id": "reassignment-leftovers-status",
+  "headline": "Site reassignment leftovers status",
   "refresh": "Run scripts/integrity/detect-site-reassignment-leftovers.sh against prod, check whether CMT-510 is still open in Jira, and rewrite this surface with the current leftover count and ticket state.",
   "refreshPolicy": {
     "policy": "automatic",

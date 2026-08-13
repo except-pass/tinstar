@@ -76,4 +76,21 @@ describe('decision template', () => {
       expect(prompt).toContain(v)
     }
   })
+
+  it('keeps the question stable and distinguishes evidence from hypotheses', () => {
+    const decision = SURFACE_CATALOG.find(t => t.id === 'decision')!
+    expect(decision.allowsRefresh).toBe(false)
+    expect(decision.prompt).toMatch(/verified facts.*source|source or observation time/i)
+    expect(decision.prompt).toMatch(/hypotheses/i)
+    expect(decision.prompt).toMatch(/unverified alert.*leading choice/i)
+    expect(decision.prompt).toMatch(/another valid outcome/i)
+    expect(decision.prompt).toMatch(/Do not set a `refresh` recipe/i)
+  })
+
+  it('keeps decisions out of the grouped open-points template', () => {
+    const { description, prompt } = SURFACE_CATALOG.find(t => t.id === 'open-points')!
+    expect(description).toMatch(/non-decision questions/i)
+    expect(prompt).toMatch(/unrelated questions in separate Surfaces/i)
+    expect(prompt).toMatch(/dedicated Decision Surface for each human choice/i)
+  })
 })

@@ -458,7 +458,7 @@ export async function handleRefreshIntent(
     // is not allowed to run, and the honest answer is the state it is in.
     return ok(res, {
       surfaceId, intent, outcome: 'skipped',
-      reason: 'this Surface is rebuilt by its foreground agent, so it refreshes when you visit it',
+      reason: 'this Surface is rebuilt by its foreground agent, so use its refresh control to update it',
       freshness: surface.freshness,
     }, { headers: cors })
   }
