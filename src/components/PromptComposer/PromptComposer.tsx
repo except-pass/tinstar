@@ -9,7 +9,7 @@
  * Does NOT own: terminated-session resume/delete UI, focus-path bookkeeping,
  * or marshal-specific lifecycle (ensure/restart). Those live in the callers.
  */
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import type { ComponentPropsWithoutRef, Ref } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -106,7 +106,7 @@ const RECAP_MD_COMPONENTS: ComponentPropsWithoutRef<typeof ReactMarkdown>['compo
   input: ({ checked, node: _node, ...props }) => <input {...props} checked={checked} disabled className="mr-1.5 accent-primary" />,
 }
 
-function MarkdownText({ content }: { content: string }) {
+const MarkdownText = memo(function MarkdownText({ content }: { content: string }) {
   return (
     <div className="break-words">
       <ReactMarkdown remarkPlugins={RECAP_REMARK_PLUGINS} components={RECAP_MD_COMPONENTS}>
@@ -114,7 +114,7 @@ function MarkdownText({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function DiffView({ diff, accent }: { diff: DiffBlock; accent: string }) {
   return (
@@ -156,7 +156,7 @@ function DiffView({ diff, accent }: { diff: DiffBlock; accent: string }) {
   )
 }
 
-function AgentMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
+const AgentMessage = memo(function AgentMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   return (
     <div className="flex gap-3">
       <div
@@ -190,9 +190,9 @@ function AgentMessage({ entry, accent }: { entry: RecapEntry; accent: string }) 
       </div>
     </div>
   )
-}
+})
 
-function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
+const UserMessage = memo(function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   return (
     <div className="flex gap-3 flex-row-reverse">
       <div className="shrink-0 w-6 h-6 border border-slate-600 flex items-center justify-center bg-surface-raised">
@@ -217,7 +217,7 @@ function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
       </div>
     </div>
   )
-}
+})
 
 function formatRecapDuration(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.round(durationMs / 1000))
@@ -227,7 +227,7 @@ function formatRecapDuration(durationMs: number): string {
   return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`
 }
 
-function StatusMessage({ entry, accent, working = false }: { entry: RecapEntry; accent: string; working?: boolean }) {
+const StatusMessage = memo(function StatusMessage({ entry, accent, working = false }: { entry: RecapEntry; accent: string; working?: boolean }) {
   const completed = entry.statusKind === 'completed'
   const label = completed && entry.durationMs !== undefined
     ? `Completed in ${formatRecapDuration(entry.durationMs)}`
@@ -261,7 +261,7 @@ function StatusMessage({ entry, accent, working = false }: { entry: RecapEntry; 
       />
     </div>
   )
-}
+})
 
 /** Iframe wrapper keyed by tick to force remount on refresh.
  *
@@ -485,7 +485,7 @@ function StashSlots({
 }
 
 /** Collapsible prompt input for sending text to the terminal */
-function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
+const ComposerInput = memo(function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
   const [internalExpanded, setInternalExpanded] = useState(false)
   const isExpanded = expanded ?? internalExpanded
   const toggleExpanded = onToggle ?? (() => setInternalExpanded(e => !e))
@@ -937,7 +937,7 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
       )}
     </div>
   )
-}
+})
 
 export interface PromptComposerProps {
   sessionId: string | undefined
