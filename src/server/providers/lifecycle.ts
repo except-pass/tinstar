@@ -526,6 +526,13 @@ export function prepareProviderManagedInstructions(
   return requireProviderCapability(adapter, 'managedInstructions').prepare(context)
 }
 
+/**
+ * Claude's native peer registry is user-global rather than Tinstar-run-scoped.
+ * Managed collaborative sessions use the authenticated NATS channel instead,
+ * so exposing these tools would let a hand enumerate and target unrelated runs.
+ */
+const CLAUDE_UNSCOPED_PEER_TOOLS = 'ListAgents,SendMessage'
+
 export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
   provider: { id: 'claude', label: 'Claude Code' },
   sessionLifecycle: 'terminal',
@@ -537,6 +544,7 @@ export const CLAUDE_PROVIDER: TerminalProviderAdapter = {
           transport: 'claude-development-channel',
           command: {
             launchFlags: (mcpConfigPath) => [
+              `--disallowedTools ${CLAUDE_UNSCOPED_PEER_TOOLS}`,
               '--dangerously-load-development-channels server:nats',
               ...(mcpConfigPath ? [`--mcp-config ${shellQuote(mcpConfigPath)}`] : []),
             ],

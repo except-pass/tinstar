@@ -42,6 +42,11 @@ send path. Worktree broadcasts and breakout rooms deliver to their other live
 subscribers, never back to the authenticated sender. An explicitly addressed
 self-DM remains valid.
 
+Managed Claude sessions disable Claude's native `ListAgents` and `SendMessage`
+tools while NATS is enabled. Claude's native peer registry is user-global, not
+scoped to a Tinstar run, so it is not a safe fallback for hand communication.
+Use the managed `reply` tool and its durable receipt instead.
+
 ## Subscription management
 
 Subscriptions are persisted with the session and hot-managed over the channel
