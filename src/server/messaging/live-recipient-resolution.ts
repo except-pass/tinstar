@@ -147,6 +147,7 @@ function destinationSessions(
   parsed: ParsedSubject,
   subject: string,
   sessions: readonly Session[],
+  senderSessionId: string,
 ): Session[] {
   if (parsed.kind === 'dm') {
     const matching = sessions.filter(
@@ -156,7 +157,11 @@ function destinationSessions(
     return exact ? [exact] : matching
   }
   return sessions.filter(session =>
-    session.nats?.enabled === true
+    // Group subjects describe peers of the authenticated sender. Leaving the
+    // sender in this set creates a durable obligation to inject its own message
+    // back into its session. An explicit self-DM is handled above and remains valid.
+    session.name !== senderSessionId
+    && session.nats?.enabled === true
     && session.nats.subscriptions.includes(subject))
 }
 
@@ -307,6 +312,7 @@ async function acceptForLiveRecipientsOwned(
     parsed,
     subject,
     await deps.listSessions(),
+    request.sender.sessionId,
   ).sort((left, right) => left.name.localeCompare(right.name))
 
   if (parsed.kind === 'dm' && discovered.length === 0) {

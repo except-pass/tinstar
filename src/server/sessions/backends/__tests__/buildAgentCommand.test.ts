@@ -310,6 +310,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).not.toContain('--dangerously-load-development-channels')
     expect(cmd).not.toContain('server:nats')
     expect(cmd).not.toContain('--mcp-config')
+    expect(cmd).not.toContain('--disallowedTools')
     // The prompt (and every other flag) survives intact.
     expect(cmd).toContain('-- ')
     expect(cmd).toContain('my prompt')
@@ -336,8 +337,10 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain('--dangerously-load-development-channels server:nats')
     expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
+    expect(cmd).toContain('--disallowedTools ListAgents,SendMessage')
     // --mcp-config stays an option, before the prompt separator.
     expect(cmd.indexOf('--mcp-config')).toBeLessThan(cmd.indexOf(' -- '))
+    expect(cmd.indexOf('--disallowedTools')).toBeLessThan(cmd.indexOf(' -- '))
     expect(cmd).toContain('my prompt')
     expect(cmd).not.toMatch(/ {2,}/)
   })
@@ -350,6 +353,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain('--dangerously-load-development-channels server:nats')
     expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
+    expect(cmd).toContain('--disallowedTools ListAgents,SendMessage')
     expect(cmd).toContain('--resume sid')
   })
 
@@ -372,7 +376,9 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
 
+    expect(cmd).toContain('--disallowedTools ListAgents,SendMessage')
     expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
+    expect(cmd.indexOf('--disallowedTools')).toBeLessThan(cmd.indexOf(' -- '))
     expect(cmd.indexOf('--dangerously-load-development-channels')).toBeLessThan(cmd.indexOf('--mcp-config'))
     expect(cmd.indexOf('--mcp-config')).toBeLessThan(cmd.indexOf(' -- '))
   })
@@ -385,7 +391,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     })
 
     expect(cmd).toBe(
-      "claude --resume sid --dangerously-load-development-channels server:nats --mcp-config '/cfg/nats-mcp.json'",
+      "claude --resume sid --disallowedTools ListAgents,SendMessage --dangerously-load-development-channels server:nats --mcp-config '/cfg/nats-mcp.json'",
     )
   })
 
@@ -400,7 +406,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
 
     expect(cmd.match(/--dangerously-load-development-channels server:nats/g)).toHaveLength(1)
     expect(cmd).toBe(
-      "claude --session-id sid --dangerously-load-development-channels server:nats -- 'my prompt'",
+      "claude --session-id sid --disallowedTools ListAgents,SendMessage --dangerously-load-development-channels server:nats -- 'my prompt'",
     )
   })
 
@@ -523,6 +529,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain(`disabled_tools=[]`)
     expect(cmd).toContain(`-c 'mcp_servers.tinstar_message_router.tools.reply.approval_mode="approve"'`)
     expect(cmd).toContain(`required=true`)
+    expect(cmd).not.toContain('--disallowedTools')
     expect(cmd).not.toContain('secret')
     expect(cmd).not.toContain('--mcp-config')
     if (resume) expect(cmd).toContain('resume --last --sandbox workspace-write')
@@ -534,6 +541,7 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
       skipPermissions: true, sessionId: 'sid', resume: false, initialPrompt: 'hi',
       nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
     })
+    expect(cmd).toContain('--disallowedTools ListAgents,SendMessage')
     expect(cmd).toContain('--dangerously-load-development-channels server:nats')
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
   })

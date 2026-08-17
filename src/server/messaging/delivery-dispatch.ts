@@ -9,6 +9,7 @@ import type {
   DeliveryRecord,
   DeliveryTransitionInput,
 } from './delivery-ledger'
+import { parseSubject } from '../nats/subjects'
 import {
   activeProviderAcceptance,
   deliverySendAttemptCount,
@@ -147,6 +148,35 @@ async function dispatchOne(
   if (!current || !isAttemptDue(current, now)) {
     return { deliveryId: captured.id, state: 'skipped' }
   }
+
+  const parsedDestination = parseSubject(envelope.message.destination.subject)
+  if (parsedDestination !== null
+    && parsedDestination.kind !== 'dm'
+    && current.recipient.sessionId === envelope.message.sender.sessionId) {
+    // Defense in depth for obligations accepted before sender exclusion existed
+    // (and for any future caller that bypasses live recipient resolution). Never
+    // invoke provider code for a group message addressed back to its own sender.
+    const reason = 'Refused group delivery to its own sender'
+    const recorded = await transition(ledger, {
+      deliveryId: current.id,
+      expected: { state: current.state, attempt: current.attempt },
+      next: {
+        state: 'failed',
+        attempt: current.attempt,
+        reason,
+        retryable: false,
+      },
+    })
+    if (!recorded) {
+      return {
+        deliveryId: current.id,
+        state: 'ambiguous',
+        reason: `could not record: ${reason}`,
+      }
+    }
+    return { deliveryId: current.id, state: 'failed', reason }
+  }
+
   const priorAcceptance = durableAcceptance(envelope, current)
   const providerRegistered = registry.get(current.recipient.providerId) !== undefined
   const adapter = providerRegistered

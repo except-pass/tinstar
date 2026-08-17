@@ -19,18 +19,23 @@ export async function acceptedLedger(recipients = [{
   maxHistoryEntries?: number
   now?: () => number
   createMessageId?: () => string
+  destinationSubject?: string
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'tinstar-dispatch-'))
   roots.push(root)
   const lockPath = join(root, 'server.lock')
   if (!acquireBackendSingleton(lockPath).acquired) throw new Error('could not acquire test lock')
+  const {
+    destinationSubject = 'agents.receiver',
+    ...ledgerOptions
+  } = options
   const ledger = DeliveryLedger.open({
-    dir: root, lockPath, createMessageId: () => 'msg-7', ...options,
+    dir: root, lockPath, createMessageId: () => 'msg-7', ...ledgerOptions,
   })
   const accepted = await ledger.accept({
     requestId: 'request-7',
     sender: { sessionId: 'sender', incarnation: 'sender-v2' },
-    destination: { subject: 'agents.receiver' },
+    destination: { subject: destinationSubject },
     text: 'hello once',
     recipients,
   })

@@ -38,7 +38,14 @@ reply(to="tinstar.<space>.<project>.<worktree>.<session>", text="Question")
 The Tinstar router authenticates the sender, resolves live recipients, records
 accepted delivery obligations durably, then returns an accepted, partial, or
 error receipt. Raw publication to the private router subject is not a supported
-send path.
+send path. Worktree broadcasts and breakout rooms deliver to their other live
+subscribers, never back to the authenticated sender. An explicitly addressed
+self-DM remains valid.
+
+Managed Claude sessions disable Claude's native `ListAgents` and `SendMessage`
+tools while NATS is enabled. Claude's native peer registry is user-global, not
+scoped to a Tinstar run, so it is not a safe fallback for hand communication.
+Use the managed `reply` tool and its durable receipt instead.
 
 ## Subscription management
 
