@@ -14,6 +14,90 @@ import {
 import { acceptedLedger, roots } from './delivery-dispatch-fixture'
 
 describe('durable provider dispatch acceptance', () => {
+  it('terminally rejects a persisted group self-delivery before provider dispatch', async () => {
+    const { ledger } = await acceptedLedger([{
+      providerId: 'claude', sessionId: 'sender', incarnation: 'sender-v2',
+    }], {
+      destinationSubject: 'tinstar.room.review-pair',
+    })
+    const accept = vi.fn()
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', { accept })
+
+    const reason = 'Refused group delivery to its own sender'
+    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'failed', reason,
+    }])
+    expect(accept).not.toHaveBeenCalled()
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed',
+      history: expect.arrayContaining([expect.objectContaining({
+        reason,
+        retryable: false,
+      })]),
+    })
+  })
+
+  it('terminally rejects a recovered in-flight group self-delivery before retry', async () => {
+    let now = Date.parse('2026-08-01T12:00:00.000Z')
+    const { ledger } = await acceptedLedger([{
+      providerId: 'claude', sessionId: 'sender', incarnation: 'sender-v2',
+    }], {
+      destinationSubject: 'tinstar.room.review-pair',
+      now: () => now,
+    })
+    await ledger.transition({
+      deliveryId: 'msg-7/d/1',
+      expected: { state: 'accepted', attempt: 0 },
+      next: { state: 'in-flight', attempt: 1 },
+    })
+    const accept = vi.fn()
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', { accept })
+    const options = { now: () => now, retryDelayMs: 1_000 }
+
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([
+      expect.objectContaining({ deliveryId: 'msg-7/d/1', state: 'ambiguous' }),
+    ])
+    now += 1_000
+    const reason = 'Refused group delivery to its own sender'
+    await expect(recoverAcceptedMessages(ledger, registry, options)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'failed', reason,
+    }])
+    expect(accept).not.toHaveBeenCalled()
+    expect(ledger.getDelivery('msg-7/d/1')).toMatchObject({
+      state: 'failed',
+      history: expect.arrayContaining([expect.objectContaining({
+        reason,
+        retryable: false,
+      })]),
+    })
+  })
+
+  it('dispatches an explicitly addressed persisted self-DM', async () => {
+    const { ledger } = await acceptedLedger([{
+      providerId: 'claude', sessionId: 'sender', incarnation: 'sender-v2',
+    }], {
+      destinationSubject: 'tinstar.space.project.worktree.sender',
+    })
+    const accept = vi.fn(async request => ({
+      state: 'delivered' as const,
+      providerId: 'claude',
+      messageId: request.messageId,
+      attempt: request.attempt,
+      recipient: request.recipient,
+      deliveredAt: '2026-08-01T12:00:02.000Z',
+      evidence: { source: { id: 'test-receipt', label: 'Test receipt' } },
+    }))
+    const registry = createDefaultProviderRegistry()
+    registry.registerDelivery('claude', { accept })
+
+    await expect(dispatchAcceptedMessage('msg-7', ledger, registry)).resolves.toEqual([{
+      deliveryId: 'msg-7/d/1', state: 'delivered',
+    }])
+    expect(accept).toHaveBeenCalledOnce()
+  })
+
   it('claims the ledger attempt once and passes the complete router stamp', async () => {
     const { ledger, accepted } = await acceptedLedger()
     const accept = vi.fn(async (request) => ({

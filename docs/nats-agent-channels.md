@@ -38,7 +38,9 @@ reply(to="tinstar.<space>.<project>.<worktree>.<session>", text="Question")
 The Tinstar router authenticates the sender, resolves live recipients, records
 accepted delivery obligations durably, then returns an accepted, partial, or
 error receipt. Raw publication to the private router subject is not a supported
-send path.
+send path. Worktree broadcasts and breakout rooms deliver to their other live
+subscribers, never back to the authenticated sender. An explicitly addressed
+self-DM remains valid.
 
 ## Subscription management
 

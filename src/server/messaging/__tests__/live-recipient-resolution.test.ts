@@ -322,6 +322,7 @@ describe('live delivery recipient resolution', () => {
 
   it('snapshots live task subscribers and reports stopped and process-dead exclusions', async () => {
     const sessions = [
+      managedSession('sender'),
       managedSession('claude-live'),
       managedSession('codex-live', 'idle', [TASK, `${TASK}.codex-live`], 'codex'),
       managedSession('stopped-agent', 'stopped'),
@@ -377,6 +378,73 @@ describe('live delivery recipient resolution', () => {
     })
     expect(deps.accept).toHaveBeenCalledWith(expect.objectContaining({
       recipients: [expect.objectContaining({ sessionId: 'room-member' })],
+    }))
+  })
+
+  it('does not route a breakout message back to its sender', async () => {
+    const sender = managedSession('sender', 'running', [
+      `${TASK}.sender`,
+      ROOM,
+    ])
+    const parent = managedSession('parent', 'running', [
+      `${TASK}.parent`,
+      ROOM,
+    ])
+    const deps = dependencies([sender, parent])
+
+    await expect(acceptForLiveRecipients(request(ROOM), deps)).resolves.toMatchObject({
+      ok: true,
+      destinationKind: 'breakout',
+      exclusions: [],
+    })
+    expect(deps.accept).toHaveBeenCalledWith(expect.objectContaining({
+      recipients: [{
+        providerId: 'claude',
+        sessionId: 'parent',
+        incarnation: 'parent-process',
+      }],
+    }))
+    expect(deps.observeProcess).toHaveBeenCalledOnce()
+    expect(deps.observeProcess).toHaveBeenCalledWith('parent')
+  })
+
+  it('rejects a group destination whose sender is its only subscriber', async () => {
+    const sender = managedSession('sender', 'running', [
+      `${TASK}.sender`,
+      ROOM,
+    ])
+    const deps = dependencies([sender])
+
+    await expect(acceptForLiveRecipients(request(ROOM), deps)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'empty-live-set',
+        destinationKind: 'breakout',
+        subject: ROOM,
+        exclusions: [],
+      },
+    })
+    expect(deps.observeProcess).not.toHaveBeenCalled()
+    expect(deps.accept).not.toHaveBeenCalled()
+  })
+
+  it('allows an explicitly addressed direct message to the sender itself', async () => {
+    const deps = dependencies([managedSession('sender')])
+
+    await expect(acceptForLiveRecipients(
+      request(`${TASK}.sender`),
+      deps,
+    )).resolves.toMatchObject({
+      ok: true,
+      destinationKind: 'dm',
+      exclusions: [],
+    })
+    expect(deps.accept).toHaveBeenCalledWith(expect.objectContaining({
+      recipients: [{
+        providerId: 'claude',
+        sessionId: 'sender',
+        incarnation: 'sender-process',
+      }],
     }))
   })
 
@@ -450,7 +518,7 @@ describe('managed-session to durable-ledger integration', () => {
       name: 'sender',
       backend: 'tmux',
       adapter: 'codex',
-      nats: { enabled: true, subscriptions: [`${TASK}.sender`] },
+      nats: { enabled: true, subscriptions: [TASK, `${TASK}.sender`] },
     })
     setState(sessionsDir, 'sender', 'running')
   }
@@ -634,6 +702,9 @@ describe('managed-session to durable-ledger integration', () => {
     expect(first).toMatchObject({
       ok: true,
       exclusions: [{ sessionId: 'stopped-agent', reason: 'stopped' }],
+      acceptance: {
+        deliveries: [{ recipient: { sessionId: 'live-agent' } }],
+      },
     })
 
     resetSessionBackendOwnersForTests()
