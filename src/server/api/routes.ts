@@ -6651,7 +6651,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             )
           }
           try {
-            const { killed } = await reapSessionNatsChannelServer(name)
+            const { killed } = await reapSessionNatsChannelServer(name, sessDir)
             // Clear the orphan flag; the next health probe re-establishes truth.
             updateSession(sessDir, name, { natsControlOrphanedAt: null })
             const run = ctx.docStore.getRun(name)

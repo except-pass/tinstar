@@ -1092,8 +1092,9 @@ export function initBackend(): RouteContext {
     // Saloon broker-health dot reflects reality even when nobody's tried
     // to subscribe/unsubscribe recently.
     if (sessionConfig) {
+      const natsSessionsDir = sessionConfig.dirs.sessions
       natsHealth = new NatsHealthMonitor({
-        sessionsDir: sessionConfig.dirs.sessions,
+        sessionsDir: natsSessionsDir,
         docStore,
         getSocketPath: (name) => natsControlSocketPath(name),
         // Auto-recovery is opt-in (config.nats.autoRecoverOrphans) because it
@@ -1101,7 +1102,7 @@ export function initBackend(): RouteContext {
         // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
         onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
           ? (name) => {
-              void reapSessionNatsChannelServer(name)
+              void reapSessionNatsChannelServer(name, natsSessionsDir)
                 .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
                 .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
             }

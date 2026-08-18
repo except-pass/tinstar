@@ -28,7 +28,10 @@ import { log } from '../../../logger'
 import type { TinstarConfig } from '../../config'
 import type { Session } from '../../session'
 
-const config = { sessions: { prefix: 'tinstar-' } } as TinstarConfig
+const config = {
+  sessions: { prefix: 'tinstar-' },
+  dirs: { sessions: '/tmp/tinstar-test-sessions' },
+} as TinstarConfig
 const parent = { name: 'parent' } as Session
 
 beforeEach(() => {
@@ -461,7 +464,7 @@ describe('session-scoped tmux targets', () => {
   ] as const)('reaps the session NATS channel-server on %s so the control socket cannot orphan', async (_label, action) => {
     await action(config, parent)
 
-    expect(reapSessionNatsChannelServerMock).toHaveBeenCalledWith('parent')
+    expect(reapSessionNatsChannelServerMock).toHaveBeenCalledWith('parent', config.dirs.sessions)
   })
 
   it.each([

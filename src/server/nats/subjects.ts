@@ -3,6 +3,8 @@
 //   dm:        tinstar.<space>.<project>.<worktree>.<session>
 //   breakout:  tinstar.room.<room-name>
 
+export { buildReplyOnlySubject, REPLY_ONLY_SUBJECT_PREFIX } from '../../../bin/nats-subjects.js'
+
 export const TINSTAR_PREFIX = 'tinstar.'
 export const BREAKOUT_PREFIX = 'tinstar.room.'
 
