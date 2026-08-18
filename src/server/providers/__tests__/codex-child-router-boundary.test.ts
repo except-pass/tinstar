@@ -145,17 +145,24 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
     // than nats-channel-mcp's narrower direct socket-collision test.
     const pauseEnv = 'TINSTAR_NATS_MCP_TEST_PAUSE_BEFORE_OWNER_REGISTRATION'
     const publicationPauseEnv = 'TINSTAR_NATS_MCP_TEST_PAUSE_BEFORE_OWNER_PUBLICATION'
-    const launch = (extraEnv: Record<string, string> = {}, distinctHost = false) => {
-      const env = { ...process.env, ...server.env, ...extraEnv }
+    const launchServer = (
+      target: typeof server,
+      extraEnv: Record<string, string> = {},
+      distinctHost = false,
+    ) => {
+      const env = { ...process.env, ...target.env, ...extraEnv }
       if (!(pauseEnv in extraEnv)) delete env[pauseEnv]
       if (!(publicationPauseEnv in extraEnv)) delete env[publicationPauseEnv]
-      const command = distinctHost ? process.execPath : server.command
-      const args = distinctHost ? [distinctHostPath, server.command, ...server.args] : server.args
+      const command = distinctHost ? process.execPath : target.command
+      const args = distinctHost ? [distinctHostPath, target.command, ...target.args] : target.args
       return spawn(command, args, {
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     }
+    const launch = (extraEnv: Record<string, string> = {}, distinctHost = false) => (
+      launchServer(server, extraEnv, distinctHost)
+    )
     const parent = launch()
     processes.push(parent)
     await waitForLaunches(launchesPath, 1)
@@ -235,45 +242,151 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
     processes.push(replacement)
     const replacementLaunch = (await waitForLaunches(launchesPath, 6))[5]!
     channelPids.push(replacementLaunch.pid)
-    expect(replacementLaunch.args).toContain('--topics-file')
-    expect(replacementLaunch.args).toContain('--control-socket')
+    expect(replacementLaunch.args).not.toContain('--topics-file')
+    expect(replacementLaunch.args).not.toContain('--control-socket')
+
+    // Native Codex root and child MCP commands share one orchestrator PPID, so
+    // a launcher cannot safely elect a successor during a live owner gap. The
+    // live recovery path must fail before signalling either follower or
+    // deleting the generation; a full session restart is the safe boundary.
+    let liveDiscoveryCalled = false
+    await expect(reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      findPids: async () => {
+        liveDiscoveryCalled = true
+        return [gapChildLaunch.pid, replacementLaunch.pid]
+      },
+    })).rejects.toThrow('restart the session instead')
+    expect(liveDiscoveryCalled).toBe(false)
+    expect(existsSync(ownerLock)).toBe(true)
     await stop(gapChild)
     await stop(replacement)
 
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
     expect(existsSync(ownerLock)).toBe(false)
+    expect(existsSync(`${ownerLock}.eligibility.json`)).toBe(false)
+
+    // A descriptor inherited by the stopped incarnation cannot bootstrap the
+    // next one. It remains reply-only even when it arrives before the new root.
+    const staleChild = launch({}, true)
+    processes.push(staleChild)
+    const staleChildLaunch = (await waitForLaunches(launchesPath, 7))[6]!
+    channelPids.push(staleChildLaunch.pid)
+    expect(staleChildLaunch.args).not.toContain('--topics-file')
+    expect(staleChildLaunch.args).not.toContain('--control-socket')
+
+    const replacementConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v2',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const replacementDescriptor = JSON.parse(readFileSync(replacementConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const replacementServer = replacementDescriptor.mcpServers.nats
+    const restartedRoot = launchServer(replacementServer)
+    processes.push(restartedRoot)
+    const restartedRootLaunch = (await waitForLaunches(launchesPath, 8))[7]!
+    channelPids.push(restartedRootLaunch.pid)
+    expect(restartedRootLaunch.args).toContain('--topics-file')
+    expect(restartedRootLaunch.args).toContain('--control-socket')
+    const restartedChild = launchServer(replacementServer, {}, true)
+    processes.push(restartedChild)
+    const restartedChildLaunch = (await waitForLaunches(launchesPath, 9))[8]!
+    channelPids.push(restartedChildLaunch.pid)
+    expect(restartedChildLaunch.args).not.toContain('--topics-file')
+    expect(restartedChildLaunch.args).not.toContain('--control-socket')
+    await stop(staleChild)
+    await stop(restartedChild)
+    await stop(restartedRoot)
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
 
     // Mixed-version state fails closed rather than being reclaimed.
     mkdirSync(ownerLock, { mode: 0o700 })
     writeFileSync(join(ownerLock, 'owner.json'), JSON.stringify({
       version: 2,
       markerId: 'future',
+      incarnation: 'future',
       launcher: { version: 2, pid: process.pid, processIdentity: 'future' },
-      principal: { version: 2, pid: process.pid, processIdentity: 'future' },
     }))
-    const incompatible = launch()
+    const incompatible = launchServer(replacementServer)
     processes.push(incompatible)
     await waitForProcessExit(incompatible)
     expect(incompatible.exitCode).not.toBe(0)
     expect(readFileSync(join(ownerLock, 'owner.json'), 'utf8')).toContain('"version":2')
-    expect(readFileSync(launchesPath, 'utf8').trim().split('\n')).toHaveLength(6)
+    expect(readFileSync(launchesPath, 'utf8').trim().split('\n')).toHaveLength(9)
     rmSync(ownerLock, { recursive: true })
-    const recovered = launch()
+
+    const recoveredConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v3',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const recoveredDescriptor = JSON.parse(readFileSync(recoveredConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const recoveredServer = recoveredDescriptor.mcpServers.nats
+    const recovered = launchServer(recoveredServer)
     processes.push(recovered)
-    const recoveredLaunch = (await waitForLaunches(launchesPath, 7))[6]!
+    const recoveredLaunch = (await waitForLaunches(launchesPath, 10))[9]!
     channelPids.push(recoveredLaunch.pid)
     expect(recoveredLaunch.args).toContain('--topics-file')
     await stop(recovered)
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
     expect(existsSync(ownerLock)).toBe(false)
 
-    // Fault-inject the exact interval from the native review: the owner has
-    // spawned its supervisor, but that supervisor has not registered itself or
-    // started the real channel server. If the launcher is SIGKILLed here, a
-    // concurrent contenders may race to take ownership; the serialized
-    // transition must invalidate the stale supervisor and publish one winner.
+    // If the owner launcher dies before its supervisor registers, the
+    // generation remains a tombstone. Trusted lifecycle reset invalidates the
+    // supervisor. An old-incarnation child that starts first stays reply-only;
+    // only the freshly generated root descriptor can bootstrap ownership.
+    const pausedConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v4',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const pausedDescriptor = JSON.parse(readFileSync(pausedConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const pausedServer = pausedDescriptor.mcpServers.nats
     const pauseFile = join(root, 'owner-child-paused')
-    const pausedOwner = launch({ [pauseEnv]: pauseFile })
+    const pausedOwner = launchServer(pausedServer, { [pauseEnv]: pauseFile })
     processes.push(pausedOwner)
     await waitForFile(pauseFile)
     const pausedSupervisorPid = Number(readFileSync(pauseFile, 'utf8'))
@@ -282,67 +395,78 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
     pausedOwner.kill('SIGKILL')
     await pausedOwnerExit
 
-    const takeoverA = launch()
-    processes.push(takeoverA)
-    const takeoverB = launch()
-    processes.push(takeoverB)
-    await waitForLaunches(launchesPath, 8)
-    writeFileSync(`${pauseFile}.release`, 'release')
-    await waitForPidExit(pausedSupervisorPid)
-
-    const takeoverLaunches = (await waitForLaunches(launchesPath, 9)).slice(7, 9)
-    channelPids.push(...takeoverLaunches.map(item => item.pid))
-    const inboundTakeovers = takeoverLaunches.filter(item => item.args.includes('--topics-file'))
-    const followerTakeovers = takeoverLaunches.filter(item => !item.args.includes('--topics-file'))
-    expect(inboundTakeovers).toHaveLength(1)
-    expect(inboundTakeovers[0]!.args).toContain('--control-socket')
-    expect(followerTakeovers).toHaveLength(1)
-    expect(followerTakeovers[0]!.args).not.toContain('--control-socket')
-    await stop(takeoverA)
-    await stop(takeoverB)
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
-    expect(existsSync(ownerLock)).toBe(false)
-
-    // Lifecycle retirement owns the same transition used by supervisor
-    // registration. A supervisor that has not registered yet is therefore
-    // invalidated even when no channel process exists to signal.
-    const latePauseFile = join(root, 'late-owner-child-paused')
-    const lateOwner = launch({ [pauseEnv]: latePauseFile })
-    processes.push(lateOwner)
-    await waitForFile(latePauseFile)
-    const lateSupervisorPid = Number(readFileSync(latePauseFile, 'utf8'))
-    channelPids.push(lateSupervisorPid)
-    const lateOwnerExit = new Promise<void>(resolve => lateOwner.once('exit', () => resolve()))
-    lateOwner.kill('SIGKILL')
-    await lateOwnerExit
-
-    const retired = await reconnectSessionNats(sessionName, {
+    await reconnectSessionNats(sessionName, {
       socketPath: natsControlSocketPath(sessionName),
       ownerLockPath: ownerLock,
+      resetOwnerState: true,
       findPids: async () => [],
     })
-    expect(retired.killed).toEqual([])
-    writeFileSync(`${latePauseFile}.release`, 'release')
-    await waitForPidExit(lateSupervisorPid)
-    await new Promise(resolve => setTimeout(resolve, 100))
-    expect(readFileSync(launchesPath, 'utf8').trim().split('\n')).toHaveLength(9)
+    writeFileSync(`${pauseFile}.release`, 'release')
+    await waitForPidExit(pausedSupervisorPid)
+    expect(readFileSync(launchesPath, 'utf8').trim().split('\n')).toHaveLength(10)
 
-    const postRetirement = launch()
+    const postRetirement = launchServer(pausedServer, {}, true)
     processes.push(postRetirement)
-    const postRetirementLaunch = (await waitForLaunches(launchesPath, 10))[9]!
+    const postRetirementLaunch = (await waitForLaunches(launchesPath, 11))[10]!
     channelPids.push(postRetirementLaunch.pid)
-    expect(postRetirementLaunch.args).toContain('--topics-file')
-    expect(postRetirementLaunch.args).toContain('--control-socket')
+    expect(postRetirementLaunch.args).not.toContain('--topics-file')
+    expect(postRetirementLaunch.args).not.toContain('--control-socket')
+
+    const finalConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v5',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const finalDescriptor = JSON.parse(readFileSync(finalConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const finalServer = finalDescriptor.mcpServers.nats
+    const finalRoot = launchServer(finalServer)
+    processes.push(finalRoot)
+    const finalRootLaunch = (await waitForLaunches(launchesPath, 12))[11]!
+    channelPids.push(finalRootLaunch.pid)
+    expect(finalRootLaunch.args).toContain('--topics-file')
+    expect(finalRootLaunch.args).toContain('--control-socket')
     await stop(postRetirement)
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
-    expect(existsSync(ownerLock)).toBe(false)
+    await stop(finalRoot)
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
 
     // A launcher that has begun claiming ownership must be visible to a
     // lifecycle reap even before owner.json is published. The transition lease
     // makes reap wait, then orders publication before retirement can finish.
     const launchesBeforePublicationRace = readFileSync(launchesPath, 'utf8').trim().split('\n').length
     const publicationPauseFile = join(root, 'owner-publication-paused')
-    const prePublicationOwner = launch({ [publicationPauseEnv]: publicationPauseFile })
+    const publicationConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v6',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const publicationDescriptor = JSON.parse(readFileSync(publicationConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const prePublicationOwner = launchServer(
+      publicationDescriptor.mcpServers.nats,
+      { [publicationPauseEnv]: publicationPauseFile },
+    )
     processes.push(prePublicationOwner)
     await waitForFile(publicationPauseFile)
 
@@ -350,6 +474,7 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
     const publicationReap = reconnectSessionNats(sessionName, {
       socketPath: natsControlSocketPath(sessionName),
       ownerLockPath: ownerLock,
+      resetOwnerState: true,
       findPids: async () => {
         try {
           return readFileSync(launchesPath, 'utf8')
@@ -377,5 +502,6 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
       .map(line => JSON.parse(line) as ChannelLaunch)
     expect(publicationRaceLaunches.every(item => !pidIsAlive(item.pid))).toBe(true)
     expect(existsSync(ownerLock)).toBe(false)
+    expect(existsSync(`${ownerLock}.eligibility.json`)).toBe(false)
   }, 20_000)
 })

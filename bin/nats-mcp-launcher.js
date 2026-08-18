@@ -13,26 +13,13 @@ import {
   acquireTransition,
   markOwnerChildStarted,
   processGroupRecordMayBeAlive,
-  processRecordMayBeAlive,
   publishOwner,
   readOwner,
+  readOwnerEligibility,
   registerOwnerChild,
-  requiredProcessRecord,
   releaseTransition,
-  removeOwnerGeneration,
-  sameProcessRecord,
 } from './nats-mcp-owner-state.js'
 import { buildReplyOnlySubject } from './nats-subjects.js'
-
-function ownerIsAlive(owner) {
-  if (!owner) return false
-  // Once startup commits, the gated shell has exec'd the channel server without
-  // changing PID or process birth identity. It remains authoritative even if
-  // either JavaScript supervisor is hard-killed.
-  if (owner.child?.channelGroup) return processGroupRecordMayBeAlive(owner.child.channelGroup)
-  if (owner.child) return processRecordMayBeAlive(owner.child)
-  return processRecordMayBeAlive(owner.launcher)
-}
 
 async function pauseBeforeOwnerPublicationForTest() {
   const readyFile = process.env.TINSTAR_NATS_MCP_TEST_PAUSE_BEFORE_OWNER_PUBLICATION
@@ -43,26 +30,29 @@ async function pauseBeforeOwnerPublicationForTest() {
   }
 }
 
-async function claimOwner(path) {
-  const principal = requiredProcessRecord(process.ppid, 'MCP host')
+async function claimOwner(path, incarnation) {
   const transition = await acquireTransition(path)
   try {
     const current = readOwner(path)
-    if (ownerIsAlive(current)) {
+    // A published generation is a durable tombstone as well as live owner
+    // state. Codex native subagents are threads in one orchestrator, so all of
+    // their stdio MCP commands share the same PPID; no launcher-local process
+    // identity can distinguish the root thread after an owner gap. Never let
+    // an inherited launch reclaim a dead generation. Tinstar resets it only
+    // after stopping the session agent and issuing a new incarnation.
+    if (current) {
       releaseTransition(path, transition)
       return { owner: false, record: null, transition: null }
     }
 
-    if (current) {
-      if (!sameProcessRecord(current.principal, principal)) {
-        releaseTransition(path, transition)
-        return { owner: false, record: null, transition: null }
-      }
-      removeOwnerGeneration(path, current.markerId, 'abandoned')
+    const eligibility = readOwnerEligibility(path)
+    if (eligibility?.incarnation !== incarnation) {
+      releaseTransition(path, transition)
+      return { owner: false, record: null, transition: null }
     }
 
     await pauseBeforeOwnerPublicationForTest()
-    const record = publishOwner(path, principal)
+    const record = publishOwner(path, incarnation)
     if (!record) throw new Error(`could not publish owner generation ${path}`)
     return { owner: true, record, transition }
   } catch (error) {
@@ -90,12 +80,14 @@ function replyOnlyArgs(args) {
 function parseArgs(argv) {
   const separator = argv.indexOf('--')
   const ownerLockIndex = argv.indexOf('--owner-lock')
+  const incarnationIndex = argv.indexOf('--owner-incarnation')
   const ownerLock = ownerLockIndex >= 0 ? argv[ownerLockIndex + 1] : undefined
+  const incarnation = incarnationIndex >= 0 ? argv[incarnationIndex + 1] : undefined
   const command = separator >= 0 ? argv[separator + 1] : undefined
-  if (!ownerLock || separator < 0 || !command) {
-    throw new Error('usage: nats-mcp-launcher --owner-lock <path> -- <command> [args...]')
+  if (!ownerLock || !incarnation || separator < 0 || !command) {
+    throw new Error('usage: nats-mcp-launcher --owner-lock <path> --owner-incarnation <id> -- <command> [args...]')
   }
-  return { ownerLock, command, args: argv.slice(separator + 2) }
+  return { ownerLock, incarnation, command, args: argv.slice(separator + 2) }
 }
 
 function parseOwnerChildArgs(argv) {
@@ -107,21 +99,6 @@ function parseOwnerChildArgs(argv) {
     throw new Error('invalid internal owner-child invocation')
   }
   return { ownerLock, markerId, command, args: argv.slice(separator + 2) }
-}
-
-function releaseOwnerUnlocked(path, record) {
-  if (!record) return
-  removeOwnerGeneration(path, record.markerId, 'release')
-}
-
-async function releaseOwner(path, record) {
-  if (!record) return
-  const transition = await acquireTransition(path)
-  try {
-    releaseOwnerUnlocked(path, record)
-  } finally {
-    releaseTransition(path, transition)
-  }
 }
 
 function supervise(command, args) {
@@ -230,7 +207,8 @@ async function runOwnerChild(argv) {
       supervised.forward('SIGTERM')
       await supervised.exit.catch(() => undefined)
     }
-    releaseOwnerUnlocked(parsed.ownerLock, ownerRecord)
+    // Retain the generation as a fail-closed tombstone. A child must not become
+    // the inbound owner merely because the root runtime failed during startup.
     throw error
   } finally {
     releaseTransition(parsed.ownerLock, transition)
@@ -253,7 +231,7 @@ async function runOwnerChild(argv) {
 export async function run(argv = process.argv.slice(2)) {
   process.umask(0o077)
   const parsed = parseArgs(argv)
-  const claim = await claimOwner(parsed.ownerLock)
+  const claim = await claimOwner(parsed.ownerLock, parsed.incarnation)
   console.error(`[tinstar-nats-mcp] ${claim.owner ? 'inbound owner' : 'reply-only follower'}`)
 
   const scriptPath = fileURLToPath(import.meta.url)
@@ -285,10 +263,7 @@ export async function run(argv = process.argv.slice(2)) {
       await supervised.exit.catch(() => undefined)
     }
     if (claim.transition) {
-      releaseOwnerUnlocked(parsed.ownerLock, claim.record)
       releaseTransition(parsed.ownerLock, claim.transition)
-    } else {
-      await releaseOwner(parsed.ownerLock, claim.record)
     }
     throw error
   }

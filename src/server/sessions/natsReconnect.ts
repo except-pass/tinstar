@@ -1,10 +1,8 @@
-// Recover a session whose NATS control socket is orphaned (running session, but
-// its channel-server MCP's control listener is wedged — see classifyNatsSocketError).
-//
-// The lever: SIGTERM the session's channel-server process. With the upstream
-// clean-exit-on-transport-close fix, it unlinks its socket and exits; Claude
-// Code then relaunches the MCP from the session's nats-mcp.json (loaded via
-// --mcp-config), binding a fresh socket. A permanent orphan becomes a brief gap.
+// Reap a session's NATS channel process at a trusted lifecycle boundary.
+// Managed owner generations may be reset only after the session agent stops.
+// Codex native root and child MCP commands share one orchestrator PPID, so a
+// live-session relaunch cannot prove it is the root; that path refuses before
+// signalling anything and directs the caller to restart the session.
 //
 // We match the process by its unique --control-socket path (one per session),
 // so we never touch another session's channel-server or the tinstar host.
@@ -21,11 +19,13 @@ import { dirname } from 'node:path'
 import { promisify } from 'node:util'
 import {
   acquireTransition,
+  readOwnerEligibility,
   recordedPidIfMayBeAlive,
   recordedProcessGroupTargetIfMayBeAlive,
   readOwner as readOwnerSnapshot,
   releaseTransition,
   removeOwnerGeneration,
+  removeOwnerEligibility,
   type TransitionRecord,
 } from '../../../bin/nats-mcp-owner-state.js'
 import { natsControlSocketPath, natsOwnerLockPath } from './nats-control'
@@ -50,6 +50,12 @@ export interface ReconnectDeps {
   /** Bounded-wait hook. Injectable for tests. */
   wait?: (ms: number) => Promise<void>
   timeoutMs?: number
+  /**
+   * Reset the managed owner generation and incarnation after the session agent
+   * is stopped. Live reconnect paths must leave this false: Codex root and
+   * child MCP launches share one OS parent and cannot safely elect a successor.
+   */
+  resetOwnerState?: boolean
 }
 
 function defaultReadOwnerTargets(ownerLockPath: string): number[] {
@@ -133,7 +139,9 @@ async function defaultFindPids(needle: string): Promise<number[]> {
 /**
  * SIGTERM the channel-server process(es) bound to this session's control socket.
  * Returns the PIDs signalled (empty if none were found — e.g. already gone).
- * Individual kill failures are swallowed because a process may exit between
+ * A managed owner requires resetOwnerState after the session agent is stopped;
+ * otherwise this refuses before process discovery or signalling. Individual
+ * kill failures are swallowed because a process may exit between
  * discovery and SIGTERM. The operation fails closed when a targeted owner is
  * still alive after the bounded handoff window.
  */
@@ -157,6 +165,15 @@ export async function reconnectSessionNats(
   const deadline = Date.now() + timeoutMs
   const killed = new Set<number>()
   try {
+    if (transition) {
+      const owner = readOwnerSnapshot(transition.ownerLockPath)
+      const eligibility = readOwnerEligibility(transition.ownerLockPath)
+      if (!deps.resetOwnerState && (owner || eligibility)) {
+        throw new Error(
+          'managed NATS owner state cannot be reset while the session agent is running; restart the session instead',
+        )
+      }
+    }
     while (true) {
       const discovered = await find(deps.socketPath)
       const recorded = transition ? readOwnerTargets(transition.ownerLockPath) : []
@@ -171,10 +188,18 @@ export async function reconnectSessionNats(
 
       if (transition && liveTargets.length === 0) {
         const owner = readOwnerSnapshot(transition.ownerLockPath)
-        if (owner) removeOwnerGeneration(transition.ownerLockPath, owner.markerId)
+        if (owner && deps.resetOwnerState) {
+          removeOwnerGeneration(transition.ownerLockPath, owner.markerId)
+        }
+        if (deps.resetOwnerState && !readOwnerSnapshot(transition.ownerLockPath)) {
+          removeOwnerEligibility(transition.ownerLockPath)
+        }
       }
 
-      const ownerRetired = !transition || !readOwnerSnapshot(transition.ownerLockPath)
+      const ownerRetired = !transition
+        || (deps.resetOwnerState && !readOwnerSnapshot(transition.ownerLockPath))
+        || (!deps.resetOwnerState && !readOwnerSnapshot(transition.ownerLockPath)
+          && !readOwnerEligibility(transition.ownerLockPath))
       if (ownerRetired && liveTargets.length === 0) {
         return { sessionName, killed: [...killed].map(target => Math.abs(target)) }
       }

@@ -59,6 +59,13 @@ describe('generateNatsMcpConfig', () => {
     expect(parsed.mcpServers.nats.args[0]).toMatch(/\/bin\/nats-mcp-launcher\.js$/)
     expect(parsed.mcpServers.nats.args).toContain('--owner-lock')
     expect(parsed.mcpServers.nats.args).toContain(natsOwnerLockPath(sessionsDir, 'alpha'))
+    expect(parsed.mcpServers.nats.args).toContain('--owner-incarnation')
+    const incarnationArg = parsed.mcpServers.nats.args.indexOf('--owner-incarnation')
+    expect(parsed.mcpServers.nats.args[incarnationArg + 1]).toBe(COMMON.agentIncarnation)
+    expect(JSON.parse(readFileSync(
+      `${natsOwnerLockPath(sessionsDir, 'alpha')}.eligibility.json`,
+      'utf8',
+    ))).toEqual({ version: 1, incarnation: COMMON.agentIncarnation })
     const separator = parsed.mcpServers.nats.args.indexOf('--')
     expect(separator).toBeGreaterThanOrEqual(0)
     expect(parsed.mcpServers.nats.args[separator + 1]).toBe(COMMON.bunPath)
@@ -106,5 +113,24 @@ describe('generateNatsMcpConfig', () => {
     writeFileSync(join(root, 'touch'), 'x')
     generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['a.b.c']), ...COMMON })
     expect(statSync(p).mtimeMs).toBe(mtime1)
+  })
+
+  it('does not rotate incarnation eligibility while an owner generation is active', () => {
+    generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['a.b.c']), ...COMMON })
+    const ownerLock = natsOwnerLockPath(sessionsDir, 'alpha')
+    mkdirSync(ownerLock)
+    writeFileSync(join(ownerLock, 'owner.json'), JSON.stringify({
+      version: 1,
+      markerId: 'active',
+      incarnation: COMMON.agentIncarnation,
+      launcher: { version: 1, pid: process.pid, processIdentity: 'test' },
+    }))
+    expect(() => generateNatsMcpConfig({
+      sessionsDir,
+      sessionName: 'alpha',
+      nats: nats(['a.b.c']),
+      ...COMMON,
+      agentIncarnation: 'alpha-v2',
+    })).toThrow('cannot replace NATS MCP owner eligibility while generation is active')
   })
 })

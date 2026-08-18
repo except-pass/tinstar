@@ -76,34 +76,45 @@ parent’s required MCP descriptor, so later processes become reply-only
 followers: they retain the authenticated `reply` path, but receive a private
 random sink subscription instead of the parent’s topics and never bind the
 parent’s control socket. This keeps inbound delivery and hot subscription
-management single-owner. The owner generation lives in the private per-session
-config directory and records the root MCP host, launcher, and a dedicated
-supervisor before that supervisor starts the channel server. Only that root MCP
-host may recover inbound ownership after an owner gap; an inherited child MCP
-remains reply-only even if it relaunches first. A private startup gate records a
-detached process group before it execs Bun, so the group remains authoritative
-if `bun x` forks the runtime and its wrapper leader is hard-killed. An atomically
-published transition lease serializes owner publication, supervisor registration and channel spawn,
-stale-owner recovery, and lifecycle reaping. The lease carries a process birth
-identity, so a hard-killed transition holder can be recovered without trusting a
-reused PID. Unsupported or malformed protocol records fail closed rather than
-being reclaimed by an older Tinstar. A hard-killed launcher or supervisor therefore cannot leave an
-unrecorded subscriber, including during startup: lifecycle reaping either observes the
-published generation or runs before that generation can publish. Reconnect and
-restart signal the complete channel process group, leave reply-only followers
-running, invalidate any late supervisor, and remove the retired generation
-before a replacement can start.
+management single-owner. Tinstar writes a private boot-eligibility record for
+each new agent incarnation before the agent starts. The first required MCP
+launch with that incarnation publishes the owner generation; after publication,
+the generation is also a durable tombstone. Every later launch is reply-only,
+even if the owner channel process has died. This fail-closed rule is necessary
+because Codex native subagents are threads in one orchestrator process and their
+stdio MCP commands share one OS parent: PPID or another launcher-local process
+identity cannot distinguish the root thread from a child during recovery.
+
+A private startup gate records a detached process group before it execs Bun, so
+the group remains authoritative if `bun x` forks the runtime and its wrapper
+leader is hard-killed. An atomically published transition lease serializes owner
+publication, supervisor registration and channel spawn, and trusted lifecycle
+reaping. The lease carries a process birth identity, so a hard-killed transition
+holder can be recovered without trusting a reused PID. Unsupported or malformed
+protocol records fail closed rather than being reclaimed by an older Tinstar.
+A hard-killed launcher or supervisor therefore cannot leave an unrecorded
+subscriber, including during startup.
+
+Tinstar removes the tombstone and boot eligibility only after it has stopped the
+session agent. It then generates a new incarnation before restart. A lingering
+old descriptor stays reply-only even if it launches before the new root. Live
+`/nats-reconnect` and automatic orphan recovery refuse before signalling a
+managed owner; restarting the session is required. This preserves the parent’s
+existing messaging instead of creating a child-first takeover window. Transparent
+live root-only recovery needs an upstream Codex signal or capability that child
+threads do not inherit.
 
 The sink is a compatibility measure for the current channel server, which
 requires at least one subscription at startup. A native upstream reply-only
 mode can replace it without changing Tinstar's ownership contract.
 
-The checked-in CI gate runs this boundary against the exact pinned
-`nats-channel-mcp` runtime. The real-Codex proof needs a credentialed, isolated
-Codex home and is opt-in:
+The checked-in public CI gate runs the descriptor boundary against the exact
+pinned `nats-channel-mcp` runtime. The real-Codex inheritance proof needs a
+credentialed, isolated Codex home and is opt-in:
 
 ```bash
 TINSTAR_NATIVE_CODEX_HOME=/path/to/isolated/codex-home \
+  TINSTAR_REQUIRE_NATS_CHANNEL_RUNTIME=1 \
   TINSTAR_REQUIRE_NATIVE_CODEX_BOUNDARY=1 \
   npx vitest run src/server/providers/__tests__/codex-child-router-nats.integration.test.ts
 ```

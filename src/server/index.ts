@@ -1097,9 +1097,9 @@ export function initBackend(): RouteContext {
         sessionsDir: natsSessionsDir,
         docStore,
         getSocketPath: (name) => natsControlSocketPath(name),
-        // Auto-recovery is opt-in (config.nats.autoRecoverOrphans) because it
-        // interrupts the agent's MCP. When on, a stuck orphan gets its
-        // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
+        // Auto-recovery is opt-in. Legacy servers can be reaped live; managed
+        // owner generations refuse before signalling and require a session
+        // restart because Codex cannot identify a root-thread MCP successor.
         onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
           ? (name) => {
               void reapSessionNatsChannelServer(name, natsSessionsDir)

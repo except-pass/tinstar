@@ -16,6 +16,10 @@ export function ownerFile(path) {
   return join(path, 'owner.json')
 }
 
+export function eligibilityFile(path) {
+  return `${path}.eligibility.json`
+}
+
 export function childFile(path, markerId) {
   return join(path, `.child-${markerId}.json`)
 }
@@ -154,7 +158,8 @@ export function readOwner(path) {
   }
   if (parsed.version !== NATS_MCP_OWNER_PROTOCOL_VERSION
     || typeof parsed.markerId !== 'string' || parsed.markerId.length === 0
-    || !isProcessRecord(parsed.launcher) || !isProcessRecord(parsed.principal)) {
+    || typeof parsed.incarnation !== 'string' || parsed.incarnation.length === 0
+    || !isProcessRecord(parsed.launcher)) {
     throw incompatibleState('NATS MCP owner record', ownerPath)
   }
   const childPath = childFile(path, parsed.markerId)
@@ -167,6 +172,20 @@ export function readOwner(path) {
     throw incompatibleState('NATS MCP owner child record', childPath)
   }
   return { ...parsed, child: child ?? undefined }
+}
+
+export function readOwnerEligibility(path) {
+  const recordPath = eligibilityFile(path)
+  const parsed = parseRecordFile(recordPath, 'NATS MCP owner eligibility')
+  if (!parsed) {
+    if (existsSync(recordPath)) throw incompatibleState('NATS MCP owner eligibility', recordPath)
+    return null
+  }
+  if (parsed.version !== NATS_MCP_OWNER_PROTOCOL_VERSION
+    || typeof parsed.incarnation !== 'string' || parsed.incarnation.length === 0) {
+    throw incompatibleState('NATS MCP owner eligibility', recordPath)
+  }
+  return parsed
 }
 
 export function readTransition(path) {
@@ -246,16 +265,18 @@ export function releaseTransition(path, record) {
   rmSync(released, { recursive: true, force: true })
 }
 
-export function publishOwner(path, principal) {
-  if (!isProcessRecord(principal)) throw new Error('owner principal process record is invalid')
+export function publishOwner(path, incarnation) {
+  if (typeof incarnation !== 'string' || incarnation.length === 0) {
+    throw new Error('owner incarnation is invalid')
+  }
   const staging = mkdtempSync(`${path}.pending-`)
   let published = false
   try {
     const record = {
       version: NATS_MCP_OWNER_PROTOCOL_VERSION,
       markerId: randomUUID(),
+      incarnation,
       launcher: requiredProcessRecord(process.pid, 'owner launcher'),
-      principal,
     }
     writeFileSync(ownerFile(staging), JSON.stringify(record), { mode: 0o600 })
     renameSync(staging, path)
@@ -267,6 +288,30 @@ export function publishOwner(path, principal) {
   } finally {
     if (!published) rmSync(staging, { recursive: true, force: true })
   }
+}
+
+export function prepareOwnerEligibility(path, incarnation) {
+  if (typeof incarnation !== 'string' || incarnation.length === 0) {
+    throw new Error('owner incarnation is invalid')
+  }
+  const current = readOwnerEligibility(path)
+  if (current?.incarnation === incarnation) return
+  if (readOwner(path)) {
+    throw new Error(`cannot replace NATS MCP owner eligibility while generation is active at ${path}`)
+  }
+  const target = eligibilityFile(path)
+  const staging = `${target}.pending-${randomUUID()}`
+  try {
+    writeFileSync(staging, JSON.stringify({
+      version: NATS_MCP_OWNER_PROTOCOL_VERSION,
+      incarnation,
+    }), { mode: 0o600, flag: 'wx' })
+    renameSync(staging, target)
+  } finally { rmSync(staging, { force: true }) }
+}
+
+export function removeOwnerEligibility(path) {
+  rmSync(eligibilityFile(path), { force: true })
 }
 
 function replaceOwnerChild(path, markerId, record) {

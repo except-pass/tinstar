@@ -464,7 +464,11 @@ describe('session-scoped tmux targets', () => {
   ] as const)('reaps the session NATS channel-server on %s so the control socket cannot orphan', async (_label, action) => {
     await action(config, parent)
 
-    expect(reapSessionNatsChannelServerMock).toHaveBeenCalledWith('parent', config.dirs.sessions)
+    expect(reapSessionNatsChannelServerMock).toHaveBeenCalledWith(
+      'parent',
+      config.dirs.sessions,
+      { resetOwnerState: true },
+    )
   })
 
   it.each([

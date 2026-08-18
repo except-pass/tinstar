@@ -60,6 +60,7 @@ import {
 } from '../../messaging/message-router-auth'
 import { natsControlSocketPath, natsOwnerLockPath } from '../nats-control'
 import { reapSessionNatsChannelServer } from '../natsReconnect'
+import { prepareOwnerEligibility } from '../../../../bin/nats-mcp-owner-state.js'
 export { natsControlSocketPath, natsOwnerLockPath } from '../nats-control'
 
 // NATS channel server paths come from config (see config.ts)
@@ -512,8 +513,10 @@ export function generateNatsMcpConfig(opts: {
   // subscription list out of the mcp config. Lives outside the git tree.
   const topicsPath = natsTopicsFilePath(opts.sessionsDir, opts.sessionName)
   const controlSocket = natsControlSocketPath(opts.sessionName)
+  const ownerLock = natsOwnerLockPath(opts.sessionsDir, opts.sessionName)
   mkdirSync(join(opts.sessionsDir, opts.sessionName), { recursive: true })
   writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n', 0o600)
+  prepareOwnerEligibility(ownerLock, opts.agentIncarnation)
 
   // Literal per-session args — the file is per-session, so there is no reason to
   // route these through env tokens. The Tinstar launcher gives the first MCP
@@ -532,7 +535,8 @@ export function generateNatsMcpConfig(opts: {
   if (opts.jetstream) channelServerArgs.push('--jetstream')
   const args = [
     natsMcpLauncherPath(),
-    '--owner-lock', natsOwnerLockPath(opts.sessionsDir, opts.sessionName),
+    '--owner-lock', ownerLock,
+    '--owner-incarnation', opts.agentIncarnation,
     '--',
     opts.bunPath,
     ...channelServerArgs,
@@ -1010,7 +1014,9 @@ export async function createTmuxSession(
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
     // Preflight: a prior stop that raced, or a crash before stop ran, can leave
     // a live channel-server on this socket. Reclaim before the agent rebinds.
-    await reapSessionNatsChannelServer(opts.session.name, config.dirs.sessions)
+    await reapSessionNatsChannelServer(opts.session.name, config.dirs.sessions, {
+      resetOwnerState: true,
+    })
     const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
@@ -1175,7 +1181,9 @@ export async function startTmuxSession(
   let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
   let autoAcceptNatsWarning = false
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
-    await reapSessionNatsChannelServer(opts.session.name, config.dirs.sessions)
+    await reapSessionNatsChannelServer(opts.session.name, config.dirs.sessions, {
+      resetOwnerState: true,
+    })
     const nats = requireProviderCapability(provider, 'nats')
     const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
@@ -1351,7 +1359,9 @@ export async function stopTmuxSession(
   // Channel-server MCPs often survive tmux kill-session (reparent to systemd
   // --user) and keep the per-session control socket. Reap explicitly so the
   // next start can bind — same lever as /nats-reconnect.
-  await reapSessionNatsChannelServer(session.name, config.dirs.sessions)
+  await reapSessionNatsChannelServer(session.name, config.dirs.sessions, {
+    resetOwnerState: true,
+  })
 }
 
 export async function deleteTmuxSession(config: TinstarConfig, session: Session): Promise<void> {
@@ -1371,7 +1381,9 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   }
 
   // Same orphan path as stop — delete must not leave a socket squatter either.
-  await reapSessionNatsChannelServer(session.name, config.dirs.sessions)
+  await reapSessionNatsChannelServer(session.name, config.dirs.sessions, {
+    resetOwnerState: true,
+  })
 }
 
 interface ReattachTmuxSessionDeps {

@@ -14,10 +14,12 @@ export interface OwnerChildRecord extends ProcessRecord {
 export interface OwnerRecord {
   version: 1
   markerId: string
+  incarnation: string
   launcher: ProcessRecord
-  principal: ProcessRecord
   child?: OwnerChildRecord
 }
+
+export interface OwnerEligibilityRecord { version: 1; incarnation: string }
 
 export interface TransitionRecord extends ProcessRecord {
   token: string
@@ -25,6 +27,7 @@ export interface TransitionRecord extends ProcessRecord {
 
 export const NATS_MCP_OWNER_PROTOCOL_VERSION: 1
 export function ownerFile(path: string): string
+export function eligibilityFile(path: string): string
 export function childFile(path: string, markerId: string): string
 export function transitionPath(path: string): string
 export function processIdentity(pid: number): string | undefined
@@ -39,13 +42,16 @@ export function processGroupRecordState(record: unknown): 'alive' | 'gone' | 'un
 export function processGroupRecordMayBeAlive(record: unknown): boolean
 export function recordedProcessGroupTargetIfMayBeAlive(record: unknown): number | undefined
 export function readOwner(path: string): OwnerRecord | null
+export function readOwnerEligibility(path: string): OwnerEligibilityRecord | null
 export function readTransition(path: string): TransitionRecord | null
 export function acquireTransition(
   path: string,
   options?: { wait?: (ms: number) => Promise<void>; timeoutMs?: number },
 ): Promise<TransitionRecord>
 export function releaseTransition(path: string, record: TransitionRecord | null | undefined): void
-export function publishOwner(path: string, principal: ProcessRecord): OwnerRecord | null
+export function publishOwner(path: string, incarnation: string): OwnerRecord | null
+export function prepareOwnerEligibility(path: string, incarnation: string): void
+export function removeOwnerEligibility(path: string): void
 export function registerOwnerChild(
   path: string,
   markerId: string,

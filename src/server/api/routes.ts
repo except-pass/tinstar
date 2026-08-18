@@ -6622,11 +6622,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
-    // POST /api/sessions/:name/nats-reconnect — recover an orphaned control
-    // socket on a *running* session (vs /start, which resumes a stopped one).
-    // SIGTERMs the session's channel-server so it exits cleanly and Claude
-    // relaunches the MCP with a fresh socket. Clears the orphan flag so the
-    // health probe re-evaluates from scratch.
+    // POST /api/sessions/:name/nats-reconnect — recover legacy channel servers
+    // on a running session. Managed owner generations fail closed before a
+    // signal and require a session restart: Codex root and child MCP launches
+    // share one OS parent, so live successor election cannot identify the root.
     if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {

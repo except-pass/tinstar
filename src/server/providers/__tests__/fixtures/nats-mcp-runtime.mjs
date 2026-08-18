@@ -29,6 +29,7 @@ if (topicsFile) {
 
 const launchesPath = process.env.TINSTAR_TEST_LAUNCHES
 const deliveriesPath = process.env.TINSTAR_TEST_DELIVERIES
+const exitAfterReplyRequestId = process.env.TINSTAR_TEST_EXIT_AFTER_REPLY_REQUEST_ID
 if (!launchesPath || !deliveriesPath) throw new Error('missing Tinstar test event paths')
 
 const sender = {
@@ -167,6 +168,16 @@ process.stdin.on('data', chunk => {
     Promise.resolve(handle(message)).then(
       result => {
         if (Object.hasOwn(message, 'id')) writeMessage({ jsonrpc: '2.0', id: message.id, result })
+        if (
+          message.method === 'tools/call'
+          && message.params?.name === 'reply'
+          && message.params?.arguments?.requestId === exitAfterReplyRequestId
+        ) {
+          // Let the JSON-RPC response flush before closing the owner transport.
+          // The native boundary test then launches a child into the dead-owner
+          // gap and proves the inherited descriptor remains reply-only.
+          setTimeout(() => { void shutdown() }, 10)
+        }
       },
       error => writeMessage({
         jsonrpc: '2.0',

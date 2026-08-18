@@ -83,8 +83,8 @@ describe('reconnectSessionNats', () => {
     writeFileSync(join(ownerLockPath, 'owner.json'), JSON.stringify({
       version: 1,
       markerId: 'owner-wait',
+      incarnation: 'owner-wait-v1',
       launcher: { version: 1, pid: 301, processIdentity: 'test' },
-      principal: { version: 1, pid: 300, processIdentity: 'principal' },
     }))
     const signalled: number[] = []
     let ownerReads = 0
@@ -92,6 +92,7 @@ describe('reconnectSessionNats', () => {
       const res = await reconnectSessionNats('sess-owner', {
         socketPath: '/tmp/tinstar-nats-sess-owner.sock',
         ownerLockPath,
+        resetOwnerState: true,
         findPids: async () => [302],
         readOwnerTargets: () => ownerReads++ === 0 ? [301] : [],
         kill: (pid) => { signalled.push(pid) },
@@ -101,6 +102,31 @@ describe('reconnectSessionNats', () => {
       expect(res.killed).toEqual([302, 301])
       expect(signalled).toEqual([302, 301])
       expect(ownerReads).toBe(1)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a live managed-owner reset before signalling any process', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'tinstar-nats-owner-live-'))
+    const ownerLockPath = join(root, 'owner')
+    mkdirSync(ownerLockPath)
+    writeFileSync(join(ownerLockPath, 'owner.json'), JSON.stringify({
+      version: 1,
+      markerId: 'owner-live',
+      incarnation: 'owner-live-v1',
+      launcher: { version: 1, pid: 301, processIdentity: 'test' },
+    }))
+    const signalled: number[] = []
+    try {
+      await expect(reconnectSessionNats('sess-owner-live', {
+        socketPath: '/tmp/tinstar-nats-sess-owner-live.sock',
+        ownerLockPath,
+        findPids: async () => [301],
+        kill: pid => { signalled.push(pid) },
+      })).rejects.toThrow('restart the session instead')
+      expect(signalled).toEqual([])
+      expect(existsSync(join(ownerLockPath, 'owner.json'))).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -121,8 +147,8 @@ describe('reconnectSessionNats', () => {
       writeFileSync(ownerFile, JSON.stringify({
         version: 1,
         markerId: 'matching',
+        incarnation: 'matching-v1',
         launcher: { version: 1, pid: helper.pid, processIdentity: identity },
-        principal: { version: 1, pid: helper.pid, processIdentity: identity },
       }))
       writeFileSync(join(ownerDir, '.child-matching.json'), JSON.stringify({
         version: 1,
@@ -135,6 +161,7 @@ describe('reconnectSessionNats', () => {
       await expect(reconnectSessionNats('sess-marker', {
         socketPath,
         ownerLockPath: ownerDir,
+        resetOwnerState: true,
         findPids: async () => [],
         kill: pid => { signalled.push(pid) },
         timeoutMs: 0,
@@ -144,13 +171,14 @@ describe('reconnectSessionNats', () => {
       writeFileSync(ownerFile, JSON.stringify({
         version: 1,
         markerId: 'stale',
+        incarnation: 'matching-v1',
         launcher: { version: 1, pid: helper.pid, processIdentity: `${identity}-reused` },
-        principal: { version: 1, pid: helper.pid, processIdentity: identity },
       }))
       signalled.length = 0
       const stale = await reconnectSessionNats('sess-marker', {
         socketPath,
         ownerLockPath: ownerDir,
+        resetOwnerState: true,
         findPids: async () => [],
         kill: pid => { signalled.push(pid) },
       })
@@ -170,8 +198,8 @@ describe('reconnectSessionNats', () => {
     writeFileSync(join(ownerLockPath, 'owner.json'), JSON.stringify({
       version: 1,
       markerId: 'started-owner',
+      incarnation: 'started-owner-v1',
       launcher: { version: 1, pid: process.pid, processIdentity: identity },
-      principal: { version: 1, pid: process.pid, processIdentity: identity },
     }))
     writeFileSync(join(ownerLockPath, '.child-started-owner.json'), JSON.stringify({
       version: 1,
@@ -185,6 +213,7 @@ describe('reconnectSessionNats', () => {
       const result = await reconnectSessionNats('sess-started', {
         socketPath: join(root, 'missing-control.sock'),
         ownerLockPath,
+        resetOwnerState: true,
         findPids: async () => [],
       })
       expect(result.killed).toEqual([])
@@ -206,8 +235,8 @@ describe('reconnectSessionNats', () => {
       writeFileSync(join(ownerLockPath, 'owner.json'), JSON.stringify({
         version: 1,
         markerId: 'channel-owner',
+        incarnation: 'channel-owner-v1',
         launcher: { version: 1, pid: process.pid, processIdentity: supervisorIdentity },
-        principal: { version: 1, pid: process.pid, processIdentity: supervisorIdentity },
       }))
       writeFileSync(join(ownerLockPath, '.child-channel-owner.json'), JSON.stringify({
         version: 1,
@@ -221,6 +250,7 @@ describe('reconnectSessionNats', () => {
       const result = await reconnectSessionNats('sess-channel-owner', {
         socketPath: join(root, 'missing-control.sock'),
         ownerLockPath,
+        resetOwnerState: true,
         findPids: async () => [],
         kill: pid => { signalled.push(pid) },
         isAlive: () => false,
@@ -291,6 +321,22 @@ describe('reconnectSessionNats', () => {
         socketPath: join(root, 'control.sock'), ownerLockPath, findPids: async () => [],
       })).rejects.toThrow('incompatible or malformed NATS MCP owner transition')
       expect(existsSync(leasePath)).toBe(true)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('fails closed on future incarnation eligibility without replacing it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'tinstar-nats-future-eligibility-'))
+    const ownerLockPath = join(root, 'owner')
+    const eligibilityPath = `${ownerLockPath}.eligibility.json`
+    writeFileSync(eligibilityPath, JSON.stringify({ version: 2, incarnation: 'future' }))
+    try {
+      await expect(reconnectSessionNats('sess-future-eligibility', {
+        socketPath: join(root, 'control.sock'),
+        ownerLockPath,
+        resetOwnerState: true,
+        findPids: async () => [],
+      })).rejects.toThrow('incompatible or malformed NATS MCP owner eligibility')
+      expect(existsSync(eligibilityPath)).toBe(true)
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

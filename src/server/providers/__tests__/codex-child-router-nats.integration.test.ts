@@ -446,7 +446,12 @@ describe.skipIf(!natsServerAvailable)('Codex inherited router with real NATS and
     await stop(forged)
     await stop(child)
     await stop(parent)
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
     expect(existsSync(ownerLock)).toBe(false)
     expect(readJsonLines(deliveriesPath)).toHaveLength(1)
   }, 20_000)
@@ -573,7 +578,12 @@ describe.runIf(productionRuntimeAvailable)('pinned nats-channel-mcp inherited bo
     await stop(contender)
     await stop(child)
     await stop(parent)
-    await reconnectSessionNats(sessionName, { socketPath: natsControlSocketPath(sessionName), ownerLockPath: ownerLock, findPids: async () => [] })
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
     expect(existsSync(ownerLock)).toBe(false)
   }, 120_000)
 })
@@ -643,6 +653,7 @@ describe.runIf(nativeCodexBoundaryAvailable)(
       }
       descriptor.mcpServers.nats.env.TINSTAR_TEST_LAUNCHES = launchesPath
       descriptor.mcpServers.nats.env.TINSTAR_TEST_DELIVERIES = deliveriesPath
+      descriptor.mcpServers.nats.env.TINSTAR_TEST_EXIT_AFTER_REPLY_REQUEST_ID = 'parent-native-request'
       writeFileSync(configPath, JSON.stringify(descriptor, null, 2), { mode: 0o600 })
 
       const flags = codexMcpLaunchFlags(configPath).join(' ')
@@ -679,6 +690,7 @@ describe.runIf(nativeCodexBoundaryAvailable)(
       expect(ownerLaunches).toHaveLength(1)
       expect(followerLaunches.length)
         .toBeGreaterThanOrEqual(1)
+      expect(launches.slice(1).every(item => !item.args.includes('--topics-file'))).toBe(true)
       const parentRoute = routed.find(request => request.text === 'parent native reply')
       const childRoute = routed.find(request => request.text === 'child native reply')
       expect(parentRoute?.requestId).toBe(`${ownerLaunches[0]!.pid}:parent-native-request`)
