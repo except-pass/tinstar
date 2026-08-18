@@ -443,10 +443,9 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
       findPids: async () => [],
     })
 
-    // A launcher that has begun claiming ownership must be visible to a
-    // lifecycle reap even before owner.json is published. The transition lease
-    // makes reap wait, then orders publication before retirement can finish.
-    const launchesBeforePublicationRace = readFileSync(launchesPath, 'utf8').trim().split('\n').length
+    // SIGKILL before owner.json publication leaves the abandoned transition as
+    // a tombstone. The inherited descriptor must still start successfully, but
+    // only reply-only; ordinary launchers cannot reap the root's claim lease.
     const publicationPauseFile = join(root, 'owner-publication-paused')
     const publicationConfigPath = generateNatsMcpConfig({
       sessionsDir,
@@ -469,39 +468,90 @@ child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 
     )
     processes.push(prePublicationOwner)
     await waitForFile(publicationPauseFile)
+    const prePublicationExit = new Promise<void>(resolve => {
+      prePublicationOwner.once('exit', () => resolve())
+    })
+    prePublicationOwner.kill('SIGKILL')
+    await prePublicationExit
+    expect(existsSync(ownerLock)).toBe(false)
+    expect(existsSync(`${ownerLock}.transition`)).toBe(true)
 
-    let reapSettled = false
-    const publicationReap = reconnectSessionNats(sessionName, {
+    const prePublicationFollower = launchServer(
+      publicationDescriptor.mcpServers.nats,
+      {},
+      true,
+    )
+    processes.push(prePublicationFollower)
+    const prePublicationFollowerLaunch = (await waitForLaunches(launchesPath, 13))[12]!
+    channelPids.push(prePublicationFollowerLaunch.pid)
+    expect(prePublicationFollowerLaunch.args).not.toContain('--topics-file')
+    expect(prePublicationFollowerLaunch.args).not.toContain('--control-socket')
+
+    await expect(reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      findPids: async () => [],
+    })).rejects.toThrow('restart the session instead')
+    expect(existsSync(`${ownerLock}.transition`)).toBe(true)
+
+    await stop(prePublicationFollower)
+    await reconnectSessionNats(sessionName, {
       socketPath: natsControlSocketPath(sessionName),
       ownerLockPath: ownerLock,
       resetOwnerState: true,
-      findPids: async () => {
-        try {
-          return readFileSync(launchesPath, 'utf8')
-            .trim()
-            .split('\n')
-            .filter(Boolean)
-            .map(line => (JSON.parse(line) as ChannelLaunch).pid)
-            .filter(pidIsAlive)
-        } catch {
-          return []
-        }
-      },
-    }).finally(() => { reapSettled = true })
-    await new Promise(resolve => setTimeout(resolve, 100))
-    expect(reapSettled).toBe(false)
-    writeFileSync(`${publicationPauseFile}.release`, 'release')
-    await publicationReap
-    await stop(prePublicationOwner)
-
-    const publicationRaceLaunches = readFileSync(launchesPath, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .slice(launchesBeforePublicationRace)
-      .map(line => JSON.parse(line) as ChannelLaunch)
-    expect(publicationRaceLaunches.every(item => !pidIsAlive(item.pid))).toBe(true)
+      findPids: async () => [],
+    })
     expect(existsSync(ownerLock)).toBe(false)
     expect(existsSync(`${ownerLock}.eligibility.json`)).toBe(false)
+
+    // Retirement invalidates eligibility before removing the owner tombstone.
+    // A fault at that exact boundary must leave an old inherited descriptor
+    // reply-only, and a later trusted retry may finish the cleanup.
+    const resetOrderConfigPath = generateNatsMcpConfig({
+      sessionsDir,
+      sessionName,
+      agentIncarnation: 'parent-v7',
+      nats: { enabled: true, subscriptions: ['tinstar.space.parent'] },
+      channelServerPackage: launchesPath,
+      bunPath: fakeBunPath,
+      jetstream: true,
+      natsUrl: 'nats://127.0.0.1:4222',
+      routerSubject: '_TINSTAR.delivery.route.v1.test',
+      routerAuth: 'a'.repeat(64),
+    })
+    const resetOrderDescriptor = JSON.parse(readFileSync(resetOrderConfigPath, 'utf8')) as {
+      mcpServers: { nats: typeof server }
+    }
+    const resetOrderRoot = launchServer(resetOrderDescriptor.mcpServers.nats)
+    processes.push(resetOrderRoot)
+    const resetOrderRootLaunch = (await waitForLaunches(launchesPath, 14))[13]!
+    channelPids.push(resetOrderRootLaunch.pid)
+    expect(resetOrderRootLaunch.args).toContain('--topics-file')
+    await stop(resetOrderRoot)
+
+    await expect(reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+      afterOwnerEligibilityRemoved: () => { throw new Error('injected retirement crash') },
+    })).rejects.toThrow('injected retirement crash')
+    expect(existsSync(ownerLock)).toBe(true)
+    expect(existsSync(`${ownerLock}.eligibility.json`)).toBe(false)
+
+    const resetOrderFollower = launchServer(resetOrderDescriptor.mcpServers.nats, {}, true)
+    processes.push(resetOrderFollower)
+    const resetOrderFollowerLaunch = (await waitForLaunches(launchesPath, 15))[14]!
+    channelPids.push(resetOrderFollowerLaunch.pid)
+    expect(resetOrderFollowerLaunch.args).not.toContain('--topics-file')
+    expect(resetOrderFollowerLaunch.args).not.toContain('--control-socket')
+    await stop(resetOrderFollower)
+    await reconnectSessionNats(sessionName, {
+      socketPath: natsControlSocketPath(sessionName),
+      ownerLockPath: ownerLock,
+      resetOwnerState: true,
+      findPids: async () => [],
+    })
+    expect(existsSync(ownerLock)).toBe(false)
   }, 20_000)
 })

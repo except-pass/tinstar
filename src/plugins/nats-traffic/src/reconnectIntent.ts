@@ -5,8 +5,9 @@
  * nothing for an orphaned session (a different layer entirely), so the amber
  * "orphaned → click to reconnect" affordance was a lie. Now:
  *
- *   - any bound session is orphaned → recover *those sessions* (POST each to
- *     /api/sessions/:id/nats-reconnect, which restarts its channel-server)
+ *   - any bound session is orphaned → request recovery for *those sessions*
+ *     (legacy channel servers are restarted; managed owners return actionable
+ *     full-session restart guidance)
  *   - otherwise → bounce the observer, i.e. re-sync the host's view of the bus
  *     (the only thing the observer-bounce was ever good for)
  */
@@ -24,6 +25,15 @@ export function reconnectIntent(
 /** Tooltip text for the reconnect button, matching the resolved intent. */
 export function reconnectTooltip(intent: ReconnectIntent): string {
   return intent.kind === 'recover-sessions'
-    ? `NATS control socket orphaned — restart channel-server for ${intent.sessionIds.join(', ')}`
+    ? `Recover NATS for ${intent.sessionIds.join(', ')} — managed sessions require a full session restart`
     : 'Re-sync NATS traffic view'
+}
+
+/** Turn an HTTP recovery failure into the actionable message shown by Saloon. */
+export async function reconnectResponseError(response: Response): Promise<string | null> {
+  if (response.ok) return null
+  const body = await response.json().catch(() => null) as {
+    error?: { message?: string }
+  } | null
+  return body?.error?.message ?? `NATS recovery failed (HTTP ${response.status})`
 }

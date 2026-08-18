@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   filterChannelServerPids,
+  ManagedNatsRestartRequiredError,
   reapSessionNatsChannelServer,
   reconnectSessionNats,
 } from '../natsReconnect'
@@ -119,12 +120,13 @@ describe('reconnectSessionNats', () => {
     }))
     const signalled: number[] = []
     try {
-      await expect(reconnectSessionNats('sess-owner-live', {
+      const reconnect = reconnectSessionNats('sess-owner-live', {
         socketPath: '/tmp/tinstar-nats-sess-owner-live.sock',
         ownerLockPath,
         findPids: async () => [301],
         kill: pid => { signalled.push(pid) },
-      })).rejects.toThrow('restart the session instead')
+      })
+      await expect(reconnect).rejects.toBeInstanceOf(ManagedNatsRestartRequiredError)
       expect(signalled).toEqual([])
       expect(existsSync(join(ownerLockPath, 'owner.json'))).toBe(true)
     } finally {

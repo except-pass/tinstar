@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reconnectIntent, reconnectTooltip } from './reconnectIntent'
+import { reconnectIntent, reconnectResponseError, reconnectTooltip } from './reconnectIntent'
 
 describe('reconnectIntent', () => {
   it('no bound sessions (e.g. all-traffic mode) → bounce the observer', () => {
@@ -26,6 +26,17 @@ describe('reconnectIntent', () => {
   it('tooltip reflects the intent honestly', () => {
     expect(reconnectTooltip({ kind: 'bounce-observer' })).toBe('Re-sync NATS traffic view')
     expect(reconnectTooltip({ kind: 'recover-sessions', sessionIds: ['b'] }))
-      .toContain('orphaned')
+      .toContain('full session restart')
+  })
+
+  it('surfaces the server recovery guidance instead of suppressing a conflict', async () => {
+    const response = new Response(JSON.stringify({
+      ok: false,
+      error: { code: 'CONFLICT', message: 'restart the session instead' },
+    }), { status: 409, headers: { 'content-type': 'application/json' } })
+
+    await expect(reconnectResponseError(response)).resolves.toBe('restart the session instead')
+    await expect(reconnectResponseError(new Response(null, { status: 500 })))
+      .resolves.toBe('NATS recovery failed (HTTP 500)')
   })
 })

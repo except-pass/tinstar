@@ -90,14 +90,18 @@ the group remains authoritative if `bun x` forks the runtime and its wrapper
 leader is hard-killed. An atomically published transition lease serializes owner
 publication, supervisor registration and channel spawn, and trusted lifecycle
 reaping. The lease carries a process birth identity, so a hard-killed transition
-holder can be recovered without trusting a reused PID. Unsupported or malformed
-protocol records fail closed rather than being reclaimed by an older Tinstar.
-A hard-killed launcher or supervisor therefore cannot leave an unrecorded
-subscriber, including during startup.
+holder can be recovered by the trusted stopped-session lifecycle without
+trusting a reused PID. Ordinary inherited launchers never reclaim an abandoned
+claim lease: before `owner.json` exists, that lease is the fail-closed tombstone
+for a root crash. Unsupported or malformed protocol records fail closed rather
+than being reclaimed by an older Tinstar. A hard-killed launcher or supervisor
+therefore cannot leave an unrecorded subscriber, including during startup.
 
-Tinstar removes the tombstone and boot eligibility only after it has stopped the
-session agent. It then generates a new incarnation before restart. A lingering
-old descriptor stays reply-only even if it launches before the new root. Live
+Tinstar removes boot eligibility first and then the tombstone, only after it has
+stopped the session agent. If retirement crashes between those writes, the old
+generation still blocks inherited launchers. Tinstar then generates a new
+incarnation before restart. A lingering old descriptor stays reply-only even if
+it launches before the new root. Live
 `/nats-reconnect` and automatic orphan recovery refuse before signalling a
 managed owner; restarting the session is required. This preserves the parent’s
 existing messaging instead of creating a child-first takeover window. Transparent

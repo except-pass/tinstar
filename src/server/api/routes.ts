@@ -101,7 +101,10 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
-import { reapSessionNatsChannelServer } from '../sessions/natsReconnect'
+import {
+  ManagedNatsRestartRequiredError,
+  reapSessionNatsChannelServer,
+} from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -6658,7 +6661,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             log.info('nats', `${name}: reconnect requested — signalled ${killed.length} channel-server process(es)`)
             ok(res, { killed })
           } catch (err) {
-            fail(res, 'INTERNAL', (err as Error).message)
+            fail(
+              res,
+              err instanceof ManagedNatsRestartRequiredError ? 'CONFLICT' : 'INTERNAL',
+              (err as Error).message,
+            )
           } finally {
             lease.release()
           }

@@ -223,9 +223,13 @@ function publishTransition(path) {
   }
 }
 
-export async function acquireTransition(
+async function acquireTransitionWithPolicy(
   path,
-  { wait = ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs = 5_000 } = {},
+  {
+    wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+    timeoutMs = 5_000,
+    recoverAbandoned,
+  },
 ) {
   const deadline = Date.now() + timeoutMs
   const canonical = transitionPath(path)
@@ -235,10 +239,19 @@ export async function acquireTransition(
 
     const incumbent = readTransition(path)
     if (processRecordMayBeAlive(incumbent)) {
-      if (Date.now() >= deadline) break
+      if (Date.now() >= deadline) {
+        if (!recoverAbandoned) return null
+        break
+      }
       await wait(25)
       continue
     }
+
+    // An abandoned claim lease is itself a fail-closed tombstone until a
+    // trusted session lifecycle boundary retires it. An inherited Codex child
+    // has the same descriptor and incarnation as the root, so it must never
+    // turn a root crash before owner.json publication into inbound ownership.
+    if (!recoverAbandoned) return null
 
     const abandoned = `${canonical}.abandoned-${randomUUID()}`
     try {
@@ -250,6 +263,20 @@ export async function acquireTransition(
     rmSync(abandoned, { recursive: true, force: true })
   }
   throw new Error(`could not acquire owner transition ${canonical}`)
+}
+
+export async function acquireTransition(
+  path,
+  options = {},
+) {
+  return acquireTransitionWithPolicy(path, { ...options, recoverAbandoned: true })
+}
+
+export async function acquireTransitionWithoutRecovery(
+  path,
+  options = {},
+) {
+  return acquireTransitionWithPolicy(path, { ...options, recoverAbandoned: false })
 }
 
 export function releaseTransition(path, record) {

@@ -11,6 +11,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   acquireTransition,
+  acquireTransitionWithoutRecovery,
   markOwnerChildStarted,
   processGroupRecordMayBeAlive,
   publishOwner,
@@ -31,7 +32,11 @@ async function pauseBeforeOwnerPublicationForTest() {
 }
 
 async function claimOwner(path, incarnation) {
-  const transition = await acquireTransition(path)
+  const transition = await acquireTransitionWithoutRecovery(path)
+  // Only a trusted stopped-session lifecycle may recover an abandoned claim
+  // lease. It is the pre-publication tombstone when a root launcher is killed;
+  // an inherited child must start reply-only without removing it.
+  if (!transition) return { owner: false, record: null, transition: null }
   try {
     const current = readOwner(path)
     // A published generation is a durable tombstone as well as live owner

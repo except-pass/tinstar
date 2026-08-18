@@ -48,6 +48,10 @@ export function acquireTransition(
   path: string,
   options?: { wait?: (ms: number) => Promise<void>; timeoutMs?: number },
 ): Promise<TransitionRecord>
+export function acquireTransitionWithoutRecovery(
+  path: string,
+  options?: { wait?: (ms: number) => Promise<void>; timeoutMs?: number },
+): Promise<TransitionRecord | null>
 export function releaseTransition(path: string, record: TransitionRecord | null | undefined): void
 export function publishOwner(path: string, incarnation: string): OwnerRecord | null
 export function prepareOwnerEligibility(path: string, incarnation: string): void

@@ -19,6 +19,7 @@ import { dirname } from 'node:path'
 import { promisify } from 'node:util'
 import {
   acquireTransition,
+  acquireTransitionWithoutRecovery,
   readOwnerEligibility,
   recordedPidIfMayBeAlive,
   recordedProcessGroupTargetIfMayBeAlive,
@@ -56,6 +57,17 @@ export interface ReconnectDeps {
    * child MCP launches share one OS parent and cannot safely elect a successor.
    */
   resetOwnerState?: boolean
+  /** Fault-injection hook for the eligibility-first retirement boundary. */
+  afterOwnerEligibilityRemoved?: () => void
+}
+
+export class ManagedNatsRestartRequiredError extends Error {
+  constructor(sessionName: string) {
+    super(
+      `managed NATS owner state for session '${sessionName}' cannot be reset while the session agent is running; restart the session instead`,
+    )
+    this.name = 'ManagedNatsRestartRequiredError'
+  }
 }
 
 function defaultReadOwnerTargets(ownerLockPath: string): number[] {
@@ -156,11 +168,16 @@ export async function reconnectSessionNats(
   const wait = deps.wait ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const ownPid = process.pid
   const timeoutMs = deps.timeoutMs ?? REAP_TIMEOUT_MS
-  const transition = deps.ownerLockPath
-    ? {
-        ownerLockPath: deps.ownerLockPath,
-        record: await acquireTransition(deps.ownerLockPath, { wait, timeoutMs }),
-      } satisfies TransitionLease
+  const transitionRecord = deps.ownerLockPath
+    ? deps.resetOwnerState
+      ? await acquireTransition(deps.ownerLockPath, { wait, timeoutMs })
+      : await acquireTransitionWithoutRecovery(deps.ownerLockPath, { wait, timeoutMs })
+    : undefined
+  if (deps.ownerLockPath && !transitionRecord) {
+    throw new ManagedNatsRestartRequiredError(sessionName)
+  }
+  const transition = deps.ownerLockPath && transitionRecord
+    ? { ownerLockPath: deps.ownerLockPath, record: transitionRecord } satisfies TransitionLease
     : undefined
   const deadline = Date.now() + timeoutMs
   const killed = new Set<number>()
@@ -169,9 +186,7 @@ export async function reconnectSessionNats(
       const owner = readOwnerSnapshot(transition.ownerLockPath)
       const eligibility = readOwnerEligibility(transition.ownerLockPath)
       if (!deps.resetOwnerState && (owner || eligibility)) {
-        throw new Error(
-          'managed NATS owner state cannot be reset while the session agent is running; restart the session instead',
-        )
+        throw new ManagedNatsRestartRequiredError(sessionName)
       }
     }
     while (true) {
@@ -189,6 +204,12 @@ export async function reconnectSessionNats(
       if (transition && liveTargets.length === 0) {
         const owner = readOwnerSnapshot(transition.ownerLockPath)
         if (owner && deps.resetOwnerState) {
+          // Invalidate the retired incarnation before removing its durable
+          // generation tombstone. A crash between these writes then leaves the
+          // owner record in place and every inherited old descriptor fails
+          // closed as a reply-only follower.
+          removeOwnerEligibility(transition.ownerLockPath)
+          deps.afterOwnerEligibilityRemoved?.()
           removeOwnerGeneration(transition.ownerLockPath, owner.markerId)
         }
         if (deps.resetOwnerState && !readOwnerSnapshot(transition.ownerLockPath)) {
