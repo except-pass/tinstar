@@ -328,6 +328,9 @@ describe('POST /api/sessions/:name/nats-reconnect', () => {
     updateSession(sessionsDir, 'managed-reconnect', {
       natsControlOrphanedAt: '2026-08-18T12:00:00.000Z',
     })
+    // The route fails closed on a session still in 'creating'; this case is
+    // about a live session whose managed router is already running.
+    setState(sessionsDir, 'managed-reconnect', 'running')
     prepareOwnerEligibility(
       natsOwnerLockPath(sessionsDir, 'managed-reconnect'),
       'managed-reconnect-v1',
