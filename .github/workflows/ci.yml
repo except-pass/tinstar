@@ -23,13 +23,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
+      - uses: oven-sh/setup-bun@v2
+
       # ttyd and tmux are what the terminal-containment guards are proven
       # against. Without them the live bind proof and the auth-header proof
       # call it.skip() and the suite goes green having tested nothing — the
       # exact silent-pass this project documents in
       # docs/solutions/conventions/verify-a-guard-by-breaking-it.md.
-      - name: Install terminal test dependencies
-        run: sudo apt-get update && sudo apt-get install -y ttyd tmux
+      - name: Install live test dependencies
+        run: sudo apt-get update && sudo apt-get install -y ttyd tmux nats-server
 
       - name: Install dependencies
         run: npm ci
@@ -50,4 +52,7 @@ jobs:
           # Same reasoning for the sudoers rule: its only real-parser proof is
           # skippable, and the bug it guards shipped once already.
           TINSTAR_REQUIRE_LIVE_VISUDO: '1'
+          # The inherited-MCP boundary must also run against the exact pinned
+          # production channel runtime, not only its fast protocol fixture.
+          TINSTAR_REQUIRE_NATS_CHANNEL_RUNTIME: '1'
         run: npm run test:unit

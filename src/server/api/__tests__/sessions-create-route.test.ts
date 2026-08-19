@@ -115,7 +115,8 @@ import {
 import { DocumentStore } from '../../stores/document-store'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID, type Notice, type Run } from '../../../domain/types'
 import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
-import { natsControlSocketPath } from '../../sessions/backends/tmux'
+import { natsControlSocketPath, natsOwnerLockPath } from '../../sessions/backends/tmux'
+import { prepareOwnerEligibility } from '../../../../bin/nats-mcp-owner-state.js'
 import {
   CLAUDE_PROVIDER,
   CODEX_PROVIDER,
@@ -312,6 +313,45 @@ afterEach(async () => {
   await testCtx.close()
   resetSessionBackendOwnersForTests()
   rmSync(tmpRoot, { recursive: true, force: true })
+})
+
+describe('POST /api/sessions/:name/nats-reconnect', () => {
+  it('returns an actionable conflict for a live managed router', async () => {
+    const sessionsDir = join(tmpRoot, 'sessions')
+    createSession(sessionsDir, {
+      name: 'managed-reconnect',
+      backend: 'tmux',
+      adapter: 'codex',
+      cliTemplate: 'Codex',
+      nats: { enabled: true, subscriptions: ['tinstar.dm.managed-reconnect'] },
+    })
+    updateSession(sessionsDir, 'managed-reconnect', {
+      natsControlOrphanedAt: '2026-08-18T12:00:00.000Z',
+    })
+    // The route fails closed on a session still in 'creating'; this case is
+    // about a live session whose managed router is already running.
+    setState(sessionsDir, 'managed-reconnect', 'running')
+    prepareOwnerEligibility(
+      natsOwnerLockPath(sessionsDir, 'managed-reconnect'),
+      'managed-reconnect-v1',
+    )
+
+    const response = await testCtx.fetch('/api/sessions/managed-reconnect/nats-reconnect', {
+      method: 'POST',
+      body: '{}',
+    })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CONFLICT',
+        message: expect.stringContaining('restart the session instead'),
+      },
+    })
+    expect(getSession(sessionsDir, 'managed-reconnect')?.natsControlOrphanedAt)
+      .toBe('2026-08-18T12:00:00.000Z')
+  })
 })
 
 describe('POST /api/sessions', () => {

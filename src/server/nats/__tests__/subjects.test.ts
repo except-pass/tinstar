@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildAgentSubject, parseSubject, BREAKOUT_PREFIX, TINSTAR_PREFIX } from '../subjects'
+import { buildAgentSubject, buildReplyOnlySubject, parseSubject, BREAKOUT_PREFIX, REPLY_ONLY_SUBJECT_PREFIX, TINSTAR_PREFIX } from '../subjects'
 
 describe('buildAgentSubject', () => {
   it('builds the canonical tinstar.<space>.<project>.<worktree>.<session> shape', () => {
@@ -10,6 +10,16 @@ describe('buildAgentSubject', () => {
   it('builds the broadcast (no session) form when session is omitted', () => {
     expect(buildAgentSubject({ space: 's', project: 'p', worktree: 'w' }))
       .toBe('tinstar.s.p.w')
+  })
+})
+
+describe('buildReplyOnlySubject', () => {
+  it('builds the private inherited-MCP sink subject', () => {
+    expect(buildReplyOnlySubject('123.abc')).toBe('_TINSTAR.reply-only.123.abc')
+    expect(REPLY_ONLY_SUBJECT_PREFIX).toBe('_TINSTAR.reply-only.')
+  })
+  it('rejects an empty nonce', () => {
+    expect(() => buildReplyOnlySubject('')).toThrow('nonce must be non-empty')
   })
 })
 

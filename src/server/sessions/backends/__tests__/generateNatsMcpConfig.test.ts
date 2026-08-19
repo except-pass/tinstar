@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { generateNatsMcpConfig, natsTopicsFilePath, natsControlSocketPath } from '../tmux'
+import {
+  generateNatsMcpConfig,
+  natsControlSocketPath,
+  natsOwnerLockPath,
+  natsTopicsFilePath,
+} from '../tmux'
 import type { SessionNats } from '../../session'
 
 function nats(subs: string[]): SessionNats {
@@ -40,7 +45,7 @@ describe('generateNatsMcpConfig', () => {
     const p = generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['tinstar.s._._.alpha']), ...COMMON })
     const text = readFileSync(p, 'utf-8')
     const parsed = JSON.parse(text) as {
-      mcpServers: { nats: { args: string[]; env: Record<string, string> } }
+      mcpServers: { nats: { command: string; args: string[]; env: Record<string, string> } }
     }
     // Literal name + literal per-session paths, not env tokens.
     expect(text).toContain('"--name"')
@@ -50,6 +55,20 @@ describe('generateNatsMcpConfig', () => {
     expect(text).not.toContain('${TINSTAR_SESSION_NAME}')
     expect(text).not.toContain('${TINSTAR_NATS_TOPICS_FILE}')
     expect(text).not.toContain('${TINSTAR_NATS_CONTROL_SOCKET}')
+    expect(parsed.mcpServers.nats.command).toBe(process.execPath)
+    expect(parsed.mcpServers.nats.args[0]).toMatch(/\/bin\/nats-mcp-launcher\.js$/)
+    expect(parsed.mcpServers.nats.args).toContain('--owner-lock')
+    expect(parsed.mcpServers.nats.args).toContain(natsOwnerLockPath(sessionsDir, 'alpha'))
+    expect(parsed.mcpServers.nats.args).toContain('--owner-incarnation')
+    const incarnationArg = parsed.mcpServers.nats.args.indexOf('--owner-incarnation')
+    expect(parsed.mcpServers.nats.args[incarnationArg + 1]).toBe(COMMON.agentIncarnation)
+    expect(JSON.parse(readFileSync(
+      `${natsOwnerLockPath(sessionsDir, 'alpha')}.eligibility.json`,
+      'utf8',
+    ))).toEqual({ version: 1, incarnation: COMMON.agentIncarnation })
+    const separator = parsed.mcpServers.nats.args.indexOf('--')
+    expect(separator).toBeGreaterThanOrEqual(0)
+    expect(parsed.mcpServers.nats.args[separator + 1]).toBe(COMMON.bunPath)
     // The variable-length subscription list is NOT inlined as --subscribe args.
     expect(text).not.toContain('--subscribe')
     expect(text).toContain('--topics-file')
@@ -94,5 +113,24 @@ describe('generateNatsMcpConfig', () => {
     writeFileSync(join(root, 'touch'), 'x')
     generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['a.b.c']), ...COMMON })
     expect(statSync(p).mtimeMs).toBe(mtime1)
+  })
+
+  it('does not rotate incarnation eligibility while an owner generation is active', () => {
+    generateNatsMcpConfig({ sessionsDir, sessionName: 'alpha', nats: nats(['a.b.c']), ...COMMON })
+    const ownerLock = natsOwnerLockPath(sessionsDir, 'alpha')
+    mkdirSync(ownerLock)
+    writeFileSync(join(ownerLock, 'owner.json'), JSON.stringify({
+      version: 1,
+      markerId: 'active',
+      incarnation: COMMON.agentIncarnation,
+      launcher: { version: 1, pid: process.pid, processIdentity: 'test' },
+    }))
+    expect(() => generateNatsMcpConfig({
+      sessionsDir,
+      sessionName: 'alpha',
+      nats: nats(['a.b.c']),
+      ...COMMON,
+      agentIncarnation: 'alpha-v2',
+    })).toThrow('cannot replace NATS MCP owner eligibility while generation is active')
   })
 })

@@ -101,7 +101,10 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
-import { reapSessionNatsChannelServer } from '../sessions/natsReconnect'
+import {
+  ManagedNatsRestartRequiredError,
+  reapSessionNatsChannelServer,
+} from '../sessions/natsReconnect'
 import { execCommand } from '../infra/execCommand'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -6622,11 +6625,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
-    // POST /api/sessions/:name/nats-reconnect — recover an orphaned control
-    // socket on a *running* session (vs /start, which resumes a stopped one).
-    // SIGTERMs the session's channel-server so it exits cleanly and Claude
-    // relaunches the MCP with a fresh socket. Clears the orphan flag so the
-    // health probe re-evaluates from scratch.
+    // POST /api/sessions/:name/nats-reconnect — recover legacy channel servers
+    // on a running session. Managed owner generations fail closed before a
+    // signal and require a session restart: Codex root and child MCP launches
+    // share one OS parent, so live successor election cannot identify the root.
     if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
@@ -6651,7 +6653,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             )
           }
           try {
-            const { killed } = await reapSessionNatsChannelServer(name)
+            const { killed } = await reapSessionNatsChannelServer(name, sessDir)
             // Clear the orphan flag; the next health probe re-establishes truth.
             updateSession(sessDir, name, { natsControlOrphanedAt: null })
             const run = ctx.docStore.getRun(name)
@@ -6659,7 +6661,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             log.info('nats', `${name}: reconnect requested — signalled ${killed.length} channel-server process(es)`)
             ok(res, { killed })
           } catch (err) {
-            fail(res, 'INTERNAL', (err as Error).message)
+            fail(
+              res,
+              err instanceof ManagedNatsRestartRequiredError ? 'CONFLICT' : 'INTERNAL',
+              (err as Error).message,
+            )
           } finally {
             lease.release()
           }

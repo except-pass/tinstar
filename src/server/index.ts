@@ -1092,16 +1092,17 @@ export function initBackend(): RouteContext {
     // Saloon broker-health dot reflects reality even when nobody's tried
     // to subscribe/unsubscribe recently.
     if (sessionConfig) {
+      const natsSessionsDir = sessionConfig.dirs.sessions
       natsHealth = new NatsHealthMonitor({
-        sessionsDir: sessionConfig.dirs.sessions,
+        sessionsDir: natsSessionsDir,
         docStore,
         getSocketPath: (name) => natsControlSocketPath(name),
-        // Auto-recovery is opt-in (config.nats.autoRecoverOrphans) because it
-        // interrupts the agent's MCP. When on, a stuck orphan gets its
-        // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
+        // Auto-recovery is opt-in. Legacy servers can be reaped live; managed
+        // owner generations refuse before signalling and require a session
+        // restart because Codex cannot identify a root-thread MCP successor.
         onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
           ? (name) => {
-              void reapSessionNatsChannelServer(name)
+              void reapSessionNatsChannelServer(name, natsSessionsDir)
                 .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
                 .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
             }

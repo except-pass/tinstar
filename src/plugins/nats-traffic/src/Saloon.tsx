@@ -8,7 +8,7 @@ import { StreamView } from './StreamView'
 import { subjectMatchesAny } from './subjectMatches'
 import { resolveBinding } from './resolveBinding'
 import { subscribedLabel } from './subscribedLabel'
-import { reconnectIntent, reconnectTooltip } from './reconnectIntent'
+import { reconnectIntent, reconnectResponseError, reconnectTooltip } from './reconnectIntent'
 import { canClear } from './canClear'
 import type { TrafficEvent } from './types'
 
@@ -142,21 +142,33 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
     const status = single?.status ? STATUS_META[single.status] : undefined
 
     // Broker health: the reconnect button does the right thing for what's
-    // actually broken. If a bound session is orphaned, it recovers *that
-    // session* (restarts its channel-server). Otherwise it bounces the host's
-    // NATS observer — re-syncing our view of the bus, which is all that ever did.
+    // actually broken. If a bound session is orphaned, it requests recovery
+    // for that session and displays the required full-restart guidance for a
+    // managed owner. Otherwise it bounces the host's NATS observer — re-syncing
+    // our view of the bus, which is all that ever did.
     const orphaned = bound.some(b => b.orphanedAt)
     const intent = reconnectIntent(bound)
     const [reconnecting, setReconnecting] = useState(false)
+    const [reconnectError, setReconnectError] = useState<string | null>(null)
     const reconnect = () => {
       if (reconnecting) return
       setReconnecting(true)
+      setReconnectError(null)
+      const checkedFetch = async (path: string) => {
+        const response = await api.http.fetch(path, { method: 'POST' })
+        const message = await reconnectResponseError(response)
+        if (message) throw new Error(message)
+      }
       const work = intent.kind === 'recover-sessions'
         ? Promise.all(intent.sessionIds.map(id =>
-            api.http.fetch(`/api/sessions/${encodeURIComponent(id)}/nats-reconnect`, { method: 'POST' })))
-        : api.http.fetch('/api/nats-traffic/bounce', { method: 'POST' })
+            checkedFetch(`/api/sessions/${encodeURIComponent(id)}/nats-reconnect`)))
+        : checkedFetch('/api/nats-traffic/bounce')
       Promise.resolve(work)
-        .catch(() => { /* best-effort; the orphan dot reflects real state on next poll */ })
+        .catch(error => {
+          const message = error instanceof Error ? error.message : String(error)
+          setReconnectError(message)
+          api.logger?.warn?.('[saloon] NATS recovery failed:', message)
+        })
         .finally(() => setReconnecting(false))
     }
 
@@ -214,6 +226,15 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         </div>
+        {reconnectError && (
+          <div
+            role="status"
+            className="px-3 py-1 bg-amber-950/60 border-b border-amber-400/20 text-2xs text-amber-300 truncate flex-shrink-0"
+            title={reconnectError}
+          >
+            {reconnectError}
+          </div>
+        )}
         {binding.mode !== 'empty' && (
           <div
             className="px-3 py-0.5 bg-surface-panel/60 border-b border-white/5 text-2xs font-mono text-slate-500 truncate flex-shrink-0"
