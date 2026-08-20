@@ -209,8 +209,9 @@ function WorkspaceShellInner() {
     if (config) setShowEmptyEntities(config.ui.showEmptyEntities)
   }, [config?.ui.showEmptyEntities])
 
-  // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
-  // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
+  // Figma-style per-run visibility — hidden runs stay in the hierarchy sidebar
+  // (dimmed) but are pruned from the canvas and inbox and skipped by
+  // Ctrl+[ / Ctrl+] cycling.
   const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden, removeHidden: removeRunHidden } = useHiddenRuns()
 
   // Background-session reveal toggle (R8–R10). U5 wires the pref + state; U6
@@ -234,7 +235,7 @@ function WorkspaceShellInner() {
   // Background pruning (R4–R5): drop background-hidden runs from the tree
   // BEFORE it forks to the sidebar and canvas — both surfaces lose the run.
   // This is a separate mechanism from the hidden-runs eyeball below, which
-  // dims runs in the sidebar and prunes them only from the canvas; the two
+  // dims runs in the hierarchy and prunes them from the canvas + inbox; the two
   // coexist and must not be merged. Attention exempts a run from this prune
   // (breakthrough, R16) so its inbox row always targets a real card.
   const backgroundHiddenIds = useMemo(

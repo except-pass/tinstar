@@ -17,13 +17,14 @@ type Filter = typeof LEVELS[number]
 interface Props {
   activeSpaceId: string | null
   searchQuery?: string
+  hiddenRunIds?: ReadonlySet<string>
   /** Reports run ids in the inbox's filtered top-to-bottom order, so
    *  bracket-cycling follows exactly what the inbox is showing. */
   onVisibleRunOrder?: (runIds: string[]) => void
 }
 
-export function InboxList({ activeSpaceId, searchQuery = '', onVisibleRunOrder }: Props) {
-  const { rows } = useInbox(activeSpaceId)
+export function InboxList({ activeSpaceId, searchQuery = '', hiddenRunIds, onVisibleRunOrder }: Props) {
+  const { rows } = useInbox(activeSpaceId, hiddenRunIds)
   const { isSelected } = useSelection()
   const [filter, setFilter] = useState<Filter>('all')
   const [unreadOnly, setUnreadOnly] = useState(false)

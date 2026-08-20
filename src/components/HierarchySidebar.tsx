@@ -795,7 +795,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     setViewState(v)
     setSidebarView(activeSpaceId, v)
   }, [activeSpaceId])
-  const { unreadCount } = useInbox(activeSpaceId)
+  const { unreadCount } = useInbox(activeSpaceId, hiddenRunIds)
 
   // --- Fuzzy search ---
   const [query, setQuery] = useState('')
@@ -1130,7 +1130,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           )}
         </div>
       ) : (
-        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} onVisibleRunOrder={onVisibleRunOrder} />
+        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} hiddenRunIds={hiddenRunIds} onVisibleRunOrder={onVisibleRunOrder} />
       )}
 
       {/* Drag divider between tree and hotkeys */}
