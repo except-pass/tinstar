@@ -37,9 +37,9 @@ export function removeHiddenRunId(runId: string): void {
 
 /**
  * Tracks which run IDs have been hidden by the user (Figma-style eyeball).
- * Hidden runs do not appear on the canvas and are skipped by session cycling,
- * but they still appear (dimmed) in the hierarchy sidebar so the user can
- * re-show them.
+ * Hidden runs do not appear on the canvas or in the inbox and are skipped by
+ * session cycling, but they still appear (dimmed) in the hierarchy sidebar so
+ * the user can re-show them.
  *
  * State is persisted to localStorage and synced across tabs.
  */

@@ -36,7 +36,10 @@ export interface UseInboxResult {
   unreadCount: number
 }
 
-export function useInbox(activeSpaceId: string | null | undefined): UseInboxResult {
+export function useInbox(
+  activeSpaceId: string | null | undefined,
+  hiddenRunIds?: ReadonlySet<string>,
+): UseInboxResult {
   const { state } = useServerEvents()
 
   return useMemo(() => {
@@ -72,6 +75,7 @@ export function useInbox(activeSpaceId: string | null | undefined): UseInboxResu
     // the rest list below by recency so you can see everything at a glance.
     for (const run of state.runs as Run[]) {
       if (run.spaceId !== activeSpaceId) continue
+      if (hiddenRunIds?.has(run.id)) continue
       // Background sessions never produce passive listing rows — even when the
       // reveal toggle is on (R6). A run with pending attention flows through
       // unchanged: that's the breakthrough row (R11/R16).
@@ -114,5 +118,5 @@ export function useInbox(activeSpaceId: string | null | undefined): UseInboxResu
     })
 
     return { rows, unreadCount: rows.filter(r => r.unread).length }
-  }, [state.pluginWidgets, state.runs, activeSpaceId])
+  }, [state.pluginWidgets, state.runs, activeSpaceId, hiddenRunIds])
 }

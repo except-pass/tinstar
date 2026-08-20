@@ -1,10 +1,15 @@
-import { test, expect } from './fixtures'
+import { test, expect, type Page } from './fixtures'
 import { resetAndWaitForData } from './helpers'
+
+async function revealRunInHierarchy(page: Page) {
+  await page.getByTestId('hierarchy-search-input').fill('R-241')
+  await expect(page.getByTestId('sidebar-node-run-R-241')).toBeVisible()
+}
 
 /**
  * Per-run visibility ("eyeball") — hidden runs stay in the sidebar (dimmed) but
- * are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling, like Figma
- * layer visibility.
+ * are pruned from the canvas and inbox and skipped by Ctrl+[ / Ctrl+] cycling,
+ * like Figma layer visibility.
  */
 test.describe('Run visibility eyeball', () => {
   test.beforeEach(async ({ page }) => {
@@ -14,14 +19,11 @@ test.describe('Run visibility eyeball', () => {
     await page.evaluate(() => localStorage.removeItem('tinstar-hidden-runs'))
     await resetAndWaitForData(page)
 
-    // Expand the tree so R-241's sidebar row is visible.
-    await page.getByTestId('chevron-initiative-init-1').click()
-    await page.getByTestId('chevron-epic-epic-1').click()
-    await page.getByTestId('chevron-task-task-1').click()
-    await expect(page.getByTestId('sidebar-node-run-R-241')).toBeVisible()
+    // Reveal the run without coupling the test to the active grouping dimensions.
+    await revealRunInHierarchy(page)
   })
 
-  test('clicking the eyeball hides the run from the canvas and keeps it in the sidebar', async ({ page }) => {
+  test('clicking the eyeball hides the run from canvas and inbox but keeps it in the hierarchy', async ({ page }) => {
     const sidebarRow = page.getByTestId('sidebar-node-run-R-241')
     const widget = page.getByTestId('canvas-widget-run-R-241')
     const eyeball = page.getByTestId('run-visibility-run-R-241')
@@ -40,7 +42,12 @@ test.describe('Run visibility eyeball', () => {
     // Eyeball stays visible (closed state) so the user can restore.
     await expect(eyeball).toBeVisible()
 
+    // Inbox follows the same visibility choice, including attention rows.
+    await page.getByTestId('sidebar-tab-inbox').click()
+    await expect(page.getByTestId('inbox-row-R-241')).toHaveCount(0)
+
     // Toggle again to show.
+    await page.getByTestId('sidebar-tab-hierarchy').click()
     await eyeball.click()
     await expect(widget).toBeVisible()
   })
@@ -54,12 +61,14 @@ test.describe('Run visibility eyeball', () => {
 
     // Select a different run as the starting point for cycling.
     const otherRun = page.locator('[data-testid^="canvas-widget-run-"]').first()
-    await otherRun.click()
+    // Canvas layout can place the card outside the viewport; dispatching the
+    // click still exercises the card's real selection handler.
+    await otherRun.evaluate(element => (element as HTMLElement).click())
 
     // Cycle forward through sessions several times; we should never select R-241.
     for (let i = 0; i < 6; i++) {
       await page.keyboard.press('Control+BracketRight')
-      await expect(page.getByTestId('sidebar-node-run-R-241')).not.toHaveClass(/bg-primary/)
+      await expect(page.getByTestId('sidebar-node-run-R-241')).not.toHaveClass(/neon-border/)
     }
   })
 
@@ -71,10 +80,8 @@ test.describe('Run visibility eyeball', () => {
 
     await page.reload()
 
-    // Re-expand the tree after reload to see the sidebar row.
-    await page.getByTestId('chevron-initiative-init-1').click()
-    await page.getByTestId('chevron-epic-epic-1').click()
-    await page.getByTestId('chevron-task-task-1').click()
+    // Search state resets on reload, so reveal the row again.
+    await revealRunInHierarchy(page)
 
     // Sidebar row is still there (dimmed); widget is not.
     await expect(page.getByTestId('sidebar-node-run-R-241')).toBeVisible()

@@ -57,6 +57,23 @@ describe('useInbox', () => {
     expect(result.current.unreadCount).toBe(0)
   })
 
+  it('excludes hidden sessions from rows and unread count without hiding plugin attention', () => {
+    mockState = {
+      pluginWidgets: [
+        { id: 'pw-visible', spaceId: 'spc-1', widgetType: 'w', attention: attn('info', 'Plugin needs attention', '2026-05-27T00:03:00.000Z') },
+      ],
+      runs: [
+        { id: 'r-hidden', spaceId: 'spc-1', status: 'needs_attention', sessionId: 's1', createdAt: '2026-05-27T00:02:00.000Z', attention: attn('urgent', 'Hidden run needs attention', '2026-05-27T00:02:00.000Z') },
+        { id: 'r-visible', spaceId: 'spc-1', status: 'idle', sessionId: 's2', createdAt: '2026-05-27T00:01:00.000Z' },
+      ],
+    }
+
+    const { result } = renderHook(() => useInbox('spc-1', new Set(['r-hidden'])))
+
+    expect(result.current.rows.map(r => r.widgetId)).toEqual(['pw-visible', 'r-visible'])
+    expect(result.current.unreadCount).toBe(1)
+  })
+
   it('sorts attention sessions above attention-free ones', () => {
     mockState = {
       pluginWidgets: [],
