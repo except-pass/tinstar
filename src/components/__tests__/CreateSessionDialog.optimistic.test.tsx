@@ -148,4 +148,32 @@ describe('CreateSessionDialog optimistic creation', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(apiFetch).not.toHaveBeenCalledWith('/api/sessions', expect.anything())
   })
+
+  it('keeps an invalid inline project out of the picker and shows the server error', async () => {
+    apiFetch.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/projects' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({
+          ok: false,
+          error: { message: 'Project path must be an existing directory: /missing/project' },
+        }, false))
+      }
+      if (url === '/api/projects') return Promise.resolve(jsonResponse({ ok: true, data: {} }))
+      if (url === '/api/cli-templates') return Promise.resolve(jsonResponse({ ok: true, data: [] }))
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    render(<CreateSessionDialog onClose={vi.fn()} />)
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/cli-templates'))
+
+    fireEvent.change(screen.getByTestId('create-project-select'), { target: { value: '__add__' } })
+    const pathInput = screen.getByPlaceholderText('/path/to/project')
+    fireEvent.change(pathInput, { target: { value: '/missing/project' } })
+    fireEvent.keyDown(pathInput, { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Project path must be an existing directory: /missing/project',
+    ))
+    expect(screen.queryByRole('option', { name: 'project' })).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('/path/to/project')).toHaveValue('/missing/project')
+  })
 })

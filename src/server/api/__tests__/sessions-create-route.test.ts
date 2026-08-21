@@ -315,6 +315,30 @@ afterEach(async () => {
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
+describe('POST /api/projects', () => {
+  it('rejects a nonexistent project path without persisting it', async () => {
+    const missingPath = join(tmpRoot, 'missing-project')
+    expect(existsSync(missingPath)).toBe(false)
+
+    const response = await testCtx.fetch('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'missing-project', path: missingPath }),
+    })
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message: `Project path must be an existing directory: ${missingPath}`,
+      },
+    })
+
+    const projects = await testCtx.fetch('/api/projects').then(res => res.json())
+    expect(projects.data).not.toHaveProperty('missing-project')
+  })
+})
+
 describe('POST /api/sessions/:name/nats-reconnect', () => {
   it('returns an actionable conflict for a live managed router', async () => {
     const sessionsDir = join(tmpRoot, 'sessions')
