@@ -7,9 +7,9 @@ import { resetAndWaitForData } from './helpers'
 // Projects persist to the worker's isolated projects.json (TINSTAR_DATA_DIR),
 // so we reset to a known set before each test for determinism.
 const PROJECTS = [
-  { name: 'zeta-proj', path: '/tmp/zeta' },
-  { name: 'yankee-proj', path: '/tmp/yankee' },
-  { name: 'xray-proj', path: '/tmp/xray' },
+  { name: 'zeta-proj', path: process.cwd() },
+  { name: 'yankee-proj', path: process.cwd() },
+  { name: 'xray-proj', path: process.cwd() },
 ]
 
 async function resetProjects(page: Page) {

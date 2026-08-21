@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { basename, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
@@ -149,6 +149,14 @@ import { projectLegacySessionContextWindow } from '../providers/legacy-observati
  */
 function currentCorsAllowlist(): string[] {
   return currentOriginAllowlist()
+}
+
+async function isExistingDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 function validateCliTemplateProvider(
@@ -8447,9 +8455,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // POST /api/projects
     if (method === 'POST' && url === '/api/projects') {
-      readBody(req).then((body) => {
+      readBody(req).then(async (body) => {
         const { name, path } = JSON.parse(body)
-        if (!name || !path) return fail(res, 'BAD_REQUEST', 'Name and path required')
+        if (typeof name !== 'string' || !name || typeof path !== 'string' || !path) {
+          return fail(res, 'BAD_REQUEST', 'Name and path required')
+        }
+        if (!await isExistingDirectory(path)) {
+          return fail(res, 'BAD_REQUEST', `Project path must be an existing directory: ${path}`)
+        }
         registerProject(cfg.files.projects, name, path)
         ctx.sse.broadcastEvent('projects_changed', { action: 'register', name })
         ok(res, null, { status: 201 })

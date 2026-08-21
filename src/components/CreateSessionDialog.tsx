@@ -301,17 +301,25 @@ export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCr
                   placeholder="/path/to/project"
                   autoFocus
                   className="flex-1 px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-                  onKeyDown={e => {
+                  onKeyDown={async e => {
                     if (e.key === 'Enter' && newProjectPath.trim()) {
-                      const name = newProjectPath.trim().split('/').pop() || 'project'
-                      apiFetch('/api/projects', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, path: newProjectPath.trim() }),
-                      }).then(r => r.json()).then(() => {
+                      const path = newProjectPath.trim()
+                      const name = path.split('/').pop() || 'project'
+                      setError(null)
+                      try {
+                        const response = await apiFetch('/api/projects', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ name, path }),
+                        })
+                        const data = await response.json()
+                        if (!data.ok) {
+                          setError(data.error?.message ?? 'Failed to add project')
+                          return
+                        }
                         setProjects(prev => [...prev, {
                           name,
-                          path: newProjectPath.trim(),
+                          path,
                           starred: false,
                           hidden: false,
                           order: prev.reduce((m, p) => Math.max(m, p.order), -1) + 1,
@@ -319,7 +327,9 @@ export function CreateSessionDialog({ onClose, prefill, existingSessionIds, onCr
                         setProject(name)
                         setAddingProject(false)
                         setNewProjectPath('')
-                      })
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to add project')
+                      }
                     } else if (e.key === 'Escape') {
                       setAddingProject(false)
                       setNewProjectPath('')
