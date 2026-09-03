@@ -1745,7 +1745,18 @@ let ttydIdentityInspectionWarned = false
 let ttydIdentityInspectionRetryAt = 0
 let ttydIdentityInspectionFailureEpoch = 0
 let ttydIdentityInspectionLastFailure = 'process inspection failed'
+let ttydIdentityInspectionConsecutiveTimeouts = 0
 const TTYD_IDENTITY_INSPECTION_RETRY_MS = 30_000
+
+/** Test seam: clear the shared inspection circuit between cases. */
+export function resetTtydIdentityInspectionForTests(): void {
+  ttydIdentityInspectionState = 'unknown'
+  ttydIdentityInspectionWarned = false
+  ttydIdentityInspectionRetryAt = 0
+  ttydIdentityInspectionFailureEpoch = 0
+  ttydIdentityInspectionLastFailure = 'process inspection failed'
+  ttydIdentityInspectionConsecutiveTimeouts = 0
+}
 
 export class TtydIdentityInspectionError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -1885,6 +1896,7 @@ function markTtydIdentityInspectionAvailable(
   ttydIdentityInspectionState = 'available'
   ttydIdentityInspectionRetryAt = 0
   ttydIdentityInspectionLastFailure = 'process inspection failed'
+  ttydIdentityInspectionConsecutiveTimeouts = 0
   ttydIdentityInspectionWarned = false
 }
 
@@ -1908,10 +1920,43 @@ function ttydIdentityInspectionCooldownError(): TtydIdentityInspectionError {
   )
 }
 
+/**
+ * A killed or signalled probe timed out: transient, load-dependent evidence
+ * that this sample was slow — not proof the host cannot be inspected.
+ */
+function isInspectionTimeout(err: unknown): boolean {
+  const failure = (
+    err !== null && typeof err === 'object' ? err : {}
+  ) as IdentityExecFailure
+  return failure.killed === true || failure.signal != null
+}
+
+/**
+ * Whether this failure should pause session starts host-wide.
+ *
+ * The cooldown exists so a genuinely broken inspection dependency cannot
+ * thrash, and a hard failure (missing binary, denied permission) is exactly
+ * that, so it trips on sight. A timeout is not. One slow probe used to pause
+ * every session start for 30s, and the 30s reconcile sweep re-probed and
+ * re-tripped the cooldown before it could expire — turning a single slow
+ * sample into a rolling outage where no session could be created at all.
+ * Requiring two consecutive timeouts still protects a wedged host while
+ * letting one slow probe cost only its own attempt.
+ */
+function shouldPauseStartsFor(err: unknown): boolean {
+  if (!isInspectionTimeout(err)) {
+    ttydIdentityInspectionConsecutiveTimeouts = 0
+    return true
+  }
+  ttydIdentityInspectionConsecutiveTimeouts += 1
+  return ttydIdentityInspectionConsecutiveTimeouts >= 2
+}
+
 function ttydIdentityInspectionFailedError(err: unknown): TtydIdentityInspectionError {
-  markTtydIdentityInspectionUnavailable(err)
+  const failure = describeIdentityInspectionFailure(err)
+  if (shouldPauseStartsFor(err)) markTtydIdentityInspectionUnavailable(err)
   return new TtydIdentityInspectionError(
-    `Terminal safety check failed: ${ttydIdentityInspectionLastFailure}. `
+    `Terminal safety check failed: ${failure}. `
       + 'No terminal was started to protect existing sessions.',
     { cause: err },
   )
@@ -2017,27 +2062,78 @@ async function inspectTtydPid(
   }
 }
 
-/** Strict, bounded host inspection without global retry/circuit state. */
-export async function inspectTtydIncumbentsOnPort(
+/**
+ * Pids listening on `port` per the kernel socket table, or null when listener
+ * ownership could not be established there.
+ *
+ * `ss` reads the kernel's socket table directly. `lsof -i` reaches the same
+ * answer by walking every open file descriptor on the host, so its cost scales
+ * with unrelated load: measured on a 6-session box at ~1.1s idle and ~1.8s
+ * while the reconcile sweep probed six ports at once, against a 2s budget.
+ * Breaching that budget paused session starts host-wide, so the cheap lookup
+ * goes first. `ss` is also the more precise question — it returns only
+ * listeners, where `lsof -i` additionally matched the backend's own proxy
+ * connection to the port and paid two `ps` calls to rule it out.
+ *
+ * Null, not an empty list, is the inconclusive answer: a host where `ss` is
+ * absent or hides process ownership falls back to lsof rather than reporting a
+ * contended port as free, which would let a start kill a terminal it never
+ * identified.
+ */
+export async function listeningPidsFromSs(
   port: number,
   run: IdentityExec = execFileAsync,
-): Promise<TtydIncumbent[]> {
+): Promise<number[] | null> {
   let stdout: string
   try {
-    stdout = (await run(
+    ({ stdout } = await run(
+      'ss',
+      ['-H', '-ltnp', `sport = :${port}`],
+      { timeout: 2_000 },
+    ))
+  } catch {
+    return null
+  }
+  const pids = [...stdout.matchAll(/pid=(\d+)/gu)].map(match => Number(match[1]))
+  if (pids.length > 0) return pids
+  // No listener at all is a conclusive answer. A listener line whose owner is
+  // hidden by restricted process visibility is not.
+  return stdout.trim() === '' ? [] : null
+}
+
+async function lsofPidsOnPort(
+  port: number,
+  run: IdentityExec,
+): Promise<number[]> {
+  let stdout: string
+  try {
+    ({ stdout } = await run(
       'lsof',
       ['-w', '-ti', `:${port}`],
       { timeout: 2_000 },
-    )).stdout
+    ))
   } catch (err) {
     if (isCleanInspectionMiss(err)) return []
     throw err
   }
-
-  const pids = stdout
+  return stdout
     .split('\n')
     .map(Number)
     .filter(pid => Number.isInteger(pid) && pid > 0)
+}
+
+/** Strict, bounded host inspection without global retry/circuit state. */
+export async function inspectTtydIncumbentsOnPort(
+  port: number,
+  run: IdentityExec = execFileAsync,
+  platform: NodeJS.Platform = process.platform,
+): Promise<TtydIncumbent[]> {
+  // Linux answers from the socket table; everywhere else lsof stays the
+  // documented dependency, since `ss` ships with iproute2 and macOS has none.
+  const listening = platform === 'linux'
+    ? await listeningPidsFromSs(port, run)
+    : null
+  const pids = listening ?? await lsofPidsOnPort(port, run)
   const inspected = await Promise.all(pids.map(pid => inspectTtydPid(pid, run)))
   return inspected.filter((entry): entry is TtydIncumbent => entry !== null)
 }

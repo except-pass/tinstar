@@ -22,6 +22,8 @@ import {
   inspectTtydIncumbentsForReadiness,
   inspectTtydIncumbentsOnPort,
   isCleanInspectionMiss,
+  listeningPidsFromSs,
+  resetTtydIdentityInspectionForTests,
   isExpectedTtydStartInterruption,
   findTtydStartSupersededError,
   onTtydRestart,
@@ -217,13 +219,14 @@ describe('verified ttyd session surfaces', () => {
         stderr: '',
       })
 
-    await expect(inspectTtydIncumbentsOnPort(6123, run)).resolves.toEqual([
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'darwin')).resolves.toEqual([
       { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
     ])
   })
 
   it('retries strict identity inspection after a transient-failure cooldown', async () => {
     let now = 1_000
+    resetTtydIdentityInspectionForTests()
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
     try {
       const failingRun = vi.fn(async () => {
@@ -236,6 +239,10 @@ describe('verified ttyd session surfaces', () => {
         })
       })
 
+      // One slow probe costs only its own attempt; the second engages the pause.
+      await expect(ttydIncumbentsOnPortStrict(6123, failingRun))
+        .rejects.toThrow('Terminal safety check failed')
+      expect(ttydIdentityInspectionUnavailable()).toBe(false)
       await expect(ttydIncumbentsOnPortStrict(6123, failingRun))
         .rejects.toThrow('Terminal safety check failed')
       expect(ttydIdentityInspectionUnavailable()).toBe(true)
@@ -254,17 +261,22 @@ describe('verified ttyd session surfaces', () => {
 
   it('uses the same cooldown for pgrep-side inspection failures', async () => {
     let now = 50_000
+    resetTtydIdentityInspectionForTests()
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const timingOut = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+      })
+    })
     try {
-      await expect(allTtydIncumbentsStrict(vi.fn(async () => {
-        throw inspectionFailure({
-          code: 'ETIMEDOUT',
-          stdout: '',
-          stderr: '',
-          killed: true,
-          signal: 'SIGTERM',
-        })
-      }))).rejects.toBeInstanceOf(TtydIdentityInspectionError)
+      await expect(allTtydIncumbentsStrict(timingOut))
+        .rejects.toBeInstanceOf(TtydIdentityInspectionError)
+      await expect(allTtydIncumbentsStrict(timingOut))
+        .rejects.toBeInstanceOf(TtydIdentityInspectionError)
       expect(ttydIdentityInspectionUnavailable()).toBe(true)
 
       now += 30_001
@@ -280,18 +292,23 @@ describe('verified ttyd session surfaces', () => {
 
   it('reports the failed command, retry time, and safety reason during cooldown', async () => {
     let now = 75_000
+    resetTtydIdentityInspectionForTests()
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const timingOut = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+        cmd: 'lsof -w -ti :6123',
+      })
+    })
     try {
-      await expect(ttydIncumbentsOnPortStrict(6123, vi.fn(async () => {
-        throw inspectionFailure({
-          code: 'ETIMEDOUT',
-          stdout: '',
-          stderr: '',
-          killed: true,
-          signal: 'SIGTERM',
-          cmd: 'lsof -w -ti :6123',
-        })
-      }))).rejects.toThrow(
+      await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow(
+        'Terminal safety check failed: lsof timed out or was interrupted. No terminal was started to protect existing sessions.',
+      )
+      await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow(
         'Terminal safety check failed: lsof timed out or was interrupted. No terminal was started to protect existing sessions.',
       )
 
@@ -311,6 +328,7 @@ describe('verified ttyd session surfaces', () => {
 
   it('does not let an older successful probe clear a newer failure cooldown', async () => {
     let now = 100_000
+    resetTtydIdentityInspectionForTests()
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
     let resolveSlowProbe!: (result: { stdout: string; stderr: string }) => void
     const slowRun = vi.fn(() => new Promise<{ stdout: string; stderr: string }>(
@@ -321,13 +339,13 @@ describe('verified ttyd session surfaces', () => {
       const slowProbe = ttydIncumbentsOnPortStrict(6123, slowRun)
       await vi.waitFor(() => expect(slowRun).toHaveBeenCalledTimes(1))
 
+      // A hard failure (not a timeout) pauses starts on sight; the subject
+      // here is the stale success, not what trips the pause.
       await expect(allTtydIncumbentsStrict(vi.fn(async () => {
         throw inspectionFailure({
-          code: 'ETIMEDOUT',
+          code: 'ENOENT',
           stdout: '',
           stderr: '',
-          killed: true,
-          signal: 'SIGTERM',
         })
       }))).rejects.toBeInstanceOf(TtydIdentityInspectionError)
       expect(ttydIdentityInspectionUnavailable()).toBe(true)
@@ -372,6 +390,173 @@ describe('verified ttyd session surfaces', () => {
     }))).rejects.toThrow('inspection failed')
 
     expect(ttydIdentityInspectionUnavailable()).toBe(false)
+  })
+
+  it('reads listener ownership from ss on linux without paying for lsof', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({
+        stdout: 'LISTEN 0 128 127.0.0.1:6123 0.0.0.0:*'
+          + ' users:(("ttyd",pid=101,fd=12))\n',
+        stderr: '',
+      })
+      .mockResolvedValueOnce({ stdout: 'ttyd\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: 'ttyd -i 127.0.0.1 bash -c tmux attach -t =tinstar-ours',
+        stderr: '',
+      })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'linux')).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: '127.0.0.1' },
+    ])
+    expect(run).toHaveBeenCalledWith(
+      'ss',
+      ['-H', '-ltnp', 'sport = :6123'],
+      { timeout: 2_000 },
+    )
+    expect(run.mock.calls.some(([file]) => file === 'lsof')).toBe(false)
+  })
+
+  it('treats an empty ss listing as a conclusively free port', async () => {
+    const run = vi.fn(async (_file: string, _args: readonly string[]) => ({
+      stdout: '',
+      stderr: '',
+    }))
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'linux')).resolves.toEqual([])
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(run.mock.calls.some(([file]) => file === 'lsof')).toBe(false)
+  })
+
+  it('falls back to lsof when ss shows a listener whose owner it cannot name', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({
+        stdout: 'LISTEN 0 128 127.0.0.1:6123 0.0.0.0:*\n',
+        stderr: '',
+      })
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'ttyd\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: 'ttyd bash -c tmux attach -t =tinstar-ours',
+        stderr: '',
+      })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'linux')).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
+    ])
+    expect(run).toHaveBeenCalledWith(
+      'lsof',
+      ['-w', '-ti', ':6123'],
+      { timeout: 2_000 },
+    )
+  })
+
+  it('falls back to lsof when ss is missing or fails', async () => {
+    const run = vi.fn()
+      .mockRejectedValueOnce(inspectionFailure({ code: 'ENOENT' }))
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'ttyd\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: 'ttyd bash -c tmux attach -t =tinstar-ours',
+        stderr: '',
+      })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'linux')).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
+    ])
+  })
+
+  it('does not reach for ss off linux, where it does not exist', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ stdout: '101\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: '/opt/homebrew/bin/ttyd\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: 'ttyd bash -c tmux attach -t =tinstar-ours',
+        stderr: '',
+      })
+
+    await expect(inspectTtydIncumbentsOnPort(6123, run, 'darwin')).resolves.toEqual([
+      { pid: 101, tmuxTarget: 'tinstar-ours', bindAddress: null },
+    ])
+    expect(run.mock.calls.some(([file]) => file === 'ss')).toBe(false)
+  })
+
+  it('reports no listener ownership when ss itself is inconclusive', async () => {
+    await expect(listeningPidsFromSs(6123, vi.fn(async () => {
+      throw inspectionFailure({ code: 'ENOENT' })
+    }))).resolves.toBeNull()
+  })
+
+  it('does not pause every session start on a single probe timeout', async () => {
+    resetTtydIdentityInspectionForTests()
+    const timingOut = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+        cmd: 'lsof -w -ti :6123',
+      })
+    })
+
+    await expect(ttydIncumbentsOnPortStrict(6123, timingOut))
+      .rejects.toThrow('Terminal safety check failed')
+    expect(ttydIdentityInspectionUnavailable()).toBe(false)
+  })
+
+  it('pauses session starts once probe timeouts repeat', async () => {
+    resetTtydIdentityInspectionForTests()
+    const timingOut = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+        cmd: 'lsof -w -ti :6123',
+      })
+    })
+
+    await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow()
+    await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow()
+    expect(ttydIdentityInspectionUnavailable()).toBe(true)
+  })
+
+  it('lets a healthy probe clear the timeout tally', async () => {
+    resetTtydIdentityInspectionForTests()
+    const timingOut = vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ETIMEDOUT',
+        stdout: '',
+        stderr: '',
+        killed: true,
+        signal: 'SIGTERM',
+        cmd: 'lsof -w -ti :6123',
+      })
+    })
+
+    await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow()
+    await expect(ttydIncumbentsOnPortStrict(
+      6123,
+      vi.fn(async () => ({ stdout: '', stderr: '' })),
+    )).resolves.toEqual([])
+    await expect(ttydIncumbentsOnPortStrict(6123, timingOut)).rejects.toThrow()
+    expect(ttydIdentityInspectionUnavailable()).toBe(false)
+  })
+
+  it('still pauses immediately when the host cannot be inspected at all', async () => {
+    resetTtydIdentityInspectionForTests()
+
+    await expect(ttydIncumbentsOnPortStrict(6123, vi.fn(async () => {
+      throw inspectionFailure({
+        code: 'ENOENT',
+        stdout: '',
+        stderr: '',
+        cmd: 'lsof -w -ti :6123',
+      })
+    }))).rejects.toThrow('Terminal safety check failed')
+    expect(ttydIdentityInspectionUnavailable()).toBe(true)
+    resetTtydIdentityInspectionForTests()
   })
 
   it('requires the expected PID to attach to the exact tmux target', () => {
