@@ -4,7 +4,7 @@ Use this fixture to check whether a configured managed provider follows Tinstar'
 standing Slate-first contract. It deliberately does not tell the model to use the Slate;
 the point is to test whether the standing contract is doing that work.
 
-Run it separately against managed Claude, Codex, and Cursor sessions. Record the
+Run it separately against managed Claude, Codex, Cursor, and Grok sessions. Record the
 session's `managedInstructions` version/mechanism receipt and the provider CLI version.
 Do not count an unavailable provider as passed.
 

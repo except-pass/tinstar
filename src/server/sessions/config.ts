@@ -9,7 +9,7 @@ import type { ErrorCode } from '../../domain/api'
 
 /**
  * Open provider ID resolved through ProviderAdapterRegistry. The built-ins are
- * claude/codex/cursor/generic, but adding a provider must not require widening a union.
+ * claude/codex/cursor/grok/generic, but adding a provider must not require widening a union.
  */
 export type AdapterType = string
 
@@ -308,6 +308,17 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     // Without it, `agent resume` falls back to the CLI's configured approvalMode
     // (allowlist), which blocks every tool call in a headless session.
     resumeCmd: 'agent --yolo --model cursor-grok-4.5-high resume',
+  },
+  {
+    id: 'grok-full-auto',
+    name: 'Grok (full auto)',
+    icon: '/agent-icons/grok.svg',
+    adapter: 'grok',
+    // `--` keeps a prompt beginning with a dash positional while preserving
+    // Grok's interactive TUI. `-p`/`--single` would exit after one turn, so it
+    // is intentionally not used for a managed Tinstar session.
+    startCmd: 'grok --always-approve --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'grok --always-approve --resume {sessionId}',
   },
   {
     id: 'shell',

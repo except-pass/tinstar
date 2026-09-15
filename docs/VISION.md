@@ -11,7 +11,7 @@ Same canvas, multiple users, real-time. The event bus and document store are alr
 The widget model is the abstraction layer between raw agent work and human understanding. Technical users see terminals, file diffs, and JSONL transcripts. Managers see throughput, cost, and team activity. Same underlying data (runs, sessions, git diffs, transcripts), different projections. Don't build three products — build one composable widget system where personas are just default widget presets.
 
 ### Agent agnosticism
-Today it's Claude Code and Codex. The abstraction is a plugin/adapter that implements: session lifecycle (start, stop, resume), transcript parsing (how to read logs), status detection (running vs idle vs blocked), and file tracking (what changed). Everything agent-specific lives behind this interface. The process-tree detection we just built proves the direction — it works for both Claude and Codex because it targets OS-level signals (child PIDs), not agent internals. The hook removal proves the inverse — agent-specific hooks were fragile and got ripped out.
+Today it includes Claude Code, Codex, Cursor Agent, and Grok. The abstraction is a plugin/adapter that implements: session lifecycle (start, stop, resume), transcript parsing (how to read logs), status detection (running vs idle vs blocked), and file tracking (what changed). Everything agent-specific lives behind this interface. The process-tree detection we just built proves the direction — it works across providers because it targets OS-level signals (child PIDs), not agent internals. The hook removal proves the inverse — agent-specific hooks were fragile and got ripped out.
 
 ## Decision guardrails
 

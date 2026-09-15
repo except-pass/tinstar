@@ -60,7 +60,7 @@ alternatives are recorded in [ADR 0003](../adrs/0003-slate-masonry-reflow.md).
 ## Foreground authoring flow
 
 Every supported managed agent receives the same versioned standing contract through
-its provider's durable instruction mechanism. Claude, Codex, and Cursor are supported;
+its provider's durable instruction mechanism. Claude, Codex, Cursor, and Grok are supported;
 generic launch templates cannot promise delivery and are rejected for new sessions.
 Existing running sessions adopt the contract on their next managed restart rather than
 receiving a surprise mid-task prompt.
@@ -168,5 +168,5 @@ under one identity.
 
 Model behavior is a separate dogfood gate: use the
 [`Slate-first provider behavior matrix`](../examples/slate/slate-first-behavior-matrix.md)
-against configured Claude, Codex, and Cursor sessions. A provider without a runnable
+against configured Claude, Codex, Cursor, and Grok sessions. A provider without a runnable
 credentialed session is reported as skipped, never counted as passed.

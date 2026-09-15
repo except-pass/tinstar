@@ -79,6 +79,27 @@ describe('provider lifecycle registry', () => {
     expect(provider.terminal.capabilities.managedInstructions.state).toBe('supported')
   })
 
+  it('resolves Grok and prepares standing instructions through --rules', () => {
+    const registry = createDefaultProviderRegistry()
+    const provider = registry.resolveTemplate(template(
+      'Grok',
+      'grok',
+      'grok --always-approve --session-id {sessionId} -- {prompt}',
+      'grok --always-approve --resume {sessionId}',
+    ))
+    const prepared = prepareProviderManagedInstructions(provider, {
+      sessionDir: mkdtempSync(join(tmpdir(), 'tinstar-grok-instructions-')),
+      version: 'test-contract/v1',
+      content: "Use the Slate; don't make turn cards.",
+    })
+
+    expect(provider.provider.id).toBe('grok')
+    expect(prepared).toMatchObject({
+      mechanism: 'grok-rules',
+      launchFlags: [`--rules 'Use the Slate; don'\\''t make turn cards.'`],
+    })
+  })
+
   it('prepares a private Cursor plugin carrying the versioned contract', () => {
     const registry = createDefaultProviderRegistry()
     const sessionDir = mkdtempSync(join(tmpdir(), 'tinstar-cursor-instructions-'))
