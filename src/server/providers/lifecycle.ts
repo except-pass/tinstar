@@ -671,6 +671,32 @@ export const CURSOR_PROVIDER: TerminalProviderAdapter = {
   },
 }
 
+export const GROK_PROVIDER: TerminalProviderAdapter = {
+  provider: { id: 'grok', label: 'Grok Build' },
+  sessionLifecycle: 'terminal',
+  terminal: {
+    capabilities: {
+      nats: unsupportedNats('Grok Build'),
+      telemetry: unsupportedTelemetry('Grok Build'),
+      managedInstructions: {
+        state: 'supported',
+        detail: {
+          mechanism: 'grok-rules',
+          prepare: context => ({
+            version: context.version,
+            mechanism: 'grok-rules',
+            launchFlags: [
+              `--rules ${shellQuote(context.content)}`,
+            ],
+          }),
+        },
+      },
+    },
+    defaultTelemetry: false,
+    transcript: null,
+  },
+}
+
 export const GENERIC_PROVIDER: TerminalProviderAdapter = {
   provider: { id: 'generic', label: 'Generic terminal CLI' },
   sessionLifecycle: 'terminal',
@@ -692,6 +718,7 @@ export function createDefaultProviderRegistry(
     CLAUDE_PROVIDER,
     CODEX_PROVIDER,
     CURSOR_PROVIDER,
+    GROK_PROVIDER,
     GENERIC_PROVIDER,
     ...additional,
   ])

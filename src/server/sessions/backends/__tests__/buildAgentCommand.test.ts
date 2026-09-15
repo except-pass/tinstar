@@ -17,6 +17,7 @@ import {
   CODEX_PROVIDER,
   CURSOR_PROVIDER,
   GENERIC_PROVIDER,
+  GROK_PROVIDER,
   ProviderCapabilityError,
   prepareProviderManagedInstructions,
   type TerminalProviderAdapter,
@@ -106,6 +107,13 @@ describe('buildAgentCommand standing instructions', () => {
       provider: CURSOR_PROVIDER,
       template: { ...tmpl('agent --yolo -- {prompt}', 'agent --yolo resume'), adapter: 'cursor' },
       expected: '--plugin-dir',
+      forbidden: '--append-system-prompt',
+    },
+    {
+      name: 'Grok',
+      provider: GROK_PROVIDER,
+      template: { ...tmpl('grok --always-approve --session-id {sessionId} -- {prompt}', 'grok --always-approve --resume {sessionId}'), adapter: 'grok' },
+      expected: '--rules',
       forbidden: '--append-system-prompt',
     },
   ])('uses only $name provider syntax on create and resume', ({ provider, template, expected, forbidden }) => {

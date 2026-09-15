@@ -51,6 +51,14 @@ describe('PUT /api/cli-templates/:id — save reflects immediately', () => {
       .toBe('enabled')
     expect(templates.find(template => template.id === 'codex-full-auto')?.telemetryState)
       .toBe('enabled')
+    expect(templates.find(template => template.id === 'grok-full-auto')).toMatchObject({
+      name: 'Grok (full auto)',
+      icon: '/agent-icons/grok.svg',
+      adapter: 'grok',
+      startCmd: 'grok --always-approve --session-id {sessionId} -- {prompt}',
+      resumeCmd: 'grok --always-approve --resume {sessionId}',
+      telemetryState: 'unsupported',
+    })
     expect(templates.find(template => template.id === 'shell')?.telemetryState)
       .toBe('unsupported')
   })
