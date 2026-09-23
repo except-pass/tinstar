@@ -11,6 +11,7 @@ import { FIRSTMATE_VIEW, FirstmateObserver, isObservedRun, observedRunId, type F
 import { LEDGER_FILE } from './ledger-watcher'
 import { parseNewEntriesAt } from '../sessions/transcript-parser'
 import type { Run } from '../../domain/types'
+import type { ObserverViews } from './observer'
 
 const j = (o: Record<string, unknown>) => JSON.stringify({ v: 1, ...o }) + '\n'
 const dispatched = (task: string, ts: number, extra: Record<string, unknown> = {}) =>
@@ -42,9 +43,11 @@ describe('FirstmateObserver', () => {
   const ledger = () => join(home, 'state', LEDGER_FILE)
   const card = (id: string) => (store.getRun(id)?.viewData as { firstmate: FirstmateCardData } | undefined)?.firstmate
 
-  function make(opts: { homes?: string[]; projectDir?: string; transcriptPollMs?: number } = {}): FirstmateObserver {
+  function make(opts: { homes?: string[]; projectDir?: string; transcriptPollMs?: number; views?: ObserverViews; terminalRefreshMs?: number } = {}): FirstmateObserver {
     const o = new FirstmateObserver({
       homes: opts.homes ?? [home],
+      views: opts.views,
+      terminalRefreshMs: opts.terminalRefreshMs,
       docStore: store,
       configRoot,
       hasSession: n => sessionNames.has(n),
@@ -207,6 +210,120 @@ describe('FirstmateObserver', () => {
       appendFileSync(ledger(), j({ ts: 2, event: 'task.cleaned_up', task: 'a' }))
       await waitFor(() => !store.getRun('fm--a'))
       expect(existsSync(join(configRoot, 'firstmate', 'dismissed.json'))).toBe(false)
+    })
+  })
+
+  describe('terminal views (M2)', () => {
+    class FakeViews implements ObserverViews {
+      ports = new Map<string, number>()
+      ensured: Array<[string, string, string | null]> = []
+      released: string[] = []
+      started = false
+      stopped = false
+      noWindowFor = new Set<string>()
+      gate: Promise<void> | null = null
+      inFlight = 0
+      maxInFlight = 0
+      async start() { this.started = true }
+      stop() { this.stopped = true }
+      async ensure(runId: string, task: string, target: string | null) {
+        this.ensured.push([runId, task, target])
+        if (this.gate) {
+          this.maxInFlight = Math.max(this.maxInFlight, ++this.inFlight)
+          try { await this.gate } finally { this.inFlight-- }
+        }
+        if (!target || this.noWindowFor.has(task)) return { state: 'unavailable' as const, reason: 'no window recorded yet' }
+        if (!this.ports.has(runId)) this.ports.set(runId, 8781 + this.ports.size)
+        return { state: 'live' as const, port: this.ports.get(runId)! }
+      }
+      release(runId: string) { this.released.push(runId); this.ports.delete(runId) }
+    }
+
+    it('points the run at its view ttyd and marks the card live', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      await make({ views }).start()
+      expect(views.started).toBe(true)
+      expect(views.ensured[0]).toEqual(['fm--a', 'a', 'firstmate:fm-a'])
+      expect(store.getRun('fm--a')!.port).toBe(8781)
+      expect(store.getRun('fm--a')!.backend).toBeNull()
+      expect(card('fm--a')!.terminal).toEqual({ state: 'live', reason: null })
+    })
+
+    it('a card with no recorded window is port-less and says why; a later meta brings the terminal up', async () => {
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      const o = make({ views, terminalRefreshMs: 30 })
+      await o.start()
+      expect(store.getRun('fm--a')!.port).toBeNull()
+      expect(card('fm--a')!.terminal).toEqual({ state: 'unavailable', reason: 'no window recorded yet' })
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      await waitFor(() => store.getRun('fm--a')!.port === 8781)
+      expect(card('fm--a')!.terminal.state).toBe('live')
+    })
+
+    it('clears a persisted port at boot, before anything can proxy to it', async () => {
+      store.upsertRun('fm--a', { ...baseRun('fm--a'), view: FIRSTMATE_VIEW, port: 8790 })
+      store.upsertRun('other', { ...baseRun('other'), port: 8791 })
+      writeFileSync(ledger(), '')
+      const seen: Array<number | null> = []
+      store.changes.on('change', (c: { id: string; data: Run | null }) => { if (c.id === 'fm--a' && c.data) seen.push(c.data.port ?? null) })
+      await make({ views: new FakeViews() }).start()
+      expect(seen[0]).toBeNull()
+      expect(store.getRun('other')!.port).toBe(8791) // never touches non-observed runs
+    })
+
+    it('releases the view when the worker is cleaned up, and when the card is dismissed', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(join(home, 'state', 'b.meta'), 'window=firstmate:fm-b\n')
+      writeFileSync(ledger(), dispatched('a', 1) + dispatched('b', 1))
+      const views = new FakeViews()
+      await make({ views }).start()
+      appendFileSync(ledger(), j({ ts: 2, event: 'task.cleaned_up', task: 'a' }))
+      await waitFor(() => views.released.includes('fm--a'))
+      store.deleteRun('fm--b') // the UI's delete
+      expect(views.released).toContain('fm--b')
+    })
+
+    it('does not re-create a card whose worker was cleaned up while its terminal was being ensured', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      await make({ views, terminalRefreshMs: 20 }).start()
+      let open!: () => void
+      views.gate = new Promise(r => { open = r })
+      await waitFor(() => views.inFlight > 0)
+      appendFileSync(ledger(), j({ ts: 2, event: 'task.cleaned_up', task: 'a' }))
+      await waitFor(() => store.getRun('fm--a') === undefined)
+      let recreated = false
+      store.changes.on('change', (c: { id: string; data: Run | null }) => { if (c.id === 'fm--a' && c.data) recreated = true })
+      open()
+      await new Promise(r => setTimeout(r, 80))
+      expect(recreated).toBe(false)
+      expect(store.getRun('fm--a')).toBeUndefined()
+    })
+
+    it('never overlaps terminal refresh passes while one is still waiting on a view', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      await make({ views, terminalRefreshMs: 10 }).start()
+      let open!: () => void
+      views.gate = new Promise(r => { open = r })
+      await waitFor(() => views.inFlight > 0)
+      await new Promise(r => setTimeout(r, 100))
+      expect(views.maxInFlight).toBe(1)
+      open()
+    })
+
+    it('stops the views with the observer', async () => {
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      const o = make({ views })
+      await o.start()
+      o.stop()
+      expect(views.stopped).toBe(true)
     })
   })
 

@@ -7,8 +7,10 @@
 //   - No session record is ever created under ~/.config/tinstar/sessions/, so
 //     reconcile, the status watcher, /stop, /start, /spawn, /send-keys … (all keyed
 //     on session records) can never reach it.
-//   - No tmux session, window or ttyd is created or touched (that is M2, and even
-//     there it happens under a `tsview-` namespace, never `tinstar-*`).
+//   - No `tinstar-*` tmux session is ever created, and no worker window is ever
+//     addressed destructively. The M2 terminal view (views.ts) only links a worker's
+//     window into a private `tsview-…` session and serves it through its own ttyd;
+//     `Run.port` is that ttyd's port, never a Tinstar session's.
 //   - `backend` is always null; the run id is `fm-…`, not a session name.
 //   - A run is skipped when a real Tinstar session record shares its name, or
 //     when a non-observed run already occupies the id.
@@ -30,6 +32,7 @@ import type { DocumentChange } from '../stores/document-store'
 import { log } from '../logger'
 import { LedgerWatcher, type LedgerBatch } from './ledger-watcher'
 import { readTaskMeta, type TaskMeta } from './meta'
+import type { TerminalResult } from './views'
 import {
   findLinkedTranscript, type LinkedTranscript,
 } from './transcript-link'
@@ -55,6 +58,14 @@ export interface ObserverDocStore {
   activeSpaceId: string
 }
 
+/** The slice of FirstmateViews the observer drives (an injectable seam for tests). */
+export interface ObserverViews {
+  start(): Promise<void>
+  stop(): void
+  ensure(runId: string, task: string, windowTarget: string | null): Promise<TerminalResult>
+  release(runId: string): void
+}
+
 export interface FirstmateObserverOpts {
   homes: string[]
   docStore: ObserverDocStore
@@ -63,6 +74,10 @@ export interface FirstmateObserverOpts {
   /** True when a real Tinstar session record exists under this name. */
   hasSession: (name: string) => boolean
   readMeta?: (home: string, task: string) => Promise<TaskMeta | null>
+  /** M2 terminal views. Omitted ⇒ cards only, no terminal. */
+  views?: ObserverViews
+  /** How often live cards re-verify their terminal (worker window appeared / moved). */
+  terminalRefreshMs?: number
   pollMs?: number
   /** How often linked transcripts are re-read for the status light. 0 disables. */
   transcriptPollMs?: number
@@ -94,6 +109,8 @@ export interface FirstmateCardData {
   conversationSource: 'auto' | 'manual' | null
   /** From the linked transcript: whether the worker's claude is mid-turn. */
   activity: 'running' | 'idle' | null
+  /** Whether the card's terminal is serving; `reason` explains an unavailable one. */
+  terminal: { state: 'live' | 'unavailable'; reason: string | null }
 }
 
 /** What a route needs to read a linked worker's transcript. */
@@ -154,6 +171,8 @@ export class FirstmateObserver {
   /** run id → unix seconds of the dismissal. */
   private dismissed: Record<string, number>
   private readonly onChange: (c: DocumentChange) => void
+  private refreshTimer: ReturnType<typeof setInterval> | undefined
+  private refreshing = false
   private started = false
 
   constructor(private readonly opts: FirstmateObserverOpts) {
@@ -184,6 +203,13 @@ export class FirstmateObserver {
     if (this.started) return
     this.started = true
     this.opts.docStore.changes.on('change', this.onChange)
+    // Boot port reset: a persisted observed run's `port` belongs to a ttyd of the
+    // PREVIOUS process. Clear it before anything can proxy to whatever holds that
+    // port now; live ttyds are re-created (and the port set again) below.
+    this.resetPersistedPorts()
+    try { await this.opts.views?.start() } catch (err) {
+      log.warn('firstmate', `terminal views failed to start: ${(err as Error).message}`)
+    }
     await Promise.all(this.entries.map(e => e.watcher.pollOnce()))
     this.pruneStale()
     for (const e of this.entries) e.watcher.start()
@@ -192,9 +218,16 @@ export class FirstmateObserver {
       this.transcriptTimer = setInterval(() => void this.refreshTranscripts(), every)
       this.transcriptTimer.unref?.()
     }
+    if (this.opts.views) {
+      this.refreshTimer = setInterval(() => { void this.refreshTerminals() }, this.opts.terminalRefreshMs ?? 10_000)
+      this.refreshTimer.unref?.()
+    }
   }
 
   stop(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer)
+    this.refreshTimer = undefined
+    this.opts.views?.stop()
     this.opts.docStore.changes.off('change', this.onChange)
     for (const e of this.entries) e.watcher.stop()
     if (this.transcriptTimer) clearInterval(this.transcriptTimer)
@@ -273,13 +306,56 @@ export class FirstmateObserver {
     }
     const meta = prefetched !== undefined ? prefetched : await this.readMeta(entry.home, task)
     // The await above may have raced a dismissal or a reset; re-check before writing.
-    if (this.dismissed[runId] !== undefined && !(w.dispatchedAt !== null && w.dispatchedAt > this.dismissed[runId])) return
-    if (entry.fleet.get(task) !== w) return
+    if (this.stale(entry, runId, task, w)) return
     this.recordSpawn(runId, w, meta)
-    this.upsert(entry, runId, w, meta, rediscover)
+    let terminal: TerminalResult = { state: 'unavailable', reason: 'terminal views are off' }
+    if (this.opts.views) {
+      terminal = await this.opts.views.ensure(runId, task, meta?.window ?? null)
+      if (this.stale(entry, runId, task, w)) { this.opts.views.release(runId); return }
+    }
+    this.upsert(entry, runId, w, meta, rediscover, terminal)
   }
 
-  private upsert(entry: HomeEntry, runId: string, w: WorkerState, meta: TaskMeta | null, rediscover: boolean): void {
+  /** True when the worker was dismissed, reset, replaced, or cleaned up while an await was pending. */
+  private stale(entry: HomeEntry, runId: string, task: string, w: WorkerState): boolean {
+    const d = this.dismissed[runId]
+    if (d !== undefined && !(w.dispatchedAt !== null && w.dispatchedAt > d)) return true
+    return entry.fleet.get(task) !== w || w.cleanedUpAt !== null
+  }
+
+  /** A view's ttyd exited on its own: re-project so the card drops (or re-creates) its terminal. */
+  onTerminalExit(runId: string): void {
+    const o = this.owned.get(runId)
+    const entry = o && this.entryFor(o.home)
+    if (!o || !entry) return
+    void this.project(entry, o.task, false).catch(err => log.warn('firstmate', `terminal restart failed for ${o.task}: ${(err as Error).message}`))
+  }
+
+  /** Re-verify every live card's terminal: the meta / window may have appeared or moved. */
+  private async refreshTerminals(): Promise<void> {
+    if (this.refreshing) return
+    this.refreshing = true
+    try {
+      for (const entry of this.entries) {
+        for (const task of [...entry.fleet.keys()]) {
+          if (!this.owned.has(observedRunId(task, entry.tag || null))) continue
+          try { await this.project(entry, task, false) } catch (err) {
+            log.warn('firstmate', `terminal refresh failed for ${task}: ${(err as Error).message}`)
+          }
+        }
+      }
+    } finally {
+      this.refreshing = false
+    }
+  }
+
+  private resetPersistedPorts(): void {
+    for (const run of this.opts.docStore.getAllRuns()) {
+      if (isObservedRun(run) && run.port != null) this.opts.docStore.upsertRun(run.id, { ...run, port: null })
+    }
+  }
+
+  private upsert(entry: HomeEntry, runId: string, w: WorkerState, meta: TaskMeta | null, rediscover: boolean, terminal: TerminalResult): void {
     const { docStore } = this.opts
     const existing = docStore.getRun(runId)
     const project = w.project ?? meta?.project ?? null
@@ -308,6 +384,9 @@ export class FirstmateObserver {
       conversationId: link?.conversationId ?? null,
       conversationSource: link?.source ?? null,
       activity,
+      terminal: terminal.state === 'live'
+        ? { state: 'live', reason: null }
+        : { state: 'unavailable', reason: terminal.reason },
     }
     const viewData = { firstmate: card }
     // Reuse the previous object when nothing changed: runShallowEqual compares
@@ -333,7 +412,7 @@ export class FirstmateObserver {
       touchedFiles: existing?.touchedFiles ?? [],
       recapEntries: relinked ? [] : existing?.recapEntries ?? [],
       rawLogs: '',
-      port: null,
+      port: terminal.state === 'live' ? terminal.port : null,
       backend: null,
       view: FIRSTMATE_VIEW,
       viewData: sameView ? existing.viewData : viewData,
@@ -439,6 +518,7 @@ export class FirstmateObserver {
   }
 
   private removeRun(runId: string): void {
+    this.opts.views?.release(runId)
     this.owned.delete(runId)
     if (this.links.delete(runId)) resetOffset(runId)
     if (!this.opts.docStore.getRun(runId)) return
@@ -458,6 +538,8 @@ export class FirstmateObserver {
     if (c.entity !== 'run' || c.data !== null) return
     if (!this.owned.has(c.id) || this.selfDeleting.has(c.id)) return
     // Someone else (the UI's delete) removed a card we own: that is a dismissal.
+    // Closing the view is all that happens — the worker itself is never touched.
+    this.opts.views?.release(c.id)
     this.owned.delete(c.id)
     this.dismissed[c.id] = this.now()
     this.saveDismissed()
