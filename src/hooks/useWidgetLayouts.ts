@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { TreeNode } from '../domain/types'
-import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import { getWidgetComponent, layoutWidgetType, toWidgetType } from '../widgets/widgetComponentRegistry'
 import { useConfig, useDebouncedConfigPatch } from '../context/ConfigContext'
 import { packBlocksRow, type RigidBlock } from '../canvas/tidyArrange'
 import { boundingBoxOf } from '../canvas/constellationCohesion'
@@ -90,7 +90,7 @@ export function generateDefaultLayouts(
 
   // Phase 1: Bottom-up sizing
   function computeSize(node: TreeNode, depth: number): { width: number; height: number } {
-    const reg = getWidgetComponent(toWidgetType(node.type))
+    const reg = getWidgetComponent(layoutWidgetType(node))
     if (!reg?.isContainer) {
       const prev = prevLayouts?.get(node.id)
       const dw = reg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
@@ -439,7 +439,7 @@ function placeNewRuns(
 
   for (const id of missingIds) {
     const node = nodeMap.get(id)
-    const nodeReg = getWidgetComponent(toWidgetType(node?.type ?? ''))
+    const nodeReg = getWidgetComponent(node ? layoutWidgetType(node) : '')
     if (!node || nodeReg?.isContainer) continue
 
     const w = nodeReg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH

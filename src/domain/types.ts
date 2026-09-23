@@ -1805,6 +1805,8 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'tmux' | null
+  /** Run leaves only: `run.view`, so layout can size a plugin-viewed run by its own widget. */
+  view?: string
   agentIcon?: string
   percentDone?: number | null
   status?: string

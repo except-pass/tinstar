@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# tinstar-fm-view — one viewer connection's private tmux "view session" onto a
+# first mate worker's window. Run by ttyd (once per WebSocket client) as
+#
+#   tinstar-fm-view <fm-session> <window-id> <expected-window-name>
+#
+# It builds a disposable session `tsview-<task>-<nonce>` holding ONLY a *link* to
+# the worker's window (never a session group), then attaches to it. tmux itself
+# guarantees the worker survives the view: killing a session closes "any windows
+# linked to it and no other sessions", and the window is still linked into the
+# first mate's session. When the browser goes away the client detaches and
+# `destroy-unattached` removes the view; when the worker's window is closed it
+# leaves the view too and the view dies with it.
+#
+# Everything this script does to tmux targets the view session it just made,
+# except two read-only lookups and the `link-window` source. It NEVER sends
+# kill-window / kill-pane / respawn-* / send-keys / kill-session to anything
+# outside the `tsview-` namespace (src/server/firstmate/views.test.ts greps for it).
+#
+# View names must never start with the first mate session name: the first mate
+# runs a bare `tmux has-session -t firstmate`, which prefix-matches.
+set -u
+
+fm_session=${1:-}
+window_id=${2:-}
+window_name=${3:-}
+
+die() { printf '\r\n%s\r\n' "$1" >&2; sleep 3; exit 1; }
+
+case "$window_id" in @[0-9]*) ;; *) die "tinstar-fm-view: bad window id" ;; esac
+case "$fm_session" in ''|*[!A-Za-z0-9._-]*) die "tinstar-fm-view: bad session name" ;; esac
+case "$window_name" in ''|*[!A-Za-z0-9._-]*) die "tinstar-fm-view: bad window name" ;; esac
+case "$fm_session" in tsview-*) die "tinstar-fm-view: refusing to view a view" ;; esac
+
+# The window must still be one of the first mate session's windows, under the
+# expected name — a reused id or a renamed window means "not our worker".
+listing=$(tmux list-windows -t "=$fm_session" -F '#{window_id} #{window_name}' 2>/dev/null) \
+  || die "worker window is gone (no tmux session '$fm_session')"
+printf '%s\n' "$listing" | grep -qxF -- "$window_id $window_name" \
+  || die "worker window is gone ($window_name)"
+
+# tsview-<task>-<nonce>; the task part is display-only, sanitised and bounded.
+task=$(printf '%s' "${window_name#fm-}" | tr -c 'A-Za-z0-9_-' '_' | cut -c1-40)
+nonce="$$-$(date +%s)-$RANDOM"
+view="tsview-$task-$nonce"
+placeholder="tsview-placeholder-$nonce"
+
+# destroy-unattached cannot be set at creation (tmux would reap the session before
+# any client attached), so a hangup before the attach below must clean up itself.
+trap 'tmux kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
+
+tmux new-session -d -s "$view" -n "$placeholder" \; \
+  set-option -t "=$view:" prefix None \; \
+  set-option -t "=$view:" prefix2 None \; \
+  set-option -t "=$view:" key-table tsview-passthrough \; \
+  set-option -t "=$view:" status off \; \
+  set-option -t "=$view:" mouse off \; \
+  set-option -t "=$view:" detach-on-destroy on \; \
+  link-window -d -s "$window_id" -t "=$view:" \; \
+  kill-window -t "=$view:=$placeholder" \
+  || die "could not create the view session"
+
+# destroy-unattached goes on as part of the attach, so the session cannot be
+# reaped before a client exists.
+trap - HUP INT TERM
+exec env -u TMUX tmux attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import type { WidgetProps } from '@tinstar/plugin-api'
 import { FirstmateCard, safePrUrl } from './FirstmateCard'
 
@@ -51,6 +51,14 @@ describe('FirstmateCard', () => {
     expect(safePrUrl('not a url')).toBeNull()
     render(<FirstmateCard {...props({ ...base, pr: 'javascript:alert(1)' })} />)
     expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('says why there is no live terminal, and stays quiet when there is one', () => {
+    render(<FirstmateCard {...props({ ...base, terminal: { state: 'unavailable', reason: 'no window recorded yet' } })} />)
+    expect(screen.getByTestId('firstmate-terminal-note').textContent).toContain('no window recorded yet')
+    cleanup()
+    render(<FirstmateCard {...props({ ...base, terminal: { state: 'live', reason: null } })} />)
+    expect(screen.queryByTestId('firstmate-terminal-note')).toBeNull()
   })
 
   it('degrades when the run carries no firstmate data', () => {

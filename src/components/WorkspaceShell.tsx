@@ -300,6 +300,7 @@ function WorkspaceShellInner() {
     color: run.color,
     status: run.status,
     backend: run.backend,
+    view: run.view,
     agentIcon: run.agentIcon,
     scope: runScope(run),
   })), [runRepo, runScope, activeSpaceId])

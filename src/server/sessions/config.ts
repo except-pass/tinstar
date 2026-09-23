@@ -150,6 +150,8 @@ export interface TinstarConfig {
    */
   firstmate: {
     homes: string[]
+    /** ttyd ports for the observer's terminal views. Must not overlap `ports.hostStart`/`hostCount`. */
+    ports: { start: number; count: number }
   }
   /**
    * The Slate's code-spawned surface authors. When a surface carries a self-contained
@@ -217,6 +219,21 @@ export interface TinstarConfig {
     /** How often the recovery sweeper runs. */
     recoverySweepMs: number
   }
+}
+
+/** The ttyd port window the first mate observer's terminal views draw from. */
+export function firstmatePortWindow(cfg: TinstarConfig): PortWindow {
+  return { label: 'firstmate-observer', start: cfg.firstmate.ports.start, count: cfg.firstmate.ports.count }
+}
+
+/** Accept a hand-edited `firstmate.ports` only when it is a sane integer window. */
+function pickFirstmatePorts(raw: unknown): { start: number; count: number } {
+  const d = BASE_CONFIG.firstmate.ports
+  if (!raw || typeof raw !== 'object') return { ...d }
+  const { start, count } = raw as { start?: unknown; count?: unknown }
+  const ok = Number.isInteger(start) && Number.isInteger(count)
+    && (start as number) >= 1024 && (count as number) >= 1 && (start as number) + (count as number) - 1 <= 65535
+  return ok ? { start: start as number, count: count as number } : { ...d }
 }
 
 /** The ttyd port window user-initiated sessions draw from. */
@@ -396,6 +413,8 @@ export const BASE_CONFIG = {
   },
   firstmate: {
     homes: [] as string[],
+    // Disjoint from the interactive 8681-8780 window (findPort refuses an overlap).
+    ports: { start: 8781, count: 50 },
   },
   slate: {
     author: {
@@ -551,6 +570,7 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
         ? ((userConfig.firstmate as { homes: unknown[] }).homes)
             .filter((h): h is string => typeof h === 'string' && isAbsolute(h))
         : [],
+      ports: pickFirstmatePorts((userConfig.firstmate as Record<string, unknown> | undefined)?.ports),
     },
     // deepMerge already folded any user `slate.author` overrides into merged.slate.
     slate: merged.slate,

@@ -22,6 +22,7 @@ export interface FirstmateCardData {
   pr: string | null
   merged: { via: string; pr: string | null } | null
   worktree: string | null
+  terminal?: { state: 'live' | 'unavailable'; reason: string | null }
 }
 
 interface CardProps { firstmate?: FirstmateCardData }
@@ -104,6 +105,11 @@ export function FirstmateCard({ data }: WidgetProps) {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {fm.terminal?.state === 'unavailable' && (
+          <div data-testid="firstmate-terminal-note" className="rounded border border-slate-700 bg-slate-800/60 px-2 py-1 text-[11px] text-slate-300">
+            No live terminal{fm.terminal.reason ? `: ${fm.terminal.reason}` : ''}
           </div>
         )}
         {(fm.pr || fm.merged) && (
