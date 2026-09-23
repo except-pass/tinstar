@@ -17,8 +17,11 @@ import { join, resolve } from 'node:path'
 
 const REPO = resolve(__dirname, '../../..')
 const VIEW_SCRIPT = join(REPO, 'bin', 'tinstar-fm-view')
-const FM_HOME = process.env.FIRSTMATE_HOME || '/Users/wtg/repo/firstmate'
-const FM_TMUX_LIB = join(FM_HOME, 'bin', 'backends', 'tmux.sh')
+const FM_HOME = process.env.FIRSTMATE_HOME ?? ''
+const FM_TMUX_LIB = FM_HOME ? join(FM_HOME, 'bin', 'backends', 'tmux.sh') : ''
+const HAS_FM = FM_TMUX_LIB !== '' && existsSync(FM_TMUX_LIB)
+const FM_GATE = "the first mate's own tmux helpers give unchanged results while a view is attached"
+const DESTRUCTIVE = new Set(['kill-session', 'kill-window', 'kill-pane', 'kill-server', 'respawn-pane', 'respawn-window', 'send-keys', 'unlink-window'])
 const REAL_TMUX = (() => { try { return execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim() } catch { return '' } })()
 const HAS_PY = (() => { try { execFileSync('python3', ['-V']); return true } catch { return false } })()
 
@@ -62,6 +65,7 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
   let dir: string
   let socket: string
   let env: NodeJS.ProcessEnv
+  let callLog: string
   const clients: ChildProcess[] = []
 
   const tm = (...args: string[]): string =>
@@ -78,9 +82,9 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
   }
   const viewSessions = () => sessions().filter(s => s.startsWith('tsview-'))
 
-  function attachViaScript(fmSession: string, wid: string, name: string): ChildProcess {
+  function attachViaScript(fmSession: string, wid: string, name: string, extraEnv: NodeJS.ProcessEnv = {}): ChildProcess {
     const c = spawn('python3', ['-c', PTY_HELPER, VIEW_SCRIPT, fmSession, wid, name], {
-      env: { ...env, TERM: 'xterm-256color' }, stdio: ['pipe', 'ignore', 'ignore'],
+      env: { ...env, ...extraEnv, TERM: 'xterm-256color' }, stdio: ['pipe', 'ignore', 'ignore'],
     })
     clients.push(c)
     return c
@@ -91,7 +95,18 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     dir = mkdtempSync(join('/tmp', 'fmv-'))
     mkdirSync(join(dir, 'bin'))
     socket = `fmv-${process.pid}`
-    writeFileSync(join(dir, 'bin', 'tmux'), `#!/bin/sh\nexec '${REAL_TMUX}' -L '${socket}' -f /dev/null "$@"\n`)
+    callLog = join(dir, 'tmux-calls.log')
+    // Every call through the shim is logged (argv joined by \x1f, one call per line).
+    // FMV_HOLD stalls right after new-session so a test can hang up before the attach.
+    writeFileSync(join(dir, 'bin', 'tmux'), [
+      '#!/bin/sh',
+      `{ printf '%s\\037' "$@"; printf '\\n'; } >> '${callLog}'`,
+      'if [ "$1" = new-session ] && [ -n "${FMV_HOLD:-}" ]; then',
+      `  '${REAL_TMUX}' -L '${socket}' -f /dev/null "$@"; rc=$?; : > "$FMV_HOLD"; sleep 3; exit $rc`,
+      'fi',
+      `exec '${REAL_TMUX}' -L '${socket}' -f /dev/null "$@"`,
+      '',
+    ].join('\n'))
     chmodSync(join(dir, 'bin', 'tmux'), 0o755)
     env = { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, TMUX_TMPDIR: join(dir, 'tmp') }
     delete env.TMUX
@@ -204,8 +219,9 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(viewSessions().length).toBe(1)
   })
 
-  const fmLib = existsSync(FM_TMUX_LIB) ? it : it.skip
-  fmLib("the first mate's own tmux helpers give unchanged results while a view is attached", async () => {
+  if (!HAS_FM) console.warn(`SKIPPED M2 gate "${FM_GATE}": set FIRSTMATE_HOME to a first mate checkout (needs bin/backends/tmux.sh) to run it.`)
+  const fmLib = HAS_FM ? it : it.skip
+  fmLib(HAS_FM ? FM_GATE : `${FM_GATE} [SKIPPED: FIRSTMATE_HOME unset or missing bin/backends/tmux.sh]`, async () => {
     // A stand-in harness process whose name the first mate classifies as an agent.
     symlinkSync('/bin/sleep', join(dir, 'bin', 'claude'))
     const { wid, other } = fleet(`${join(dir, 'bin', 'claude')} 600`)
@@ -240,13 +256,43 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     killClient(c)
   })
 
-  it('bin/tinstar-fm-view only ever names tsview- targets for destructive tmux verbs', () => {
-    const src = readFileSync(VIEW_SCRIPT, 'utf8').split('\n').filter(l => !l.trim().startsWith('#')).join('\n')
-    expect(src).not.toMatch(/send-keys|kill-pane|respawn|kill-server|unlink-window/)
-    const kills = src.match(/kill-window[^\n]*/g) ?? []
-    expect(kills.length).toBe(1)
-    expect(kills[0]).toContain('=$view:=$placeholder')
-    // the only kill-session is the trap that removes the script's OWN view
-    expect(src.match(/kill-session[^\n]*/g) ?? []).toEqual(['kill-session -t "=$view" 2>/dev/null; exit 1\' HUP INT TERM'])
+  it('bin/tinstar-fm-view only ever aims destructive tmux verbs at =tsview- targets', async () => {
+    const { wid } = fleet()
+    writeFileSync(callLog, '')
+    // refused targets
+    for (const [s, w, n] of [['firstmate', '@999', 'fm-demo'], ['firstmate', wid, 'fm-wrong'], ['nope', wid, 'fm-demo'], ['tsview', wid, 'fm-demo']] as [string, string, string][]) {
+      const c = attachViaScript(s, w, n)
+      await sleep(150)
+      killClient(c)
+    }
+    // a normal attach, then a browser disconnect
+    const c = attachViaScript('firstmate', wid, 'fm-demo')
+    expect(await until(armed)).toBe(true)
+    killClient(c)
+    expect(await until(() => viewSessions().length === 0)).toBe(true)
+    // a hangup after the view session exists but before the attach
+    const hold = join(dir, 'held')
+    const h = attachViaScript('firstmate', wid, 'fm-demo', { FMV_HOLD: hold })
+    expect(await until(() => existsSync(hold))).toBe(true)
+    expect(viewSessions().length).toBe(1)
+    killClient(h)
+    expect(await until(() => viewSessions().length === 0)).toBe(true)
+    expect(windowIds('=firstmate')).toContain(wid)
+
+    const commands: string[][] = []
+    for (const line of readFileSync(callLog, 'utf8').split('\n').filter(Boolean)) {
+      let cur: string[] = []
+      for (const a of line.split('\x1f').slice(0, -1)) {
+        if (a === ';') { commands.push(cur); cur = [] } else cur.push(a)
+      }
+      commands.push(cur)
+    }
+    const destructive = commands.filter(cmd => DESTRUCTIVE.has(cmd[0]!))
+    expect(destructive.map(cmd => cmd[0])).toEqual(expect.arrayContaining(['kill-window', 'kill-session']))
+    for (const cmd of destructive) {
+      const t = cmd.indexOf('-t')
+      expect(t, cmd.join(' ')).toBeGreaterThan(0)
+      expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
+    }
   })
 })

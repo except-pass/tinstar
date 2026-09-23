@@ -51,7 +51,7 @@ describe('parseWindowRef', () => {
     expect(parseWindowRef('firstmate:fm-fix-login')).toEqual({ session: 'firstmate', windowName: 'fm-fix-login' })
   })
   it('rejects anything else, including view sessions', () => {
-    for (const t of [null, '', 'firstmate', 'a:b:c', 'x:$(id)', 'tsview-a:fm-x', ' a:b', 'a:b;c']) expect(parseWindowRef(t)).toBeNull()
+    for (const t of [null, '', 'firstmate', 'a:b:c', 'x:$(id)', 'tsview-a:fm-x', 't:fm-x', 'tsview:fm-x', ' a:b', 'a:b;c']) expect(parseWindowRef(t)).toBeNull()
   })
 })
 

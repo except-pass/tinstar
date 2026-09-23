@@ -43,7 +43,7 @@ export function parseWindowRef(target: string | null | undefined): WorkerWindowR
   const m = target.match(/^([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$/)
   if (!m) return null
   const [, session, windowName] = m as unknown as [string, string, string]
-  if (session.startsWith(VIEW_SESSION_PREFIX)) return null
+  if (session.startsWith(VIEW_SESSION_PREFIX) || VIEW_SESSION_PREFIX.startsWith(session)) return null
   return { session, windowName }
 }
 
