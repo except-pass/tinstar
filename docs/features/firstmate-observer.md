@@ -38,7 +38,7 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 | --- | --- |
 | `ledger-watcher.ts` | Byte-offset tail of `<home>/state/fleet-ledger.jsonl`: directory-level `fs.watch` plus a 3 s poll floor; only whole lines are delivered; a shrunk or replaced file signals a rebuild. |
 | `reducer.ts` | Pure fold of ledger records into one worker per task. Ignores unknown events/members, tolerates duplicates and a status that precedes its `dispatched`, refuses unsafe task ids. |
-| `meta.ts` | Interim join: reads `<home>/state/<task>.meta` for `worktree=` / `window=`. That format is the first mate's **undocumented internal** state, so it is best-effort — absent file, missing keys and unknown keys are all tolerated. |
+| `meta.ts` | Interim join: reads `<home>/state/<task>.meta` for `worktree=`, `window=` (for M2) and `project=` (fallback when the ledger names no project). That format is the first mate's **undocumented internal** state, so it is best-effort — absent file, missing keys and unknown keys are all tolerated. |
 | `observer.ts` | Projects workers onto docstore-only Runs, derives attention, handles dismiss. Started from `src/server/index.ts`. |
 
 The card is the bundled `firstmate` plugin (`src/plugins/firstmate/`): a widget registered as `firstmate-worker`, selected by `run.view`. It only renders `viewData.firstmate`, which the server owns and the card never writes back. Status text is verbatim from the first mate's `state/`, so it is rendered as plain text and only `https:` PR links are clickable.
