@@ -1,10 +1,9 @@
 // Interim task → endpoint join: read `<home>/state/<task>.meta`.
 //
 // The meta file is the first mate's INTERNAL, UNDOCUMENTED format (the documented
-// contract is the ledger). It is used only for `worktree=` (and `window=`, kept for
-// the M2 terminal view) and is treated as best-effort: absent file, unreadable
-// file, missing keys, unknown keys, and a missing `backend=` line (= tmux) are all
-// normal and never throw. Read-only — Tinstar never writes to a first mate home.
+// contract is the ledger). M1 reads `worktree=` and `window=` from it; `window=`
+// is consumed by the M2 terminal view. It is treated as best-effort: absent file,
+// unreadable file, missing keys and unknown keys are all normal and never throw. Read-only — Tinstar never writes to a first mate home.
 
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
@@ -16,8 +15,6 @@ export interface TaskMeta {
   worktree: string | null
   /** Project directory name derived from the meta's `project=` path. */
   project: string | null
-  /** `backend=` value; null (absent) means tmux. */
-  backend: string | null
 }
 
 const MAX_META_BYTES = 64 * 1024
@@ -37,7 +34,6 @@ export function parseMeta(text: string): TaskMeta {
     window: get('window'),
     worktree: get('worktree'),
     project: project ? basename(project) || null : null,
-    backend: get('backend'),
   }
 }
 

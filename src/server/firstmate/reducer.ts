@@ -100,10 +100,14 @@ export function reduceRecord(state: FleetState, record: Record<string, unknown>)
   let w = state.get(task)
 
   if (event === 'task.dispatched') {
-    // A dispatch that is newer than the one on record (or follows a cleanup) is a
+    // A dispatch that is newer than the one on record (or newer than a cleanup) is a
     // NEW worker reusing the task id: start over rather than inherit a dead one's
-    // decisions and PR. A replayed duplicate has an equal ts and just re-applies.
-    if (w && (w.cleanedUpAt !== null || (w.dispatchedAt !== null && ts > w.dispatchedAt))) w = undefined
+    // decisions and PR. A replayed duplicate has an equal ts and just re-applies; a
+    // replay at or before a cleanup belongs to the finished worker and is ignored.
+    if (w && w.cleanedUpAt !== null) {
+      if (ts <= w.cleanedUpAt) return null
+      w = undefined
+    } else if (w && w.dispatchedAt !== null && ts > w.dispatchedAt) w = undefined
     if (!w) { w = freshWorker(task, ts); state.set(task, w) }
     w.dispatchedAt = ts
     w.kind = str(record.kind) ?? w.kind

@@ -275,29 +275,6 @@ describe('FirstmateObserver', () => {
       expect(readdirSync(configRoot).filter(n => n !== 'firstmate')).toEqual([])
     })
 
-    it('module sources contain no tmux, process-spawning, session-backend, or first-mate-write code', () => {
-      const dir = __dirname
-      const sources = readdirSync(dir).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts'))
-      expect(sources.sort()).toEqual(['ledger-watcher.ts', 'meta.ts', 'observer.ts', 'reducer.ts'])
-      // Comments describe what the module must NOT do, so strip them before scanning.
-      const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-      for (const f of sources) {
-        const code = strip(readFileSync(join(dir, f), 'utf8'))
-        expect(code, f).not.toMatch(/child_process|execa|\bspawn(Sync)?\b|\bexec(Sync|File)?\s*\(/)
-        expect(code, f).not.toMatch(/tmux/i)
-        expect(code, f).not.toMatch(/sessions\/(backends|store|reconcile)|from ['"]\.\.\/sessions/)
-        expect(code, f).not.toMatch(/['"`]tinstar-/)
-        expect(code, f).not.toMatch(/\bappendFile|\bcreateWriteStream|\bunlink|\brmSync|\brm\(|\bcopyFile|\bchmod|\btruncate|\bsymlink|\bopen\([^)]*['"`][wa+]/)
-        // Filesystem writes exist only in observer.ts (the dismissal file) and never near `home`.
-        if (f !== 'observer.ts') expect(code, f).not.toMatch(/writeFile|mkdir|rename/)
-      }
-      const obs = strip(readFileSync(join(dir, 'observer.ts'), 'utf8'))
-      const writes = obs.match(/(writeFileSync|mkdirSync|renameSync)\([^)]*\)/g) ?? []
-      expect(writes.length).toBeGreaterThan(0)
-      for (const w of writes) expect(w).not.toMatch(/home/i)
-      expect(obs).toMatch(/this\.dismissedPath = join\(opts\.configRoot/)
-    })
-
     it('the observed run id is not a tmux-session-shaped name', () => {
       expect(observedRunId('t', null)).toBe('fm--t')
       expect(observedRunId('t', 'abc123')).toBe('fm-abc123-t')

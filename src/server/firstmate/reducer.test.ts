@@ -124,6 +124,11 @@ describe('fleet ledger reducer', () => {
     expect(w.lastStatus).toBeNull()
   })
 
+  it('a replayed dispatch at or before a cleanup does not revive the finished worker', () => {
+    const s = fold([dispatched('t', 1), j({ ts: 5, event: 'task.cleaned_up', task: 't' }), dispatched('t', 1), dispatched('t', 5)])
+    expect(s.get('t')).toMatchObject({ cleanedUpAt: 5, dispatchedAt: 1 })
+  })
+
   it('parseLedgerLine returns null for non-objects', () => {
     expect(parseLedgerLine('{"a":1}')).toEqual({ a: 1 })
     expect(parseLedgerLine('null')).toBeNull()

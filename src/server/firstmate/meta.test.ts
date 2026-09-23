@@ -9,17 +9,17 @@ describe('first mate task meta', () => {
   beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'fm-meta-')); mkdirSync(join(home, 'state')) })
   afterEach(() => rmSync(home, { recursive: true, force: true }))
 
-  it('parses window, worktree and project; absent backend means tmux (null)', () => {
+  it('parses window, worktree and project', () => {
     const m = parseMeta([
       'window=firstmate:fm-x', 'endpoint_task_id=x', 'worktree=/w/tree/1/tinstar',
       'project=/Users/me/repo/firstmate/projects/tinstar', 'harness=claude', 'unknown_future_key=zzz', 'garbage line',
     ].join('\n'))
-    expect(m).toEqual({ window: 'firstmate:fm-x', worktree: '/w/tree/1/tinstar', project: 'tinstar', backend: null })
+    expect(m).toEqual({ window: 'firstmate:fm-x', worktree: '/w/tree/1/tinstar', project: 'tinstar' })
   })
 
   it('tolerates empty and partial content', () => {
-    expect(parseMeta('')).toEqual({ window: null, worktree: null, project: null, backend: null })
-    expect(parseMeta('backend=herdr\nwindow=').backend).toBe('herdr')
+    expect(parseMeta('')).toEqual({ window: null, worktree: null, project: null })
+    expect(parseMeta('backend=herdr\nwindow=')).toEqual({ window: null, worktree: null, project: null })
   })
 
   it('returns null when the meta file is absent', async () => {

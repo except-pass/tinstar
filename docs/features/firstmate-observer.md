@@ -38,7 +38,7 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 | --- | --- |
 | `ledger-watcher.ts` | Byte-offset tail of `<home>/state/fleet-ledger.jsonl`: directory-level `fs.watch` plus a 3 s poll floor; only whole lines are delivered; a shrunk or replaced file signals a rebuild. |
 | `reducer.ts` | Pure fold of ledger records into one worker per task. Ignores unknown events/members, tolerates duplicates and a status that precedes its `dispatched`, refuses unsafe task ids. |
-| `meta.ts` | Interim join: reads `<home>/state/<task>.meta` for `worktree=` / `window=`. That format is the first mate's **undocumented internal** state, so it is best-effort — absent file, unknown keys and a missing `backend=` line are all tolerated. |
+| `meta.ts` | Interim join: reads `<home>/state/<task>.meta` for `worktree=` / `window=`. That format is the first mate's **undocumented internal** state, so it is best-effort — absent file, missing keys and unknown keys are all tolerated. |
 | `observer.ts` | Projects workers onto docstore-only Runs, derives attention, handles dismiss. Started from `src/server/index.ts`. |
 
 The card is the bundled `firstmate` plugin (`src/plugins/firstmate/`): a widget registered as `firstmate-worker`, selected by `run.view`. It only renders `viewData.firstmate`, which the server owns and the card never writes back. Status text is verbatim from the first mate's `state/`, so it is rendered as plain text and only `https:` PR links are clickable.
@@ -53,4 +53,4 @@ An observed worker must never be reachable by anything that manages Tinstar-owne
 - **Guards:** a task is skipped if a real Tinstar session with the same name exists, or if a non-observed run already holds the id.
 - **Tinstar never writes to the first mate home.** The modules only read; the one file Tinstar writes is the dismissal list under its own config root.
 
-`src/server/firstmate/observer.test.ts` proves this (no session store, no home changes, and a scan of the module sources for tmux / process-spawning / session-backend / home-write code). If a later milestone adds terminal views, they must live under their own `tsview-` tmux namespace and keep these tests green.
+`src/server/firstmate/observer.test.ts` proves this by running the observer against a real ledger and asserting that no session record or session store is created, the first mate home is unchanged, and nothing but `firstmate/` is written under the config root. If a later milestone adds terminal views, they must live under their own `tsview-` tmux namespace and keep these tests green.
