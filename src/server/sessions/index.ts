@@ -1,7 +1,7 @@
 export {
   loadConfig, loadSecrets, applyTokenOverride, validateSessionOverride, ensureDirs,
   loadActiveSpaceId, saveActiveSpaceId,
-  interactivePortWindow, portWindowsOverlap,
+  interactivePortWindow, firstmatePortWindow, portWindowsOverlap,
   type TinstarConfig, type PortWindow,
 } from './config'
 export {

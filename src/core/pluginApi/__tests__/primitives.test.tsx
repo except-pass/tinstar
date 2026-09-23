@@ -222,3 +222,27 @@ describe('api.primitives browser round-trip', () => {
     disposable.dispose()
   })
 })
+
+describe('api.primitives terminal at a run node (session-view)', () => {
+  it('connects the iframe to the run session the host injects, not the run viewData', () => {
+    // A session-view run's persisted data is only its viewData (no sessionId);
+    // renderNode hands the widget { ...viewData, sessionId: run.sessionId }.
+    mockState = {
+      constellationGraphs: [], pinSets: [], pluginWidgets: [],
+      runs: [{ id: 'fm--demo-task', sessionId: 'fm--demo-task', view: 'test-terminal', viewData: { firstmate: {} } }],
+    } as unknown as typeof mockState
+    const api = createPluginApi(makeRecord())
+    const disposable = api.primitives.registerTerminalWidget({ type: 'test-terminal' })
+    const RegisteredWidget = getWidgetComponent('test-terminal')!.component
+
+    const { container } = render(
+      <WidgetIdProvider id="run-fm--demo-task">
+        <RegisteredWidget data={{ firstmate: {}, sessionId: 'fm--demo-task' }} zoom={1}
+          isSelected={false} isDragging={false} isHovered={false} isDropTarget={false} />
+      </WidgetIdProvider>,
+    )
+
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/terminal-wrapper.html?session=fm--demo-task')
+    disposable.dispose()
+  })
+})

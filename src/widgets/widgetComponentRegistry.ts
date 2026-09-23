@@ -96,3 +96,14 @@ export function toWidgetType(nodeType: string): string {
   if (nodeType === 'run') return 'run-workspace'
   return nodeType
 }
+
+/**
+ * The registry type whose size/container rules govern a tree node's LAYOUT. A run
+ * whose `view` names a registered widget (a plugin's session-view, e.g. the first
+ * mate worker) is sized by that widget's own default/min size rather than the
+ * run-workspace's; everything else is exactly `toWidgetType`.
+ */
+export function layoutWidgetType(node: { type: string; view?: string }): string {
+  if (node.type === 'run' && node.view && getWidgetComponent(node.view)) return node.view
+  return toWidgetType(node.type)
+}

@@ -6,6 +6,6 @@
   "tinstar": {
     "apiVersion": "5",
     "displayName": "First mate",
-    "description": "Read-only cards for first mate workers, followed from the first mate's fleet ledger"
+    "description": "First mate workers followed from the fleet ledger: a live terminal on each worker's tmux window plus a read-only status card"
   }
 }

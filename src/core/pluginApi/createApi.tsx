@@ -432,10 +432,11 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     }
 
     function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
-      function TerminalBackedWidget(_props: WidgetProps) {
+      function TerminalBackedWidget(props: WidgetProps) {
         const [data] = api.widget.useData<{ sessionId?: string }>()
-        // For a session-view, data.sessionId is injected by renderNode from the run (run.sessionId).
-        const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
+        // For a session-view, useData() is only the run's viewData; renderNode injects
+        // the run's sessionId into the `data` prop instead.
+        const sessionId = data?.sessionId ?? (props.data as { sessionId?: string } | null)?.sessionId ?? opts.defaultSessionId ?? ''
         const frameRef = useRef<HTMLIFrameElement>(null)
         const handle: TerminalHandle = useMemo(
           () => makeTerminalHandle(sessionId, () => frameRef.current?.contentWindow?.focus()),

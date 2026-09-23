@@ -32,7 +32,7 @@ The one-shot whole-canvas action that projects current organizational scope into
 A documented capability — a `SKILL.md` with name/description frontmatter — installed into a harness's skills directory to teach an agent how to perform a Tinstar workflow. Skills are instructions only (no slash commands), and are symlinked or copied into any harness directory that has a skills folder.
 
 ### Observed run
-A docstore-only Run that Tinstar mirrors from an external supervisor rather than owning — today, a first mate worker followed from that home's fleet ledger. It has no session record, no tmux session and no ttyd, so no session lifecycle path (reconcile, stop, start, send-keys) can reach it; deleting its card only dismisses it. Rendered by the plugin widget named in `run.view` from server-written `viewData`.
+A docstore-only Run that Tinstar mirrors from an external supervisor rather than owning — today, a first mate worker followed from that home's fleet ledger. It has no session record and no `tinstar-*` tmux session, so no session lifecycle path (reconcile, stop, start, send-keys) can reach it; deleting its card only dismisses it. Its terminal is a private `tsview-*` tmux session that links (never owns) the worker's window, served by the observer's own ttyd — closing it can never kill the worker. Rendered by the plugin widget named in `run.view` from server-written `viewData`.
 *Avoid:* managed session (an observed run is the opposite: Tinstar does not spawn, track or steer it).
 
 ## Backend & events
