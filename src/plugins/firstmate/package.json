@@ -1,0 +1,11 @@
+{
+  "name": "firstmate",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "First mate",
+    "description": "Read-only cards for first mate workers, followed from the first mate's fleet ledger"
+  }
+}
