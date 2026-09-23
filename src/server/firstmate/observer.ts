@@ -172,6 +172,7 @@ export class FirstmateObserver {
   private dismissed: Record<string, number>
   private readonly onChange: (c: DocumentChange) => void
   private refreshTimer: ReturnType<typeof setInterval> | undefined
+  private refreshing = false
   private started = false
 
   constructor(private readonly opts: FirstmateObserverOpts) {
@@ -315,11 +316,11 @@ export class FirstmateObserver {
     this.upsert(entry, runId, w, meta, rediscover, terminal)
   }
 
-  /** True when the worker was dismissed, reset, or replaced while an await was pending. */
+  /** True when the worker was dismissed, reset, replaced, or cleaned up while an await was pending. */
   private stale(entry: HomeEntry, runId: string, task: string, w: WorkerState): boolean {
     const d = this.dismissed[runId]
     if (d !== undefined && !(w.dispatchedAt !== null && w.dispatchedAt > d)) return true
-    return entry.fleet.get(task) !== w
+    return entry.fleet.get(task) !== w || w.cleanedUpAt !== null
   }
 
   /** A view's ttyd exited on its own: re-project so the card drops (or re-creates) its terminal. */
@@ -332,13 +333,19 @@ export class FirstmateObserver {
 
   /** Re-verify every live card's terminal: the meta / window may have appeared or moved. */
   private async refreshTerminals(): Promise<void> {
-    for (const entry of this.entries) {
-      for (const task of [...entry.fleet.keys()]) {
-        if (!this.owned.has(observedRunId(task, entry.tag || null))) continue
-        try { await this.project(entry, task, false) } catch (err) {
-          log.warn('firstmate', `terminal refresh failed for ${task}: ${(err as Error).message}`)
+    if (this.refreshing) return
+    this.refreshing = true
+    try {
+      for (const entry of this.entries) {
+        for (const task of [...entry.fleet.keys()]) {
+          if (!this.owned.has(observedRunId(task, entry.tag || null))) continue
+          try { await this.project(entry, task, false) } catch (err) {
+            log.warn('firstmate', `terminal refresh failed for ${task}: ${(err as Error).message}`)
+          }
         }
       }
+    } finally {
+      this.refreshing = false
     }
   }
 

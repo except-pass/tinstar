@@ -4,6 +4,7 @@ import type {
   WidgetRegistration as PluginApiWidgetRegistration,
   Disposable,
 } from '@tinstar/plugin-api'
+import { resolveRunViewType } from '../domain/runView'
 
 export interface GroupWidgetData {
   node: {
@@ -104,6 +105,6 @@ export function toWidgetType(nodeType: string): string {
  * run-workspace's; everything else is exactly `toWidgetType`.
  */
 export function layoutWidgetType(node: { type: string; view?: string }): string {
-  if (node.type === 'run' && node.view && getWidgetComponent(node.view)) return node.view
+  if (node.type === 'run') return resolveRunViewType(node, t => !!getWidgetComponent(t))
   return toWidgetType(node.type)
 }

@@ -221,10 +221,17 @@ describe('FirstmateObserver', () => {
       started = false
       stopped = false
       noWindowFor = new Set<string>()
+      gate: Promise<void> | null = null
+      inFlight = 0
+      maxInFlight = 0
       async start() { this.started = true }
       stop() { this.stopped = true }
       async ensure(runId: string, task: string, target: string | null) {
         this.ensured.push([runId, task, target])
+        if (this.gate) {
+          this.maxInFlight = Math.max(this.maxInFlight, ++this.inFlight)
+          try { await this.gate } finally { this.inFlight-- }
+        }
         if (!target || this.noWindowFor.has(task)) return { state: 'unavailable' as const, reason: 'no window recorded yet' }
         if (!this.ports.has(runId)) this.ports.set(runId, 8781 + this.ports.size)
         return { state: 'live' as const, port: this.ports.get(runId)! }
@@ -277,6 +284,37 @@ describe('FirstmateObserver', () => {
       await waitFor(() => views.released.includes('fm--a'))
       store.deleteRun('fm--b') // the UI's delete
       expect(views.released).toContain('fm--b')
+    })
+
+    it('does not re-create a card whose worker was cleaned up while its terminal was being ensured', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      await make({ views, terminalRefreshMs: 20 }).start()
+      let open!: () => void
+      views.gate = new Promise(r => { open = r })
+      await waitFor(() => views.inFlight > 0)
+      appendFileSync(ledger(), j({ ts: 2, event: 'task.cleaned_up', task: 'a' }))
+      await waitFor(() => store.getRun('fm--a') === undefined)
+      let recreated = false
+      store.changes.on('change', (c: { id: string; data: Run | null }) => { if (c.id === 'fm--a' && c.data) recreated = true })
+      open()
+      await new Promise(r => setTimeout(r, 80))
+      expect(recreated).toBe(false)
+      expect(store.getRun('fm--a')).toBeUndefined()
+    })
+
+    it('never overlaps terminal refresh passes while one is still waiting on a view', async () => {
+      writeFileSync(join(home, 'state', 'a.meta'), 'window=firstmate:fm-a\n')
+      writeFileSync(ledger(), dispatched('a', 1))
+      const views = new FakeViews()
+      await make({ views, terminalRefreshMs: 10 }).start()
+      let open!: () => void
+      views.gate = new Promise(r => { open = r })
+      await waitFor(() => views.inFlight > 0)
+      await new Promise(r => setTimeout(r, 100))
+      expect(views.maxInFlight).toBe(1)
+      open()
     })
 
     it('stops the views with the observer', async () => {
