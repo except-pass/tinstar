@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, OrganizationalScope, Run, TreeNode } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
+import { pruneCanvasRuns } from '../domain/canvasVisibility'
 import { buildScopeTree, flattenUnscopedForCanvas, normalizedScope } from '../domain/scopeTree'
 import { RunRepository } from '../domain/repositories'
 import { useBackendState } from '../hooks/useBackendState'
@@ -415,25 +416,10 @@ function WorkspaceShellInner() {
   // still shows them (dimmed) so the user can re-show them. Until plugins boot, also
   // hold back runs with a plugin `view`: their widget isn't registered yet, so a
   // cold-load default layout would size them as a run-workspace and persist that.
-  const visibleCanvasTree = useMemo(() => {
-    const canvasRoots = flattenUnscopedForCanvas(canvasTree)
-    if (hiddenRunIds.size === 0 && pluginsBooted) return canvasRoots
-    const prune = (nodes: TreeNode[]): TreeNode[] => {
-      const out: TreeNode[] = []
-      for (const node of nodes) {
-        if (node.type === 'run' && (hiddenRunIds.has(node.entityId) || (!pluginsBooted && node.view))) continue
-        if (node.children.length === 0) {
-          out.push(node)
-          continue
-        }
-        const children = prune(node.children)
-        if (children === node.children) out.push(node)
-        else out.push({ ...node, children })
-      }
-      return out
-    }
-    return prune(canvasRoots)
-  }, [canvasTree, hiddenRunIds, pluginsBooted])
+  const visibleCanvasTree = useMemo(
+    () => pruneCanvasRuns(flattenUnscopedForCanvas(canvasTree), { hiddenRunIds, pluginsBooted }),
+    [canvasTree, hiddenRunIds, pluginsBooted],
+  )
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
