@@ -13,6 +13,8 @@ import modelAttributionPkg from '../../plugins/model-attribution/package.json'
 import * as modelAttribution from '../../plugins/model-attribution/src/index'
 import graveyardPkg from '../../plugins/graveyard/package.json'
 import * as graveyard from '../../plugins/graveyard/src/index'
+import firstmatePkg from '../../plugins/firstmate/package.json'
+import * as firstmate from '../../plugins/firstmate/src/index'
 import roundupPkg from '../../plugins/roundup/package.json'
 import * as roundup from '../../plugins/roundup/src/index'
 
@@ -38,4 +40,5 @@ export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
   'model-attribution': { pkg: modelAttributionPkg, module: modelAttribution as Plugin },
   graveyard: { pkg: graveyardPkg, module: graveyard as Plugin },
   roundup: { pkg: roundupPkg, module: roundup as Plugin },
+  firstmate: { pkg: firstmatePkg, module: firstmate as Plugin },
 }

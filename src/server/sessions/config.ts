@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { getConfigRoot } from '../configRoot'
 import { log } from '../logger'
@@ -141,6 +141,15 @@ export interface TinstarConfig {
     /** Master switch for the per-session OAuth token override. False ⇒ any token
      *  override is rejected at launch (the auth-sensitive default). */
     allowTokenOverride: boolean
+  }
+  /**
+   * First mate observer (docs/features/firstmate-observer.md). Each entry is a
+   * first mate home whose opt-in fleet ledger (`<home>/state/fleet-ledger.jsonl`)
+   * Tinstar follows to show one read-only card per worker. Empty (the default)
+   * ⇒ the observer never starts. Tinstar only ever READS these directories.
+   */
+  firstmate: {
+    homes: string[]
   }
   /**
    * The Slate's code-spawned surface authors. When a surface carries a self-contained
@@ -385,6 +394,9 @@ export const BASE_CONFIG = {
     allowedModels: [] as string[],
     allowTokenOverride: false,
   },
+  firstmate: {
+    homes: [] as string[],
+  },
   slate: {
     author: {
       enabled: true,
@@ -532,6 +544,13 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       allowTokenOverride: typeof (userConfig.switchboard as Record<string, unknown>)?.allowTokenOverride === 'boolean'
         ? (userConfig.switchboard as Record<string, boolean>).allowTokenOverride!
         : merged.switchboard.allowTokenOverride,
+    },
+    // Picked so only absolute, string paths survive a hand-edited config.json.
+    firstmate: {
+      homes: Array.isArray((userConfig.firstmate as Record<string, unknown> | undefined)?.homes)
+        ? ((userConfig.firstmate as { homes: unknown[] }).homes)
+            .filter((h): h is string => typeof h === 'string' && isAbsolute(h))
+        : [],
     },
     // deepMerge already folded any user `slate.author` overrides into merged.slate.
     slate: merged.slate,

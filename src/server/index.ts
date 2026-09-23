@@ -54,6 +54,7 @@ import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
+import { FirstmateObserver } from './firstmate/observer'
 import { SurfaceService } from './surfaces/surface-service'
 import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
 import { SurfaceComposeCoordinator } from './surfaces/surface-compose-coordinator'
@@ -815,6 +816,7 @@ export function initBackend(): RouteContext {
     markBackendContextReady = resolve
   })
   let slateWatcher: SlateWatcher | undefined
+  let firstmateObserver: FirstmateObserver | undefined
   let refreshCoordinator: SurfaceRefreshCoordinator | undefined
   let composeCoordinator: SurfaceComposeCoordinator | undefined
   let natsBackendCleanup: Promise<void> | null = null
@@ -835,6 +837,7 @@ export function initBackend(): RouteContext {
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
+      try { firstmateObserver?.stop() } catch (e) { log.debug('shutdown', `firstmateObserver: ${(e as Error).message}`) }
       try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
       try { await stopAllMessageRouters() } catch (e) { log.debug('shutdown', `messageRouter: ${(e as Error).message}`) }
       try { await stopDeliveryRetryScheduler() } catch (e) { log.debug('shutdown', `deliveryRetry: ${(e as Error).message}`) }
@@ -1631,6 +1634,19 @@ export function initBackend(): RouteContext {
           if (result.failed.length) log.info('slate-author', `restart failed ${result.failed.length} interrupted compose attempt(s)`)
         })
         .catch(err => log.warn('slate-author', `restart recovery failed: ${(err as Error).message}`))
+      // First mate observer (M1 cards): read-only ledger follower that mirrors first
+      // mate workers as docstore-only runs. Opt-in via config `firstmate.homes`, and
+      // never under the simulator's mock data.
+      if (!fastSim && cfg.firstmate.homes.length > 0) {
+        firstmateObserver = new FirstmateObserver({
+          homes: cfg.firstmate.homes,
+          docStore,
+          configRoot: getConfigRoot(),
+          hasSession: name => !!getSession(cfg.dirs.sessions, name),
+        })
+        void firstmateObserver.start()
+          .catch(err => log.warn('firstmate', `observer failed to start: ${(err as Error).message}`))
+      }
       setInterval(() => {
         void composeCoordinator?.sweep()
           .catch(err => log.warn('slate-author', `deadline sweep failed: ${(err as Error).message}`))
