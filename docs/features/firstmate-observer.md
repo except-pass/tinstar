@@ -43,6 +43,10 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 
 The card is the bundled `firstmate` plugin (`src/plugins/firstmate/`): a widget registered as `firstmate-worker`, selected by `run.view`. It only renders `viewData.firstmate`, which the server owns and the card never writes back. Status text is verbatim from the first mate's `state/`, so it is rendered as plain text and only `https:` PR links are clickable.
 
+## Conversation link (status light and timeline)
+
+`transcript-link.ts` links each worker to its Claude Code conversation so the card gets a running/idle light, recap entries, and the timeline. The first mate records no conversation id, so the link is a heuristic: among top-level `*.jsonl` in the worktree's Claude project dir, take the most recently appended one whose first user/assistant record has `cwd == worktree`, `isSidechain == false`, a non-`sdk*` `entrypoint`, and a timestamp at least 120 s before the spawn time (meta `spawn_gen`, else the ledger dispatch ts). A wrong link can only mislabel one card; nothing acts on it. The card shows the conversation id, and `PUT /api/firstmate/runs/:id/conversation` (`{conversationId}`; `null` clears) sets a manual override, stored in `<configRoot>/firstmate/conversation-overrides.json`. `GET /api/sessions/:name/timeline` falls back to the observer's linked transcript when no session record exists; the status watcher's no-orphan-adoption rule is untouched. Transcripts are only read.
+
 ## Invariant: observed workers are not Tinstar sessions
 
 An observed worker must never be reachable by anything that manages Tinstar-owned sessions:

@@ -31,6 +31,10 @@ import { log } from '../logger'
 import { LedgerWatcher, type LedgerBatch } from './ledger-watcher'
 import { readTaskMeta, type TaskMeta } from './meta'
 import {
+  findLinkedTranscript, isValidConversationId, type LinkedTranscript,
+} from './transcript-link'
+import { parseNewEntriesAt, readSessionStatusDetailAt, resetOffset } from '../sessions/transcript-parser'
+import {
   reduceLines, runStatusFor, type FleetState, type WorkerState,
 } from './reducer'
 
@@ -43,6 +47,7 @@ export interface ObserverDocStore {
   getRun(id: string): Run | undefined
   getAllRuns(): Run[]
   deleteRun(id: string): void
+  addRecapEntry?(runId: string, entry: import('../../domain/types').RecapEntry): void
   readonly changes: EventEmitter
   activeSpaceId: string
 }
@@ -56,12 +61,17 @@ export interface FirstmateObserverOpts {
   hasSession: (name: string) => boolean
   readMeta?: (home: string, task: string) => Promise<TaskMeta | null>
   pollMs?: number
+  /** How often linked transcripts are re-read for the status light. 0 disables. */
+  transcriptPollMs?: number
+  /** Test seam for the Claude project directory of a worktree. */
+  projectDirFor?: (worktree: string) => string | undefined
   now?: () => number
 }
 
 /** What the card renders. Server-authored; the card must never write it back. */
 export interface FirstmateCardData {
   source: 'fleet-ledger'
+  runId: string
   home: string
   task: string
   kind: string | null
@@ -76,6 +86,19 @@ export interface FirstmateCardData {
   merged: { via: string; pr: string | null } | null
   worktree: string | null
   dispatchedAt: number | null
+  /** The Claude conversation linked to this worker (display only); null until found. */
+  conversationId: string | null
+  conversationSource: 'auto' | 'manual' | null
+  /** From the linked transcript: whether the worker's claude is mid-turn. */
+  activity: 'running' | 'idle' | null
+}
+
+/** What a route needs to read a linked worker's transcript. */
+export interface ObservedTranscript {
+  name: string
+  conversationId: string
+  path: string
+  createdSec: number
 }
 
 interface HomeEntry {
@@ -112,6 +135,12 @@ export class FirstmateObserver {
   private readonly readMeta: (home: string, task: string) => Promise<TaskMeta | null>
   private readonly now: () => number
   private readonly dismissedPath: string
+  private readonly overridesPath: string
+  /** run id → manually chosen conversation id. */
+  private overrides: Record<string, string>
+  /** run id → current link (auto or manual). */
+  private readonly links = new Map<string, LinkedTranscript>()
+  private transcriptTimer: ReturnType<typeof setInterval> | null = null
   /** run id → owning home + task, for runs this process created. */
   private readonly owned = new Map<string, { home: string; task: string }>()
   /** Ids the observer is deleting itself, so they are not mistaken for a dismissal. */
@@ -126,6 +155,8 @@ export class FirstmateObserver {
     this.now = opts.now ?? (() => Math.floor(Date.now() / 1000))
     this.dismissedPath = join(opts.configRoot, 'firstmate', 'dismissed.json')
     this.dismissed = this.loadDismissed()
+    this.overridesPath = join(opts.configRoot, 'firstmate', 'conversation-overrides.json')
+    this.overrides = this.loadStringMap(this.overridesPath)
     const homes = [...new Set(opts.homes.map(h => resolve(h)))]
     const multi = homes.length > 1
     this.entries = homes.map(home => ({
@@ -150,11 +181,18 @@ export class FirstmateObserver {
     await Promise.all(this.entries.map(e => e.watcher.pollOnce()))
     this.pruneStale()
     for (const e of this.entries) e.watcher.start()
+    const every = this.opts.transcriptPollMs ?? 5000
+    if (every > 0) {
+      this.transcriptTimer = setInterval(() => void this.refreshTranscripts(), every)
+      this.transcriptTimer.unref?.()
+    }
   }
 
   stop(): void {
     this.opts.docStore.changes.off('change', this.onChange)
     for (const e of this.entries) e.watcher.stop()
+    if (this.transcriptTimer) clearInterval(this.transcriptTimer)
+    this.transcriptTimer = null
     this.started = false
   }
 
@@ -211,8 +249,12 @@ export class FirstmateObserver {
     const { docStore } = this.opts
     const existing = docStore.getRun(runId)
     const project = w.project ?? meta?.project ?? null
+    const worktree = meta?.worktree ?? null
+    const link = this.linkFor(runId, worktree, meta?.spawnGen ?? w.dispatchedAt)
+    const activity = link ? readSessionStatusDetailAt(link.path)?.state ?? null : null
     const card: FirstmateCardData = {
       source: 'fleet-ledger',
+      runId,
       home: entry.home,
       task: w.task,
       kind: w.kind,
@@ -225,8 +267,11 @@ export class FirstmateObserver {
       decisions: Object.values(w.openDecisions).sort((a, b) => a.ts - b.ts),
       pr: w.pr,
       merged: w.merged ? { via: w.merged.via, pr: w.merged.pr } : null,
-      worktree: meta?.worktree ?? null,
+      worktree,
       dispatchedAt: w.dispatchedAt,
+      conversationId: link?.conversationId ?? null,
+      conversationSource: link?.source ?? null,
+      activity,
     }
     const viewData = { firstmate: card }
     // Reuse the previous object when nothing changed: runShallowEqual compares
@@ -266,10 +311,82 @@ export class FirstmateObserver {
     // compares scope by its string members.
     this.owned.set(runId, { home: entry.home, task: w.task })
     docStore.upsertRun(runId, run)
+    if (link) this.feedRecap(runId, link, activity)
+  }
+
+  /** Resolve (and remember) the worker's conversation. A changed link restarts the
+   *  recap parser so the new conversation is read from its beginning. */
+  private linkFor(runId: string, worktree: string | null, spawnSec: number | null): LinkedTranscript | null {
+    let link: LinkedTranscript | null = null
+    if (worktree) {
+      try {
+        link = findLinkedTranscript({
+          worktree, spawnSec, override: this.overrides[runId] ?? null,
+          projectDir: this.opts.projectDirFor?.(worktree),
+        })
+      } catch (err) {
+        log.debug('firstmate', `transcript link failed for ${runId}: ${(err as Error).message}`)
+      }
+    }
+    const prev = this.links.get(runId)
+    if (prev && prev.path !== link?.path) resetOffset(runId)
+    if (link) this.links.set(runId, link)
+    else this.links.delete(runId)
+    return link
+  }
+
+  private feedRecap(runId: string, link: LinkedTranscript, activity: 'running' | 'idle' | null): void {
+    const { docStore } = this.opts
+    if (!docStore.addRecapEntry) return
+    try {
+      for (const entry of parseNewEntriesAt(runId, link.path, activity ?? 'idle')) docStore.addRecapEntry(runId, entry)
+    } catch (err) {
+      log.debug('firstmate', `recap parse failed for ${runId}: ${(err as Error).message}`)
+    }
+  }
+
+  /** Re-project every live worker so transcript activity shows without a ledger line. */
+  private async refreshTranscripts(): Promise<void> {
+    for (const entry of this.entries) {
+      for (const task of [...entry.fleet.keys()]) {
+        try { await this.project(entry, task) } catch (err) {
+          log.debug('firstmate', `refresh failed for ${task}: ${(err as Error).message}`)
+        }
+      }
+    }
+  }
+
+  /** The transcript behind a card, for the timeline route. Null when not observed
+   *  or not linked yet. */
+  resolveTranscript(runId: string): ObservedTranscript | null {
+    const link = this.links.get(runId)
+    const run = this.opts.docStore.getRun(runId)
+    if (!link || !run || !this.owned.has(runId)) return null
+    return {
+      name: runId,
+      conversationId: link.conversationId,
+      path: link.path,
+      createdSec: Date.parse(run.createdAt) / 1000,
+    }
+  }
+
+  /** Point a card at a specific conversation id (or clear with null → back to the
+   *  heuristic). Display-only; returns false for an unknown card or a malformed id. */
+  async setConversationOverride(runId: string, conversationId: string | null): Promise<boolean> {
+    const owner = this.owned.get(runId)
+    if (!owner) return false
+    if (conversationId !== null && !isValidConversationId(conversationId)) return false
+    if (conversationId === null) delete this.overrides[runId]
+    else this.overrides[runId] = conversationId
+    this.saveStringMap(this.overridesPath, this.overrides)
+    const entry = this.entryFor(owner.home)
+    if (entry) await this.project(entry, owner.task)
+    return true
   }
 
   private removeRun(runId: string): void {
     this.owned.delete(runId)
+    if (this.links.delete(runId)) resetOffset(runId)
     if (!this.opts.docStore.getRun(runId)) return
     this.selfDeleting.add(runId)
     try { this.opts.docStore.deleteRun(runId) } finally { this.selfDeleting.delete(runId) }
@@ -295,6 +412,29 @@ export class FirstmateObserver {
   private forgetDismissal(runId: string): void {
     delete this.dismissed[runId]
     this.saveDismissed()
+  }
+
+  private loadStringMap(path: string): Record<string, string> {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') out[k] = v
+      return out
+    } catch {
+      return {}
+    }
+  }
+
+  private saveStringMap(path: string, map: Record<string, string>): void {
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      const tmp = `${path}.tmp`
+      writeFileSync(tmp, JSON.stringify(map))
+      renameSync(tmp, path)
+    } catch (err) {
+      log.warn('firstmate', `could not persist ${path}: ${(err as Error).message}`)
+    }
   }
 
   private loadDismissed(): Record<string, number> {

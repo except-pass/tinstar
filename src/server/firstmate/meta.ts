@@ -15,6 +15,8 @@ export interface TaskMeta {
   worktree: string | null
   /** Project directory name derived from the meta's `project=` path. */
   project: string | null
+  /** Unix seconds of the last (re)spawn, from `spawn_gen=s<epoch>`; null when absent. */
+  spawnGen: number | null
 }
 
 const MAX_META_BYTES = 64 * 1024
@@ -30,10 +32,12 @@ export function parseMeta(text: string): TaskMeta {
   }
   const get = (k: string) => kv.get(k) || null
   const project = get('project')
+  const gen = /^s?(\d{9,12})$/.exec(get('spawn_gen') ?? '')
   return {
     window: get('window'),
     worktree: get('worktree'),
     project: project ? basename(project) || null : null,
+    spawnGen: gen ? Number(gen[1]) : null,
   }
 }
 

@@ -3,6 +3,7 @@
 // overwritten by the next ledger line anyway). Every string here comes verbatim from
 // the first mate's status log, so it is rendered as plain text only — never as HTML
 // or markdown — and links are limited to https URLs.
+import { useState } from 'react'
 import type { WidgetProps } from '@tinstar/plugin-api'
 
 interface Decision { key: string; state: string; text: string; ts: number }
@@ -22,6 +23,11 @@ export interface FirstmateCardData {
   pr: string | null
   merged: { via: string; pr: string | null } | null
   worktree: string | null
+  runId?: string
+  /** The linked Claude conversation (display only; a heuristic link can be wrong). */
+  conversationId?: string | null
+  conversationSource?: 'auto' | 'manual' | null
+  activity?: 'running' | 'idle' | null
 }
 
 interface CardProps { firstmate?: FirstmateCardData }
@@ -65,7 +71,56 @@ function Field({ label, value }: { label: string; value: string | null }) {
   )
 }
 
-export function FirstmateCard({ data }: WidgetProps) {
+/** Sends a manual conversation override (null clears it); wired by the plugin entry. */
+export type SetConversation = (runId: string, conversationId: string | null) => Promise<boolean>
+
+function ActivityLight({ activity }: { activity: 'running' | 'idle' | null | undefined }) {
+  const tone = activity === 'running' ? 'bg-emerald-400 animate-pulse' : activity === 'idle' ? 'bg-amber-400' : 'bg-slate-600'
+  const label = activity === 'running' ? 'running' : activity === 'idle' ? 'idle' : 'no conversation linked'
+  return <span data-testid="firstmate-activity" data-activity={activity ?? 'none'} title={label} aria-label={label} className={`inline-block h-2 w-2 shrink-0 rounded-full ${tone}`} />
+}
+
+function ConversationRow({ fm, setConversation }: { fm: FirstmateCardData; setConversation?: SetConversation }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState(false)
+  const save = async (value: string | null) => {
+    if (!fm.runId || !setConversation) return
+    const ok = await setConversation(fm.runId, value)
+    setError(!ok)
+    if (ok) setEditing(false)
+  }
+  return (
+    <div data-testid="firstmate-conversation" className="text-xs">
+      <span className="text-[10px] uppercase tracking-wider text-slate-400/70">Conversation </span>
+      <span className="break-all font-mono" title="Matched heuristically from the worktree's Claude transcripts">
+        {fm.conversationId ?? '—'}
+      </span>
+      {fm.conversationSource === 'manual' && <span className="ml-1 text-slate-400">(manual)</span>}
+      {setConversation && fm.runId && !editing && (
+        <button type="button" className="ml-2 text-sky-300 underline" onClick={() => { setDraft(''); setError(false); setEditing(true) }}>
+          override
+        </button>
+      )}
+      {editing && (
+        <span className="ml-2 inline-flex gap-1">
+          <input
+            aria-label="conversation id" value={draft} onChange={e => setDraft(e.target.value)}
+            className="w-56 rounded border border-slate-600 bg-slate-800 px-1 font-mono text-[11px]" placeholder="conversation id"
+          />
+          <button type="button" className="text-sky-300 underline" onClick={() => void save(draft.trim())}>set</button>
+          {fm.conversationSource === 'manual' && (
+            <button type="button" className="text-sky-300 underline" onClick={() => void save(null)}>auto</button>
+          )}
+          <button type="button" className="text-slate-400 underline" onClick={() => setEditing(false)}>cancel</button>
+        </span>
+      )}
+      {error && <span className="ml-2 text-red-300">not found</span>}
+    </div>
+  )
+}
+
+export function FirstmateCard({ data, setConversation }: WidgetProps & { setConversation?: SetConversation }) {
   const fm = (data as CardProps | undefined)?.firstmate
   if (!fm) {
     return <div className="p-3 text-xs text-slate-400" data-testid="firstmate-card-empty">No first mate data</div>
@@ -75,6 +130,7 @@ export function FirstmateCard({ data }: WidgetProps) {
     <div data-testid="firstmate-card" className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100">
       <div className="widget-drag-handle flex items-center gap-2 border-b border-slate-700 bg-slate-800 px-3 py-2">
         <span className="truncate text-sm font-semibold" title={fm.task}>{fm.task}</span>
+        <ActivityLight activity={fm.activity} />
         <span className={`ml-auto shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold ${statusTone(fm.status)}`}>
           {fm.merged ? 'merged' : orDash(fm.status)}
         </span>
@@ -90,6 +146,7 @@ export function FirstmateCard({ data }: WidgetProps) {
           <div className="text-[10px] uppercase tracking-wider text-slate-400/70">Latest status</div>
           <div data-testid="firstmate-status" className="whitespace-pre-wrap break-words text-xs">{orDash(fm.statusText)}</div>
         </div>
+        <ConversationRow fm={fm} setConversation={setConversation} />
         {fm.decisions.length > 0 && (
           <div data-testid="firstmate-decisions">
             <div className="text-[10px] uppercase tracking-wider text-red-300/80">

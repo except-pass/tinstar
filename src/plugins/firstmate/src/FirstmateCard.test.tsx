@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { WidgetProps } from '@tinstar/plugin-api'
 import { FirstmateCard, safePrUrl } from './FirstmateCard'
 
@@ -56,5 +56,26 @@ describe('FirstmateCard', () => {
   it('degrades when the run carries no firstmate data', () => {
     render(<FirstmateCard {...props(undefined)} />)
     expect(screen.getByTestId('firstmate-card-empty')).toBeTruthy()
+  })
+
+  it('shows the running/idle light and the linked conversation id', () => {
+    render(<FirstmateCard {...props({ ...base, runId: 'fm--fix-login', conversationId: 'abc12345-conv', conversationSource: 'auto', activity: 'running' })} />)
+    expect(screen.getByTestId('firstmate-activity').getAttribute('data-activity')).toBe('running')
+    expect(screen.getByTestId('firstmate-conversation').textContent).toContain('abc12345-conv')
+  })
+
+  it('shows a neutral light when no conversation is linked', () => {
+    render(<FirstmateCard {...props(base)} />)
+    expect(screen.getByTestId('firstmate-activity').getAttribute('data-activity')).toBe('none')
+  })
+
+  it('submits a manual conversation override', async () => {
+    const calls: Array<[string, string | null]> = []
+    const set = async (id: string, conv: string | null) => { calls.push([id, conv]); return true }
+    render(<FirstmateCard {...props({ ...base, runId: 'fm--fix-login', conversationId: null, conversationSource: null, activity: null })} setConversation={set} />)
+    fireEvent.click(screen.getByText('override'))
+    fireEvent.change(screen.getByLabelText('conversation id'), { target: { value: ' conv-1234567 ' } })
+    fireEvent.click(screen.getByText('set'))
+    await waitFor(() => expect(calls).toEqual([['fm--fix-login', 'conv-1234567']]))
   })
 })

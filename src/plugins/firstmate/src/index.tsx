@@ -8,14 +8,27 @@
 // sense for a run the observer created.
 import type { ComponentType } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
-import { FirstmateCard } from './FirstmateCard'
+import { FirstmateCard, type SetConversation } from './FirstmateCard'
 
 export function activate(api: TinstarPluginAPI) {
   api.logger.info('firstmate plugin activating')
+  const setConversation: SetConversation = async (runId, conversationId) => {
+    try {
+      const res = await api.http.fetch(`/api/firstmate/runs/${encodeURIComponent(runId)}/conversation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+  const Card: ComponentType<WidgetProps> = props => <FirstmateCard {...props} setConversation={setConversation} />
   return [
     api.widgets.register({
       type: 'firstmate-worker',
-      component: FirstmateCard as ComponentType<WidgetProps>,
+      component: Card,
       isContainer: false,
       defaultSize: { width: 420, height: 320 },
       minSize: { width: 300, height: 200 },

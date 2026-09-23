@@ -10,6 +10,8 @@ import { DEFAULT_WINDOW_SEC, __resetTimelineCache } from '../../sessions/timelin
 
 const FIXTURE_SPACE_ID = 'spc-test-fixture'
 
+let observedTranscript: { name: string; conversationId: string; path: string; createdSec: number } | null = null
+
 function makeCtx(root: string): RouteContext {
   const cfg = {
     sessions: { prefix: 'tinstar' },
@@ -34,7 +36,10 @@ function makeCtx(root: string): RouteContext {
     name: 'Test Space',
     createdAt: new Date().toISOString(),
   })
-  return { sessionConfig: cfg, docStore } as unknown as RouteContext
+  return {
+    sessionConfig: cfg, docStore,
+    firstmateObserver: { resolveTranscript: (id: string) => (observedTranscript?.name === id ? observedTranscript : null) },
+  } as unknown as RouteContext
 }
 
 interface TestCtx {
@@ -116,6 +121,17 @@ afterEach(async () => {
 describe('GET /api/sessions/:name/timeline', () => {
   it('404s an unknown session', async () => {
     expect((await t.fetch('/api/sessions/nope/timeline')).status).toBe(404)
+  })
+
+  it('serves an observed first mate run from its linked transcript (no session record)', async () => {
+    const path = join(root, '.claude', 'projects', join(root, 'work').replace(/\//g, '-'), 'tl-fixture-conv.jsonl')
+    observedTranscript = { name: 'fm--t1', conversationId: 'tl-fixture-conv', path, createdSec: 0 }
+    try {
+      const body = await (await t.fetch('/api/sessions/fm--t1/timeline')).json()
+      expect(body.ok).toBe(true)
+      expect(body.data.bands.length).toBeGreaterThan(0)
+      expect((await t.fetch('/api/sessions/fm--other/timeline')).status).toBe(404)
+    } finally { observedTranscript = null }
   })
 
   it('returns bands that tile the span', async () => {
