@@ -32,6 +32,7 @@ case "$window_id" in @[0-9]*) ;; *) die "tinstar-fm-view: bad window id" ;; esac
 case "$fm_session" in ''|*[!A-Za-z0-9._-]*) die "tinstar-fm-view: bad session name" ;; esac
 case "$window_name" in ''|*[!A-Za-z0-9._-]*) die "tinstar-fm-view: bad window name" ;; esac
 case "$fm_session" in tsview-*) die "tinstar-fm-view: refusing to view a view" ;; esac
+# shellcheck disable=SC2194  # intentional: is "tsview-" prefixed by $fm_session?
 case tsview- in "$fm_session"*) die "tinstar-fm-view: session name would prefix-match view names" ;; esac
 
 # The window must still be one of the first mate session's windows, under the

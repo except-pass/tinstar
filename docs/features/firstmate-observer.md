@@ -62,7 +62,7 @@ The card is the bundled `firstmate` plugin (`src/plugins/firstmate/`): a widget 
 
 An observed worker must never be reachable by anything that manages Tinstar-owned sessions:
 
-- **No session record** is created under `~/.config/tinstar/sessions/`. Reconcile, the status watcher, `/stop`, `/start`, `/spawn`, `/send-keys` and friends are all keyed on session records, so they cannot find these Runs. The Run has `backend: null`, no ttyd `port`, and an `fm-…` id.
+- **No session record** is created under `~/.config/tinstar/sessions/`. Reconcile, the status watcher, `/stop`, `/start`, `/spawn`, `/send-keys` and friends are all keyed on session records, so they cannot find these Runs. The Run has `backend: null` and an `fm-…` id; its `port`, when set, is only its view ttyd's (see below).
 - **No `tinstar-*` tmux name, and no worker window, is ever created or addressed destructively.** The only tmux objects Tinstar makes are the private `tsview-*` view sessions described above; `Run.port` is a view ttyd's port, never a Tinstar session's.
 - **Deleting a card** takes the docstore-only branch of `DELETE /api/sessions/:name`, which removes the projection and never reaches a backend.
 - **Guards:** a task is skipped if a real Tinstar session with the same name exists, or if a non-observed run already holds the id.
