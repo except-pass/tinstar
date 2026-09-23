@@ -383,18 +383,23 @@ export class FirstmateObserver {
     }
   }
 
-  /** Re-project every unfinished worker so transcript activity shows without a
+  /** Re-project every unfinished (or still-running) worker so transcript activity shows without a
    *  ledger line. Linked workers rescan their project dir only every RELINK_TICKS. */
   private async refreshTranscripts(): Promise<void> {
     const rediscover = ++this.refreshTick % RELINK_TICKS === 0
     for (const entry of this.entries) {
       for (const [task, w] of [...entry.fleet]) {
-        if (w.merged || w.lastStatus?.state === 'done') continue
+        if ((w.merged || w.lastStatus?.state === 'done') && this.lastActivity(entry, task) !== 'running') continue
         try { await this.project(entry, task, rediscover) } catch (err) {
           log.debug('firstmate', `refresh failed for ${task}: ${(err as Error).message}`)
         }
       }
     }
+  }
+
+  private lastActivity(entry: HomeEntry, task: string): FirstmateCardData['activity'] {
+    const run = this.opts.docStore.getRun(observedRunId(task, entry.tag || null))
+    return (run?.viewData as { firstmate?: FirstmateCardData } | undefined)?.firstmate?.activity ?? null
   }
 
   /** The transcript behind a card, for the timeline route. Null when not observed

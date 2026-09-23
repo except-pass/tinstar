@@ -321,6 +321,16 @@ describe('FirstmateObserver', () => {
       expect(store.getRun('fm--t1')!.recapEntries.length).toBeGreaterThan(0)
     })
 
+    it('keeps polling a done worker until its light settles to idle', async () => {
+      writeConv(CONV, [assistant('', true)])
+      writeFileSync(ledger(), dispatched('t1', 1005) + status('t1', 1100, 'done', 'shipped'))
+      const o = make({ projectDir, transcriptPollMs: 20 })
+      await o.start()
+      expect(card('fm--t1')!.activity).toBe('running')
+      appendFileSync(join(projectDir, `${CONV}.jsonl`), JSON.stringify(assistant('all done')) + '\n')
+      await waitFor(() => card('fm--t1')!.activity === 'idle')
+    })
+
     it('never writes into the transcript dir or the first mate home', async () => {
       writeConv(CONV, [assistant('done')])
       const before = [...fingerprint(home), ...fingerprint(projectDir)]
