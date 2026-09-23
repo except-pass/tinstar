@@ -35,6 +35,13 @@ describe('findLinkedTranscript', () => {
     expect(link(9000)?.conversationId).toBe('cccccccc-skew')
   })
 
+  it('with a later spawn in the same worktree, only transcripts started before it qualify', () => {
+    transcript('aaaaaaaa-mine', { timestamp: iso(1000) }, 2000)
+    transcript('bbbbbbbb-next', { timestamp: iso(5000) }, 6000)
+    expect(findLinkedTranscript({ worktree: WT, spawnSec: 1000, nextSpawnSec: 5000, projectDir: dir })?.conversationId).toBe('aaaaaaaa-mine')
+    expect(findLinkedTranscript({ worktree: WT, spawnSec: 5000, projectDir: dir })?.conversationId).toBe('bbbbbbbb-next')
+  })
+
   it('picks the most recently appended candidate (relaunch, /clear)', () => {
     transcript('eeeeeeee-first', { timestamp: iso(9000) }, 9100)
     transcript('ffffffff-second', { timestamp: iso(9200) }, 9800)

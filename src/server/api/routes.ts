@@ -2584,7 +2584,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const withBody = (req: IncomingMessage, res: ServerResponse, handler: (body: string) => unknown): void => {
     readBody(req).then(handler).catch(err => {
       if (res.headersSent) return
-      if (err instanceof SyntaxError) fail(res, 'INVALID_PARAMS', 'Invalid JSON body')
+      if (err instanceof SyntaxError) fail(res, 'BAD_REQUEST', 'Invalid JSON body')
       else fail(res, 'INTERNAL', (err as Error).message)
     })
   }
@@ -2667,7 +2667,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     //    only supported way to turn reach on.
     const contentType = (req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
     if (contentType !== 'application/json') {
-      fail(res, 'INVALID_PARAMS', 'Content-Type must be application/json', { status: 415 })
+      fail(res, 'BAD_REQUEST', 'Content-Type must be application/json', { status: 415 })
       return true
     }
     const origin = req.headers.origin
@@ -2679,7 +2679,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     let body: { enabled?: unknown } | null = null
     try { body = JSON.parse(await readBody(req)) as { enabled?: unknown } } catch { /* reported below */ }
     if (typeof body?.enabled !== 'boolean') {
-      fail(res, 'INVALID_PARAMS', 'body must be {"enabled": true|false}')
+      fail(res, 'BAD_REQUEST', 'body must be {"enabled": true|false}')
       return true
     }
     const coordinator = getReachCoordinator()
@@ -2689,7 +2689,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ? await coordinator.enable(ctx.boundPort ?? 5273)
       : await coordinator.disable()
     if (status.state === 'refused') {
-      fail(res, 'INVALID_PARAMS', status.detail ?? 'reach refused')
+      fail(res, 'BAD_REQUEST', status.detail ?? 'reach refused')
       return true
     }
     ok(res, status)
@@ -2777,7 +2777,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     try {
       payload = JSON.parse(body)
     } catch {
-      fail(res, 'INVALID_PARAMS', 'malformed_json')
+      fail(res, 'BAD_REQUEST', 'malformed_json')
       return true
     }
     const snap = ctx.ccQuotaService.ingest(payload)
@@ -2811,7 +2811,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     try {
       parsed = JSON.parse(body)
     } catch {
-      fail(res, 'INVALID_PARAMS', 'malformed_json')
+      fail(res, 'BAD_REQUEST', 'malformed_json')
       return true
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -2838,7 +2838,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     try {
       parsed = JSON.parse(body)
     } catch {
-      fail(res, 'INVALID_PARAMS', 'malformed_json')
+      fail(res, 'BAD_REQUEST', 'malformed_json')
       return true
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -2872,12 +2872,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           worktreeId?: string
         }
         if (!ctx.sessionConfig) return fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable')
-        if (!payload.sha || !payload.message) return fail(res, 'INVALID_PARAMS', 'invalid payload')
+        if (!payload.sha || !payload.message) return fail(res, 'BAD_REQUEST', 'invalid payload')
         const record = buildCommitRecord(payload, 'hook', ctx.sessionConfig.git.taskMarkerRegex)
         const inserted = ctx.docStore.upsertCommit(record)
         ok(res, { inserted })
       } catch {
-        fail(res, 'INVALID_PARAMS', 'invalid json')
+        fail(res, 'BAD_REQUEST', 'invalid json')
       }
     })
     return true
@@ -2942,12 +2942,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       try {
         const { taskTag } = JSON.parse(body) as { taskTag: string }
-        if (!taskTag) return fail(res, 'INVALID_PARAMS', 'taskTag is required')
+        if (!taskTag) return fail(res, 'BAD_REQUEST', 'taskTag is required')
         const updated = ctx.docStore.assignTaskTag(sha, taskTag)
         if (!updated) return fail(res, 'NOT_FOUND', 'not found')
         ok(res, updated)
       } catch {
-        fail(res, 'INVALID_PARAMS', 'invalid json')
+        fail(res, 'BAD_REQUEST', 'invalid json')
       }
     })
     return true
@@ -3262,7 +3262,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         parsed = JSON.parse(body)
       } catch {
-        return fail(res, 'INVALID_PARAMS', 'invalid json')
+        return fail(res, 'BAD_REQUEST', 'invalid json')
       }
       const existing = ctx.docStore.getTopicMetadata(subject) ?? {
         subject,
@@ -3464,7 +3464,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.upsertImageWidget(widget.id, widget)
       ok(res, widget)
       } catch {
-        fail(res, 'INVALID_PARAMS', 'Invalid request body')
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -3527,7 +3527,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return
         }
         if (headline.length > NOTICE_HEADLINE_MAX) {
-          fail(res, 'INVALID_PARAMS', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
+          fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
           return
         }
         // Content is an optional A2UI v0_9 description (R14). Absent → a
@@ -3535,7 +3535,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         let parsedContent: Notice['content']
         if (content !== undefined && content !== null) {
           if (JSON.stringify(content).length > NOTICE_CONTENT_MAX) {
-            fail(res, 'INVALID_PARAMS', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
+            fail(res, 'BAD_REQUEST', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
             return
           }
           const valid = parseA2uiContent(content)
@@ -3558,7 +3558,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ctx.docStore.upsertNotice(notice)
         ok(res, notice)
       } catch {
-        fail(res, 'INVALID_PARAMS', 'Invalid request body')
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -3598,7 +3598,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
 
       let parsed: { text?: unknown; presetId?: unknown; author?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       // `JSON.parse('null')`/`'42'`/`'[]'` all parse — without this the property
       // reads below throw inside the .then and the request hangs.
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -3638,7 +3638,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return
         }
         if (parsed.text.length > NOTICE_FOLLOWUP_TEXT_MAX) {
-          fail(res, 'INVALID_PARAMS', `text exceeds ${NOTICE_FOLLOWUP_TEXT_MAX} characters`, { status: 413 })
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_FOLLOWUP_TEXT_MAX} characters`, { status: 413 })
           return
         }
         // Persist the TRIMMED value, not the raw one. Gating emptiness on
@@ -3689,7 +3689,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       ok(res, { notice: updated, reply, delivered })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -3706,7 +3706,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         patch = JSON.parse(body)
       } catch {
-        fail(res, 'INVALID_PARAMS', 'Invalid request body')
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
         return
       }
       // `JSON.parse('null')` and `JSON.parse('42')` both succeed; without this
@@ -3724,7 +3724,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return
       }
       if (patch.headline !== undefined && patch.headline.length > NOTICE_HEADLINE_MAX) {
-        fail(res, 'INVALID_PARAMS', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
+        fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
         return
       }
       // Amend the A2UI content (R14/R17). `null` clears it (headline-only);
@@ -3737,7 +3737,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           contentPatch = { content: undefined }
         } else {
           if (JSON.stringify(patch.content).length > NOTICE_CONTENT_MAX) {
-            fail(res, 'INVALID_PARAMS', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
+            fail(res, 'BAD_REQUEST', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
             return
           }
           const valid = parseA2uiContent(patch.content)
@@ -3844,7 +3844,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
 
       let parsed: { choices?: unknown; text?: unknown; dissent?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
         return
@@ -3875,7 +3875,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return
         }
         if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
-          fail(res, 'INVALID_PARAMS', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 })
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 })
           return
         }
         if (parsed.text.trim()) answerText = parsed.text
@@ -3932,7 +3932,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       ok(res, { notice: updated, delivered })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -3943,7 +3943,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const filePath = qs.get('path')
 
     if (!sessionId || !filePath) {
-      fail(res, 'INVALID_PARAMS', 'session and path required')
+      fail(res, 'BAD_REQUEST', 'session and path required')
       return true
     }
 
@@ -3956,7 +3956,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const session = getSession(sessDir, sessionId)
       if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return true }
       const workspacePath = session.workspace?.path ?? null
-      if (!workspacePath) { fail(res, 'INVALID_PARAMS', 'session workspace unavailable'); return true }
+      if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return true }
       absolutePath = filePath.startsWith('/')
         ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
         : resolve(workspacePath, filePath)
@@ -4022,12 +4022,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && url === '/api/nats-traffic/firehose') {
     readBody(req).then(body => {
       let parsed: { widgetId?: unknown; on?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON'); return }
-      if (typeof parsed.widgetId !== 'string' || !parsed.widgetId) { fail(res, 'INVALID_PARAMS', 'widgetId required'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (typeof parsed.widgetId !== 'string' || !parsed.widgetId) { fail(res, 'BAD_REQUEST', 'widgetId required'); return }
       if (parsed.on) registerFirehose(ctx.natsTraffic, parsed.widgetId)
       else unregisterFirehose(ctx.natsTraffic, parsed.widgetId)
       ok(res, null)
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'invalid JSON'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
@@ -4037,14 +4037,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       try {
         const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
-        if (!sessionId || !filePath) { fail(res, 'INVALID_PARAMS', 'sessionId and filePath required'); return }
+        if (!sessionId || !filePath) { fail(res, 'BAD_REQUEST', 'sessionId and filePath required'); return }
 
         const sessDir = ctx.sessionConfig?.dirs.sessions
         if (!sessDir) { fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable'); return }
         const session = getSession(sessDir, sessionId)
         if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return }
         const workspacePath = session.workspace?.path ?? null
-        if (!workspacePath) { fail(res, 'INVALID_PARAMS', 'session workspace unavailable'); return }
+        if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return }
 
         const absolutePath = filePath.startsWith('/')
           ? filePath
@@ -4079,7 +4079,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           sessionId?: string; filePath?: string; subscriberId?: string; mode?: 'content' | 'notify'
         }
         if (!sessionId || !filePath || !subscriberId) {
-          fail(res, 'INVALID_PARAMS', 'sessionId, filePath, and subscriberId required')
+          fail(res, 'BAD_REQUEST', 'sessionId, filePath, and subscriberId required')
           return
         }
 
@@ -4092,7 +4092,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const session = getSession(sessDir, sessionId)
           if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return }
           const workspacePath = session.workspace?.path ?? null
-          if (!workspacePath) { fail(res, 'INVALID_PARAMS', 'session workspace unavailable'); return }
+          if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return }
           absolutePath = filePath.startsWith('/')
             ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
             : resolve(workspacePath, filePath)
@@ -4118,7 +4118,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ok(res, { absolutePath })
         }
       } catch {
-        fail(res, 'INVALID_PARAMS', 'invalid request body')
+        fail(res, 'BAD_REQUEST', 'invalid request body')
       }
     })
     return true
@@ -4132,13 +4132,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           absolutePath?: string; subscriberId?: string
         }
         if (!absolutePath || !subscriberId) {
-          fail(res, 'INVALID_PARAMS', 'absolutePath and subscriberId required')
+          fail(res, 'BAD_REQUEST', 'absolutePath and subscriberId required')
           return
         }
         removeFileWatchSubscriber(absolutePath, subscriberId)
         ok(res, null)
       } catch {
-        fail(res, 'INVALID_PARAMS', 'invalid request body')
+        fail(res, 'BAD_REQUEST', 'invalid request body')
       }
     })
     return true
@@ -4450,15 +4450,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       readBody(req).then(async body => {
         let parsed: { project?: string | null; worktree?: string | null }
         try { parsed = JSON.parse(body) as typeof parsed }
-        catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+        catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
         if (!parsed || typeof parsed !== 'object') {
-          fail(res, 'INVALID_PARAMS', 'Scope must be an object')
+          fail(res, 'BAD_REQUEST', 'Scope must be an object')
           return
         }
         const project = typeof parsed.project === 'string' ? parsed.project.trim() : ''
         const worktree = typeof parsed.worktree === 'string' ? parsed.worktree.trim() : ''
         if (worktree && !project) {
-          fail(res, 'INVALID_PARAMS', 'A Worktree scope requires a Project')
+          fail(res, 'BAD_REQUEST', 'A Worktree scope requires a Project')
           return
         }
         const projectsFile = ctx.sessionConfig?.files.projects
@@ -4604,9 +4604,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (data !== undefined) {
         let serialized: string
         try { serialized = JSON.stringify(data) }
-        catch { fail(res, 'INVALID_PARAMS', 'bad_data: not JSON-serializable'); return }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
         if (serialized.length > 65536) {
-          fail(res, 'INVALID_PARAMS', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
           return
         }
       }
@@ -4680,9 +4680,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if ('data' in patch) {
         let serialized: string
         try { serialized = JSON.stringify(patch.data) }
-        catch { fail(res, 'INVALID_PARAMS', 'bad_data: not JSON-serializable'); return }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
         if (serialized.length > 65536) {
-          fail(res, 'INVALID_PARAMS', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
           return
         }
       }
@@ -4706,7 +4706,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           })
           attentionApplied = true
         } else {
-          fail(res, 'INVALID_PARAMS', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
+          fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
           return
         }
       }
@@ -4747,20 +4747,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
     readBody(req).then(body => {
       let parsed: unknown
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
       // Migrate legacy tuple edges before validation — older clients still send [a,b] tuples.
       // migrateSnapEdges is idempotent on already-structured graphs.
       const migrated = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).snapped)
         ? migrateSnapEdges(parsed as ConstellationGraph)
         : parsed
-      if (!isConstellationGraph(migrated)) { fail(res, 'INVALID_PARAMS', 'invalid constellation graph'); return }
+      if (!isConstellationGraph(migrated)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
       // Reject stale/equal-revision writes with a conflict rather than a false
       // success — the revision gate drops them, so the doc is not stored.
       if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...migrated, spaceId })) {
         fail(res, 'CONFLICT', 'stale constellation graph revision'); return
       }
       ok(res, null)
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'invalid JSON'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
@@ -4770,8 +4770,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
     readBody(req).then(body => {
       let parsed: unknown
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON'); return }
-      if (!isPinSet(parsed)) { fail(res, 'INVALID_PARAMS', 'invalid pin set'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (!isPinSet(parsed)) { fail(res, 'BAD_REQUEST', 'invalid pin set'); return }
       const merged = mergePreservingReplies({ ...parsed, spaceId }, ctx.docStore.getPinSet(spaceId))
       // Reject stale/equal-revision writes with a conflict rather than a false
       // success — the revision gate drops them, so the doc is not stored.
@@ -4779,7 +4779,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'CONFLICT', 'stale pin set revision'); return
       }
       ok(res, null)
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'invalid JSON'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
@@ -4792,10 +4792,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const noteId = decodeURIComponent(path.slice('/api/notes/'.length, -'/replies'.length))
     readBody(req).then(body => {
       let parsed: { text?: unknown; author?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
       const text = parsed.text
       if (typeof text !== 'string' || text.trim() === '') {
-        fail(res, 'INVALID_PARAMS', "missing 'text' in request body"); return
+        fail(res, 'BAD_REQUEST', "missing 'text' in request body"); return
       }
       const author: 'user' | 'agent' = parsed.author === 'user' ? 'user' : 'agent'
       // Pin ids are globally unique across spaces, so the first match owns the note.
@@ -4814,7 +4814,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return
       }
       ok(res, { replyId })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'invalid JSON'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
@@ -4847,7 +4847,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     try {
       ok(res, startServer(configRoot, pluginId))
     } catch (e) {
-      if (e instanceof NoStartError) fail(res, 'INVALID_PARAMS', e.message)
+      if (e instanceof NoStartError) fail(res, 'BAD_REQUEST', e.message)
       else fail(res, 'INTERNAL', String((e as Error)?.message ?? e))
     }
     return true
@@ -4970,7 +4970,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!principal) return true
     readBody(req).then(async raw => {
       let parsed: { key?: unknown; label?: unknown; request?: unknown; recipe?: unknown }
-      try { parsed = JSON.parse(raw) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(raw) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -4992,7 +4992,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'INVALID_PARAMS', 'request must be a non-empty string'); return
       }
       if (request.length + recipe.length > SLATE_AUTHORING_REQUEST_MAX) {
-        fail(res, 'INVALID_PARAMS', `authoring request exceeds ${SLATE_AUTHORING_REQUEST_MAX} characters`, { status: 413 }); return
+        fail(res, 'BAD_REQUEST', `authoring request exceeds ${SLATE_AUTHORING_REQUEST_MAX} characters`, { status: 413 }); return
       }
       const worktree = principal.session.workspace?.path
       if (!worktree) {
@@ -5031,7 +5031,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         deadlineAt,
         replayed: card.replayed,
       }, { status: card.replayed ? 200 : 201 })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5046,7 +5046,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
 
       let parsed: { id?: unknown; headline?: unknown; content?: unknown; anchor?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5054,7 +5054,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'INVALID_PARAMS', 'headline must be a non-empty string'); return
       }
       if (parsed.headline.length > SLATE_HEADLINE_MAX) {
-        fail(res, 'INVALID_PARAMS', `headline exceeds ${SLATE_HEADLINE_MAX} characters`, { status: 413 }); return
+        fail(res, 'BAD_REQUEST', `headline exceeds ${SLATE_HEADLINE_MAX} characters`, { status: 413 }); return
       }
       if (parsed.id !== undefined && (typeof parsed.id !== 'string' || parsed.id.length === 0)) {
         fail(res, 'INVALID_PARAMS', 'id must be a non-empty string when provided'); return
@@ -5072,7 +5072,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       let content: A2uiContent | undefined
       if (parsed.content !== undefined && parsed.content !== null) {
         if (JSON.stringify(parsed.content).length > SLATE_CONTENT_MAX) {
-          fail(res, 'INVALID_PARAMS', `content exceeds ${SLATE_CONTENT_MAX} bytes`, { status: 413 }); return
+          fail(res, 'BAD_REQUEST', `content exceeds ${SLATE_CONTENT_MAX} bytes`, { status: 413 }); return
         }
         const valid = parseA2uiContent(parsed.content)
         if (!valid) { fail(res, 'INVALID_PARAMS', 'content must be a valid A2UI v0_9 component description'); return }
@@ -5105,7 +5105,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // reconciliation test). `notified:false` is invariant here — it is a posture, not a
       // failed delivery.
       ok(res, { point, notified: false })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5121,7 +5121,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
       let parsed: { order?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5137,7 +5137,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // No delivery: a reorder is a view arrangement, not an injection (same posture
       // as the lifecycle routes). The new sequence rides the SSE `run` delta.
       ok(res, { order: ctx.docStore.getSlatePointsForRun(runId).map(p => p.id) })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5164,7 +5164,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
       let parsed: { text?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5172,7 +5172,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'INVALID_PARAMS', 'text must be a non-empty string'); return
       }
       if (parsed.text.length > OBJECTIVE_MAX) {
-        fail(res, 'INVALID_PARAMS', `objective exceeds ${OBJECTIVE_MAX} characters`, { status: 413 }); return
+        fail(res, 'BAD_REQUEST', `objective exceeds ${OBJECTIVE_MAX} characters`, { status: 413 }); return
       }
       const text = parsed.text.trim()
       const prior = ctx.docStore.getSlatePoint(runId, OBJECTIVE_POINT_ID)
@@ -5202,7 +5202,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // delivered:false on an unreachable run is a NOTE, not an error (mirrors compose/
       // refresh) — the objective is persisted either way and the card says as much.
       ok(res, { objective, delivered, changed })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5268,7 +5268,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       let parsed: { choices?: unknown; text?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5293,7 +5293,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (parsed.text !== undefined && parsed.text !== null) {
         if (typeof parsed.text !== 'string') { fail(res, 'INVALID_PARAMS', 'text must be a string'); return }
         if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
-          fail(res, 'INVALID_PARAMS', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
         }
         if (parsed.text.trim()) answerText = parsed.text.trim()
       }
@@ -5318,7 +5318,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         requestGeneration,
       )
       ok(res, { point: updated, delivered })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5339,7 +5339,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       let parsed: { text?: unknown; author?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5349,7 +5349,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const author: 'user' | 'agent' | 'process' = parsed.author === 'user' ? 'user' : parsed.author === 'process' ? 'process' : 'agent'
       if (typeof parsed.text !== 'string') { fail(res, 'INVALID_PARAMS', 'text must be a string'); return }
       if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
-        fail(res, 'INVALID_PARAMS', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
+        fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
       }
       const trimmed = parsed.text.trim()
       if (!trimmed) { fail(res, 'INVALID_PARAMS', 'text must be non-empty'); return }
@@ -5364,7 +5364,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase(), owner), requestGeneration)
         : false
       ok(res, { point: updated, reply, delivered })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5384,7 +5384,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
     void slateBridge().setDisposition(runId, pid, action, slateActor('user')).then(result => {
       ok(res, { point: result.point })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'lifecycle change failed'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'lifecycle change failed'))
     return true
   }
 
@@ -5534,7 +5534,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const requestGeneration = persistedSessionBackendGeneration(ctx, runId)
     readBody(req).then(async body => {
       let parsed: { templateId?: unknown; freeform?: unknown; recipe?: unknown }
-      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'Invalid request body'); return }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
@@ -5555,7 +5555,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // freeform would blast an oversized prompt into the agent's session.
       const SLATE_COMPOSE_MAX = 8 * 1024
       if (prompt.length + freeform.length + recipe.length > SLATE_COMPOSE_MAX) {
-        fail(res, 'INVALID_PARAMS', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
+        fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
       }
       const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
       const bridge = new RunSlateBridge(ctx.docStore, service)
@@ -5634,7 +5634,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         localId: card.localId,
         delivered,
       })
-    }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid request body'))
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 
@@ -5683,7 +5683,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         patch = body ? JSON.parse(body) : {}
       } catch {
-        return fail(res, 'INVALID_PARAMS', 'invalid_json')
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
       // `blocked` is a derived-attention input owned by the StatusWatcher and
@@ -5720,7 +5720,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if ('name' in patch) {
         const raw = patch.name
         if (raw !== null && raw !== undefined && typeof raw !== 'string') {
-          return fail(res, 'INVALID_PARAMS', 'invalid_name: must be a string, or null/empty to clear')
+          return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string, or null/empty to clear')
         }
         namePatch = { name: normalizeRunName(raw) }
       }
@@ -5729,7 +5729,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Background flip (promote/demote, R3): validate before any mutation so
       // an invalid value cannot leave a half-applied patch.
       if ('background' in patch && typeof patch.background !== 'boolean') {
-        return fail(res, 'INVALID_PARAMS', 'invalid_background: must be a boolean')
+        return fail(res, 'BAD_REQUEST', 'invalid_background: must be a boolean')
       }
       const backgroundChanged = typeof patch.background === 'boolean' && patch.background !== existing.background
 
@@ -5754,7 +5754,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
           applyAttention = () => ctx.docStore.setRunAttention(id, nextAttention)
         } else {
-          return fail(res, 'INVALID_PARAMS', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
+          return fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
         }
       }
 
@@ -6067,7 +6067,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           try {
             ({ from, to } = JSON.parse(body || '{}'))
           } catch {
-            return fail(res, 'INVALID_PARAMS', 'Invalid JSON body')
+            return fail(res, 'BAD_REQUEST', 'Invalid JSON body')
           }
           if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) {
             return fail(res, 'INVALID_PARAMS', 'from and to are required')
@@ -6221,7 +6221,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         if (conversationId !== null && typeof conversationId !== 'string') return fail(res, 'INVALID_PARAMS', 'conversationId must be a string or null')
         const done = await observer.setConversationOverride(runId, conversationId)
-        if (!done) return fail(res, 'NOT_FOUND', `No observed worker '${runId}', or malformed conversation id`)
+        if (!done) return fail(res, 'NOT_FOUND', `No observed worker '${runId}', or no such conversation in its worktree`)
         ok(res, { ok: true })
       })
       return true
@@ -6244,7 +6244,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
 
         const explicitPrompt = validateExplicitWorkPrompt(prompt, OBJECTIVE_MAX)
-        if (!explicitPrompt.ok) return fail(res, 'INVALID_PARAMS', explicitPrompt.message)
+        if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
 
         const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
           resolvedHand
@@ -6266,13 +6266,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           if (!result.ok) {
             switch (result.error.code) {
-              case 'MISSING_NAME': return fail(res, 'INVALID_PARAMS', result.error.message)
-              case 'INVALID_WORK_PROMPT': return fail(res, 'INVALID_PARAMS', result.error.message)
+              case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'INVALID_WORK_PROMPT': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
               case 'PROVIDER_CAPABILITY_UNAVAILABLE':
-                return fail(res, 'INVALID_PARAMS', result.error.message)
+                return fail(res, 'BAD_REQUEST', result.error.message)
               // Switchboard override guard — surface the stable code/status (not INTERNAL).
               case 'OVERRIDE_MODEL_NOT_CONFIGURED':
               case 'OVERRIDE_MODEL_NOT_ALLOWED':
@@ -6307,7 +6307,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const overrides = body ? JSON.parse(body) : {}
           if (typeof overrides.name !== 'string' || !overrides.name) {
-            return fail(res, 'INVALID_PARAMS', 'Session name is required')
+            return fail(res, 'BAD_REQUEST', 'Session name is required')
           }
 
           const task = ctx.docStore.getTask(taskId)
@@ -6317,7 +6317,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const resolvedProject = settings?.resolved?.project
 
           const explicitPrompt = validateExplicitWorkPrompt(overrides.prompt, OBJECTIVE_MAX)
-          if (!explicitPrompt.ok) return fail(res, 'INVALID_PARAMS', explicitPrompt.message)
+          if (!explicitPrompt.ok) return fail(res, 'BAD_REQUEST', explicitPrompt.message)
 
           const params: CreateSessionParams = {
             ...overrides,
@@ -6346,11 +6346,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!result.ok) {
             // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
             // everything else collapses to INTERNAL with the original message.
-            if (result.error.code === 'MISSING_NAME') return fail(res, 'INVALID_PARAMS', result.error.message)
-            if (result.error.code === 'INVALID_WORK_PROMPT') return fail(res, 'INVALID_PARAMS', result.error.message)
+            if (result.error.code === 'MISSING_NAME') return fail(res, 'BAD_REQUEST', result.error.message)
+            if (result.error.code === 'INVALID_WORK_PROMPT') return fail(res, 'BAD_REQUEST', result.error.message)
             if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
             if (result.error.code === 'PROVIDER_CAPABILITY_UNAVAILABLE') {
-              return fail(res, 'INVALID_PARAMS', result.error.message)
+              return fail(res, 'BAD_REQUEST', result.error.message)
             }
             return fail(res, 'INTERNAL', result.error.message)
           }
@@ -6501,7 +6501,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
             // Require a conversation ID to resume — sessions created before this change won't have one
             if (!session.conversation?.id) {
-              return fail(res, 'INVALID_PARAMS', `Session '${name}' has no conversation ID. Delete and recreate it.`)
+              return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
             }
 
             // Switchboard: a per-session token override is spawn-time-only and never
@@ -6644,7 +6644,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 err instanceof ProviderAdapterResolutionError
                 || err instanceof ProviderCapabilityError
               ) {
-                return fail(res, 'INVALID_PARAMS', err.message)
+                return fail(res, 'BAD_REQUEST', err.message)
               }
               fail(res, 'INTERNAL', (err as Error).message)
             }
@@ -7021,7 +7021,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Defense-in-depth: convId is only ever a Claude Code conversation id
         // (UUID-ish token). Reject anything else before it can reach a filesystem
         // path or the `--resume <convId>` command, independent of the tombstone guard.
-        if (!/^[A-Za-z0-9_-]+$/.test(convId)) return fail(res, 'INVALID_PARAMS', `Invalid convId '${convId}'`)
+        if (!/^[A-Za-z0-9_-]+$/.test(convId)) return fail(res, 'BAD_REQUEST', `Invalid convId '${convId}'`)
         const tombstone = ctx.docStore.getTombstone(convId)
         if (!tombstone) return fail(res, 'NOT_FOUND', `No graveyard entry for '${convId}'`)
 
@@ -7308,7 +7308,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       readBody(req).then((body) => {
         let patch: Record<string, unknown>
         try { patch = JSON.parse(body) } catch {
-          return fail(res, 'INVALID_PARAMS', 'invalid JSON')
+          return fail(res, 'BAD_REQUEST', 'invalid JSON')
         }
         // Validate uploadMaxBytes if present
         if ('uploadMaxBytes' in patch) {
@@ -7330,7 +7330,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/editor/open') {
       readBody(req).then(async (body) => {
         const { path: filePath, sessionId } = JSON.parse(body)
-        if (!filePath) return fail(res, 'INVALID_PARAMS', 'path is required')
+        if (!filePath) return fail(res, 'BAD_REQUEST', 'path is required')
 
         // Resolve relative paths against the session's workspace directory
         let resolvedPath = filePath
@@ -7424,7 +7424,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions/:name/spawn — spawn a companion hand on the same task
     if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/spawn')) {
       const parentName = extractSessionName(url, '/api/sessions/')?.replace('/spawn', '')
-      if (!parentName) return fail(res, 'INVALID_PARAMS', 'Session name required')
+      if (!parentName) return fail(res, 'BAD_REQUEST', 'Session name required')
 
       const parentSession = getSession(sessDir, parentName)
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
@@ -7455,7 +7455,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         spawnBody = body ? JSON.parse(body) : {}
       } catch {
-        return fail(res, 'INVALID_PARAMS', 'invalid_json')
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
       }
       const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false, name: friendlyName } = spawnBody as {
         hand: string
@@ -7470,7 +7470,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       if (!handName) {
-        return fail(res, 'INVALID_PARAMS', 'hand field is required')
+        return fail(res, 'BAD_REQUEST', 'hand field is required')
       }
 
       // Friendly display name, set by the spawning agent so the hand is born
@@ -7478,7 +7478,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // spawned without one just displays its generated id, as before. The id
       // itself is still the concatenated form below — this only affects display.
       if (friendlyName !== undefined && typeof friendlyName !== 'string') {
-        return fail(res, 'INVALID_PARAMS', 'invalid_name: must be a string')
+        return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string')
       }
       const spawnedDisplayName = normalizeRunName(friendlyName)
 
@@ -8066,7 +8066,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const body = JSON.parse(await readBody(req))
         const keys: string[] = body.keys
         if (!Array.isArray(keys) || keys.length === 0) {
-          fail(res, 'INVALID_PARAMS', 'keys must be a non-empty array of strings')
+          fail(res, 'BAD_REQUEST', 'keys must be a non-empty array of strings')
           return true
         }
         const session = getSession(sessDir, name)
@@ -8094,16 +8094,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions/:name/exec  { argv: string[] } → run in session cwd
     if (method === 'POST' && url.endsWith('/exec') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
-      if (!name) return fail(res, 'INVALID_PARAMS', 'session name required')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
       const session = getSession(sessDir, name)
       if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
       const cwd = session.workspace?.path
       if (!cwd) return fail(res, 'CONFLICT', 'Session has no workspace path')
       readBody(req).then(async (raw) => {
         let argv: unknown
-        try { argv = JSON.parse(raw).argv } catch { return fail(res, 'INVALID_PARAMS', 'invalid JSON body') }
+        try { argv = JSON.parse(raw).argv } catch { return fail(res, 'BAD_REQUEST', 'invalid JSON body') }
         if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
-          return fail(res, 'INVALID_PARAMS', 'argv must be a non-empty string array')
+          return fail(res, 'BAD_REQUEST', 'argv must be a non-empty string array')
         }
         try {
           const result = await execCommand(argv as string[], { cwd })
@@ -8118,7 +8118,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/sessions/:name/screen?scrollback=<n>  → rendered terminal screen
     if (method === 'GET' && url.startsWith('/api/sessions/') && url.split('?')[0]!.endsWith('/screen')) {
       const name = extractSessionName(url, '/api/sessions/')
-      if (!name) return fail(res, 'INVALID_PARAMS', 'session name required')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
       const session = getSession(sessDir, name)
       if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
       const lease = acquirePersistedSessionBackendLease(ctx, name)
@@ -8159,7 +8159,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const body = JSON.parse(await readBody(req))
         const prompt: string = body.prompt
         if (!prompt || typeof prompt !== 'string') {
-          fail(res, 'INVALID_PARAMS', 'prompt must be a non-empty string')
+          fail(res, 'BAD_REQUEST', 'prompt must be a non-empty string')
           return true
         }
         const session = getSession(sessDir, name)
@@ -8240,7 +8240,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
-            return fail(res, 'INVALID_PARAMS', 'subject must be a non-empty string')
+            return fail(res, 'BAD_REQUEST', 'subject must be a non-empty string')
           }
           const session = getSession(sessDir, name)
           if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
@@ -8278,7 +8278,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } finally {
             lease.release()
           }
-        }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid JSON'))
+        }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
     }
@@ -8298,7 +8298,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
-            return fail(res, 'INVALID_PARAMS', 'subject must be a non-empty string')
+            return fail(res, 'BAD_REQUEST', 'subject must be a non-empty string')
           }
           const session = getSession(sessDir, name)
           if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
@@ -8331,7 +8331,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } finally {
             lease.release()
           }
-        }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid JSON'))
+        }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
     }
@@ -8347,7 +8347,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/cli-templates') {
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
-        if (!name || !startCmd || !resumeCmd) return fail(res, 'INVALID_PARAMS', 'name, startCmd, and resumeCmd are required')
+        if (!name || !startCmd || !resumeCmd) return fail(res, 'BAD_REQUEST', 'name, startCmd, and resumeCmd are required')
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
@@ -8365,7 +8365,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         const registry = ctx.providerRegistry ?? defaultProviderRegistry
         const providerError = validateCliTemplateProvider(registry, entry)
-        if (providerError) return fail(res, 'INVALID_PARAMS', providerError)
+        if (providerError) return fail(res, 'BAD_REQUEST', providerError)
         templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
@@ -8377,7 +8377,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // nothing in the settings modal.
         ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
         ok(res, discoverCliTemplate(registry, entry))
-      }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid JSON'))
+      }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
 
@@ -8387,7 +8387,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const templateId = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
-        if (!name || !startCmd || !resumeCmd) return fail(res, 'INVALID_PARAMS', 'name, startCmd, and resumeCmd are required')
+        if (!name || !startCmd || !resumeCmd) return fail(res, 'BAD_REQUEST', 'name, startCmd, and resumeCmd are required')
 
         // Check if template exists in merged config (includes defaults)
         const existsInMerged = cfg.cliTemplates.some(t => t.id === templateId)
@@ -8409,7 +8409,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         const registry = ctx.providerRegistry ?? defaultProviderRegistry
         const providerError = validateCliTemplateProvider(registry, entry)
-        if (providerError) return fail(res, 'INVALID_PARAMS', providerError)
+        if (providerError) return fail(res, 'BAD_REQUEST', providerError)
         const idx = templates.findIndex(t => t.id === templateId)
         if (idx >= 0) {
           templates[idx] = entry
@@ -8427,7 +8427,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // nothing in the settings modal.
         ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
         ok(res, discoverCliTemplate(registry, entry))
-      }).catch(() => fail(res, 'INVALID_PARAMS', 'Invalid JSON'))
+      }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
 
@@ -8486,10 +8486,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       readBody(req).then(async (body) => {
         const { name, path } = JSON.parse(body)
         if (typeof name !== 'string' || !name || typeof path !== 'string' || !path) {
-          return fail(res, 'INVALID_PARAMS', 'Name and path required')
+          return fail(res, 'BAD_REQUEST', 'Name and path required')
         }
         if (!await isExistingDirectory(path)) {
-          return fail(res, 'INVALID_PARAMS', `Project path must be an existing directory: ${path}`)
+          return fail(res, 'BAD_REQUEST', `Project path must be an existing directory: ${path}`)
         }
         registerProject(cfg.files.projects, name, path)
         ctx.sse.broadcastEvent('projects_changed', { action: 'register', name })
@@ -8504,14 +8504,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const parsed = JSON.parse(body)
         const order = parsed?.order
         if (!Array.isArray(order) || order.some((n: unknown) => typeof n !== 'string')) {
-          return fail(res, 'INVALID_PARAMS', 'order must be an array of project names')
+          return fail(res, 'BAD_REQUEST', 'order must be an array of project names')
         }
         const result = reorderProjects(cfg.files.projects, order as string[])
         if (!result.ok) {
           const msg = result.unknown
             ? `Unknown project(s): ${result.unknown.join(', ')}`
             : `Duplicate project(s): ${result.duplicate!.join(', ')}`
-          return fail(res, 'INVALID_PARAMS', msg)
+          return fail(res, 'BAD_REQUEST', msg)
         }
         ctx.sse.broadcastEvent('projects_changed', { action: 'reorder' })
         return ok(res, null)
@@ -8527,13 +8527,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         withBody(req, res, (body) => {
           const { starred, hidden } = JSON.parse(body) ?? {}
           if (starred === undefined && hidden === undefined) {
-            return fail(res, 'INVALID_PARAMS', 'starred or hidden required')
+            return fail(res, 'BAD_REQUEST', 'starred or hidden required')
           }
           if (
             (starred !== undefined && typeof starred !== 'boolean') ||
             (hidden !== undefined && typeof hidden !== 'boolean')
           ) {
-            return fail(res, 'INVALID_PARAMS', 'starred and hidden must be booleans')
+            return fail(res, 'BAD_REQUEST', 'starred and hidden must be booleans')
           }
           const updated = setProjectFlag(cfg.files.projects, name, { starred, hidden })
           if (!updated) return fail(res, 'NOT_FOUND', `Project '${name}' not found`)
@@ -8605,7 +8605,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'CONFLICT', 'session-not-ready')
           return
         }
-        if (!text) { fail(res, 'INVALID_PARAMS', 'missing text'); return }
+        if (!text) { fail(res, 'BAD_REQUEST', 'missing text'); return }
         const lease = acquirePersistedSessionBackendLease(
           ctx,
           sessionId,
@@ -8690,7 +8690,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       let payload: Record<string, unknown>
       try { payload = JSON.parse(body) } catch {
-        return fail(res, 'INVALID_PARAMS', 'Invalid JSON')
+        return fail(res, 'BAD_REQUEST', 'Invalid JSON')
       }
       const action = payload.action
       if (action !== 'set' && action !== 'focus' && action !== 'reset' && action !== 'fit') {

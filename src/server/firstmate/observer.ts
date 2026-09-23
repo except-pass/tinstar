@@ -21,7 +21,7 @@
 // worker's next ledger line does not resurrect it — only a genuinely NEWER
 // dispatch of the same task id does.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import type { EventEmitter } from 'node:events'
@@ -31,7 +31,7 @@ import { log } from '../logger'
 import { LedgerWatcher, type LedgerBatch } from './ledger-watcher'
 import { readTaskMeta, type TaskMeta } from './meta'
 import {
-  findLinkedTranscript, isValidConversationId, type LinkedTranscript,
+  findLinkedTranscript, type LinkedTranscript,
 } from './transcript-link'
 import { parseNewEntriesAt, readSessionStatusDetailAt, resetOffset } from '../sessions/transcript-parser'
 import {
@@ -40,6 +40,9 @@ import {
 
 /** `Run.view` value that selects the firstmate card widget. */
 export const FIRSTMATE_VIEW = 'firstmate-worker'
+
+/** Every Nth transcript refresh rescans project dirs for already-linked workers. */
+const RELINK_TICKS = 12
 
 /** The slice of DocumentStore the observer needs. */
 export interface ObserverDocStore {
@@ -140,6 +143,9 @@ export class FirstmateObserver {
   private overrides: Record<string, string>
   /** run id → current link (auto or manual). */
   private readonly links = new Map<string, LinkedTranscript>()
+  /** run id → worktree and spawn time, for the next-spawn upper bound of slot reuse. */
+  private readonly spawns = new Map<string, { worktree: string; spawnSec: number | null }>()
+  private refreshTick = 0
   private transcriptTimer: ReturnType<typeof setInterval> | null = null
   /** run id → owning home + task, for runs this process created. */
   private readonly owned = new Map<string, { home: string; task: string }>()
@@ -213,13 +219,40 @@ export class FirstmateObserver {
       tasks = new Set()
     }
     for (const t of reduceLines(entry.fleet, batch.lines)) tasks.add(t)
-    for (const task of tasks) await this.project(entry, task)
+    // Learn every worker's worktree and spawn time first, so an older worker in a
+    // reused slot sees the newer spawn's upper bound on its first link.
+    const metas = new Map<string, TaskMeta | null>()
+    await Promise.all([...tasks].map(async task => {
+      const w = entry.fleet.get(task)
+      if (!w) return
+      const meta = await this.readMeta(entry.home, task)
+      metas.set(task, meta)
+      this.recordSpawn(observedRunId(task, entry.tag || null), w, meta)
+    }))
+    for (const task of tasks) await this.project(entry, task, true, metas.get(task))
   }
 
-  private async project(entry: HomeEntry, task: string): Promise<void> {
+  private recordSpawn(runId: string, w: WorkerState, meta: TaskMeta | null): void {
+    if (meta?.worktree) this.spawns.set(runId, { worktree: meta.worktree, spawnSec: meta.spawnGen ?? w.dispatchedAt })
+  }
+
+  /** The earliest spawn into `worktree` later than `spawnSec` by another worker. */
+  private nextSpawnAfter(runId: string, worktree: string, spawnSec: number | null): number | null {
+    if (spawnSec === null) return null
+    let next: number | null = null
+    for (const [id, s] of this.spawns) {
+      if (id === runId || s.worktree !== worktree || s.spawnSec === null || s.spawnSec <= spawnSec) continue
+      if (next === null || s.spawnSec < next) next = s.spawnSec
+    }
+    return next
+  }
+
+  /** `rediscover` false reuses an existing link instead of rescanning the project dir. */
+  private async project(entry: HomeEntry, task: string, rediscover = true, prefetched?: TaskMeta | null): Promise<void> {
     const runId = observedRunId(task, entry.tag || null)
     const w = entry.fleet.get(task)
     if (!w || w.cleanedUpAt !== null) {
+      if (!w) this.spawns.delete(runId)
       if (w && this.dismissed[runId] !== undefined) this.forgetDismissal(runId)
       this.removeRun(runId)
       return
@@ -238,19 +271,20 @@ export class FirstmateObserver {
       log.warn('firstmate', `not showing ${task}: run ${runId} is not an observed run`)
       return
     }
-    const meta = await this.readMeta(entry.home, task)
+    const meta = prefetched !== undefined ? prefetched : await this.readMeta(entry.home, task)
     // The await above may have raced a dismissal or a reset; re-check before writing.
     if (this.dismissed[runId] !== undefined && !(w.dispatchedAt !== null && w.dispatchedAt > this.dismissed[runId])) return
     if (entry.fleet.get(task) !== w) return
-    this.upsert(entry, runId, w, meta)
+    this.recordSpawn(runId, w, meta)
+    this.upsert(entry, runId, w, meta, rediscover)
   }
 
-  private upsert(entry: HomeEntry, runId: string, w: WorkerState, meta: TaskMeta | null): void {
+  private upsert(entry: HomeEntry, runId: string, w: WorkerState, meta: TaskMeta | null, rediscover: boolean): void {
     const { docStore } = this.opts
     const existing = docStore.getRun(runId)
     const project = w.project ?? meta?.project ?? null
     const worktree = meta?.worktree ?? null
-    const link = this.linkFor(runId, worktree, meta?.spawnGen ?? w.dispatchedAt)
+    const link = this.linkFor(runId, worktree, meta?.spawnGen ?? w.dispatchedAt, rediscover)
     const activity = link ? readSessionStatusDetailAt(link.path)?.state ?? null : null
     const card: FirstmateCardData = {
       source: 'fleet-ledger',
@@ -316,19 +350,23 @@ export class FirstmateObserver {
 
   /** Resolve (and remember) the worker's conversation. A changed link restarts the
    *  recap parser so the new conversation is read from its beginning. */
-  private linkFor(runId: string, worktree: string | null, spawnSec: number | null): LinkedTranscript | null {
+  private linkFor(runId: string, worktree: string | null, spawnSec: number | null, rediscover: boolean): LinkedTranscript | null {
+    const prev = this.links.get(runId)
+    if (!rediscover && prev && worktree) {
+      try { return { ...prev, mtimeMs: statSync(prev.path).mtimeMs } } catch { /* gone: rediscover */ }
+    }
     let link: LinkedTranscript | null = null
     if (worktree) {
       try {
         link = findLinkedTranscript({
           worktree, spawnSec, override: this.overrides[runId] ?? null,
+          nextSpawnSec: this.nextSpawnAfter(runId, worktree, spawnSec),
           projectDir: this.opts.projectDirFor?.(worktree),
         })
       } catch (err) {
         log.debug('firstmate', `transcript link failed for ${runId}: ${(err as Error).message}`)
       }
     }
-    const prev = this.links.get(runId)
     if (prev && prev.path !== link?.path) resetOffset(runId)
     if (link) this.links.set(runId, link)
     else this.links.delete(runId)
@@ -345,11 +383,14 @@ export class FirstmateObserver {
     }
   }
 
-  /** Re-project every live worker so transcript activity shows without a ledger line. */
+  /** Re-project every unfinished worker so transcript activity shows without a
+   *  ledger line. Linked workers rescan their project dir only every RELINK_TICKS. */
   private async refreshTranscripts(): Promise<void> {
+    const rediscover = ++this.refreshTick % RELINK_TICKS === 0
     for (const entry of this.entries) {
-      for (const task of [...entry.fleet.keys()]) {
-        try { await this.project(entry, task) } catch (err) {
+      for (const [task, w] of [...entry.fleet]) {
+        if (w.merged || w.lastStatus?.state === 'done') continue
+        try { await this.project(entry, task, rediscover) } catch (err) {
           log.debug('firstmate', `refresh failed for ${task}: ${(err as Error).message}`)
         }
       }
@@ -371,11 +412,17 @@ export class FirstmateObserver {
   }
 
   /** Point a card at a specific conversation id (or clear with null → back to the
-   *  heuristic). Display-only; returns false for an unknown card or a malformed id. */
+   *  heuristic). Display-only; returns false for an unknown card, or an id with no
+   *  transcript in the worker's project dir. */
   async setConversationOverride(runId: string, conversationId: string | null): Promise<boolean> {
     const owner = this.owned.get(runId)
     if (!owner) return false
-    if (conversationId !== null && !isValidConversationId(conversationId)) return false
+    if (conversationId !== null) {
+      const worktree = this.spawns.get(runId)?.worktree
+      if (!worktree || !findLinkedTranscript({
+        worktree, spawnSec: null, override: conversationId, projectDir: this.opts.projectDirFor?.(worktree),
+      })) return false
+    }
     if (conversationId === null) delete this.overrides[runId]
     else this.overrides[runId] = conversationId
     this.saveStringMap(this.overridesPath, this.overrides)

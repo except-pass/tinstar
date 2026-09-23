@@ -9,7 +9,8 @@
 //   accept     : first user/assistant record has `cwd == worktree`,
 //                `isSidechain == false`, an interactive `entrypoint` (headless
 //                `claude -p` runs report an `sdk-*` entrypoint and are skipped),
-//                and a timestamp >= spawn time - SPAWN_SKEW_SEC
+//                a timestamp >= spawn time - SPAWN_SKEW_SEC, and (when a later
+//                worker was spawned into the same worktree) < that later spawn
 //   pick       : the candidate appended to most recently (follows relaunch and /clear)
 //
 // READ-ONLY and display-only: a wrong link can mislabel one card's light or
@@ -37,6 +38,8 @@ export interface LinkOpts {
   worktree: string
   /** Unix seconds the worker was (re)spawned: meta `spawn_gen`, else the ledger dispatch ts. */
   spawnSec: number | null
+  /** Unix seconds of the next later spawn into the same worktree; null when none. */
+  nextSpawnSec?: number | null
   /** Manual override, e.g. a conversation id the operator pasted onto the card. */
   override?: string | null
   /** Test seam; defaults to the Claude adapter's project dir for the worktree. */
@@ -117,6 +120,7 @@ export function findLinkedTranscript(opts: LinkOpts): LinkedTranscript | null {
   let names: string[]
   try { names = readdirSync(dir) } catch { return null }
   const earliest = opts.spawnSec === null ? null : opts.spawnSec - SPAWN_SKEW_SEC
+  const latest = opts.nextSpawnSec ?? null
 
   let best: LinkedTranscript | null = null
   for (const name of names) {
@@ -134,6 +138,7 @@ export function findLinkedTranscript(opts: LinkOpts): LinkedTranscript | null {
     const verdict = judgeHead(path, opts.worktree)
     if (!verdict.ok) continue
     if (earliest !== null && (verdict.firstSec === null || verdict.firstSec < earliest)) continue
+    if (latest !== null && (verdict.firstSec === null || verdict.firstSec >= latest)) continue
     best = { conversationId, path, mtimeMs, source: 'auto' }
   }
   return best

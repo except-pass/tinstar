@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync,
-  rmSync, statSync, writeFileSync,
+  rmSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -287,8 +287,8 @@ describe('FirstmateObserver', () => {
     const CONV = 'a599bd80-0000-4000-8000-000000000001'
     let projectDir: string
 
-    function writeConv(id: string, records: object[]) {
-      const first = { type: 'user', cwd: '/wt/1/webapp', isSidechain: false, entrypoint: 'claude-desktop', timestamp: iso(1000), message: { content: 'go' } }
+    function writeConv(id: string, records: object[], firstSec = 1000) {
+      const first = { type: 'user', cwd: '/wt/1/webapp', isSidechain: false, entrypoint: 'claude-desktop', timestamp: iso(firstSec), message: { content: 'go' } }
       writeFileSync(join(projectDir, `${id}.jsonl`), [first, ...records].map(r => JSON.stringify(r)).join('\n') + '\n')
     }
     const assistant = (text: string, toolUse = false) => ({
@@ -348,8 +348,24 @@ describe('FirstmateObserver', () => {
       expect(JSON.parse(readFileSync(join(configRoot, 'firstmate', 'conversation-overrides.json'), 'utf8'))).toEqual({ 'fm--t1': OTHER })
       expect(await o.setConversationOverride('fm--t1', '../bad')).toBe(false)
       expect(await o.setConversationOverride('fm--nope', OTHER)).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', 'c0000000-0000-4000-8000-000000000404')).toBe(false)
+      expect(card('fm--t1')).toMatchObject({ conversationId: OTHER, conversationSource: 'manual' })
       expect(await o.setConversationOverride('fm--t1', null)).toBe(true)
       expect(card('fm--t1')!.conversationSource).toBe('auto')
+    })
+
+    it('two workers sharing one worktree slot each keep their own conversation', async () => {
+      const NEWER = 'b0000000-0000-4000-8000-000000000003'
+      writeConv(CONV, [assistant('done')], 1000)
+      writeConv(NEWER, [assistant('', true)], 5010)
+      utimesSync(join(projectDir, `${CONV}.jsonl`), 2000, 2000)
+      utimesSync(join(projectDir, `${NEWER}.jsonl`), 6000, 6000)
+      writeFileSync(join(home, 'state', 't2.meta'), 'worktree=/wt/1/webapp\nspawn_gen=s5000\n')
+      writeFileSync(ledger(), dispatched('t1', 1005) + dispatched('t2', 5005))
+      const o = make({ projectDir })
+      await o.start()
+      expect(card('fm--t1')).toMatchObject({ conversationId: CONV, activity: 'idle' })
+      expect(card('fm--t2')).toMatchObject({ conversationId: NEWER, activity: 'running' })
     })
   })
 })
