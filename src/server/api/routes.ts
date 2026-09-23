@@ -1819,6 +1819,8 @@ export interface RouteContext {
   refreshCoordinator?: SurfaceRefreshCoordinator
   /** Settles compose process exits, deadlines, and restart recovery. */
   composeCoordinator?: SurfaceComposeCoordinator
+  /** The first mate observer, when configured (transcript link + override). */
+  firstmateObserver?: import('../firstmate/observer').FirstmateObserver
 }
 
 function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
@@ -6178,7 +6180,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const name = extractSessionName(url.split('?')[0] ?? '', '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
-        if (!session) {
+        // Observed first mate workers have no session record (read-only path): fall
+        // back to the observer's linked Claude transcript.
+        const observed = session ? null : ctx.firstmateObserver?.resolveTranscript(name) ?? null
+        if (!session && !observed) {
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           return true
         }
@@ -6186,7 +6191,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const requested = Number.parseInt(params.get('windowSec') ?? '', 10)
         const windowSec = Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_WINDOW_SEC
         try {
-          const timeline = buildSessionTimeline(resolveTimelineInput(session))
+          const input: TimelineInput = session
+            ? resolveTimelineInput(session)
+            : { name, adapter: 'claude', transcriptPath: observed!.path, createdSec: observed!.createdSec }
+          const timeline = buildSessionTimeline(input)
           // null is a real answer, not an error: a Codex session with no
           // workspace.path has no working directory to discover a rollout
           // against, so there is nothing to reconstruct (R18).
@@ -6197,6 +6205,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         return true
       }
+    }
+
+    // PUT /api/firstmate/runs/:id/conversation — manually link an observed worker to a
+    // Claude conversation id ({conversationId: null} returns to the heuristic).
+    // Display-only: it changes which transcript the card reads, nothing else.
+    if (method === 'PUT' && url.startsWith('/api/firstmate/runs/') && url.split('?')[0]!.endsWith('/conversation')) {
+      const runId = decodeURIComponent(url.split('?')[0]!.slice('/api/firstmate/runs/'.length, -'/conversation'.length))
+      withBody(req, res, async (body) => {
+        const observer = ctx.firstmateObserver
+        if (!observer) return fail(res, 'NOT_FOUND', 'First mate observer is not running')
+        let conversationId: unknown
+        try { conversationId = (JSON.parse(body) as { conversationId?: unknown }).conversationId ?? null } catch {
+          return fail(res, 'INVALID_PARAMS', 'Invalid JSON body')
+        }
+        if (conversationId !== null && typeof conversationId !== 'string') return fail(res, 'INVALID_PARAMS', 'conversationId must be a string or null')
+        const done = await observer.setConversationOverride(runId, conversationId)
+        if (!done) return fail(res, 'NOT_FOUND', `No observed worker '${runId}', or no such conversation in its worktree`)
+        ok(res, { ok: true })
+      })
+      return true
     }
 
     // POST /api/sessions

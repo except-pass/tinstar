@@ -12,14 +12,14 @@ describe('first mate task meta', () => {
   it('parses window, worktree and project', () => {
     const m = parseMeta([
       'window=firstmate:fm-x', 'endpoint_task_id=x', 'worktree=/w/tree/1/tinstar',
-      'project=/Users/me/repo/firstmate/projects/tinstar', 'harness=claude', 'unknown_future_key=zzz', 'garbage line',
+      'project=/Users/me/repo/firstmate/projects/tinstar', 'harness=claude', 'spawn_gen=s1790171520', 'unknown_future_key=zzz', 'garbage line',
     ].join('\n'))
-    expect(m).toEqual({ window: 'firstmate:fm-x', worktree: '/w/tree/1/tinstar', project: 'tinstar' })
+    expect(m).toEqual({ window: 'firstmate:fm-x', worktree: '/w/tree/1/tinstar', project: 'tinstar', spawnGen: 1790171520 })
   })
 
   it('tolerates empty and partial content', () => {
-    expect(parseMeta('')).toEqual({ window: null, worktree: null, project: null })
-    expect(parseMeta('backend=herdr\nwindow=')).toEqual({ window: null, worktree: null, project: null })
+    expect(parseMeta('')).toEqual({ window: null, worktree: null, project: null, spawnGen: null })
+    expect(parseMeta('backend=herdr\nwindow=')).toEqual({ window: null, worktree: null, project: null, spawnGen: null })
   })
 
   it('returns null when the meta file is absent', async () => {

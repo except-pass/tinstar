@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync,
-  rmSync, statSync, writeFileSync,
+  rmSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,6 +9,7 @@ import { DocumentStore } from '../stores/document-store'
 import { getSession } from '../sessions/session'
 import { FIRSTMATE_VIEW, FirstmateObserver, isObservedRun, observedRunId, type FirstmateCardData } from './observer'
 import { LEDGER_FILE } from './ledger-watcher'
+import { parseNewEntriesAt } from '../sessions/transcript-parser'
 import type { Run } from '../../domain/types'
 
 const j = (o: Record<string, unknown>) => JSON.stringify({ v: 1, ...o }) + '\n'
@@ -41,13 +42,15 @@ describe('FirstmateObserver', () => {
   const ledger = () => join(home, 'state', LEDGER_FILE)
   const card = (id: string) => (store.getRun(id)?.viewData as { firstmate: FirstmateCardData } | undefined)?.firstmate
 
-  function make(opts: { homes?: string[] } = {}): FirstmateObserver {
+  function make(opts: { homes?: string[]; projectDir?: string; transcriptPollMs?: number } = {}): FirstmateObserver {
     const o = new FirstmateObserver({
       homes: opts.homes ?? [home],
       docStore: store,
       configRoot,
       hasSession: n => sessionNames.has(n),
       pollMs: 20,
+      transcriptPollMs: opts.transcriptPollMs ?? 0,
+      projectDirFor: opts.projectDir ? () => opts.projectDir : undefined,
     })
     observers.push(o)
     return o
@@ -278,6 +281,130 @@ describe('FirstmateObserver', () => {
     it('the observed run id is not a tmux-session-shaped name', () => {
       expect(observedRunId('t', null)).toBe('fm--t')
       expect(observedRunId('t', 'abc123')).toBe('fm-abc123-t')
+    })
+  })
+  describe('conversation link (M3)', () => {
+    const iso = (sec: number) => new Date(sec * 1000).toISOString()
+    const CONV = 'a599bd80-0000-4000-8000-000000000001'
+    let projectDir: string
+
+    function writeConv(id: string, records: object[], firstSec = 1000) {
+      const first = { type: 'user', cwd: '/wt/1/webapp', isSidechain: false, entrypoint: 'claude-desktop', timestamp: iso(firstSec), message: { content: 'go' } }
+      writeFileSync(join(projectDir, `${id}.jsonl`), [first, ...records].map(r => JSON.stringify(r)).join('\n') + '\n')
+    }
+    const assistant = (text: string, toolUse = false) => ({
+      type: 'assistant', timestamp: iso(1001),
+      message: { content: toolUse ? [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] : [{ type: 'text', text }] },
+    })
+
+    beforeEach(() => {
+      projectDir = mkdtempSync(join(tmpdir(), 'fm-proj-'))
+      writeFileSync(join(home, 'state', 't1.meta'), 'worktree=/wt/1/webapp\nspawn_gen=s1000\n')
+      writeFileSync(ledger(), dispatched('t1', 1005))
+    })
+    afterEach(() => rmSync(projectDir, { recursive: true, force: true }))
+
+    it('links the conversation and shows running/idle from the transcript tail', async () => {
+      writeConv(CONV, [assistant('', true)])
+      const o = make({ projectDir })
+      await o.start()
+      expect(card('fm--t1')).toMatchObject({ conversationId: CONV, conversationSource: 'auto', activity: 'running', runId: 'fm--t1' })
+      expect(o.resolveTranscript('fm--t1')).toMatchObject({ conversationId: CONV, path: join(projectDir, `${CONV}.jsonl`) })
+    })
+
+    it('flips to idle on a later poll without any new ledger line, and feeds recap entries', async () => {
+      writeConv(CONV, [assistant('', true)])
+      const o = make({ projectDir, transcriptPollMs: 20 })
+      await o.start()
+      expect(card('fm--t1')!.activity).toBe('running')
+      appendFileSync(join(projectDir, `${CONV}.jsonl`), JSON.stringify(assistant('all done')) + '\n')
+      await waitFor(() => card('fm--t1')!.activity === 'idle')
+      expect(store.getRun('fm--t1')!.recapEntries.length).toBeGreaterThan(0)
+    })
+
+    it('keeps polling a done worker until its light settles to idle', async () => {
+      writeConv(CONV, [assistant('', true)])
+      writeFileSync(ledger(), dispatched('t1', 1005) + status('t1', 1100, 'done', 'shipped'))
+      const o = make({ projectDir, transcriptPollMs: 20 })
+      await o.start()
+      expect(card('fm--t1')!.activity).toBe('running')
+      appendFileSync(join(projectDir, `${CONV}.jsonl`), JSON.stringify(assistant('all done')) + '\n')
+      await waitFor(() => card('fm--t1')!.activity === 'idle')
+    })
+
+    it('never writes into the transcript dir or the first mate home', async () => {
+      writeConv(CONV, [assistant('done')])
+      const before = [...fingerprint(home), ...fingerprint(projectDir)]
+      const o = make({ projectDir })
+      await o.start()
+      o.stop()
+      expect([...fingerprint(home), ...fingerprint(projectDir)]).toEqual(before)
+    })
+
+    it('leaves the card unlinked when no transcript matches', async () => {
+      const o = make({ projectDir })
+      await o.start()
+      expect(card('fm--t1')).toMatchObject({ conversationId: null, activity: null })
+      expect(o.resolveTranscript('fm--t1')).toBeNull()
+    })
+
+    it('manual override re-links and persists; null returns to the heuristic', async () => {
+      const OTHER = 'b0000000-0000-4000-8000-000000000002'
+      writeConv(CONV, [assistant('done')])
+      writeConv(OTHER, [assistant('', true)])
+      const o = make({ projectDir })
+      await o.start()
+      expect(await o.setConversationOverride('fm--t1', OTHER)).toBe(true)
+      expect(card('fm--t1')).toMatchObject({ conversationId: OTHER, conversationSource: 'manual', activity: 'running' })
+      expect(JSON.parse(readFileSync(join(configRoot, 'firstmate', 'conversation-overrides.json'), 'utf8'))).toEqual({ 'fm--t1': OTHER })
+      expect(await o.setConversationOverride('fm--t1', '../bad')).toBe(false)
+      expect(await o.setConversationOverride('fm--nope', OTHER)).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', 'c0000000-0000-4000-8000-000000000404')).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', '')).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', '   ')).toBe(false)
+      expect(card('fm--t1')).toMatchObject({ conversationId: OTHER, conversationSource: 'manual' })
+      expect(await o.setConversationOverride('fm--t1', null)).toBe(true)
+      expect(card('fm--t1')!.conversationSource).toBe('auto')
+    })
+
+    it('a relink drops recap entries from the previous conversation', async () => {
+      const OTHER = 'b0000000-0000-4000-8000-000000000002'
+      writeConv(CONV, [assistant('from the wrong conversation')])
+      writeConv(OTHER, [assistant('from the right conversation')])
+      utimesSync(join(projectDir, `${CONV}.jsonl`), 9000, 9000)
+      utimesSync(join(projectDir, `${OTHER}.jsonl`), 2000, 2000)
+      const o = make({ projectDir })
+      await o.start()
+      const texts = () => JSON.stringify(store.getRun('fm--t1')!.recapEntries)
+      expect(texts()).toContain('wrong conversation')
+      expect(await o.setConversationOverride('fm--t1', OTHER)).toBe(true)
+      expect(texts()).not.toContain('wrong conversation')
+      expect(texts()).toContain('right conversation')
+    })
+
+    it('a new observer reads its linked conversation from the start despite a stale parser offset', async () => {
+      writeConv(CONV, [assistant(`first answer ${'.'.repeat(200)}`)])
+      // A previous owner of the run id (an earlier observer) left the parser part-way into this file's length.
+      writeConv('stale', [assistant('y')])
+      parseNewEntriesAt('fm--t1', join(projectDir, 'stale.jsonl'))
+      rmSync(join(projectDir, 'stale.jsonl'))
+      const o = make({ projectDir })
+      await o.start()
+      expect(JSON.stringify(store.getRun('fm--t1')!.recapEntries)).toContain('first answer')
+    })
+
+    it('two workers sharing one worktree slot each keep their own conversation', async () => {
+      const NEWER = 'b0000000-0000-4000-8000-000000000003'
+      writeConv(CONV, [assistant('done')], 1000)
+      writeConv(NEWER, [assistant('', true)], 5010)
+      utimesSync(join(projectDir, `${CONV}.jsonl`), 2000, 2000)
+      utimesSync(join(projectDir, `${NEWER}.jsonl`), 6000, 6000)
+      writeFileSync(join(home, 'state', 't2.meta'), 'worktree=/wt/1/webapp\nspawn_gen=s5000\n')
+      writeFileSync(ledger(), dispatched('t1', 1005) + dispatched('t2', 5005))
+      const o = make({ projectDir })
+      await o.start()
+      expect(card('fm--t1')).toMatchObject({ conversationId: CONV, activity: 'idle' })
+      expect(card('fm--t2')).toMatchObject({ conversationId: NEWER, activity: 'running' })
     })
   })
 })

@@ -1749,6 +1749,7 @@ export function initBackend(): RouteContext {
     providerRegistry,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
+    get firstmateObserver() { return firstmateObserver },
   }
   backendContext = ctx
   markBackendContextReady()
