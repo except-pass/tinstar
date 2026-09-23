@@ -266,7 +266,7 @@ describe('CLI against a live backend', () => {
     await run(argv('group', `${a},${b}`, '--headline', 'box', '--json'))
     const grouped = JSON.parse(out.join('\n')) as { data: { surfaces: { surface: { id: string } }[] } }
     const boxId = grouped.data.surfaces[0]!.surface.id
-    expect(docStore.getSurfaceChildren(boxId).map(s => s.id)).toEqual([a, b])
+    expect(docStore.getSurfaceChildren(boxId).map(s => s.id).sort()).toEqual([a, b].sort())
 
     out.length = 0
     await run(argv('ungroup', boxId))

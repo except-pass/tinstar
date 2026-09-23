@@ -369,7 +369,7 @@ export class FirstmateObserver {
         log.debug('firstmate', `transcript link failed for ${runId}: ${(err as Error).message}`)
       }
     }
-    if (prev && prev.path !== link?.path) resetOffset(runId)
+    if (prev?.path !== link?.path) resetOffset(runId)
     if (link) this.links.set(runId, link)
     else this.links.delete(runId)
     return link

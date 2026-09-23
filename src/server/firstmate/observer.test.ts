@@ -9,6 +9,7 @@ import { DocumentStore } from '../stores/document-store'
 import { getSession } from '../sessions/session'
 import { FIRSTMATE_VIEW, FirstmateObserver, isObservedRun, observedRunId, type FirstmateCardData } from './observer'
 import { LEDGER_FILE } from './ledger-watcher'
+import { parseNewEntriesAt } from '../sessions/transcript-parser'
 import type { Run } from '../../domain/types'
 
 const j = (o: Record<string, unknown>) => JSON.stringify({ v: 1, ...o }) + '\n'
@@ -379,6 +380,17 @@ describe('FirstmateObserver', () => {
       expect(await o.setConversationOverride('fm--t1', OTHER)).toBe(true)
       expect(texts()).not.toContain('wrong conversation')
       expect(texts()).toContain('right conversation')
+    })
+
+    it('a new observer reads its linked conversation from the start despite a stale parser offset', async () => {
+      writeConv(CONV, [assistant(`first answer ${'.'.repeat(200)}`)])
+      // A previous owner of the run id (an earlier observer) left the parser part-way into this file's length.
+      writeConv('stale', [assistant('y')])
+      parseNewEntriesAt('fm--t1', join(projectDir, 'stale.jsonl'))
+      rmSync(join(projectDir, 'stale.jsonl'))
+      const o = make({ projectDir })
+      await o.start()
+      expect(JSON.stringify(store.getRun('fm--t1')!.recapEntries)).toContain('first answer')
     })
 
     it('two workers sharing one worktree slot each keep their own conversation', async () => {
