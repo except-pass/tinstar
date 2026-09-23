@@ -284,7 +284,9 @@ export class FirstmateObserver {
     const existing = docStore.getRun(runId)
     const project = w.project ?? meta?.project ?? null
     const worktree = meta?.worktree ?? null
+    const prevPath = this.links.get(runId)?.path
     const link = this.linkFor(runId, worktree, meta?.spawnGen ?? w.dispatchedAt, rediscover)
+    const relinked = prevPath !== undefined && prevPath !== link?.path
     const activity = link ? readSessionStatusDetailAt(link.path)?.state ?? null : null
     const card: FirstmateCardData = {
       source: 'fleet-ledger',
@@ -329,7 +331,7 @@ export class FirstmateObserver {
       repo: project ?? '',
       worktree: '',
       touchedFiles: existing?.touchedFiles ?? [],
-      recapEntries: existing?.recapEntries ?? [],
+      recapEntries: relinked ? [] : existing?.recapEntries ?? [],
       rawLogs: '',
       port: null,
       backend: null,

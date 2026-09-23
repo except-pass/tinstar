@@ -366,6 +366,21 @@ describe('FirstmateObserver', () => {
       expect(card('fm--t1')!.conversationSource).toBe('auto')
     })
 
+    it('a relink drops recap entries from the previous conversation', async () => {
+      const OTHER = 'b0000000-0000-4000-8000-000000000002'
+      writeConv(CONV, [assistant('from the wrong conversation')])
+      writeConv(OTHER, [assistant('from the right conversation')])
+      utimesSync(join(projectDir, `${CONV}.jsonl`), 9000, 9000)
+      utimesSync(join(projectDir, `${OTHER}.jsonl`), 2000, 2000)
+      const o = make({ projectDir })
+      await o.start()
+      const texts = () => JSON.stringify(store.getRun('fm--t1')!.recapEntries)
+      expect(texts()).toContain('wrong conversation')
+      expect(await o.setConversationOverride('fm--t1', OTHER)).toBe(true)
+      expect(texts()).not.toContain('wrong conversation')
+      expect(texts()).toContain('right conversation')
+    })
+
     it('two workers sharing one worktree slot each keep their own conversation', async () => {
       const NEWER = 'b0000000-0000-4000-8000-000000000003'
       writeConv(CONV, [assistant('done')], 1000)
