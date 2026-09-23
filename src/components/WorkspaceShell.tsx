@@ -148,7 +148,7 @@ function WorkspaceShellInner() {
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
   // from their PluginWidgetDisabledPlaceholder to the real component.
-  const [, setPluginsBooted] = useState(false)
+  const [pluginsBooted, setPluginsBooted] = useState(false)
   useEffect(() => {
     let cancelled = false
     pluginsReady.then(() => { if (!cancelled) setPluginsBooted(true) }).catch(() => {})
@@ -412,14 +412,16 @@ function WorkspaceShellInner() {
   )
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
-  // still shows them (dimmed) so the user can re-show them.
+  // still shows them (dimmed) so the user can re-show them. Until plugins boot, also
+  // hold back runs with a plugin `view`: their widget isn't registered yet, so a
+  // cold-load default layout would size them as a run-workspace and persist that.
   const visibleCanvasTree = useMemo(() => {
     const canvasRoots = flattenUnscopedForCanvas(canvasTree)
-    if (hiddenRunIds.size === 0) return canvasRoots
+    if (hiddenRunIds.size === 0 && pluginsBooted) return canvasRoots
     const prune = (nodes: TreeNode[]): TreeNode[] => {
       const out: TreeNode[] = []
       for (const node of nodes) {
-        if (node.type === 'run' && hiddenRunIds.has(node.entityId)) continue
+        if (node.type === 'run' && (hiddenRunIds.has(node.entityId) || (!pluginsBooted && node.view))) continue
         if (node.children.length === 0) {
           out.push(node)
           continue
@@ -431,7 +433,7 @@ function WorkspaceShellInner() {
       return out
     }
     return prune(canvasRoots)
-  }, [canvasTree, hiddenRunIds])
+  }, [canvasTree, hiddenRunIds, pluginsBooted])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
