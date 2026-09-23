@@ -107,7 +107,7 @@ function judgeHead(path: string, worktree: string): HeadVerdict {
 export function findLinkedTranscript(opts: LinkOpts): LinkedTranscript | null {
   const dir = opts.projectDir ?? getProjectDir(opts.worktree)
 
-  if (opts.override) {
+  if (opts.override != null) {
     if (!isValidConversationId(opts.override)) return null
     const path = join(dir, `${opts.override}.jsonl`)
     try {

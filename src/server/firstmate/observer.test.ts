@@ -359,6 +359,8 @@ describe('FirstmateObserver', () => {
       expect(await o.setConversationOverride('fm--t1', '../bad')).toBe(false)
       expect(await o.setConversationOverride('fm--nope', OTHER)).toBe(false)
       expect(await o.setConversationOverride('fm--t1', 'c0000000-0000-4000-8000-000000000404')).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', '')).toBe(false)
+      expect(await o.setConversationOverride('fm--t1', '   ')).toBe(false)
       expect(card('fm--t1')).toMatchObject({ conversationId: OTHER, conversationSource: 'manual' })
       expect(await o.setConversationOverride('fm--t1', null)).toBe(true)
       expect(card('fm--t1')!.conversationSource).toBe('auto')
