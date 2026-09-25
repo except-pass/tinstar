@@ -332,6 +332,24 @@ function dependencyProposal(envelope: IntentEnvelope): ParseResult<Proposal> {
 }
 
 /**
+ * Epic ids blocked by one dependency. `fromId` waits on `toId`.
+ * A task id names its epic. Other epics in the same initiative are not blocked.
+ */
+export function blockedStreamIds(doc: PortfolioDoc, dependencyId: string): string[] {
+  const dependency = doc.dependencies.find(item => item.id === dependencyId)
+  if (!dependency) return []
+  const streamId = streamForEndpoint(doc, dependency.fromId)
+  return streamId ? [streamId] : []
+}
+
+function streamForEndpoint(doc: PortfolioDoc, id: string): string | null {
+  if (doc.epics.some(epic => epic.id === id)) return id
+  const task = doc.tasks.find(item => item.id === id)
+  if (task?.epicId && doc.epics.some(epic => epic.id === task.epicId)) return task.epicId
+  return null
+}
+
+/**
  * Persist only ancestors the launch body supplied.
  * The project is the task's single project when that task already exists.
  * An epic's initiative is never copied in.
