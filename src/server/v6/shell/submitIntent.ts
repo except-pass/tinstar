@@ -252,15 +252,17 @@ export async function submitIntent(raw: unknown, opts: InboxClientOptions): Prom
 
   const ready = await readReady(opts)
   let disposition: IntentDisposition
-  if (ready.canReceive !== true) disposition = 'not-receivable'
-  else if (note.code === 3 || payload.announced === false) disposition = 'saved-unannounced'
-  else disposition = 'queued'
+  // A saved note is the durable queue. Primary readiness and a pane do not
+  // turn that file into delivery, and they are not a third "not receivable" state.
+  if (ready.canReceive === true && (note.code === 3 || payload.announced === false)) {
+    disposition = 'saved-unannounced'
+  } else {
+    disposition = 'queued'
+  }
 
   const detail = disposition === 'queued'
     ? (payload.outcome === 'replay' ? 'replayed the original note' : 'queued')
-    : disposition === 'saved-unannounced'
-      ? 'saved, not announced'
-      : ready.detail || 'not receivable'
+    : 'saved, not announced'
 
   const submission: IntentSubmission = {
     requestId: envelope.requestId,

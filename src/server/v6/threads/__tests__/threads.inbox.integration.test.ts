@@ -112,7 +112,7 @@ describe('threads against the real fm-inbox.sh', () => {
         anchor: { type: 'epic', ids: ['epic-live'], labels: ['Live card'] },
       })
       expect(first.messages).toHaveLength(1)
-      expect(first.messages[0]?.disposition).toBe('not-receivable')
+      expect(first.messages[0]?.disposition).toBe('queued')
       expect(first.messages[0]?.pending).toBe(true)
       const firstNote = first.messages[0]?.noteId
       const firstRequest = first.messages[0]?.requestId
