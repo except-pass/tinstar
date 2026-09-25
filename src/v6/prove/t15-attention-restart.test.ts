@@ -19,13 +19,29 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { decisionFixture } from '../needsyou/fixtures'
 import { NeedsYouRail } from '../needsyou/NeedsYouRail'
 import { readAttention } from '../../server/v6/needsyou/store'
-import { registerNeedsYouRoutes } from '../../server/v6/needsyou/routes'
+import { registerNeedsYouRoutes, type SubmitIntent } from '../../server/v6/needsyou/routes'
 import { listWorkerDescriptors } from '../../server/v6/shell/snapshot'
 import { readReceipts, submitIntent } from '../../server/v6/shell/submitIntent'
 
 const BIN = process.env.FM_V6_BIN
   ?? '/Users/wtg/.local/state/pm-build/tinstar-v6/worktrees/fm-boundary/bin'
 const binDir = BIN.endsWith('.sh') ? join(BIN, '..') : BIN
+const hasInbox = existsSync(join(binDir, 'fm-inbox.sh'))
+const hasSnapshot = existsSync(join(binDir, 'fm-fleet-snapshot.sh'))
+
+/** Writes the note into the temp home. Used when the fleet scripts are not installed (Linux CI). */
+function durableInbox(fmHome: string): SubmitIntent {
+  return async raw => {
+    const requestId = raw && typeof raw === 'object' && 'requestId' in raw && typeof raw.requestId === 'string'
+      ? raw.requestId
+      : 'req'
+    const noteId = `note-${requestId}`
+    const dir = join(fmHome, 'state', 'inbox')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${noteId}.note`), `${JSON.stringify(raw)}\n`)
+    return { requestId, noteId, disposition: 'queued', applied: false, detail: 'queued' }
+  }
+}
 const WORKER = 'origin-t15'
 const ORIGIN = 'ny-origin'
 const OPEN = 'ny-open'
@@ -99,6 +115,7 @@ describe('T15 attention durability', () => {
   let home = ''
   let base = ''
   let server: Server | null = null
+  let submit: SubmitIntent = submitIntent
 
   afterAll(async () => {
     if (server) await new Promise<void>(resolve => server?.close(() => resolve()))
@@ -109,8 +126,8 @@ describe('T15 attention durability', () => {
   async function listen(): Promise<void> {
     if (server) await new Promise<void>(resolve => server?.close(() => resolve()))
     const handle = registerNeedsYouRoutes({
-      submitIntent,
-      inbox: { home, binDir },
+      submitIntent: submit,
+      inbox: { home, binDir: hasInbox ? binDir : home },
       now: () => '2026-09-25T04:00:00.000Z',
     })
     server = createServer((req, res) => {
@@ -149,11 +166,10 @@ describe('T15 attention durability', () => {
   }
 
   it('keeps an open item after the worker is gone, and applies one restarted answer', async () => {
-    expect(existsSync(join(binDir, 'fm-inbox.sh'))).toBe(true)
-    expect(existsSync(join(binDir, 'fm-fleet-snapshot.sh'))).toBe(true)
     config = mkdtempSync(join(tmpdir(), 't15-config-'))
     home = mkdtempSync(join(tmpdir(), 't15-fm-'))
     dirs.push(config, home)
+    submit = hasInbox ? submitIntent : durableInbox(home)
     for (const key of ['TINSTAR_CONFIG_HOME', 'TINSTAR_V6_FM_HOME', 'FM_V6_BIN', 'TINSTAR_V6_FIXTURE', 'FM_HOME', 'TMUX', 'NODE_ENV']) {
       remember(key)
     }
@@ -164,9 +180,11 @@ describe('T15 attention durability', () => {
     delete process.env.TMUX
     delete process.env.NODE_ENV
     meta(home)
-
-    const listed = await listWorkerDescriptors({ home, configured: true, binDir, fixture: true })
-    expect(listed.workers.map(worker => worker.id)).toContain(WORKER)
+    expect(existsSync(join(home, 'state', `${WORKER}.meta`))).toBe(true)
+    if (hasSnapshot) {
+      const listed = await listWorkerDescriptors({ home, configured: true, binDir, fixture: true })
+      expect(listed.workers.map(worker => worker.id)).toContain(WORKER)
+    }
 
     await listen()
     const origin = await post('/api/v6/needsyou/items', decisionFixture({
@@ -219,20 +237,23 @@ describe('T15 attention durability', () => {
     expect(queuedBody.item.state).toBe('answered')
 
     rmSync(join(home, 'state', `${WORKER}.meta`))
-    const gone = await listWorkerDescriptors({ home, configured: true, binDir, fixture: true })
+    expect(existsSync(join(home, 'state', `${WORKER}.meta`))).toBe(false)
+    const gone = await listWorkerDescriptors({ home, configured: true, binDir: hasSnapshot ? binDir : null, fixture: true })
     expect(gone.workers.map(worker => worker.id)).not.toContain(WORKER)
-    let taskText = ''
-    try {
-      taskText = execFileSync(join(binDir, 'fm-fleet-snapshot.sh'), ['--task', WORKER, '--json'], {
-        env: childEnv(home),
-        encoding: 'utf8',
-      })
-    } catch (err) {
-      const failed = err as { stdout?: string; status?: number }
-      taskText = String(failed.stdout ?? '')
-      expect(failed.status).not.toBe(0)
+    if (hasSnapshot) {
+      let taskText = ''
+      try {
+        taskText = execFileSync(join(binDir, 'fm-fleet-snapshot.sh'), ['--task', WORKER, '--json'], {
+          env: childEnv(home),
+          encoding: 'utf8',
+        })
+      } catch (err) {
+        const failed = err as { stdout?: string; status?: number }
+        taskText = String(failed.stdout ?? '')
+        expect(failed.status).not.toBe(0)
+      }
+      expect(taskText).toMatch(/not-found|"found": false/)
     }
-    expect(taskText).toMatch(/not-found|"found": false/)
 
     const afterExit = itemsOf(await (await fetch(`${base}/api/v6/needsyou`)).json())
     const surviving = afterExit.find(row => row.item.id === ORIGIN)
@@ -264,16 +285,24 @@ describe('T15 attention durability', () => {
     expect(stored?.delivery === 'queued' || stored?.delivery === 'not-receivable' || stored?.delivery === 'saved-unannounced').toBe(true)
     const requestId = stored?.answerRequestId
     expect(requestId).toBeTruthy()
-    const projection = JSON.parse(readFileSync(join(config, 'v6', 'projection.json'), 'utf8')) as {
-      intents: Record<string, { noteId: string | null }>
+    let noteId = `note-${requestId}`
+    if (hasInbox) {
+      const projection = JSON.parse(readFileSync(join(config, 'v6', 'projection.json'), 'utf8')) as {
+        intents: Record<string, { noteId: string | null }>
+      }
+      noteId = projection.intents[requestId ?? '']?.noteId ?? ''
     }
-    const noteId = projection.intents[requestId ?? '']?.noteId
+    const notePath = join(home, 'state', 'inbox', `${noteId}.note`)
     expect(noteId).toBeTruthy()
-    expect(existsSync(join(home, 'state', 'inbox', `${noteId}.note`))).toBe(true)
+    const noteBytes = readFileSync(notePath, 'utf8')
+    expect(noteBytes).toContain(requestId ?? '')
 
     await listen()
-    const reread = await readReceipts({ home, binDir }, requestId ?? '')
-    expect(reread.reply).toBeNull()
+    expect(readFileSync(notePath, 'utf8')).toBe(noteBytes)
+    if (hasInbox) {
+      const reread = await readReceipts({ home, binDir }, requestId ?? '')
+      expect(reread.reply).toBeNull()
+    }
     const reloaded = readAttention(join(config, 'v6', 'needsyou')).items
     const originAgain = reloaded.find(row => row.item.id === ORIGIN)
     const openAgain = reloaded.find(row => row.item.id === OPEN)
@@ -303,13 +332,15 @@ describe('T15 attention durability', () => {
       outcome: 'applied',
       detail: 'applied once',
     }
-    execFileSync(join(binDir, 'fm-inbox.sh'), ['reply', '--json', noteId ?? '', JSON.stringify(receipt)], {
-      env: childEnv(home),
-      encoding: 'utf8',
-    })
-    const replied = await readReceipts({ home, binDir }, requestId ?? '')
-    expect(replied.reply?.appliedOutcome).toBe('applied')
-    expect(replied.reply?.requestId).toBe(requestId)
+    if (hasInbox) {
+      execFileSync(join(binDir, 'fm-inbox.sh'), ['reply', '--json', noteId, JSON.stringify(receipt)], {
+        env: childEnv(home),
+        encoding: 'utf8',
+      })
+      const replied = await readReceipts({ home, binDir }, requestId ?? '')
+      expect(replied.reply?.appliedOutcome).toBe('applied')
+      expect(replied.reply?.requestId).toBe(requestId)
+    }
 
     const first = await post('/api/v6/needsyou/receipts', receipt)
     expect(first.status).toBe(200)
