@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { RECEIPT_SCHEMA, type AppliedReceipt } from '../../contract/intent'
 import {
   applyProposal,
+  blockedStreamIds,
   emptyPortfolio,
   initiativeEnvelope,
   isStale,
@@ -150,6 +151,50 @@ describe('T03 cross-project organization', () => {
     expect(next.epics.map(item => item.initiativeId)).toEqual(['init-1', 'init-1'])
     expect(next.initiatives[0]).toMatchObject({ epicIds: ['epic-a', 'epic-b'], projectIds: ['proj-a', 'proj-b'] })
     expect(next.tasks.map(item => item.project)).toEqual(['proj-a', 'proj-b'])
+  })
+
+  it('does not treat a cross-project dependency as a blocker for every related stream', () => {
+    const doc = board({
+      epics: [epic({ id: 'epic-a' }), epic({ id: 'epic-b' }), epic({ id: 'epic-c' })],
+      tasks: [
+        task({ id: 'task-a', project: 'proj-a', epicId: 'epic-a' }),
+        task({ id: 'task-b', project: 'proj-b', epicId: 'epic-b' }),
+        task({ id: 'task-c', project: 'proj-c', epicId: 'epic-c' }),
+      ],
+    })
+    const initiative = initiativeEnvelope({
+      id: 'init-1',
+      name: 'Rivers',
+      epicIds: ['epic-a', 'epic-b', 'epic-c'],
+      projectIds: ['proj-a', 'proj-b', 'proj-c'],
+    }, 'req-init', null)
+    const proposed = proposalFromIntent(doc, initiative)
+    expect(proposed.ok).toBe(true)
+    if (!proposed.ok) return
+    const coordinated = applyProposal(doc, proposed.value).doc
+    expect(coordinated.dependencies).toEqual([])
+    expect(coordinated.initiatives[0]).toMatchObject({
+      epicIds: ['epic-a', 'epic-b', 'epic-c'],
+      projectIds: ['proj-a', 'proj-b', 'proj-c'],
+    })
+    const dep = proposalFromIntent(coordinated, {
+      schema: 'tinstar.v6.intent/1',
+      kind: 'portfolio.mutate',
+      requestId: 'req-dep',
+      revision: null,
+      anchor: { type: 'selection', ids: ['dep-1'] },
+      body: { op: 'add-dependency', id: 'dep-1', fromId: 'epic-a', toId: 'epic-b' },
+    })
+    expect(dep.ok).toBe(true)
+    if (!dep.ok) return
+    const next = applyProposal(coordinated, dep.value).doc
+    expect(next.tasks.map(item => item.project)).toEqual(['proj-a', 'proj-b', 'proj-c'])
+    expect(next.dependencies).toEqual([{ id: 'dep-1', fromId: 'epic-a', toId: 'epic-b' }])
+    const related = next.epics.map(item => item.id)
+    expect(related).toEqual(['epic-a', 'epic-b', 'epic-c'])
+    const blocked = blockedStreamIds(next, 'dep-1')
+    expect(blocked).toEqual(['epic-a'])
+    expect(blocked).not.toEqual(related)
   })
 
   it('records an explicit dependency id and rejects a task with more than one project', () => {
