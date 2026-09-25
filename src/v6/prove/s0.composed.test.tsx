@@ -361,7 +361,7 @@ describe('prove composed S0', () => {
     base = `http://127.0.0.1:${address.port}`
   }, 60_000)
 
-  liveIt('lists the two fixture workers from fm-fleet-snapshot', { bins: true }, async () => {
+  liveIt('lists the two fixture workers from fm-fleet-snapshot', { bins: true, tmux: true }, async () => {
     const listed = await fetch(`${base}/api/v6/workers`)
     const text = await listed.text()
     const body = JSON.parse(text) as {
@@ -473,7 +473,7 @@ describe('prove composed S0', () => {
     expect(readdirSync(join(home, 'state')).filter(name => name.endsWith('.meta')).sort()).toEqual(['alpha.meta', 'beta.meta'])
   }, 40_000)
 
-  liveIt('shows the anchored inbox reply on the worker', { bins: true }, async () => {
+  liveIt('shows the anchored inbox reply on the worker', { bins: true, tmux: true }, async () => {
     await renderShell()
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: HELLO } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -499,7 +499,7 @@ describe('prove composed S0', () => {
     expect(screen.getByTestId('v6-shell')).toHaveAttribute('data-worker', 'alpha')
   }, 40_000)
 
-  liveIt('shows a second thread turn on the same worker anchor', { bins: true }, async () => {
+  liveIt('shows a second thread turn on the same worker anchor', { bins: true, tmux: true }, async () => {
     await renderShell()
     fireEvent.click(screen.getByRole('button', { name: /Thread/ }))
     const form = screen.getByRole('form', { name: 'Context thread' })
