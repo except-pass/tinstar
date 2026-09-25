@@ -15,7 +15,7 @@ import {
 } from './model'
 import { isClickablePlanHref } from './plan'
 import { getPortfolio, getPortfolioPlan, postPortfolioIntent, postPortfolioReconcile, type PortfolioSubmitResult } from './client'
-import type { Column, Epic, PlanView, PortfolioDoc } from './types'
+import type { Column, Epic, PendingIntent, PlanView, PortfolioDoc } from './types'
 
 export interface PortfolioBoardProps {
   board?: PortfolioDoc
@@ -44,6 +44,15 @@ function Field({ label, testId, defaultValue }: { label: string; testId: string;
 function inputValue(root: ParentNode | null, testId: string): string {
   const node = root?.querySelector(`[data-testid="${testId}"]`)
   return node instanceof HTMLInputElement ? node.value.trim() : ''
+}
+
+/** Saved while the primary is down: a durable queue, not a move in progress. */
+function statusCopy(item: PendingIntent): string {
+  if (!item.applied && item.canReceive !== true) {
+    if (item.disposition === 'failed' || !item.noteId) return item.detail || 'Failed'
+    return 'Queued'
+  }
+  return pendingLabel(item)
 }
 
 export function PortfolioBoard({
@@ -143,7 +152,7 @@ export function PortfolioBoard({
             data-exit={item.exitCode ?? ''}
             className="flex items-center gap-2 text-2xs text-hue-discussing"
           >
-            <span>{pendingLabel(item)}</span>
+            <span>{statusCopy(item)}</span>
             <button
               type="button"
               className="border border-white/10 px-1 text-ink-mid"
@@ -225,7 +234,7 @@ function EpicCard({
   onPlan?: () => void
 }) {
   const initiative = doc.initiatives.find(item => item.id === epic.initiativeId)
-  const pending = doc.pending.some(item => !item.applied && item.disposition === 'queued' && item.proposal.op === 'move' && item.proposal.epicId === epic.id)
+  const pending = doc.pending.some(item => !item.applied && item.canReceive === true && item.disposition === 'queued' && item.proposal.op === 'move' && item.proposal.epicId === epic.id)
   return (
     <article
       data-testid={`epic-${epic.id}`}
