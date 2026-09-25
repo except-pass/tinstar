@@ -359,6 +359,41 @@ describe('account routes', () => {
     expect(loadPortfolio(portfolioPath()).epics.find(item => item.id === 'epic-done')?.columnId).toBe('col-done')
   })
 
+  it('reopening a completed epic restores active visibility', async () => {
+    await seedBoard()
+    const hidden = await send('/api/v6/account/board')
+    const hiddenIds = ((hidden.body.data?.board as { epics: { id: string }[] }).epics).map(item => item.id)
+    expect(hiddenIds).not.toContain('epic-old')
+    expect(hidden.body.data?.archivedEpicIds).toEqual(['epic-old'])
+
+    const reopened = await post('/api/v6/account/epics/epic-old/completion', { completedAt: null })
+    expect(reopened.status).toBe(200)
+    expect(reopened.body.data?.hidden).toBe(false)
+    expect(reopened.body.data?.epic).toMatchObject({
+      id: 'epic-old',
+      completedAt: null,
+      columnId: 'col-inbox',
+    })
+
+    const board = await send('/api/v6/account/board')
+    const ids = ((board.body.data?.board as { epics: { id: string }[] }).epics).map(item => item.id)
+    expect(ids).toEqual(['epic-done', 'epic-old', 'epic-exact', 'epic-fresh'])
+    expect(board.body.data?.archivedEpicIds).toEqual([])
+
+    const read = await send('/api/v6/account/epics/epic-old')
+    expect(read.status).toBe(200)
+    expect(read.body.data?.hidden).toBe(false)
+    expect(read.body.data?.completedAt).toBeNull()
+    expect(read.body.data?.threads).toEqual([
+      { id: 'thr-old', anchor: { type: 'epic', ids: ['epic-old'] } },
+    ])
+    expect(read.body.data?.needsYouIds).toEqual(['ny-open'])
+    expect(loadPortfolio(portfolioPath()).epics.find(item => item.id === 'epic-old')).toMatchObject({
+      completedAt: null,
+      columnId: 'col-inbox',
+    })
+  })
+
   it('does not start or stop a process from the account implementation', () => {
     const banned = ["from 'node:child_process'", 'from "node:child_process"', 'process.kill(', 'execFile(', 'spawn(']
     const roots = [
