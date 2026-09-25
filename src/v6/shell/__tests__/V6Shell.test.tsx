@@ -275,6 +275,7 @@ describe('V6Shell', () => {
     expect(screen.getByTestId('worker-beta')).toHaveAttribute('data-color', before.betaColor)
     expect(screen.getByTestId('worker-beta')).toHaveTextContent(betaName)
     expect(faceSignature(screen.getByTestId('worker-beta'))).toBe(before.betaFace)
+    expect(headerFaceScope().querySelector<HTMLElement>('img, span[aria-hidden="true"]')?.style.borderColor).toBe(alphaAfter.style.borderColor)
     expect(identityPosts).toEqual([])
   })
 })
