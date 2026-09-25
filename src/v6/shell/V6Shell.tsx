@@ -91,7 +91,7 @@ function Face({ id, color }: { id: string; color: string }) {
   if (!url) {
     return <span aria-hidden className="inline-block h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
   }
-  return <img src={url} alt="" width={28} height={28} className="h-7 w-7 rounded-full" />
+  return <img src={url} alt="" width={28} height={28} className="h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
 }
 
 function statusLabel(intent: IntentUi): string {
