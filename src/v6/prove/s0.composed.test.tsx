@@ -194,7 +194,7 @@ function attachView(argv: string[]): ChildProcess {
 
 function treeHas(root: string, token: string): boolean {
   const visit = (dir: string): boolean => {
-    let entries: ReturnType<typeof readdirSync>
+    let entries
     try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return false }
     for (const entry of entries) {
       const path = join(dir, entry.name)
