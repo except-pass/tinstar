@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ComponentType } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import { apiFetch } from '../../apiClient'
+import './motion.css'
 import { getAvatarDataUrl, subscribeAvatarCache } from '../../components/agentAvatarCache'
 import type { WorkerDescriptor } from '../contract/descriptor'
 import {
@@ -40,8 +41,13 @@ function Slot({ component: Component }: { component: ComponentType | null }) {
   return <Component />
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window.matchMedia !== 'function') return false
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 function useReducedMotion(): boolean {
-  const [reduce, setReduce] = useState(false)
+  const [reduce, setReduce] = useState(prefersReducedMotion)
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -51,6 +57,28 @@ function useReducedMotion(): boolean {
     return () => media.removeEventListener?.('change', apply)
   }, [])
   return reduce
+}
+
+function isHiddenTerminal(element: HTMLElement): boolean {
+  return element.tagName === 'IFRAME'
+    && (element.dataset.testid ?? '').startsWith('terminal-')
+    && (element as HTMLIFrameElement).style.visibility === 'hidden'
+}
+
+/** Put focus on the visible terminal, the open control, or the view heading. */
+function restoreShellFocus(shell: HTMLElement) {
+  const frames = [...shell.querySelectorAll<HTMLIFrameElement>('[data-testid^="terminal-"]')]
+  const visible = frames.find(frame => frame.style.visibility !== 'hidden')
+  if (visible) {
+    visible.focus()
+    return
+  }
+  const opener = shell.querySelector<HTMLElement>('[data-testid="open-terminal"]')
+  if (opener) {
+    opener.focus()
+    return
+  }
+  shell.querySelector<HTMLElement>('[data-focus-landing]')?.focus()
 }
 
 function Face({ id, color }: { id: string; color: string }) {
@@ -63,7 +91,7 @@ function Face({ id, color }: { id: string; color: string }) {
   if (!url) {
     return <span aria-hidden className="inline-block h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
   }
-  return <img src={url} alt="" width={28} height={28} className="h-7 w-7 rounded-full" />
+  return <img src={url} alt="" width={28} height={28} className="h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
 }
 
 function statusLabel(intent: IntentUi): string {
@@ -75,18 +103,68 @@ function statusLabel(intent: IntentUi): string {
   return 'Queued'
 }
 
+interface OpenedTerminal {
+  id: string
+  spawnGen: string | null
+  target: string | null
+}
+
+/**
+ * The frame was opened against one incarnation and endpoint. A later poll that
+ * replaces either of those is a different worker, even when the id matches.
+ */
+function openTerminalStale(open: OpenedTerminal, worker: WorkerDescriptor | undefined): boolean {
+  if (!worker) return true
+  return worker.spawnGen !== open.spawnGen || worker.endpoint.target !== open.target
+}
+
 export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const [nav, setNav] = useState<ShellNav>(initialNav)
   const [workers, setWorkers] = useState<WorkerDescriptor[]>([])
   const [identities, setIdentities] = useState<Record<string, IdentityRecord>>({})
   const [configured, setConfigured] = useState(true)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [opened, setOpened] = useState<string[]>([])
+  const [opened, setOpened] = useState<OpenedTerminal[]>([])
   const [concealed, setConcealed] = useState<string[]>([])
   const [terminalNote, setTerminalNote] = useState<string | null>(null)
   const [intent, setIntent] = useState<IntentUi | null>(null)
+  const [switchCount, setSwitchCount] = useState(0)
   const reduce = useReducedMotion()
   const postedColors = useRef(new Set<string>())
+  const shellRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<HTMLElement>(null)
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const openerRef = useRef<HTMLElement | null>(null)
+  const lastFocusRef = useRef<HTMLElement | null>(null)
+  const switchSeq = useRef(0)
+  const noteRef = useRef<string | null>(null)
+  const dismissing = useRef(false)
+
+  function markSwitch() {
+    switchSeq.current += 1
+    shellRef.current?.setAttribute('data-switch-seq', String(switchSeq.current))
+    setSwitchCount(switchSeq.current)
+  }
+
+  function focusOpener() {
+    const back = openerRef.current
+    openerRef.current = null
+    if (back && back.isConnected && back !== document.body) {
+      back.focus()
+      return
+    }
+    if (shellRef.current) restoreShellFocus(shellRef.current)
+  }
+
+  function dismissTerminal() {
+    if (dismissing.current) return
+    dismissing.current = true
+    const dialog = dialogRef.current
+    if (dialog && typeof dialog.close === 'function' && dialog.open) dialog.close()
+    setTerminalNote(null)
+    focusOpener()
+    queueMicrotask(() => { dismissing.current = false })
+  }
 
   useEffect(() => {
     let stop = false
@@ -140,6 +218,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
       if (!(event.ctrlKey || event.metaKey)) return
       if (event.code !== 'BracketLeft' && event.code !== 'BracketRight') return
       event.preventDefault()
+      markSwitch()
       const dir = event.code === 'BracketRight' ? 1 : -1
       setNav(current => cycleSelection(current, ids(), dir))
     }
@@ -147,13 +226,23 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
       const data = event.data as { type?: string; direction?: string } | null
       if (!data || data.type !== 'v6-worker-cycle') return
       if (data.direction !== 'next' && data.direction !== 'prev') return
+      markSwitch()
       setNav(current => cycleSelection(current, ids(), data.direction === 'next' ? 1 : -1))
+    }
+    function onFocusIn(event: FocusEvent) {
+      const target = event.target
+      if (!(target instanceof HTMLElement)) return
+      if (!shellRef.current?.contains(target)) return
+      if (target.closest('[data-testid="v6-terminal-dialog"]')) return
+      lastFocusRef.current = target
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('message', onMessage)
+    document.addEventListener('focusin', onFocusIn)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('message', onMessage)
+      document.removeEventListener('focusin', onFocusIn)
     }
   }, [workers])
 
@@ -183,6 +272,70 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
 
   const selected = workers.find(worker => worker.id === nav.selectedWorkerId) ?? null
   const view = nav.history.current
+  noteRef.current = terminalNote
+  const stageKey = `${view.kind}:${view.kind === 'portfolio' ? '' : view.id}:${selected?.id ?? ''}`
+  const presence = `${opened.map(row => row.id).join(',')}|${concealed.join(',')}`
+  const selectedId = selected?.id ?? null
+
+  useLayoutEffect(() => {
+    const stale = opened.filter(row => openTerminalStale(row, workers.find(worker => worker.id === row.id)))
+    if (stale.length === 0) return
+    const staleIds = new Set(stale.map(row => row.id))
+    setOpened(current => current.filter(row => !staleIds.has(row.id)))
+    setConcealed(current => current.some(id => staleIds.has(id)) ? current.filter(id => !staleIds.has(id)) : current)
+    if (selectedId && staleIds.has(selectedId)) setTerminalNote('worker changed or is unavailable')
+    for (const row of stale) {
+      void apiFetch(`/api/v6/workers/${encodeURIComponent(row.id)}/terminal`, { method: 'DELETE' }).catch(() => undefined)
+    }
+  }, [opened, workers, selectedId])
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    // Paint-only. setNav already committed, so the next switch does not wait on animationend.
+    stage.classList.remove('v6-arrive')
+    if (reduce) return
+    void stage.getBoundingClientRect()
+    stage.classList.add('v6-arrive')
+  }, [stageKey, reduce])
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current
+    if (!shell || shell.querySelector('[data-testid="v6-terminal-dialog"]')) return
+    const previous = lastFocusRef.current
+    if (!previous) return
+    const lost = !previous.isConnected
+    const hidden = previous.isConnected && isHiddenTerminal(previous)
+    if (!lost && !hidden) return
+    restoreShellFocus(shell)
+  }, [stageKey, presence, terminalNote])
+
+  useEffect(() => {
+    if (!noteRef.current) return
+    const back = openerRef.current
+    openerRef.current = null
+    setTerminalNote(null)
+    if (back && back.isConnected && back !== document.body) back.focus()
+  }, [stageKey])
+
+  useEffect(() => {
+    if (!terminalNote) return
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && !dialog.contains(active)) openerRef.current = active
+    if (typeof dialog.showModal === 'function') {
+      if (!dialog.open) dialog.showModal()
+    } else {
+      dialog.open = true
+      dialog.querySelector<HTMLElement>('[data-dialog-initial]')?.focus()
+    }
+    return () => {
+      dismissing.current = true
+      if (typeof dialog.close === 'function' && dialog.open) dialog.close()
+      queueMicrotask(() => { dismissing.current = false })
+    }
+  }, [terminalNote])
 
   async function openTerminal(worker: WorkerDescriptor) {
     setTerminalNote(null)
@@ -194,7 +347,10 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
       })
       const body = await res.json() as { data?: { state?: string; reason?: string } }
       if (body.data?.state === 'live') {
-        setOpened(current => current.includes(worker.id) ? current : [...current, worker.id])
+        const next = { id: worker.id, spawnGen: worker.spawnGen, target: worker.endpoint.target }
+        setOpened(current => current.some(row => row.id === worker.id)
+          ? current.map(row => row.id === worker.id ? next : row)
+          : [...current, next])
         setConcealed(current => current.filter(id => id !== worker.id))
         return
       }
@@ -205,7 +361,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   }
 
   async function closeTerminal(workerId: string) {
-    setOpened(current => current.filter(id => id !== workerId))
+    setOpened(current => current.filter(row => row.id !== workerId))
     setConcealed(current => current.filter(id => id !== workerId))
     try {
       await apiFetch(`/api/v6/workers/${encodeURIComponent(workerId)}/terminal`, { method: 'DELETE' })
@@ -268,18 +424,20 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   return (
     <ShellSelection value={{ workerId: selected?.id ?? null, view }}>
     <div
+      ref={shellRef}
       data-testid="v6-shell"
       data-view={view.kind}
       data-worker={selected?.id ?? ''}
       data-reduced={reduce ? 'true' : 'false'}
-      className="flex h-full min-h-screen flex-col bg-surface-base text-slate-100"
+      data-switch-seq={switchCount}
+      className="v6-shell flex h-full min-h-screen flex-col bg-surface-base text-slate-100"
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
         <strong className="mr-2 text-sm tracking-wide">Tin Star</strong>
-        <button type="button" data-testid="board" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => setNav(current => jumpBoard(current))}>Board</button>
-        <button type="button" data-testid="back" className="rounded border border-white/15 px-2 py-1 text-xs disabled:opacity-40" disabled={nav.history.past.length === 0} onClick={() => setNav(current => goBack(current))}>Back</button>
-        <button type="button" data-testid="worker-prev" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => setNav(current => cycleSelection(current, workers.map(worker => worker.id), -1))}>Previous worker</button>
-        <button type="button" data-testid="worker-next" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => setNav(current => cycleSelection(current, workers.map(worker => worker.id), 1))}>Next worker</button>
+        <button type="button" data-testid="board" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => { markSwitch(); setNav(current => jumpBoard(current)) }}>Board</button>
+        <button type="button" data-testid="back" className="rounded border border-white/15 px-2 py-1 text-xs disabled:opacity-40" disabled={nav.history.past.length === 0} onClick={() => { markSwitch(); setNav(current => goBack(current)) }}>Back</button>
+        <button type="button" data-testid="worker-prev" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => { markSwitch(); setNav(current => cycleSelection(current, workers.map(worker => worker.id), -1)) }}>Previous worker</button>
+        <button type="button" data-testid="worker-next" className="rounded border border-white/15 px-2 py-1 text-xs" onClick={() => { markSwitch(); setNav(current => cycleSelection(current, workers.map(worker => worker.id), 1)) }}>Next worker</button>
         <Slot component={QuotaRail} />
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[16rem_1fr]">
@@ -298,9 +456,9 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
                     data-testid={`worker-${worker.id}`}
                     data-color={color}
                     aria-pressed={active}
-                    className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left text-sm ${motion}`}
+                    className={`v6-worker-row flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left text-sm ${motion}`}
                     style={{ borderColor: color, background: active ? 'rgba(255,255,255,0.04)' : 'transparent' }}
-                    onClick={() => setNav(current => selectWorker(current, worker.id))}
+                    onClick={() => { markSwitch(); setNav(current => selectWorker(current, worker.id)) }}
                   >
                     <Face id={worker.id} color={color} />
                     <span className="min-w-0 flex-1">
@@ -315,10 +473,10 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
             })}
           </ul>
         </aside>
-        <main className="flex min-h-0 flex-col">
+        <main ref={stageRef} data-testid="v6-stage" className="v6-stage flex min-h-0 flex-col">
           {view.kind === 'portfolio' && (
             <section className="p-4">
-              <h1 className="mb-2 text-lg">Portfolio</h1>
+              <h1 tabIndex={-1} data-focus-landing="" className="mb-2 text-lg">Portfolio</h1>
               {PortfolioBoard ? <PortfolioBoard /> : <p>No epics yet.</p>}
             </section>
           )}
@@ -327,7 +485,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
               <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2">
                 <Face id={selected.id} color={identities[selected.id]?.color ?? hashPaletteColor(selected.id)} />
                 <div>
-                  <h1 className="text-base">{displayName(selected.id, identities[selected.id]?.alias)}</h1>
+                  <h1 tabIndex={-1} data-focus-landing="" className="text-base">{displayName(selected.id, identities[selected.id]?.alias)}</h1>
                   <p className="text-xs text-slate-400">{selected.worktree.path ?? 'worktree unavailable'} · {selected.project || 'no project'}</p>
                 </div>
                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-[10px] uppercase">{selected.crewState}</span>
@@ -335,28 +493,28 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
               </div>
               <Slot component={WorkerObjective} />
               <div className="relative min-h-[12rem] flex-1 bg-black">
-                {opened.map(id => (
+                {opened.map(row => (
                   <iframe
-                    key={id}
-                    data-testid={`terminal-${id}`}
-                    title={`Terminal ${id}`}
-                    src={`/v6-terminal-wrapper.html?worker=${encodeURIComponent(id)}`}
+                    key={row.id}
+                    data-testid={`terminal-${row.id}`}
+                    title={`Terminal ${row.id}`}
+                    src={`/v6-terminal-wrapper.html?worker=${encodeURIComponent(row.id)}`}
                     className="absolute inset-0 h-full w-full border-0"
-                    style={{ visibility: id === selected.id && !concealed.includes(id) ? 'visible' : 'hidden' }}
+                    style={{ visibility: row.id === selected.id && !concealed.includes(row.id) ? 'visible' : 'hidden' }}
                   />
                 ))}
-                {!opened.includes(selected.id) && (
+                {!opened.some(row => row.id === selected.id) && (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <button type="button" className="rounded border border-cyan-400/40 px-3 py-1.5 text-sm text-cyan-200" onClick={() => { void openTerminal(selected) }}>Open terminal</button>
+                    <button type="button" data-testid="open-terminal" className="rounded border border-cyan-400/40 px-3 py-1.5 text-sm text-cyan-200" onClick={() => { void openTerminal(selected) }}>Open terminal</button>
                   </div>
                 )}
-                {opened.includes(selected.id) && (
+                {opened.some(row => row.id === selected.id) && (
                   <div className="absolute right-2 top-2 z-10 flex gap-2">
                     <button type="button" className="rounded bg-black/70 px-2 py-1 text-xs" onClick={() => setConcealed(current => current.includes(selected.id) ? current.filter(id => id !== selected.id) : [...current, selected.id])}>Hide terminal</button>
                     <button type="button" className="rounded bg-black/70 px-2 py-1 text-xs" onClick={() => { void closeTerminal(selected.id) }}>Close view</button>
                   </div>
                 )}
-                {terminalNote && <p className="absolute bottom-2 left-2 right-2 text-sm text-amber-200" data-testid="terminal-note">{terminalNote}</p>}
+
               </div>
               <form
                 className="border-t border-white/10 bg-surface-base p-3"
@@ -390,11 +548,52 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
           )}
           {view.kind !== 'portfolio' && view.kind !== 'worker' && (
             <section className="p-4">
-              <p className="text-sm text-slate-300">{view.kind} {view.id}</p>
+              <p tabIndex={-1} data-focus-landing="" className="text-sm text-slate-300">{view.kind} {view.id}</p>
             </section>
           )}
         </main>
       </div>
+      {terminalNote && (
+        <dialog
+          ref={dialogRef}
+          data-testid="v6-terminal-dialog"
+          aria-modal="true"
+          aria-labelledby="v6-terminal-dialog-title"
+          className="v6-dialog"
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              event.stopPropagation()
+              dismissTerminal()
+              return
+            }
+            if (event.key !== 'Tab') return
+            const dialog = dialogRef.current
+            if (!dialog) return
+            const items = [...dialog.querySelectorAll<HTMLElement>('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])')]
+              .filter(item => !item.hasAttribute('disabled'))
+            const first = items[0]
+            const last = items[items.length - 1]
+            if (!first || !last) return
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault()
+              last.focus()
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault()
+              first.focus()
+            }
+          }}
+          onCancel={event => {
+            event.preventDefault()
+            dismissTerminal()
+          }}
+          onClose={dismissTerminal}
+        >
+          <h2 id="v6-terminal-dialog-title" className="mb-2 text-base">Terminal unavailable</h2>
+          <p data-testid="terminal-note" className="text-sm text-amber-200">{terminalNote}</p>
+          <button type="button" data-dialog-initial className="mt-3 rounded border border-white/20 px-3 py-1 text-sm" onClick={dismissTerminal}>Close</button>
+        </dialog>
+      )}
     </div>
     </ShellSelection>
   )
