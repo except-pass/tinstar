@@ -164,6 +164,8 @@ async function getWorkers(res: ServerResponse): Promise<true> {
     workers: list.workers,
     identities,
     diagnostics: list.diagnostics,
+    observation: list.observation,
+    unobserved: list.unobserved,
   })
 }
 
