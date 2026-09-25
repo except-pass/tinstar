@@ -37,8 +37,10 @@ case v6view- in "$session"*) die "tinstar-v6-view: session name would prefix-mat
 # shellcheck disable=SC2194
 case tsview- in "$session"*) die "tinstar-v6-view: session name would prefix-match view names" ;; esac
 
+# `env` runs a program, not the shell builtin `command`. Ubuntu has no
+# /usr/bin/command, so `env command tmux` died before any session existed.
 v6tmux() {
-  env -u TMUX command tmux -L "$socket" "$@"
+  env -u TMUX tmux -L "$socket" "$@"
 }
 
 listing=$(v6tmux list-windows -t "=$session" -F '#{window_id} #{window_name}' 2>/dev/null) \
@@ -53,7 +55,7 @@ placeholder="v6ph-$nonce"
 
 # destroy-unattached cannot be set at creation (tmux would reap the session
 # before a client attached), so a hangup before attach cleans the view only.
-trap 'env -u TMUX command tmux -L "$socket" kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
+trap 'env -u TMUX tmux -L "$socket" kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
 
 v6tmux new-session -d -s "$view" -n "$placeholder" \; \
   set-option -t "=$view:" prefix None \; \
@@ -67,4 +69,4 @@ v6tmux new-session -d -s "$view" -n "$placeholder" \; \
   || die "could not create the view session"
 
 trap - HUP INT TERM
-exec env -u TMUX command tmux -L "$socket" attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on
+exec env -u TMUX tmux -L "$socket" attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on

@@ -1,5 +1,5 @@
-import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,10 +8,41 @@ import { cycleSelection, jumpBoard } from '../../../../v6/shell/navigation'
 import { readReceipts, submitIntent } from '../submitIntent'
 import { listWorkerDescriptors } from '../snapshot'
 
-const snapshotBin = process.env.FM_V6_BIN
+const snapshotCandidate = process.env.FM_V6_BIN
   ?? '/Users/wtg/.local/state/pm-build/tinstar-v6/worktrees/fm-boundary/bin/fm-fleet-snapshot.sh'
-const binDir = snapshotBin.endsWith('.sh') ? dirname(snapshotBin) : snapshotBin
+const snapshotScript = snapshotCandidate.endsWith('.sh')
+  ? snapshotCandidate
+  : join(snapshotCandidate, 'fm-fleet-snapshot.sh')
+const snapshotInstalled = existsSync(snapshotScript)
+const binDir = dirname(snapshotScript)
 const script = join(process.cwd(), 'bin/tinstar-v6-view')
+
+const ptyHelper = `
+import os, pty, select, sys, signal, struct, fcntl, termios
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+def bye(*_):
+    try: os.kill(pid, signal.SIGHUP)
+    except Exception: pass
+    os._exit(0)
+signal.signal(signal.SIGTERM, bye)
+sin = sys.stdin.fileno()
+while True:
+    try: r, _, _ = select.select([fd, sin], [], [])
+    except Exception: break
+    if fd in r:
+        try:
+            if not os.read(fd, 65536): break
+        except OSError: break
+    if sin in r:
+        d = os.read(sin, 65536)
+        if not d: bye()
+        os.write(fd, d)
+try: os.waitpid(pid, 0)
+except Exception: pass
+`
 
 function meta(id: string, session: string, window: string): string {
   return [
@@ -25,7 +56,7 @@ function meta(id: string, session: string, window: string): string {
   ].join('\n')
 }
 
-describe('S0 integrated temp home', () => {
+describe.skipIf(!snapshotInstalled)('S0 integrated temp home (skipped when fm-fleet-snapshot.sh is not installed)', () => {
   const previous = {
     FM_HOME: process.env.FM_HOME,
     TMUX: process.env.TMUX,
@@ -82,10 +113,13 @@ describe('S0 integrated temp home', () => {
       expect(nav.history.past).toEqual([{ kind: 'worker', id: 'beta' }])
 
       const alphaWindow = tmux('list-windows', '-t', '=worker-a', '-F', '#{window_id} #{window_name}').trim().split(' ')
-      const view = spawn(script, [socket, 'worker-a', alphaWindow[0]!, alphaWindow[1]!], {
-        env: { ...env, TINSTAR_V6_VIEW_DIE_SLEEP: '0' },
-        stdio: 'ignore',
-      })
+      const viewArgs = [socket, 'worker-a', alphaWindow[0]!, alphaWindow[1]!]
+      const viewEnv = { ...env, TINSTAR_V6_VIEW_DIE_SLEEP: '0', TERM: 'xterm-256color' }
+      let python = false
+      try { execFileSync('python3', ['-V'], { stdio: 'ignore' }); python = true } catch { /* attach without a pty */ }
+      const view: ChildProcess = python
+        ? spawn('python3', ['-c', ptyHelper, script, ...viewArgs], { env: viewEnv, stdio: ['pipe', 'ignore', 'pipe'] })
+        : spawn(script, viewArgs, { env: viewEnv, stdio: ['ignore', 'ignore', 'pipe'] })
       let sessions = ''
       for (let i = 0; i < 30; i++) {
         sessions = tmux('list-sessions', '-F', '#{session_name}')
@@ -130,18 +164,18 @@ describe('S0 integrated temp home', () => {
       rmSync(sockDir, { recursive: true, force: true })
     }
   }, 30_000)
+})
 
-  it('still labels a hand-built JSON fixture as a fixture', () => {
-    const parsed = parseWorkerDescriptor({
-      id: 'alpha',
-      fixture: true,
-      project: 'demo',
-      spawn_gen: '1',
-      backend: 'tmux',
-      paths: { worktree: { path: '/tmp/alpha', present: true } },
-      endpoint: { target: 'sess:alpha', exists: true, agent_alive: 'alive', status: 'alive' },
-      current_state: { state: 'working', observed_at: '2026-09-24T04:00:00Z' },
-    })
-    expect(parsed.ok && parsed.value.fixture).toBe(true)
+it('still labels a hand-built JSON fixture as a fixture', () => {
+  const parsed = parseWorkerDescriptor({
+    id: 'alpha',
+    fixture: true,
+    project: 'demo',
+    spawn_gen: '1',
+    backend: 'tmux',
+    paths: { worktree: { path: '/tmp/alpha', present: true } },
+    endpoint: { target: 'sess:alpha', exists: true, agent_alive: 'alive', status: 'alive' },
+    current_state: { state: 'working', observed_at: '2026-09-24T04:00:00Z' },
   })
+  expect(parsed.ok && parsed.value.fixture).toBe(true)
 })
