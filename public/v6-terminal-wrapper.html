@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>V6 terminal</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe id="term" title="worker terminal" allow="clipboard-read; clipboard-write"></iframe>
+  <script>
+    var params = new URLSearchParams(location.search)
+    var worker = params.get('worker') || ''
+    var termEl = document.getElementById('term')
+    if (!/^[A-Za-z0-9._-]+$/.test(worker)) {
+      document.body.textContent = 'Terminal unavailable'
+    } else {
+      termEl.src = '/s/v6term/' + encodeURIComponent(worker) + '/'
+    }
+
+    function cycleDirection(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return null
+      if (e.code === 'BracketRight') return 'next'
+      if (e.code === 'BracketLeft') return 'prev'
+      return null
+    }
+
+    function postCycle(direction) {
+      window.parent.postMessage({ type: 'v6-worker-cycle', direction: direction, worker: worker }, '*')
+    }
+
+    function notifyCycle(e) {
+      var direction = cycleDirection(e)
+      if (!direction) return false
+      e.preventDefault()
+      if (e.stopPropagation) e.stopPropagation()
+      postCycle(direction)
+      return true
+    }
+
+    window.addEventListener('keydown', function(e) {
+      notifyCycle(e)
+    })
+
+    function tryAttachXterm() {
+      try {
+        var win = termEl.contentWindow
+        if (!win || !win.term || !win.term.attachCustomKeyEventHandler) return false
+        win.term.attachCustomKeyEventHandler(function(e) {
+          if (e.type !== 'keydown') return true
+          if (notifyCycle(e)) return false
+          return true
+        })
+        return true
+      } catch (_) { return false }
+    }
+
+    function tryAttachKeydown() {
+      try {
+        termEl.contentWindow.addEventListener('keydown', function(e) {
+          notifyCycle(e)
+        }, true)
+      } catch (_) {}
+    }
+
+    var attempts = 0
+    var timer = setInterval(function() {
+      attempts += 1
+      var attached = tryAttachXterm()
+      if (attempts === 1) tryAttachKeydown()
+      if (attached || attempts > 40) clearInterval(timer)
+    }, 250)
+  </script>
+</body>
+</html>

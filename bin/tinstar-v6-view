@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# tinstar-v6-view — one viewer connection's private tmux session onto a worker
+# window. ttyd runs it once per WebSocket client as
+#
+#   tinstar-v6-view <socket> <session> <window-id> <window-name>
+#
+# The session prefix is v6view-, never tsview-, so a V5 sweep and this sweep
+# cannot see each other. Every tmux call uses `tmux -L <socket>` and an unset
+# TMUX, so the default server is never addressed. kill-session is only ever
+# aimed at the v6view- session this process just created. The worker window is
+# linked, not grouped, and is never the target of a kill.
+set -u
+
+socket=${1:-}
+session=${2:-}
+window_id=${3:-}
+window_name=${4:-}
+
+die() {
+  printf '\r\n%s\r\n' "$1" >&2
+  sleep "${TINSTAR_V6_VIEW_DIE_SLEEP:-3}"
+  exit 1
+}
+
+case "$socket" in ''|*[!A-Za-z0-9._-]*) die "tinstar-v6-view: bad socket" ;; esac
+case "$window_id" in @[0-9]*) ;; *) die "tinstar-v6-view: bad window id" ;; esac
+case "$session" in ''|*[!A-Za-z0-9._-]*) die "tinstar-v6-view: bad session name" ;; esac
+case "$window_name" in ''|*[!A-Za-z0-9._-]*) die "tinstar-v6-view: bad window name" ;; esac
+case "$session" in
+  firstmate|serena-view|kd-live) die "tinstar-v6-view: refused session" ;;
+  tsview-*|v6view-*) die "tinstar-v6-view: refusing to view a view" ;;
+esac
+# A worker session that is a prefix of the view prefix would make a bare
+# has-session match view sessions. Refuse it before any tmux call.
+# shellcheck disable=SC2194
+case v6view- in "$session"*) die "tinstar-v6-view: session name would prefix-match view names" ;; esac
+# shellcheck disable=SC2194
+case tsview- in "$session"*) die "tinstar-v6-view: session name would prefix-match view names" ;; esac
+
+# `env` runs a program, not the shell builtin `command`. Ubuntu has no
+# /usr/bin/command, so `env command tmux` died before any session existed.
+v6tmux() {
+  env -u TMUX tmux -L "$socket" "$@"
+}
+
+listing=$(v6tmux list-windows -t "=$session" -F '#{window_id} #{window_name}' 2>/dev/null) \
+  || die "worker window is gone (no tmux session '$session')"
+printf '%s\n' "$listing" | grep -qxF -- "$window_id $window_name" \
+  || die "worker window is gone ($window_name)"
+
+task=$(printf '%s' "$window_name" | tr -c 'A-Za-z0-9_-' '_' | cut -c1-40)
+nonce="$$-$(date +%s)-$RANDOM"
+view="v6view-$task-$nonce"
+placeholder="v6ph-$nonce"
+
+# destroy-unattached cannot be set at creation (tmux would reap the session
+# before a client attached), so a hangup before attach cleans the view only.
+trap 'env -u TMUX tmux -L "$socket" kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
+
+v6tmux new-session -d -s "$view" -n "$placeholder" \; \
+  set-option -t "=$view:" prefix None \; \
+  set-option -t "=$view:" prefix2 None \; \
+  set-option -t "=$view:" key-table v6view-passthrough \; \
+  set-option -t "=$view:" status off \; \
+  set-option -t "=$view:" mouse off \; \
+  set-option -t "=$view:" detach-on-destroy on \; \
+  link-window -d -s "$window_id" -t "=$view:" \; \
+  kill-window -t "=$view:=$placeholder" \
+  || die "could not create the view session"
+
+trap - HUP INT TERM
+exec env -u TMUX tmux -L "$socket" attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on
