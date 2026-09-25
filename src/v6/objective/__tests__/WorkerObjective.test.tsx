@@ -163,4 +163,20 @@ describe('WorkerObjective', () => {
     expect(screen.getByRole('button', { name: 'Achieve your objective' })).toBeDisabled()
     expect(screen.queryByTestId('objective-fixture')).toBeNull()
   })
+
+  it('shows the rail name, face, and color, and a refresh does not reassign them', async () => {
+    const identity = { name: 'Ace', color: '#123456', project: 'tinstar', worktree: '/tmp/alpha' }
+    const { rerender } = render(<WorkerObjective workerId="alpha" identity={identity} initialRecord={null} />)
+    const mark = await screen.findByTestId('objective-identity')
+    expect(mark).toHaveAttribute('data-name', 'Ace')
+    expect(mark).toHaveAttribute('data-color', '#123456')
+    expect(mark).toHaveTextContent('Ace')
+    expect(mark.querySelector('[data-face="alpha"]')).toBeTruthy()
+    rerender(<WorkerObjective workerId="alpha" identity={{ ...identity }} initialRecord={null} />)
+    const again = screen.getByTestId('objective-identity')
+    expect(again).toHaveAttribute('data-name', 'Ace')
+    expect(again).toHaveAttribute('data-color', '#123456')
+    expect(again).toHaveTextContent('Ace')
+    expect(again.querySelector('[data-face="alpha"]')).toBeTruthy()
+  })
 })

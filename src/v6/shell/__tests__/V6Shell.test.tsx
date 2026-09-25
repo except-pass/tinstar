@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WorkerDescriptor } from '../../contract/descriptor'
-import { displayName, hashPaletteColor } from '../identity'
+import { blockedFixture } from '../../needsyou/fixtures'
+import { displayName, hashPaletteColor, terminalDocumentSrc } from '../identity'
 import { V6Shell } from '../V6Shell'
 
 const alpha: WorkerDescriptor = {
@@ -173,7 +176,14 @@ describe('V6Shell', () => {
     const betaRow = screen.getByTestId('worker-beta')
     fireEvent.click(screen.getByTestId('open-terminal'))
     const frame = await screen.findByTestId('terminal-alpha')
-    expect(frame).toHaveAttribute('src', '/v6-terminal-wrapper.html?worker=alpha')
+    expect(frame).toHaveAttribute('src', terminalDocumentSrc('alpha', {
+      name: 'alpha',
+      color: '#123456',
+      project: 'tinstar',
+      worktree: '/tmp/alpha',
+    }))
+    expect(frame.getAttribute('src')).toContain('name=alpha')
+    expect(frame.getAttribute('src')).toContain(`color=${encodeURIComponent('#123456')}`)
 
     const seen: string[] = []
     function cycle(target: Window | HTMLElement, code: 'BracketLeft' | 'BracketRight') {
@@ -277,5 +287,114 @@ describe('V6Shell', () => {
     expect(faceSignature(screen.getByTestId('worker-beta'))).toBe(before.betaFace)
     expect(headerFaceScope().querySelector<HTMLElement>('img, span[aria-hidden="true"]')?.style.borderColor).toBe(alphaAfter.style.borderColor)
     expect(identityPosts).toEqual([])
+  })
+
+  it('shows that same name, face, and color on the task, attention provenance, and terminal document', async () => {
+    let polls = 0
+    const identityPosts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/v6/identity') && init?.method === 'POST') {
+        identityPosts.push(String(init.body ?? ''))
+        return new Response(JSON.stringify({ ok: true, data: {} }), { status: 200 })
+      }
+      if (url.includes('/terminal')) {
+        return new Response(JSON.stringify({ ok: true, data: { state: 'live' } }), { status: 200 })
+      }
+      if (url.includes('/api/v6/workers')) {
+        polls += 1
+        return workersResponse([alpha], { alpha: { color: '#123456', alias: 'Ace' } })
+      }
+      if (url.includes('/api/v6/needsyou')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: {
+            items: [blockedFixture({ id: 'ny-alpha', provenance: { workerId: 'alpha', taskId: 'task-1' } })],
+          },
+        }), { status: 200 })
+      }
+      if (url.includes('/api/v6/objectives/')) {
+        return new Response(JSON.stringify({ ok: true, data: { workerId: 'alpha', current: null, history: [] } }), { status: 200 })
+      }
+      return new Response('no', { status: 404 })
+    }))
+
+    const view = render(<V6Shell pollMs={200} />)
+    const rail = await screen.findByTestId('worker-alpha')
+    const task = await screen.findByTestId('objective-identity')
+    const attention = await screen.findByTestId('needsyou-provenance-ny-alpha')
+
+    function faceOf(scope: HTMLElement): HTMLElement {
+      const face = scope.querySelector<HTMLElement>('[data-face="alpha"]')
+      expect(face).toBeTruthy()
+      return face!
+    }
+
+    expect(rail).toHaveAttribute('data-color', '#123456')
+    expect(rail).toHaveAttribute('data-name', 'Ace')
+    expect(rail).toHaveTextContent('Ace')
+    expect(hashPaletteColor('alpha')).not.toBe('#123456')
+    expect(task).toHaveAttribute('data-name', 'Ace')
+    expect(task).toHaveAttribute('data-color', rail.getAttribute('data-color'))
+    expect(task).toHaveTextContent('Ace')
+    expect(attention).toHaveAttribute('data-name', 'Ace')
+    expect(attention).toHaveAttribute('data-color', '#123456')
+    expect(attention).toHaveTextContent('Ace')
+    expect(faceOf(task).style.borderColor).toBe(faceOf(rail).style.borderColor)
+    expect(faceOf(attention).style.borderColor).toBe(faceOf(rail).style.borderColor)
+
+    await waitFor(() => expect(polls).toBeGreaterThan(1))
+    expect(screen.getByTestId('objective-identity')).toHaveAttribute('data-color', '#123456')
+    expect(screen.getByTestId('objective-identity')).toHaveAttribute('data-name', 'Ace')
+    expect(screen.getByTestId('objective-identity').querySelector('[data-face="alpha"]')).toBeTruthy()
+    expect(screen.getByTestId('needsyou-provenance-ny-alpha')).toHaveAttribute('data-color', '#123456')
+    expect(screen.getByTestId('needsyou-provenance-ny-alpha')).toHaveAttribute('data-name', 'Ace')
+    expect(screen.getByTestId('needsyou-provenance-ny-alpha').querySelector('[data-face="alpha"]')).toBeTruthy()
+    expect(identityPosts).toEqual([])
+
+    fireEvent.click(screen.getByTestId('open-terminal'))
+    const frame = await screen.findByTestId('terminal-alpha')
+    const src = frame.getAttribute('src') ?? ''
+    expect(src).toContain('name=Ace')
+    expect(src).toContain(`color=${encodeURIComponent('#123456')}`)
+    const faceUrl = 'data:image/svg+xml;base64,QQ=='
+    view.unmount()
+
+    vi.useFakeTimers()
+    try {
+      const wrapper = readFileSync(join(process.cwd(), 'public', 'v6-terminal-wrapper.html'), 'utf8')
+      const body = wrapper.match(/<body>([\s\S]*?)<script>/)?.[1]
+      const script = wrapper.match(/<script>([\s\S]*?)<\/script>/)?.[1]
+      expect(body).toBeTruthy()
+      expect(script).toBeTruthy()
+      const search = src.slice(src.indexOf('?'))
+      window.history.replaceState({}, '', `/v6-terminal-wrapper.html${search}`)
+      document.body.innerHTML = body!
+      new Function(script!)()
+      const bar = document.getElementById('worker-identity')
+      const paintedFace = document.getElementById('worker-face')
+      expect(bar?.getAttribute('data-name')).toBe('Ace')
+      expect(bar?.getAttribute('data-color')).toBe('#123456')
+      expect(bar?.textContent).toContain('Ace')
+      expect(paintedFace?.getAttribute('data-face')).toBe('alpha')
+      window.dispatchEvent(new MessageEvent('message', {
+        data: {
+          type: 'v6-worker-identity',
+          worker: 'alpha',
+          name: 'Ace',
+          color: '#123456',
+          face: faceUrl,
+          project: 'tinstar',
+          worktree: '/tmp/alpha',
+        },
+      }))
+      expect(document.getElementById('worker-name')?.textContent).toBe('Ace')
+      expect(document.getElementById('worker-identity')?.getAttribute('data-color')).toBe('#123456')
+      expect(document.getElementById('worker-face')?.getAttribute('src')).toBe(faceUrl)
+      expect(document.getElementById('worker-face')?.getAttribute('data-face')).toBe('alpha')
+    } finally {
+      vi.useRealTimers()
+      document.body.innerHTML = ''
+    }
   })
 })

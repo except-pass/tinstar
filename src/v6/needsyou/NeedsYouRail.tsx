@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../../apiClient'
 import { isRecord } from '../contract/result'
+import type { ShellWorkerIdentity } from '../shell/identity'
+import { WorkerFace } from '../shell/WorkerFace'
 import { BlockedCard } from './BlockedCard'
 import { ContradictionCard } from './ContradictionCard'
 import { DecisionCard } from './DecisionCard'
@@ -39,6 +41,8 @@ export interface NeedsYouRailProps {
   submitIntent?: RailSubmitIntent
   /** Route client. Production uses `apiFetch` when both props are omitted. */
   http?: NeedsYouHttp
+  /** Rail identity keyed by worker id. Provenance paints this and does not mint another. */
+  identities?: Record<string, ShellWorkerIdentity>
 }
 
 const defaultHttp: NeedsYouHttp = {
@@ -93,7 +97,38 @@ function TypedCard({ row, commit }: { row: AttentionRow; commit: AttentionCommit
   }
 }
 
-export function NeedsYouRail({ items, submitIntent, http }: NeedsYouRailProps) {
+function ProvenanceIdentity({
+  itemId,
+  workerId,
+  identities,
+}: {
+  itemId: string
+  workerId: string | undefined
+  identities: Record<string, ShellWorkerIdentity>
+}) {
+  if (!workerId) return null
+  const identity = identities[workerId]
+  if (!identity) return null
+  return (
+    <p
+      data-testid={`needsyou-provenance-${itemId}`}
+      data-identity="worker"
+      data-color={identity.color}
+      data-name={identity.name}
+      className="flex items-center gap-2 rounded border-2 px-2 py-1"
+      style={{ borderColor: identity.color }}
+    >
+      <WorkerFace id={workerId} color={identity.color} />
+      <span className="min-w-0">
+        <span className="block truncate">{identity.name}</span>
+        <span className="block truncate text-xs">{identity.project}</span>
+        <span className="block truncate text-xs">{identity.worktree}</span>
+      </span>
+    </p>
+  )
+}
+
+export function NeedsYouRail({ items, submitIntent, http, identities = {} }: NeedsYouRailProps) {
   const controlled = items !== undefined
   const [entries, setEntries] = useState<RailEntry[]>(() => (items ?? []).map((raw, index) => readEntry(raw, index)))
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -171,7 +206,14 @@ export function NeedsYouRail({ items, submitIntent, http }: NeedsYouRailProps) {
           <p>{entry.diagnostic}</p>
         </article>
       ) : (
-        <TypedCard key={entry.row.item.id} row={entry.row} commit={commit} />
+        <div key={entry.row.item.id} className="flex flex-col gap-1">
+          <ProvenanceIdentity
+            itemId={entry.row.item.id}
+            workerId={entry.row.item.provenance.workerId}
+            identities={identities}
+          />
+          <TypedCard row={entry.row} commit={commit} />
+        </div>
       ))}
     </section>
   )

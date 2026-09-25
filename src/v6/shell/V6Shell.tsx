@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { apiFetch } from '../../apiClient'
 import './motion.css'
 import { getAvatarDataUrl, subscribeAvatarCache } from '../../components/agentAvatarCache'
@@ -11,7 +11,8 @@ import {
   ShellSelection,
   WorkerObjective,
 } from './slots'
-import { displayName, hashPaletteColor } from './identity'
+import { displayName, hashPaletteColor, terminalDocumentSrc, terminalIdentityMessage, type ShellWorkerIdentity } from './identity'
+import { WorkerFace } from './WorkerFace'
 import {
   adoptWorkers,
   cycleSelection,
@@ -81,19 +82,6 @@ function restoreShellFocus(shell: HTMLElement) {
   shell.querySelector<HTMLElement>('[data-focus-landing]')?.focus()
 }
 
-function Face({ id, color }: { id: string; color: string }) {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const read = () => setUrl(getAvatarDataUrl(id, color))
-    read()
-    return subscribeAvatarCache(read)
-  }, [id, color])
-  if (!url) {
-    return <span aria-hidden className="inline-block h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
-  }
-  return <img src={url} alt="" width={28} height={28} className="h-7 w-7 rounded-full border-2" style={{ borderColor: color }} />
-}
-
 function statusLabel(intent: IntentUi): string {
   if (intent.appliedOutcome === 'applied') return 'Applied'
   if (intent.appliedOutcome === 'rejected') return 'Rejected'
@@ -129,6 +117,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const [terminalNote, setTerminalNote] = useState<string | null>(null)
   const [intent, setIntent] = useState<IntentUi | null>(null)
   const [switchCount, setSwitchCount] = useState(0)
+  const [avatarTick, setAvatarTick] = useState(0)
   const reduce = useReducedMotion()
   const postedColors = useRef(new Set<string>())
   const shellRef = useRef<HTMLDivElement>(null)
@@ -211,6 +200,8 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
     }
   }, [workers, identities])
 
+  useEffect(() => subscribeAvatarCache(() => setAvatarTick(tick => tick + 1)), [])
+
   useEffect(() => {
     const ids = () => workers.map(worker => worker.id)
     function onKey(event: KeyboardEvent) {
@@ -269,6 +260,34 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
       clearInterval(timer)
     }
   }, [intent, pollMs])
+
+  const railIdentities = useMemo(() => {
+    const map: Record<string, ShellWorkerIdentity> = {}
+    for (const worker of workers) {
+      const stored = identities[worker.id]
+      map[worker.id] = {
+        name: displayName(worker.id, stored?.alias),
+        color: stored?.color ?? hashPaletteColor(worker.id),
+        project: worker.project || 'no project',
+        worktree: worker.worktree.path ?? 'worktree unavailable',
+      }
+    }
+    return map
+  }, [workers, identities])
+
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell) return
+    for (const frame of shell.querySelectorAll<HTMLIFrameElement>('[data-testid^="terminal-"]')) {
+      const workerId = frame.dataset.testid?.slice('terminal-'.length) ?? ''
+      const identity = railIdentities[workerId]
+      if (!identity) continue
+      frame.contentWindow?.postMessage(
+        terminalIdentityMessage(workerId, identity, getAvatarDataUrl(workerId, identity.color)),
+        '*',
+      )
+    }
+  }, [railIdentities, opened, avatarTick])
 
   const selected = workers.find(worker => worker.id === nav.selectedWorkerId) ?? null
   const view = nav.history.current
@@ -422,7 +441,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const motion = reduce ? '' : 'transition-colors duration-150'
 
   return (
-    <ShellSelection value={{ workerId: selected?.id ?? null, view }}>
+    <ShellSelection value={{ workerId: selected?.id ?? null, view, identities: railIdentities }}>
     <div
       ref={shellRef}
       data-testid="v6-shell"
@@ -446,23 +465,25 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
           {!configured && <p className="px-2 py-3 text-sm text-slate-300">First Mate home is not configured.</p>}
           <ul className="space-y-1">
             {workers.map(worker => {
-              const color = identities[worker.id]?.color ?? hashPaletteColor(worker.id)
-              const name = displayName(worker.id, identities[worker.id]?.alias)
+              const identity = railIdentities[worker.id]
+              if (!identity) return null
               const active = worker.id === selected?.id
               return (
                 <li key={worker.id}>
                   <button
                     type="button"
                     data-testid={`worker-${worker.id}`}
-                    data-color={color}
+                    data-identity="worker"
+                    data-color={identity.color}
+                    data-name={identity.name}
                     aria-pressed={active}
                     className={`v6-worker-row flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left text-sm ${motion}`}
-                    style={{ borderColor: color, background: active ? 'rgba(255,255,255,0.04)' : 'transparent' }}
+                    style={{ borderColor: identity.color, background: active ? 'rgba(255,255,255,0.04)' : 'transparent' }}
                     onClick={() => { markSwitch(); setNav(current => selectWorker(current, worker.id)) }}
                   >
-                    <Face id={worker.id} color={color} />
+                    <WorkerFace id={worker.id} color={identity.color} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate">{name}</span>
+                      <span className="block truncate">{identity.name}</span>
                       <span className="block truncate text-xs text-slate-400">{worker.project || 'no project'}</span>
                     </span>
                     <span data-testid={`crew-${worker.id}`} className="rounded border border-white/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">{worker.crewState}</span>
@@ -480,29 +501,39 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
               {PortfolioBoard ? <PortfolioBoard /> : <p>No epics yet.</p>}
             </section>
           )}
-          {view.kind === 'worker' && selected && (
+          {view.kind === 'worker' && selected && railIdentities[selected.id] && (
             <section className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2">
-                <Face id={selected.id} color={identities[selected.id]?.color ?? hashPaletteColor(selected.id)} />
+                <WorkerFace id={selected.id} color={railIdentities[selected.id]!.color} />
                 <div>
-                  <h1 tabIndex={-1} data-focus-landing="" className="text-base">{displayName(selected.id, identities[selected.id]?.alias)}</h1>
-                  <p className="text-xs text-slate-400">{selected.worktree.path ?? 'worktree unavailable'} · {selected.project || 'no project'}</p>
+                  <h1 tabIndex={-1} data-focus-landing="" className="text-base">{railIdentities[selected.id]!.name}</h1>
+                  <p className="text-xs text-slate-400">{railIdentities[selected.id]!.worktree} · {railIdentities[selected.id]!.project}</p>
                 </div>
                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-[10px] uppercase">{selected.crewState}</span>
                 {selected.fixture && <span className="text-[10px] uppercase text-amber-300">fixture</span>}
               </div>
               <Slot component={WorkerObjective} />
               <div className="relative min-h-[12rem] flex-1 bg-black">
-                {opened.map(row => (
+                {opened.map(row => {
+                  const identity = railIdentities[row.id]
+                  return (
                   <iframe
                     key={row.id}
                     data-testid={`terminal-${row.id}`}
                     title={`Terminal ${row.id}`}
-                    src={`/v6-terminal-wrapper.html?worker=${encodeURIComponent(row.id)}`}
+                    src={identity ? terminalDocumentSrc(row.id, identity) : `/v6-terminal-wrapper.html?worker=${encodeURIComponent(row.id)}`}
                     className="absolute inset-0 h-full w-full border-0"
                     style={{ visibility: row.id === selected.id && !concealed.includes(row.id) ? 'visible' : 'hidden' }}
+                    onLoad={event => {
+                      if (!identity) return
+                      event.currentTarget.contentWindow?.postMessage(
+                        terminalIdentityMessage(row.id, identity, getAvatarDataUrl(row.id, identity.color)),
+                        '*',
+                      )
+                    }}
                   />
-                ))}
+                  )
+                })}
                 {!opened.some(row => row.id === selected.id) && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <button type="button" data-testid="open-terminal" className="rounded border border-cyan-400/40 px-3 py-1.5 text-sm text-cyan-200" onClick={() => { void openTerminal(selected) }}>Open terminal</button>

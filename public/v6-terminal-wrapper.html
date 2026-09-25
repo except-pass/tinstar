@@ -6,20 +6,91 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #worker-identity {
+      display: none;
+      position: absolute;
+      z-index: 2;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 36px;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px;
+      background: #111;
+      color: #fff;
+      font: 12px/1.2 sans-serif;
+      border-bottom: 3px solid transparent;
+    }
+    #worker-identity.is-shown { display: flex; }
+    #worker-face {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      background: transparent;
+    }
     iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+    body.has-identity iframe { top: 36px; height: calc(100% - 36px); }
   </style>
 </head>
 <body>
+  <div id="worker-identity" data-identity="worker">
+    <img id="worker-face" alt="" width="28" height="28" />
+    <span id="worker-name"></span>
+    <span id="worker-context"></span>
+  </div>
   <iframe id="term" title="worker terminal" allow="clipboard-read; clipboard-write"></iframe>
   <script>
     var params = new URLSearchParams(location.search)
     var worker = params.get('worker') || ''
     var termEl = document.getElementById('term')
+
+    function paintIdentity(next) {
+      if (!next || next.worker !== worker) return
+      var name = typeof next.name === 'string' ? next.name : ''
+      var color = typeof next.color === 'string' ? next.color : ''
+      if (!name || !color) return
+      var bar = document.getElementById('worker-identity')
+      bar.className = 'is-shown'
+      bar.setAttribute('data-color', color)
+      bar.setAttribute('data-name', name)
+      bar.style.borderColor = color
+      bar.style.borderBottomColor = color
+      document.body.className = 'has-identity'
+      document.getElementById('worker-name').textContent = name
+      document.title = name
+      var faceEl = document.getElementById('worker-face')
+      faceEl.setAttribute('data-face', worker)
+      faceEl.style.borderColor = color
+      if (typeof next.face === 'string' && next.face.indexOf('data:image/') === 0) {
+        faceEl.setAttribute('src', next.face)
+      }
+      var bits = []
+      if (next.project) bits.push(next.project)
+      if (next.worktree) bits.push(next.worktree)
+      document.getElementById('worker-context').textContent = bits.join(' · ')
+    }
+
     if (!/^[A-Za-z0-9._-]+$/.test(worker)) {
       document.body.textContent = 'Terminal unavailable'
     } else {
       termEl.src = '/s/v6term/' + encodeURIComponent(worker) + '/'
+      paintIdentity({
+        worker: worker,
+        name: params.get('name') || '',
+        color: params.get('color') || '',
+        face: params.get('face') || '',
+        project: params.get('project') || '',
+        worktree: params.get('worktree') || '',
+      })
     }
+
+    window.addEventListener('message', function(e) {
+      var data = e.data
+      if (!data || data.type !== 'v6-worker-identity') return
+      paintIdentity(data)
+    })
 
     function cycleDirection(e) {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return null

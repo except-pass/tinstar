@@ -369,4 +369,26 @@ describe('NeedsYouRail revision check through its routes', () => {
     expect(listed.data.items[0]?.item.state).toBe('open')
     expect(listed.data.items[0]?.item.response).toBeNull()
   })
+
+  it('shows the rail name, face, and color on attention provenance', () => {
+    const identity = { name: 'Ace', color: '#123456', project: 'tinstar', worktree: '/tmp/alpha' }
+    const { rerender } = render(<NeedsYouRail
+      items={[blockedFixture({ id: 'ny-alpha', provenance: { workerId: 'alpha', taskId: 'task-1' } })]}
+      identities={{ alpha: identity }}
+    />)
+    const mark = screen.getByTestId('needsyou-provenance-ny-alpha')
+    expect(mark).toHaveAttribute('data-name', 'Ace')
+    expect(mark).toHaveAttribute('data-color', '#123456')
+    expect(mark).toHaveTextContent('Ace')
+    expect(mark.querySelector('[data-face="alpha"]')).toBeTruthy()
+    rerender(<NeedsYouRail
+      items={[blockedFixture({ id: 'ny-alpha', provenance: { workerId: 'alpha', taskId: 'task-1' } })]}
+      identities={{ alpha: { ...identity } }}
+    />)
+    const again = screen.getByTestId('needsyou-provenance-ny-alpha')
+    expect(again).toHaveAttribute('data-name', 'Ace')
+    expect(again).toHaveAttribute('data-color', '#123456')
+    expect(again).toHaveTextContent('Ace')
+    expect(again.querySelector('[data-face="alpha"]')).toBeTruthy()
+  })
 })
