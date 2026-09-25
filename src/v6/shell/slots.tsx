@@ -4,12 +4,15 @@ import { NeedsYouRail as NeedsYouRailView } from '../needsyou'
 import { WorkerObjective as WorkerObjectiveView, type WorkerObjectiveProps } from '../objective'
 import { QuotaRail as QuotaRailView } from '../quota'
 import { ContextThread as ContextThreadView, type ContextThreadProps } from '../threads'
+import type { ShellWorkerIdentity } from './identity'
 import type { ViewId } from './navigation'
 
 /** What the shell has already selected. Slots read this instead of inventing a target. */
 export interface ShellSelection {
   workerId: string | null
   view: ViewId
+  /** Rail identity for each worker id. Slots display this and do not mint another. */
+  identities?: Record<string, ShellWorkerIdentity>
 }
 
 const EMPTY_SELECTION: ShellSelection = {
@@ -37,8 +40,14 @@ export function threadPropsFor(view: ViewId): ContextThreadProps {
 }
 
 function WiredWorkerObjective() {
-  const { workerId } = useContext(SelectionContext)
-  return <WorkerObjectiveView {...objectivePropsFor(workerId)} />
+  const { workerId, identities } = useContext(SelectionContext)
+  const identity = workerId && identities ? identities[workerId] : undefined
+  return <WorkerObjectiveView {...objectivePropsFor(workerId)} identity={identity} />
+}
+
+function WiredNeedsYouRail() {
+  const { identities } = useContext(SelectionContext)
+  return <NeedsYouRailView identities={identities ?? {}} />
 }
 
 function WiredContextThread() {
@@ -47,7 +56,7 @@ function WiredContextThread() {
 }
 
 /** Module surfaces. The shell renders one component per slot. */
-export const NeedsYouRail: ComponentType = NeedsYouRailView
+export const NeedsYouRail: ComponentType = WiredNeedsYouRail
 export const PortfolioBoard: ComponentType = ActivePortfolio
 export const ContextThread: ComponentType = WiredContextThread
 export const WorkerObjective: ComponentType = WiredWorkerObjective

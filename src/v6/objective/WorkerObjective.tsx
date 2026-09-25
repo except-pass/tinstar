@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { apiFetch } from '../../apiClient'
+import type { ShellWorkerIdentity } from '../shell/identity'
+import { WorkerFace } from '../shell/WorkerFace'
 import {
   T01_PROCESS_UNCLAIMED,
   suggestSessionName,
@@ -9,6 +11,8 @@ import {
 
 export interface WorkerObjectiveProps {
   workerId?: string
+  /** Name, face seed, and color already resolved for this worker on the rail. */
+  identity?: ShellWorkerIdentity | null
   fixture?: boolean
   narrower?: boolean
   parentTaskId?: string | null
@@ -37,6 +41,7 @@ async function readJson(response: Response): Promise<unknown> {
 
 export function WorkerObjective({
   workerId,
+  identity = null,
   fixture = false,
   narrower = false,
   parentTaskId = null,
@@ -194,6 +199,23 @@ export function WorkerObjective({
         <h2 className="text-ink-high font-medium">Objective</h2>
         {id ? <p data-testid="objective-worker" className="text-ink-low">Worker {id}</p> : <p className="text-ink-low">No worker selected</p>}
       </header>
+      {id && identity ? (
+        <div
+          data-testid="objective-identity"
+          data-identity="worker"
+          data-color={identity.color}
+          data-name={identity.name}
+          className="flex items-center gap-2 rounded border-2 px-2 py-1"
+          style={{ borderColor: identity.color }}
+        >
+          <WorkerFace id={id} color={identity.color} />
+          <span className="min-w-0">
+            <span className="block truncate">{identity.name}</span>
+            <span className="block truncate text-xs text-ink-low">{identity.project}</span>
+            <span className="block truncate text-xs text-ink-low">{identity.worktree}</span>
+          </span>
+        </div>
+      ) : null}
       {showFixture ? <p data-testid="objective-fixture" className="text-accent-amber">fixture</p> : null}
       {current ? (
         <div className="space-y-1">
