@@ -103,13 +103,28 @@ function statusLabel(intent: IntentUi): string {
   return 'Queued'
 }
 
+interface OpenedTerminal {
+  id: string
+  spawnGen: string | null
+  target: string | null
+}
+
+/**
+ * The frame was opened against one incarnation and endpoint. A later poll that
+ * replaces either of those is a different worker, even when the id matches.
+ */
+function openTerminalStale(open: OpenedTerminal, worker: WorkerDescriptor | undefined): boolean {
+  if (!worker) return true
+  return worker.spawnGen !== open.spawnGen || worker.endpoint.target !== open.target
+}
+
 export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const [nav, setNav] = useState<ShellNav>(initialNav)
   const [workers, setWorkers] = useState<WorkerDescriptor[]>([])
   const [identities, setIdentities] = useState<Record<string, IdentityRecord>>({})
   const [configured, setConfigured] = useState(true)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [opened, setOpened] = useState<string[]>([])
+  const [opened, setOpened] = useState<OpenedTerminal[]>([])
   const [concealed, setConcealed] = useState<string[]>([])
   const [terminalNote, setTerminalNote] = useState<string | null>(null)
   const [intent, setIntent] = useState<IntentUi | null>(null)
@@ -259,7 +274,20 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const view = nav.history.current
   noteRef.current = terminalNote
   const stageKey = `${view.kind}:${view.kind === 'portfolio' ? '' : view.id}:${selected?.id ?? ''}`
-  const presence = `${opened.join(',')}|${concealed.join(',')}`
+  const presence = `${opened.map(row => row.id).join(',')}|${concealed.join(',')}`
+  const selectedId = selected?.id ?? null
+
+  useLayoutEffect(() => {
+    const stale = opened.filter(row => openTerminalStale(row, workers.find(worker => worker.id === row.id)))
+    if (stale.length === 0) return
+    const staleIds = new Set(stale.map(row => row.id))
+    setOpened(current => current.filter(row => !staleIds.has(row.id)))
+    setConcealed(current => current.some(id => staleIds.has(id)) ? current.filter(id => !staleIds.has(id)) : current)
+    if (selectedId && staleIds.has(selectedId)) setTerminalNote('worker changed or is unavailable')
+    for (const row of stale) {
+      void apiFetch(`/api/v6/workers/${encodeURIComponent(row.id)}/terminal`, { method: 'DELETE' }).catch(() => undefined)
+    }
+  }, [opened, workers, selectedId])
 
   useLayoutEffect(() => {
     const stage = stageRef.current
@@ -319,7 +347,10 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
       })
       const body = await res.json() as { data?: { state?: string; reason?: string } }
       if (body.data?.state === 'live') {
-        setOpened(current => current.includes(worker.id) ? current : [...current, worker.id])
+        const next = { id: worker.id, spawnGen: worker.spawnGen, target: worker.endpoint.target }
+        setOpened(current => current.some(row => row.id === worker.id)
+          ? current.map(row => row.id === worker.id ? next : row)
+          : [...current, next])
         setConcealed(current => current.filter(id => id !== worker.id))
         return
       }
@@ -330,7 +361,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   }
 
   async function closeTerminal(workerId: string) {
-    setOpened(current => current.filter(id => id !== workerId))
+    setOpened(current => current.filter(row => row.id !== workerId))
     setConcealed(current => current.filter(id => id !== workerId))
     try {
       await apiFetch(`/api/v6/workers/${encodeURIComponent(workerId)}/terminal`, { method: 'DELETE' })
@@ -462,22 +493,22 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
               </div>
               <Slot component={WorkerObjective} />
               <div className="relative min-h-[12rem] flex-1 bg-black">
-                {opened.map(id => (
+                {opened.map(row => (
                   <iframe
-                    key={id}
-                    data-testid={`terminal-${id}`}
-                    title={`Terminal ${id}`}
-                    src={`/v6-terminal-wrapper.html?worker=${encodeURIComponent(id)}`}
+                    key={row.id}
+                    data-testid={`terminal-${row.id}`}
+                    title={`Terminal ${row.id}`}
+                    src={`/v6-terminal-wrapper.html?worker=${encodeURIComponent(row.id)}`}
                     className="absolute inset-0 h-full w-full border-0"
-                    style={{ visibility: id === selected.id && !concealed.includes(id) ? 'visible' : 'hidden' }}
+                    style={{ visibility: row.id === selected.id && !concealed.includes(row.id) ? 'visible' : 'hidden' }}
                   />
                 ))}
-                {!opened.includes(selected.id) && (
+                {!opened.some(row => row.id === selected.id) && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <button type="button" data-testid="open-terminal" className="rounded border border-cyan-400/40 px-3 py-1.5 text-sm text-cyan-200" onClick={() => { void openTerminal(selected) }}>Open terminal</button>
                   </div>
                 )}
-                {opened.includes(selected.id) && (
+                {opened.some(row => row.id === selected.id) && (
                   <div className="absolute right-2 top-2 z-10 flex gap-2">
                     <button type="button" className="rounded bg-black/70 px-2 py-1 text-xs" onClick={() => setConcealed(current => current.includes(selected.id) ? current.filter(id => id !== selected.id) : [...current, selected.id])}>Hide terminal</button>
                     <button type="button" className="rounded bg-black/70 px-2 py-1 text-xs" onClick={() => { void closeTerminal(selected.id) }}>Close view</button>
