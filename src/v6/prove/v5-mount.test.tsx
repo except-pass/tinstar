@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { render, screen } from '@testing-library/react'
@@ -9,6 +9,18 @@ vi.mock('../../components/WorkspaceShell', () => ({
 }))
 
 import App from '../../App'
+
+/** `/tmp` and `os.tmpdir()` are the same volume on macOS only after realpath. */
+function isTempPath(path: string): boolean {
+  if (!path) return false
+  let real = path
+  try { real = realpathSync(path) } catch { return false }
+  const roots: string[] = []
+  for (const candidate of [tmpdir(), '/tmp', '/private/tmp']) {
+    try { roots.push(realpathSync(candidate)) } catch { /* this candidate is absent */ }
+  }
+  return roots.some(root => real === root || real.startsWith(`${root}/`))
+}
 
 function listFiles(root: string): string[] {
   const out: string[] = []
@@ -35,7 +47,7 @@ describe('prove V5 mount', () => {
 
   it('mounts the V5 workspace when v6 is off and writes nothing outside the temp config and temp home', () => {
     const config = process.env.TINSTAR_CONFIG_HOME ?? ''
-    expect(config.startsWith(tmpdir())).toBe(true)
+    expect(isTempPath(config)).toBe(true)
     expect(config).not.toBe(join(homedir(), '.config', 'tinstar'))
     const home = mkdtempSync(join(tmpdir(), 'prove-v5-home-'))
     writeFileSync(join(home, 'FIXTURE'), 'fixture\n')

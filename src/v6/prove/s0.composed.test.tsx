@@ -3,7 +3,7 @@
  * The temp home is a fixture. T01's worker-process half is unfinished.
  * T25 is unsupported: tool access is not supervision, and this does not prove a native desktop client.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -66,6 +66,7 @@ let sockDir = ''
 let base = ''
 let server: Server | null = null
 let views: V6Views | null = null
+let viewChild: ChildProcess | null = null
 const socket = `prove${process.pid}`
 const startedAt = Date.now()
 const policyHash = new Map<string, string>()
@@ -147,6 +148,69 @@ function reply(noteId: string, text: string): void {
     env: childEnv(),
     encoding: 'utf8',
   })
+}
+
+const ptyHelper = `
+import os, pty, select, sys, signal, struct, fcntl, termios
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+def bye(*_):
+    try: os.kill(pid, signal.SIGHUP)
+    except Exception: pass
+    os._exit(0)
+signal.signal(signal.SIGTERM, bye)
+sin = sys.stdin.fileno()
+while True:
+    try: r, _, _ = select.select([fd, sin], [], [])
+    except Exception: break
+    if fd in r:
+        try:
+            if not os.read(fd, 65536): break
+        except OSError: break
+    if sin in r:
+        d = os.read(sin, 65536)
+        if not d: bye()
+        os.write(fd, d)
+try: os.waitpid(pid, 0)
+except Exception: pass
+`
+
+/** ttyd answers HTTP before a client connects. The linked session appears when this script runs. */
+function attachView(argv: string[]): ChildProcess {
+  const scriptIndex = argv.findIndex(arg => arg.endsWith('tinstar-v6-view'))
+  if (scriptIndex < 0) throw new Error(`view argv has no tinstar-v6-view: ${argv.join(' ')}`)
+  const script = argv[scriptIndex]!
+  const viewArgs = argv.slice(scriptIndex + 1)
+  if (viewArgs[0] !== socket || viewArgs[1] !== 'worker-a') {
+    throw new Error(`view argv is not the private worker: ${viewArgs.join(' ')}`)
+  }
+  return spawn('python3', ['-c', ptyHelper, script, ...viewArgs], {
+    env: { ...childEnv(), TINSTAR_V6_VIEW_DIE_SLEEP: '0', TERM: 'xterm-256color' },
+    stdio: ['pipe', 'ignore', 'pipe'],
+  })
+}
+
+function treeHas(root: string, token: string): boolean {
+  const visit = (dir: string): boolean => {
+    let entries: ReturnType<typeof readdirSync>
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return false }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) {
+        if (visit(path)) return true
+      } else if (entry.isFile()) {
+        try {
+          if (statSync(path).size > 1_000_000) continue
+          if (readFileSync(path, 'utf8').includes(token)) return true
+        } catch { /* unreadable sidecar */ }
+      }
+    }
+    return false
+  }
+  return visit(root)
 }
 
 function hashFile(file: string): string | null {
@@ -285,6 +349,7 @@ describe('prove composed S0', () => {
   }, 60_000)
 
   afterAll(async () => {
+    try { viewChild?.kill('SIGTERM') } catch { /* already gone */ }
     views?.close('alpha')
     views?.close('beta')
     setV6RouteDepsForTests(null)
@@ -348,12 +413,22 @@ describe('prove composed S0', () => {
       const note = screen.queryByTestId('terminal-note')
       if (note?.textContent) throw new Error(note.textContent)
       expect(screen.getByTestId('terminal-alpha')).toBeTruthy()
-      expect(listSessions().some(name => name.startsWith('v6view-'))).toBe(true)
     }, { timeout: 20_000 })
+    const argv = views?.spawns.find(row => row.some(arg => arg.endsWith('tinstar-v6-view')))
+    expect(argv, JSON.stringify(views?.spawns)).toBeTruthy()
+    expect(argv!.join('\n')).not.toMatch(/fm-send|fm-spawn|bash/)
+    expect(argv!.join('\n')).not.toMatch(/firstmate|serena-view|kd-live/)
+    viewChild = attachView(argv!)
+    let stderr = ''
+    viewChild.stderr?.on('data', (chunk: Buffer) => { stderr += String(chunk) })
+    await waitFor(() => {
+      expect(listSessions().some(name => name.startsWith('v6view-')), stderr).toBe(true)
+    }, { timeout: 10_000 })
     expect(listSessions().filter(name => name.startsWith('tsview-'))).toEqual([])
     assertPrivate(listSessions())
 
     fireEvent.click(screen.getByRole('button', { name: 'Close view' }))
+    viewChild.kill('SIGTERM')
     await waitFor(() => {
       expect(screen.queryByTestId('terminal-alpha')).toBeNull()
       const names = listSessions()
@@ -470,7 +545,7 @@ describe('prove composed S0', () => {
     expect(notes.length).toBeGreaterThanOrEqual(3)
     for (const token of TOKENS) {
       expect(outsideHits(token)).toEqual([])
-      expect(notes.some(note => note.body?.text === token || readFileSync(join(home, 'state', 'inbox', `${note.id}.note`), 'utf8').includes(token))).toBe(true)
+      expect(treeHas(home, token), token).toBe(true)
     }
     for (const [file, hash] of policyHash) {
       expect(hashFile(file)).toBe(hash)
