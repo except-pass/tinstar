@@ -7,17 +7,29 @@ import { describe, expect, it } from 'vitest'
 import { fmChildEnv } from '../../shell/fmExec'
 import { registerThreadRoutes } from '../routes'
 
-function inboxScript(): string {
+/**
+ * The real inbox script, or a skip reason. Never falls back to a live home
+ * and never substitutes a mock.
+ */
+function resolveInboxScript(): { ok: true; script: string } | { ok: false; reason: string } {
   const raw = process.env.FM_V6_BIN?.trim()
   if (!raw) {
-    throw new Error('FM_V6_BIN is not set. The integration test refuses to mock fm-inbox.sh.')
+    return {
+      ok: false,
+      reason: 'FM_V6_BIN is unset, so fm-inbox.sh is not on this machine. Refusing to mock or use a live First Mate home.',
+    }
   }
   const script = raw.endsWith('.sh') ? raw : join(raw, 'fm-inbox.sh')
   if (!existsSync(script)) {
-    throw new Error(`FM_V6_BIN does not contain fm-inbox.sh (${script}). Refusing to mock it.`)
+    return {
+      ok: false,
+      reason: `fm-inbox.sh is not at ${script}. Refusing to mock or use a live First Mate home.`,
+    }
   }
-  return script
+  return { ok: true, script }
 }
+
+const resolvedInbox = resolveInboxScript()
 
 function assertTempHome(home: string): void {
   const forbidden = [
@@ -70,8 +82,13 @@ async function post(base: string, path: string, body: unknown): Promise<ThreadPa
 }
 
 describe('threads against the real fm-inbox.sh', () => {
-  it('correlates two turns on one thread id and ignores a replay of the first request id', async () => {
-    const script = inboxScript()
+  it.skipIf(!resolvedInbox.ok)(
+    resolvedInbox.ok
+      ? 'correlates two turns on one thread id and ignores a replay of the first request id'
+      : `skipped: ${resolvedInbox.reason}`,
+    async () => {
+    if (!resolvedInbox.ok) return
+    const script = resolvedInbox.script
     const home = mkdtempSync(join(tmpdir(), 'ts-threads-fm-'))
     const config = mkdtempSync(join(tmpdir(), 'ts-threads-cfg-'))
     assertTempHome(home)
