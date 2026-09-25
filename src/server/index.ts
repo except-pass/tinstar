@@ -28,6 +28,7 @@ import { shortId } from './utils/shortId'
 import { LOOPBACK_BIND_ADDRESS } from './bind'
 import { getReachCoordinator } from './reach'
 import { getConfigRoot } from './configRoot'
+import { registerV6 } from './v6/register'
 import {
   acquireBackendSingleton,
   describeSingletonFailure,
@@ -1778,6 +1779,8 @@ export function initBackend(): RouteContext {
       })
       .catch(err => log.warn('marshal-boot', `auto-start threw: ${(err as Error).message}`))
   })
+
+  registerV6()
 
   return ctx
 }
