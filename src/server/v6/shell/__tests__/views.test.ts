@@ -162,6 +162,132 @@ describe('v6 terminal view', () => {
     else process.env.TINSTAR_V6_TMUX_SOCKET = previousSocket
   })
 
+  it('does not kill the worker on reload or when a second view is open', async () => {
+    const tmuxCalls: string[][] = []
+    const ttydKilled: string[] = []
+    let nextPort = 23120
+    const views = new V6Views({
+      tmux: async (socket, args) => {
+        tmuxCalls.push([socket, ...args])
+        const targetAt = args.indexOf('-t')
+        const target = targetAt >= 0 ? args[targetAt + 1] ?? '' : ''
+        if (target.includes('worker-b')) return '@5 beta\n'
+        return '@4 alpha\n'
+      },
+      spawnTtyd: () => {
+        const child = new EventEmitter() as ChildProcess
+        child.kill = ((signal?: NodeJS.Signals) => {
+          ttydKilled.push(signal ?? '')
+          return true
+        }) as ChildProcess['kill']
+        return child
+      },
+      ttydRefusal: () => null,
+      healthCheck: async () => true,
+      claimPort: async () => {
+        const port = nextPort
+        nextPort += 1
+        return port
+      },
+      releasePort: () => undefined,
+    }, '/opt/tinstar/bin/tinstar-v6-view')
+    const commands: string[] = []
+    const runner: FmCommandRunner = {
+      exec: async (_script, args) => {
+        commands.push(args.join(' '))
+        const id = args[1]
+        if (args[0] !== '--task' || (id !== 'alpha' && id !== 'beta')) {
+          return { code: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` }
+        }
+        const session = id === 'alpha' ? 'worker-a' : 'worker-b'
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            id,
+            fixture: true,
+            project: 'tinstar',
+            spawn_gen: '1',
+            backend: 'tmux',
+            paths: { worktree: { path: `/tmp/${id}`, present: true } },
+            endpoint: { target: `${session}:${id}`, exists: true, agent_alive: 'alive', status: 'alive' },
+            current_state: { state: 'working', observed_at: '2026-09-24T04:00:00Z' },
+            actions: { steer: `bin/fm-send.sh fm-${id}` },
+          }),
+          stderr: '',
+        } satisfies CommandResult
+      },
+    }
+    const previousSocket = process.env.TINSTAR_V6_TMUX_SOCKET
+    process.env.TINSTAR_V6_TMUX_SOCKET = 'tsv6test'
+    const file = join(mkdtempSync(join(tmpdir(), 'v6-views-')), 'projection.json')
+    setV6RouteDepsForTests({
+      views,
+      runner,
+      projectionFile: file,
+      home: '/tmp/v6-home',
+      configured: true,
+      binDir: '/tmp/v6-bin',
+    })
+    try {
+      const opened = res()
+      await handleV6Http(req('POST', '/api/v6/workers/alpha/terminal', { spawnGen: '1', target: 'worker-a:alpha' }), opened)
+      const first = JSON.parse(opened.body).data as { state: string; port: number }
+      expect(first.state).toBe('live')
+      expect(first.port).toBe(23120)
+      const spawnsAfterOpen = views.spawns.length
+      expect(spawnsAfterOpen).toBeGreaterThan(0)
+
+      const reloaded = res()
+      await handleV6Http(req('POST', '/api/v6/workers/alpha/terminal', { spawnGen: '1', target: 'worker-a:alpha' }), reloaded)
+      const reloadBody = JSON.parse(reloaded.body).data as { state: string; port: number }
+      expect(reloadBody).toEqual({ state: 'live', port: first.port })
+      expect(views.portOf('alpha')).toBe(first.port)
+      expect(views.spawns.length).toBe(spawnsAfterOpen)
+      expect(ttydKilled).toEqual([])
+
+      const second = res()
+      await handleV6Http(req('POST', '/api/v6/workers/beta/terminal', { spawnGen: '1', target: 'worker-b:beta' }), second)
+      const secondBody = JSON.parse(second.body).data as { state: string; port: number }
+      expect(secondBody.state).toBe('live')
+      expect(secondBody.port).not.toBe(first.port)
+      expect(views.portOf('alpha')).toBe(first.port)
+      expect(views.portOf('beta')).toBe(secondBody.port)
+      expect(views.spawns.length).toBeGreaterThan(spawnsAfterOpen)
+      expect(ttydKilled).toEqual([])
+
+      expect(tmuxCalls).toEqual([
+        ['tsv6test', 'list-windows', '-t', '=worker-a', '-F', '#{window_id} #{window_name}'],
+        ['tsv6test', 'list-windows', '-t', '=worker-a', '-F', '#{window_id} #{window_name}'],
+        ['tsv6test', 'list-windows', '-t', '=worker-b', '-F', '#{window_id} #{window_name}'],
+      ])
+      const tmuxText = tmuxCalls.map(call => call.join(' ')).join('\n')
+      expect(tmuxText).not.toMatch(/kill-session|kill-window|kill-server|send-keys/)
+      expect(tmuxText).not.toMatch(/firstmate|serena-view|kd-live/)
+      expect(tmuxText).not.toContain('/tmp/alpha')
+      expect(tmuxText).not.toContain('/tmp/beta')
+      expect(commands).toEqual(['--task alpha --json', '--task alpha --json', '--task beta --json'])
+      expect(commands.join(' ')).not.toMatch(/fm-spawn|fm-send/)
+      expect(opened.body).not.toContain('fm-send')
+      expect(second.body).not.toContain('fm-send')
+
+      const closedAlpha = res()
+      await handleV6Http(req('DELETE', '/api/v6/workers/alpha/terminal'), closedAlpha)
+      expect(JSON.parse(closedAlpha.body).data).toMatchObject({ closed: true, workerKilled: false })
+      expect(views.portOf('alpha')).toBeNull()
+      expect(views.portOf('beta')).toBe(secondBody.port)
+      const closedBeta = res()
+      await handleV6Http(req('DELETE', '/api/v6/workers/beta/terminal'), closedBeta)
+      expect(JSON.parse(closedBeta.body).data).toMatchObject({ closed: true, workerKilled: false })
+      expect(tmuxCalls.map(call => call.join(' ')).join('\n')).toBe(tmuxText)
+      expect(ttydKilled.every(signal => signal === 'SIGTERM')).toBe(true)
+      expect(ttydKilled.length).toBe(views.spawns.length)
+    } finally {
+      setV6RouteDepsForTests(null)
+      if (previousSocket === undefined) delete process.env.TINSTAR_V6_TMUX_SOCKET
+      else process.env.TINSTAR_V6_TMUX_SOCKET = previousSocket
+    }
+  })
+
   it('serves descriptors without steer strings', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'v6-list-')), 'projection.json')
     const runner: FmCommandRunner = {
