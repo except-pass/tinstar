@@ -1,0 +1,49 @@
+/* Arrival is decorative. The next view is already in the DOM when this starts. */
+@keyframes v6-arrive {
+  from {
+    opacity: 0.86;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.v6-stage.v6-arrive {
+  animation: v6-arrive 160ms ease-out;
+}
+
+.v6-shell [data-focus-landing]:focus {
+  outline: 2px solid rgba(34, 211, 238, 0.75);
+  outline-offset: 3px;
+}
+
+.v6-dialog {
+  max-width: 28rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.5rem;
+  background: #0b1220;
+  color: inherit;
+  padding: 1rem 1.1rem;
+}
+
+.v6-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.v6-shell[data-reduced="true"] .v6-stage,
+.v6-shell[data-reduced="true"] .v6-worker-row,
+.v6-shell[data-reduced="true"] .v6-dialog {
+  animation: none;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v6-shell .v6-stage,
+  .v6-shell .v6-worker-row,
+  .v6-shell .v6-dialog {
+    animation: none !important;
+    transition: none !important;
+  }
+}
