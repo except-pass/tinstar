@@ -50,6 +50,8 @@ export interface UiPrefs {
   /** Per-browser: keep the Slate column open even with zero surfaces, so it can be
    *  opened blank and filled via Explain / + Add surface. Default false. */
   slateOpen?: boolean
+  /** Mount the V6 shell instead of the V5 workspace. `?v6=1` also mounts it. */
+  v6Shell?: boolean
 }
 
 function readAll(): UiPrefs {
