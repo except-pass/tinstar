@@ -1,11 +1,13 @@
 import type { ComponentType } from 'react'
+import { ActivePortfolio } from '../account/ActivePortfolio'
+import { NeedsYouRail as NeedsYouRailView } from '../needsyou'
+import { WorkerObjective as WorkerObjectiveView } from '../objective'
+import { QuotaRail as QuotaRailView } from '../quota'
+import { ContextThread as ContextThreadView } from '../threads'
 
-/**
- * Module slots. Each export stays null until ts-account wires a component.
- * The shell renders nothing for a null slot.
- */
-export const NeedsYouRail: ComponentType | null = null
-export const PortfolioBoard: ComponentType | null = null
-export const ContextThread: ComponentType | null = null
-export const WorkerObjective: ComponentType | null = null
-export const QuotaRail: ComponentType | null = null
+/** Module surfaces. The shell renders one component per slot. */
+export const NeedsYouRail: ComponentType = NeedsYouRailView
+export const PortfolioBoard: ComponentType = ActivePortfolio
+export const ContextThread: ComponentType = ContextThreadView
+export const WorkerObjective: ComponentType = WorkerObjectiveView
+export const QuotaRail: ComponentType = QuotaRailView
