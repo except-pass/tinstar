@@ -27,6 +27,32 @@ import App from '../../App'
 const BIN = process.env.FM_V6_BIN
   ?? '/Users/wtg/.local/state/pm-build/tinstar-v6/worktrees/fm-boundary/bin'
 const binDir = BIN.endsWith('.sh') ? join(BIN, '..') : BIN
+
+/** Probed at load: `it.skipIf` reads these before `beforeAll`. `-V` does not touch a session. */
+function commandInstalled(bin: string): boolean {
+  try {
+    execFileSync(bin, ['-V'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const hasBins = existsSync(join(binDir, 'fm-fleet-snapshot.sh')) && existsSync(join(binDir, 'fm-inbox.sh'))
+const hasTmux = commandInstalled('tmux')
+
+function liveIt(
+  name: string,
+  needs: { bins?: boolean; tmux?: boolean },
+  fn: () => void | Promise<void>,
+  timeout?: number,
+): void {
+  const reasons: string[] = []
+  if (needs.bins && !hasBins) reasons.push('fm-fleet-snapshot.sh and fm-inbox.sh are absent')
+  if (needs.tmux && !hasTmux) reasons.push('tmux is absent')
+  const reason = reasons.join('; ')
+  it.skipIf(reason.length > 0)(reason ? `${name} (skipped: ${reason})` : name, fn, timeout)
+}
 const HELLO = 'hello from the fixture shell'
 const REPLY = 'captain read the fixture worker'
 const TURN_1 = 'first turn on the fixture thread'
@@ -84,7 +110,9 @@ function restoreEnv(): void {
 }
 
 function childEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, TMUX_TMPDIR: sockDir, FM_HOME: home }
+  const env: NodeJS.ProcessEnv = { ...process.env, FM_HOME: home }
+  if (sockDir) env.TMUX_TMPDIR = sockDir
+  else delete env.TMUX_TMPDIR
   delete env.TMUX
   delete env.TMUX_PANE
   for (const key of Object.keys(env)) {
@@ -265,12 +293,9 @@ describe('prove composed S0', () => {
       const hash = hashFile(file)
       if (hash) policyHash.set(file, hash)
     }
-    if (!existsSync(join(binDir, 'fm-fleet-snapshot.sh')) || !existsSync(join(binDir, 'fm-inbox.sh'))) {
-      throw new Error(`fm-fleet-snapshot.sh and fm-inbox.sh must both exist under ${binDir}`)
-    }
     home = mkdtempSync(join(tmpdir(), 'prove-s0-home-'))
     config = mkdtempSync(join(tmpdir(), 'prove-s0-config-'))
-    sockDir = mkdtempSync(join(tmpdir(), 'prove-s0-sock-'))
+    if (hasTmux && hasBins) sockDir = mkdtempSync(join(tmpdir(), 'prove-s0-sock-'))
     mkdirSync(join(home, 'state'), { recursive: true })
     mkdirSync(join(home, 'data'), { recursive: true })
     writeFileSync(join(home, 'FIXTURE'), 'fixture\n')
@@ -285,9 +310,11 @@ describe('prove composed S0', () => {
     process.env.TINSTAR_V6_FM_HOME = home
     process.env.TINSTAR_CONFIG_HOME = config
     process.env.TINSTAR_V6_FIXTURE = '1'
-    process.env.TINSTAR_V6_TMUX_SOCKET = socket
-    process.env.FM_V6_BIN = binDir
-    process.env.TMUX_TMPDIR = sockDir
+    if (hasBins) process.env.FM_V6_BIN = binDir
+    if (sockDir) {
+      process.env.TINSTAR_V6_TMUX_SOCKET = socket
+      process.env.TMUX_TMPDIR = sockDir
+    }
     process.env.PATH = `${stub}${process.env.PATH ? `:${process.env.PATH}` : ''}`
     delete process.env.TMUX
     delete process.env.TMUX_PANE
@@ -298,9 +325,12 @@ describe('prove composed S0', () => {
     for (const name of ['worker-a', 'worker-b']) {
       if (DENIED.includes(name)) throw new Error(`refusing to create ${name}`)
     }
-    execFileSync('tmux', ['-L', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'worker-a', '-n', 'alpha'], { env: childEnv() })
-    tmux('new-session', '-d', '-s', 'worker-b', '-n', 'beta')
-    assertPrivate(listSessions())
+    if (!hasBins) return
+    if (hasTmux) {
+      execFileSync('tmux', ['-L', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'worker-a', '-n', 'alpha'], { env: childEnv() })
+      tmux('new-session', '-d', '-s', 'worker-b', '-n', 'beta')
+      assertPrivate(listSessions())
+    }
 
     views = new V6Views()
     setV6RouteDepsForTests({ views })
@@ -329,7 +359,9 @@ describe('prove composed S0', () => {
     expect(address.port).not.toBe(5281)
     expect(address.port).not.toBe(8932)
     base = `http://127.0.0.1:${address.port}`
+  }, 60_000)
 
+  liveIt('lists the two fixture workers from fm-fleet-snapshot', { bins: true }, async () => {
     const listed = await fetch(`${base}/api/v6/workers`)
     const text = await listed.text()
     const body = JSON.parse(text) as {
@@ -346,7 +378,7 @@ describe('prove composed S0', () => {
     expect(body.data?.workers[0]?.endpoint.target).toBe('worker-a:alpha')
     expect(body.data?.workers[1]?.endpoint.target).toBe('worker-b:beta')
     expect(text).not.toContain('fm-send')
-  }, 60_000)
+  })
 
   afterAll(async () => {
     try { viewChild?.kill('SIGTERM') } catch { /* already gone */ }
@@ -370,7 +402,7 @@ describe('prove composed S0', () => {
     restoreEnv()
   })
 
-  it('labels the fixture home, cycles with Ctrl+], and jumps straight to the board', async () => {
+  liveIt('labels the fixture home, cycles with Ctrl+], and jumps straight to the board', { bins: true, tmux: true }, async () => {
     const alphaWindow = windowId('worker-a')
     const betaWindow = windowId('worker-b')
     await renderShell()
@@ -404,7 +436,7 @@ describe('prove composed S0', () => {
     assertPrivate(listSessions())
   }, 40_000)
 
-  it('closes the v6view- attach and leaves both workers', async () => {
+  liveIt('closes the v6view- attach and leaves both workers', { bins: true, tmux: true }, async () => {
     const alphaWindow = windowId('worker-a')
     const betaWindow = windowId('worker-b')
     await renderShell()
@@ -441,7 +473,7 @@ describe('prove composed S0', () => {
     expect(readdirSync(join(home, 'state')).filter(name => name.endsWith('.meta')).sort()).toEqual(['alpha.meta', 'beta.meta'])
   }, 40_000)
 
-  it('shows the anchored inbox reply on the worker', async () => {
+  liveIt('shows the anchored inbox reply on the worker', { bins: true }, async () => {
     await renderShell()
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: HELLO } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -467,7 +499,7 @@ describe('prove composed S0', () => {
     expect(screen.getByTestId('v6-shell')).toHaveAttribute('data-worker', 'alpha')
   }, 40_000)
 
-  it('shows a second thread turn on the same worker anchor', async () => {
+  liveIt('shows a second thread turn on the same worker anchor', { bins: true }, async () => {
     await renderShell()
     fireEvent.click(screen.getByRole('button', { name: /Thread/ }))
     const form = screen.getByRole('form', { name: 'Context thread' })
@@ -509,7 +541,7 @@ describe('prove composed S0', () => {
     expect(screen.getByText(TURN_2)).toBeInTheDocument()
   }, 60_000)
 
-  it('does not spawn for launch and does not claim native supervision', async () => {
+  liveIt('does not spawn for launch and does not claim native supervision', { bins: true, tmux: true }, async () => {
     await renderShell()
     expect(screen.getByTestId('launch-unclaimed')).toHaveTextContent(T01_PROCESS_UNCLAIMED)
     fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'fixture-project' } })
@@ -530,26 +562,32 @@ describe('prove composed S0', () => {
     expect(text).not.toMatch(/proved a native/i)
   }, 40_000)
 
-  it('keeps notes and policy bytes inside the fixture boundary', () => {
+  it('keeps the labeled fixture home and policy bytes inside the temp boundary', () => {
     expect(home.startsWith(tmpdir())).toBe(true)
     expect(config.startsWith(tmpdir())).toBe(true)
-    for (const root of [home, config, sockDir]) {
+    for (const root of [home, config, sockDir].filter(root => root.length > 0)) {
       expect(root.startsWith('/Users/wtg/repo/')).toBe(false)
       expect(root.startsWith(join(homedir(), '.config', 'tinstar'))).toBe(false)
       expect(root.startsWith('/Users/wtg/.local/state/pm-build/tinstar-v6/firstmate-home')).toBe(false)
     }
+    expect(readFileSync(join(home, 'FIXTURE'), 'utf8')).toBe('fixture\n')
+    for (const [file, hash] of policyHash) {
+      expect(hashFile(file)).toBe(hash)
+    }
+  })
+
+  liveIt('keeps notes inside the fixture boundary', { bins: true }, () => {
     expect(existsSync(join(config, 'v6', 'projection.json'))).toBe(true)
     expect(existsSync(join(config, 'v6', 'threads.json'))).toBe(true)
-    expect(readFileSync(join(home, 'FIXTURE'), 'utf8')).toBe('fixture\n')
     const notes = readNotes()
     expect(notes.length).toBeGreaterThanOrEqual(3)
     for (const token of TOKENS) {
       expect(outsideHits(token)).toEqual([])
       expect(treeHas(home, token), token).toBe(true)
     }
-    for (const [file, hash] of policyHash) {
-      expect(hashFile(file)).toBe(hash)
-    }
+  })
+
+  liveIt('keeps denied sessions off the private tmux socket', { bins: true, tmux: true }, () => {
     assertPrivate(listSessions())
   })
 })
