@@ -10,8 +10,6 @@ const LIVE_ROOTS = [
   '/Users/wtg/.local/state/pm-build/tinstar-v6/firstmate-home',
 ]
 
-const HONEST = ['queued', 'saved-unannounced', 'not-receivable', 'failed'] as const
-
 const envelope = {
   schema: 'tinstar.v6.intent/1',
   kind: 'thread.message',
@@ -155,18 +153,25 @@ function assertIsolated(home: string, binDir: string, calls: Call[]): void {
 function assertHeldOrFailed(result: IntentSubmission, file: string, noteSaved: boolean): void {
   expect(result.applied).toBe(false)
   expect(result.canReceive).not.toBe(true)
-  expect(HONEST).toContain(result.disposition)
   expect(result.detail.trim().length).toBeGreaterThan(0)
-  if (result.disposition === 'failed') {
-    if (!noteSaved) expect(result.noteId).toBeNull()
+  expect(result.detail.toLowerCase()).not.toMatch(/delivered|processing/)
+  if (!noteSaved) {
+    expect(result.disposition).toBe('failed')
+    expect(result.noteId).toBeNull()
     expect(stored(file, result.requestId)?.disposition).not.toBe('queued')
     return
   }
-  expect(noteSaved).toBe(true)
+  // A saved note is the durable queue, or the call fails in the open.
+  // not-receivable and saved-unannounced are neither.
+  expect(['queued', 'failed']).toContain(result.disposition)
+  if (result.disposition === 'failed') {
+    expect(stored(file, result.requestId)).toMatchObject({ disposition: 'failed' })
+    return
+  }
   expect(result.noteId).toBeTruthy()
   expect(stored(file, result.requestId)).toMatchObject({
     noteId: result.noteId,
-    disposition: result.disposition,
+    disposition: 'queued',
   })
 }
 
@@ -214,7 +219,7 @@ describe('T06 primary unavailable', () => {
     assertIsolated(place.home, place.binDir, calls)
     assertHeldOrFailed(result, place.projectionFile, true)
     expect(result.canReceive).toBe('unknown')
-    expect(result.disposition).not.toBe('queued')
+    expect(result.disposition).toBe('queued')
     expect(existsSync(join(place.inbox, 'note-req-t06-down.note'))).toBe(true)
   })
 

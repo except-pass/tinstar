@@ -98,13 +98,14 @@ describe('submitIntent', () => {
     expect(result.detail).toMatch(/not announced/)
   })
 
-  it('can_receive other than true is not receivable and not applied', async () => {
+  it('can_receive other than true stays queued and is not applied', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'v6-intent-')), 'projection.json')
     for (const can of [false, 'unknown'] as const) {
       const runner = runnerOf((_script, args) => args[0] === 'ready' ? readyJson(can) : noteJson({}))
       const result = await submitIntent({ ...envelope, requestId: `req-${can}` }, opts(runner, file))
-      expect(result.disposition).toBe('not-receivable')
+      expect(result.disposition).toBe('queued')
       expect(result.applied).toBe(false)
+      expect(result.canReceive).toBe(can)
     }
   })
 

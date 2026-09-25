@@ -100,9 +100,16 @@ function closedPrimary(home: string): FmCommandRunner {
   }
 }
 
-function claimFree(text: string): void {
-  const rest = text.replaceAll('Not applied', '')
-  expect(rest).not.toMatch(/delivered|processing|\bapplied\b|\bsent\b/i)
+function assertShownQueueOrFailure(text: string, disposition: string | undefined): void {
+  const shown = text.replaceAll('Not applied', ' ')
+  expect(shown).not.toMatch(/delivered|processing|\bapplied\b|\bpending\b|not receivable/i)
+  expect(['queued', 'failed']).toContain(disposition)
+  if (disposition === 'failed') {
+    expect(shown.toLowerCase()).toMatch(/fail|cannot receive|not saved|nothing saved|unavailable|primary/)
+    expect(shown.toLowerCase()).not.toContain('queued')
+    return
+  }
+  expect(shown.toLowerCase()).toContain('queued')
 }
 
 function noteFor(inbox: string, requestId: string): string {
@@ -175,21 +182,17 @@ describe('T06 primary unavailable UI', () => {
       expect(seen.submission).toBeTruthy()
       const text = screen.getByTestId('intent-status').textContent ?? ''
       expect(text).toMatch(/Not applied/)
-      const disposition = seen.submission?.disposition
-      if (disposition === 'not-receivable') expect(text).toMatch(/Not receivable/)
-      else if (disposition === 'queued') expect(text).toMatch(/\bQueued\b/)
-      else if (disposition === 'saved-unannounced') expect(text).toMatch(/Saved, not announced/)
-      else expect(text.toLowerCase()).toMatch(/fail|not saved|nothing saved|cannot receive/)
+      assertShownQueueOrFailure(text, seen.submission?.disposition)
     })
 
     const submission = seen.submission as IntentSubmission
     expect(submission.applied).toBe(false)
     expect(submission.canReceive).not.toBe(true)
-    expect(['queued', 'saved-unannounced', 'not-receivable', 'failed']).toContain(submission.disposition)
+    expect(submission.disposition).toBe('queued')
     const text = screen.getByTestId('intent-status').textContent ?? ''
-    claimFree(text)
+    assertShownQueueOrFailure(text, submission.disposition)
     expect(screen.queryByText(/^Applied$/)).toBeNull()
-    expect(screen.queryByText(/Delivered|Processing/i)).toBeNull()
+    expect(screen.queryByText(/Delivered|Processing|Pending|Not receivable/i)).toBeNull()
     expect(screen.getByTestId('terminal-alpha')).toBeInTheDocument()
     const notes = submission.requestId
     expect(existsSync(noteFor(place.inbox, notes))).toBe(true)
@@ -224,13 +227,13 @@ describe('T06 primary unavailable UI', () => {
     const submission = seen.submission as IntentSubmission
     expect(submission.applied).toBe(false)
     expect(submission.canReceive).not.toBe(true)
-    expect(submission.disposition).not.toBe('failed')
+    expect(submission.disposition).toBe('queued')
     const card = screen.getByTestId('needsyou-card-ny-decision')
     expect(card).toHaveAttribute('data-applied', 'false')
-    expect(card.getAttribute('data-delivery')).not.toBe('applied')
+    expect(card.getAttribute('data-delivery')).toBe('queued')
+    expect(card.getAttribute('data-state')).not.toBe('resolved')
     const status = screen.getByTestId('needsyou-status-ny-decision').textContent ?? ''
-    expect(status).toMatch(/not receivable|queued|saved, not announced|failed/)
-    claimFree(status)
+    assertShownQueueOrFailure(status, submission.disposition)
     expect(existsSync(join(place.home, 'state', 'pane'))).toBe(true)
     const saved = readFileSync(noteFor(place.inbox, submission.requestId), 'utf8')
     expect(saved).toContain('attention.answer')
@@ -277,11 +280,12 @@ describe('T06 primary unavailable UI', () => {
     const submission = seen.submission as IntentSubmission
     expect(submission.applied).toBe(false)
     expect(submission.canReceive).not.toBe(true)
+    expect(submission.disposition).toBe('queued')
     expect(status).toHaveAttribute('data-applied', 'false')
-    expect(status).toHaveAttribute('data-disposition', 'not-receivable')
-    claimFree(status.textContent ?? '')
+    assertShownQueueOrFailure(status.textContent ?? '', 'queued')
     expect(screen.queryByText(/^Applied$/)).toBeNull()
     expect(screen.queryByText(/^Pending$/)).toBeNull()
+    expect(screen.queryByText(/Not receivable|Delivered|Processing/i)).toBeNull()
     const card = screen.getByTestId('epic-epic-1')
     expect(card).toHaveAttribute('data-authoritative-column', 'col-inbox')
     expect(card).toHaveAttribute('data-pending', 'false')
