@@ -7,6 +7,7 @@ import {
   NeedsYouRail,
   PortfolioBoard,
   QuotaRail,
+  ShellSelection,
   WorkerObjective,
 } from './slots'
 import { displayName, hashPaletteColor } from './identity'
@@ -265,6 +266,7 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
   const motion = reduce ? '' : 'transition-colors duration-150'
 
   return (
+    <ShellSelection value={{ workerId: selected?.id ?? null, view }}>
     <div
       data-testid="v6-shell"
       data-view={view.kind}
@@ -394,5 +396,6 @@ export function V6Shell({ pollMs = 4000 }: { pollMs?: number }) {
         </main>
       </div>
     </div>
+    </ShellSelection>
   )
 }

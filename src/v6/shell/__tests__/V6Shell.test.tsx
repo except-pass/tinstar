@@ -133,13 +133,16 @@ describe('V6Shell', () => {
       const url = String(input)
       if (url.includes('/api/v6/workers')) return workersResponse([alpha])
       if (url.includes('/api/v6/identity')) return new Response(JSON.stringify({ ok: true, data: {} }), { status: 200 })
-      if (init?.method === 'POST' && url.includes('/api/v6/intents')) {
-        return new Response(JSON.stringify({
-          ok: true,
-          data: { disposition: 'saved-unannounced', detail: 'saved, not announced', applied: false },
-        }), { status: 200 })
+      if (url.includes('/api/v6/intents')) {
+        if (init?.method === 'POST') {
+          return new Response(JSON.stringify({
+            ok: true,
+            data: { disposition: 'saved-unannounced', detail: 'saved, not announced', applied: false },
+          }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ ok: true, data: { reply: null } }), { status: 200 })
       }
-      return new Response(JSON.stringify({ ok: true, data: { reply: null } }), { status: 200 })
+      return new Response('no', { status: 404 })
     }))
     render(<V6Shell pollMs={60_000} />)
     await screen.findByLabelText('Message')
