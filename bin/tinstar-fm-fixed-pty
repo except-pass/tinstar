@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Relay a browser terminal into a tmux client on a fixed-size private PTY."""
+
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import sys
+import termios
+import tty
+
+
+def main() -> int:
+    script, session, window_id, window_name, cols, rows = sys.argv[1:]
+    pid, master = pty.fork()
+    if pid == 0:
+        os.environ["TINSTAR_FIXED_PTY"] = "1"
+        os.execv(script, [script, session, window_id, window_name])
+
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", int(rows), int(cols), 0, 0))
+    input_fd = sys.stdin.fileno()
+    output_fd = sys.stdout.fileno()
+    old_mode = termios.tcgetattr(input_fd) if os.isatty(input_fd) else None
+    if old_mode is not None:
+        tty.setraw(input_fd)
+
+    def stop(_signal, _frame):
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except ProcessLookupError:
+            pass
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGHUP, stop)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        while True:
+            ready, _, _ = select.select([input_fd, master], [], [])
+            if input_fd in ready:
+                data = os.read(input_fd, 65536)
+                if not data:
+                    break
+                os.write(master, data)
+            if master in ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                os.write(output_fd, data)
+    finally:
+        if old_mode is not None:
+            termios.tcsetattr(input_fd, termios.TCSADRAIN, old_mode)
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except ProcessLookupError:
+            pass
+        os.waitpid(pid, 0)
+        os.close(master)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

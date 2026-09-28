@@ -26,3 +26,4 @@ todos.txt
 # and a watcher projects them onto the run's Slate. These are ephemeral per-session
 # surfaces (like /.mcp.json above), not source — never commit them.
 /.tinstar/
+.tmp/

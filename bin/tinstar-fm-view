@@ -13,7 +13,7 @@
 # leaves the view too and the view dies with it.
 #
 # Everything this script does to tmux targets the view session it just made,
-# except two read-only lookups and the `link-window` source. It NEVER sends
+# except read-only lookups and the `link-window` source. It NEVER sends
 # kill-window / kill-pane / respawn-* / send-keys / kill-session to anything
 # outside the `tsview-` namespace (src/server/firstmate/views.tmux.test.ts records
 # every tmux call the script makes and asserts it).
@@ -42,6 +42,23 @@ listing=$(tmux list-windows -t "=$fm_session" -F '#{window_id} #{window_name}' 2
 printf '%s\n' "$listing" | grep -qxF -- "$window_id $window_name" \
   || die "worker window is gone ($window_name)"
 
+# A detached tmux session otherwise starts at its own default size and linking
+# the worker window can resize the real pane immediately. Match the source size
+# before link-window; ignore-size below prevents the browser client changing it.
+worker_size=$(tmux display-message -p -t "$window_id" '#{window_width} #{window_height}' 2>/dev/null) \
+  || die "worker window size unavailable"
+read -r worker_cols worker_rows <<< "$worker_size"
+[[ $worker_cols =~ ^[1-9][0-9]*$ && $worker_rows =~ ^[1-9][0-9]*$ ]] \
+  || die "worker window size unavailable"
+
+# ttyd changes its own PTY size when a browser connects or resizes. A linked
+# tmux window would pass that change through to the real worker. Put tmux on a
+# fixed inner PTY instead; only the outer browser-facing PTY changes size.
+if [ "${TINSTAR_FIXED_PTY:-}" != 1 ]; then
+  command -v python3 >/dev/null 2>&1 || die "python3 required for a size-safe terminal view"
+  exec python3 "$(dirname "$0")/tinstar-fm-fixed-pty" "$0" "$fm_session" "$window_id" "$window_name" "$worker_cols" "$worker_rows"
+fi
+
 # tsview-<task>-<nonce>; the task part is display-only, sanitised and bounded.
 task=$(printf '%s' "${window_name#fm-}" | tr -c 'A-Za-z0-9_-' '_' | cut -c1-40)
 nonce="$$-$(date +%s)-$RANDOM"
@@ -52,7 +69,7 @@ placeholder="tsview-placeholder-$nonce"
 # any client attached), so a hangup before the attach below must clean up itself.
 trap 'tmux kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
 
-tmux new-session -d -s "$view" -n "$placeholder" \; \
+tmux new-session -d -s "$view" -x "$worker_cols" -y "$worker_rows" -n "$placeholder" \; \
   set-option -t "=$view:" prefix None \; \
   set-option -t "=$view:" prefix2 None \; \
   set-option -t "=$view:" key-table tsview-passthrough \; \
@@ -66,4 +83,9 @@ tmux new-session -d -s "$view" -n "$placeholder" \; \
 # destroy-unattached goes on as part of the attach, so the session cannot be
 # reaped before a client exists.
 trap - HUP INT TERM
-exec env -u TMUX tmux attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on
+# ttyd starts this process after receiving the browser's initial geometry.
+# Set only this view's PTY to the worker's existing size before tmux attaches.
+stty cols "$worker_cols" rows "$worker_rows" 2>/dev/null || die "view terminal size unavailable"
+# The viewer is a tmux client of a linked worker window. Without ignore-size,
+# tmux's default latest sizing lets this browser resize the real worker pane.
+exec env -u TMUX tmux attach-session -f ignore-size -t "=$view" \; set-option -t "=$view:" destroy-unattached on

@@ -45,7 +45,6 @@ import {
   listSessions,
   updateSession,
   interactivePortWindow,
-  firstmatePortWindow,
   loadSecrets,
   type TinstarConfig,
   type Session,
@@ -55,8 +54,7 @@ import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
-import { FirstmateObserver } from './firstmate/observer'
-import { FirstmateViews } from './firstmate/views'
+import type { FirstmateObserver } from './firstmate/observer'
 import { SurfaceService } from './surfaces/surface-service'
 import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
 import { SurfaceComposeCoordinator } from './surfaces/surface-compose-coordinator'
@@ -1636,26 +1634,8 @@ export function initBackend(): RouteContext {
           if (result.failed.length) log.info('slate-author', `restart failed ${result.failed.length} interrupted compose attempt(s)`)
         })
         .catch(err => log.warn('slate-author', `restart recovery failed: ${(err as Error).message}`))
-      // First mate observer (M1 cards): read-only ledger follower that mirrors first
-      // mate workers as docstore-only runs. Opt-in via config `firstmate.homes`, and
-      // never under the simulator's mock data.
-      if (!fastSim && cfg.firstmate.homes.length > 0) {
-        // M2: the terminal view. Its ttyds draw ports from their own window and reach
-        // the browser through the existing /s/<runId>/ proxy (Run.port).
-        const firstmateViews = new FirstmateViews({
-          window: firstmatePortWindow(cfg),
-          onExit: runId => firstmateObserver?.onTerminalExit(runId),
-        })
-        firstmateObserver = new FirstmateObserver({
-          homes: cfg.firstmate.homes,
-          docStore,
-          configRoot: getConfigRoot(),
-          hasSession: name => !!getSession(cfg.dirs.sessions, name),
-          views: firstmateViews,
-        })
-        void firstmateObserver.start()
-          .catch(err => log.warn('firstmate', `observer failed to start: ${(err as Error).message}`))
-      }
+      // Fleet reads and terminal views live in the cockpit service. The legacy
+      // canvas observer is not started, so it cannot create duplicate views.
       setInterval(() => {
         void composeCoordinator?.sweep()
           .catch(err => log.warn('slate-author', `deadline sweep failed: ${(err as Error).message}`))
