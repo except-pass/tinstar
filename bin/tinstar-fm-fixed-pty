@@ -33,6 +33,10 @@ def set_size(fd, size):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def report_size(fd, size):
+    os.write(fd, ("\x1b]7337;%d;%d\x07" % size).encode())
+
+
 def main() -> int:
     script, session, window_id, window_name, cols, rows = sys.argv[1:]
     pid, master = pty.fork()
@@ -44,6 +48,7 @@ def main() -> int:
     set_size(master, size)
     input_fd = sys.stdin.fileno()
     output_fd = sys.stdout.fileno()
+    report_size(output_fd, size)
     old_mode = termios.tcgetattr(input_fd) if os.isatty(input_fd) else None
     if old_mode is not None:
         tty.setraw(input_fd)
@@ -67,6 +72,7 @@ def main() -> int:
                 if current is not None and current != size:
                     size = current
                     set_size(master, size)
+                    report_size(output_fd, size)
             if input_fd in ready:
                 data = os.read(input_fd, 65536)
                 if not data:

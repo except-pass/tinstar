@@ -263,6 +263,19 @@
         term.refresh(0, term.rows - 1)
       }
       term.resize()
+      if (term.parser && term.parser.registerOscHandler) {
+        term.parser.registerOscHandler(7337, function(data) {
+          var size = data.split(';')
+          var cols = Number(size[0])
+          var rows = Number(size[1])
+          if (cols > 0 && rows > 0) {
+            fixedCols = cols
+            fixedRows = rows
+            term.resize()
+          }
+          return true
+        })
+      }
       if (win.ResizeObserver && term.element) {
         var screen = term.element.querySelector('.xterm-screen')
         if (screen) new win.ResizeObserver(fitPinnedFrame).observe(screen)

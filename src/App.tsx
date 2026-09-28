@@ -116,12 +116,12 @@ export default function App() {
         const next: Terminal = body.ok && body.data ? body.data : { state: 'unavailable', reason: body.error?.message ?? 'Terminal unavailable' }
         setTerminals(previous => {
           const old = previous[key]
-          if (old?.state === 'live' && next.state === 'live' && old.port === next.port && old.pid === next.pid
-            && old.cols === next.cols && old.rows === next.rows) return previous
+          if (old?.state === 'live' && next.state === 'live' && old.port === next.port && old.pid === next.pid) return previous
           return { ...previous, [key]: next }
         })
       })
-      .catch(err => setTerminals(previous => ({ ...previous, [key]: { state: 'unavailable', reason: (err as Error).message } })))
+      .catch(err => setTerminals(previous => previous[key]?.state === 'live' ? previous
+        : { ...previous, [key]: { state: 'unavailable', reason: (err as Error).message } }))
       .finally(() => setOpening(previous => ({ ...previous, [key]: false })))
   }, [currentKey, currentTerminalAvailable, fleet])
 
@@ -161,7 +161,7 @@ export default function App() {
       </div>
       <div className="cockpit-rail-footer">CTRL + [ &nbsp; / &nbsp; CTRL + ]<span>Switch workers</span></div>
     </aside>
-    <main className="cockpit-main">
+    <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {!current ? <>
         <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p></header>
         {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
@@ -183,7 +183,7 @@ export default function App() {
               const terminal = terminals[worker.key]
               if (terminal?.state !== 'live') return []
               const active = current.key === worker.key
-              return [<iframe key={`${worker.key}:${terminal.port}:${terminal.pid}:${terminal.cols}x${terminal.rows}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}&cols=${terminal.cols}&rows=${terminal.rows}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
+              return [<iframe key={`${worker.key}:${terminal.port}:${terminal.pid}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}&cols=${terminal.cols}&rows=${terminal.rows}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
             })}
             {opening[current.key] && !terminals[current.key] && <p className="cockpit-terminal-placeholder">Connecting to terminal…</p>}
             {!current.terminalAvailable && <p className="cockpit-terminal-placeholder">Terminal endpoint unavailable</p>}

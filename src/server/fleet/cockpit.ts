@@ -62,6 +62,7 @@ export class CockpitFleet {
   private homes: string[]
   private errors: string[] = []
   private python: Promise<boolean> | null = null
+  private sizes = new Map<string, { cols: number; rows: number }>()
 
   constructor() {
     const config = loadConfig({ _rootDir: getConfigRoot() })
@@ -100,8 +101,9 @@ export class CockpitFleet {
     if (!await this.python) return { key, state: 'unavailable' as const, reason: 'python3 is required for a size-safe terminal view' }
     const result = await this.views.ensure(key, ref.id, ref.target)
     if (result.state !== 'live') return { key, ...result }
-    const size = await this.windowSize(ref.target)
+    const size = await this.windowSize(ref.target) ?? this.sizes.get(key)
     if (!size) return { key, state: 'unavailable' as const, reason: 'worker window size unavailable' }
+    this.sizes.set(key, size)
     return { key, ...result, pid: this.views.pidOf(key), ...size }
   }
 
@@ -133,7 +135,11 @@ export class CockpitFleet {
             if (target) targets.set(worker.key, target)
           }
         }
-        for (const old of this.workers) if (!targets.has(old.key)) this.views.release(old.key)
+        for (const old of this.workers) {
+          if (targets.has(old.key)) continue
+          this.views.release(old.key)
+          this.sizes.delete(old.key)
+        }
         this.workers = workers
         this.targets = targets
         this.errors = errors

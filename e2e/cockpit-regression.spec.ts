@@ -15,12 +15,28 @@ const xtermSize = async (page: Page, id: string) => {
     return term ? `${term.cols}x${term.rows}` : 'missing'
   }).catch(() => 'missing')
 }
-const terminalFitsStage = (page: Page, id: string) => {
-  const frame = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
-  return frame!.evaluate(() => {
-    const r = document.getElementById('term')!.getBoundingClientRect()
-    return r.width <= innerWidth + 1 && r.height <= innerHeight + 1
+const promptProblems = async (page: Page, id: string) => {
+  const problems = await page.evaluate(() => {
+    const found: string[] = []
+    const stage = document.querySelector('.cockpit-terminal-stage')!.getBoundingClientRect()
+    const main = document.querySelector('.cockpit-main')!
+    if (stage.bottom > innerHeight || stage.right > innerWidth) found.push(`stage ends at ${stage.right}x${stage.bottom} in ${innerWidth}x${innerHeight}`)
+    if (document.documentElement.scrollHeight > innerHeight) found.push('page scrolls')
+    if (main.scrollHeight > main.clientHeight) found.push('worker pane scrolls')
+    return found
   })
+  const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
+  const fits = await wrapper?.evaluate(() => {
+    const r = document.getElementById('term')!.getBoundingClientRect()
+    return r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1
+  })
+  if (!fits) problems.push('terminal larger than stage')
+  const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
+    const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
+    return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
+  }).catch(() => '')
+  if (!bottom?.includes('PROMPT_BOTTOM>')) problems.push(`bottom row is "${bottom}"`)
+  return problems
 }
 
 test('regression: private First Mate fleet, terminal input, cycling and window survival', async ({ browser }) => {
@@ -62,7 +78,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     }
     snapshot(['alpha', 'bravo'])
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
-    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', 'cat')
+    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "seq 1 200; printf 'PROMPT_BOTTOM> '; exec cat")
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', 'cat')
     const before = windows()
     const sizesBefore = windowSizes()
@@ -103,7 +119,13 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
     expect(alphaSize()).toBe('220x60')
     await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
-    expect(await terminalFitsStage(page, 'alpha')).toBe(true)
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]) {
+      await page.setViewportSize(viewport)
+      await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+      await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
+    }
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     await page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').locator('.xterm-screen').click()
     await page.keyboard.type('COCKPIT_PRIVATE_INPUT')
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-alpha')).toContain('COCKPIT_PRIVATE_INPUT')
@@ -147,7 +169,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     expect(windowSizes()).toBe(sizesBefore)
     console.log(`private worker window sizes after viewport resize=${windowSizes()}`)
     expect(await xtermSize(page, 'alpha')).toBe('220x60')
-    expect(await terminalFitsStage(page, 'alpha')).toBe(true)
+    await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     console.log(`private ttyd PIDs before=${ttydPids.join(',')} after=${ttydPidsAfter.join(',')}`)
     console.log(`private iframe sizes before=${frameSizes.join(',')} after=${frameSizesAfter.join(',')}`)
     await page.reload()
@@ -174,12 +196,15 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     // An operator client resizes the worker, then detaches while the cockpit view
     // is the only client left on the window: the view must not impose its size.
     await expect.poll(() => xtermSize(second, 'alpha')).toBe('220x60')
+    await second.locator('iframe[title="alpha terminal"]').evaluate(frame => { frame.dataset.mounted = 'before-operator' })
     tmux('select-window', '-t', 'firstmate:fm-alpha')
     operator('new-session', '-d', '-s', 'operator', '-x', '200', '-y', '50',
       `env -u TMUX '${realTmux}' -L '${socket}' attach-session -t firstmate`)
     await expect.poll(alphaSize).not.toBe('220x60')
     const operatorSize = alphaSize()
     console.log(`private worker alpha size with operator attached=${operatorSize}`)
+    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 3_000 }).toBe(operatorSize)
+    await expect(second.locator('iframe[title="alpha terminal"]')).toHaveAttribute('data-mounted', 'before-operator')
     await delay(1500)
     operator('kill-server')
     await expect.poll(() => tmux('list-clients', '-F', '#{session_name}').split('\n')).not.toContain('firstmate')
@@ -190,7 +215,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await second.reload()
     await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
     await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 15_000 }).toBe(operatorSize)
-    expect(await terminalFitsStage(second, 'alpha')).toBe(true)
+    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
     console.log(`private worker alpha size after reconnect=${alphaSize()}`)
     expect(alphaSize()).toBe(operatorSize)
     await second.close()

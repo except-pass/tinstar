@@ -219,7 +219,8 @@ export class FirstmateViews {
     try {
       windowId = await this.resolveWindowId(ref)
     } catch (err) {
-      this.stopView(runId, false)
+      const current = this.live.get(runId)
+      if (current && current.child.exitCode === null && current.child.signalCode === null) return { state: 'live', port: current.port }
       return { state: 'unavailable', reason: `tmux unreadable: ${(err as Error).message.split('\n')[0]}` }
     }
     if (!windowId) {
