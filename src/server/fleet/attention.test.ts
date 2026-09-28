@@ -22,8 +22,8 @@ describe('First Mate attention projection', () => {
     const workers = [worker({ state: 'blocked', detail: 'Need repository access', prUrl: url }), worker({ id: 'bravo', key: 'cockpit-0-bravo', state: 'failed', detail: 'Build failed' })]
     const cards = buildAttentionCards(0, tasks, [], workers, new Map([[url, 'open']]))
     expect(cards.map(card => card.type)).toEqual(['blocked', 'failure', 'review'])
-    expect(cards[0]?.detail).toBe('Need repository access')
-    expect(cards[1]?.headline).toBe('Build failed')
+    expect(cards[0]).toMatchObject({ headline: 'Need repository access', detail: '' })
+    expect(cards[1]).toMatchObject({ headline: 'Build failed', detail: '' })
     expect(cards[2]).toMatchObject({ repository: 'acme/editor', prNumber: 42, prUrl: url, ci: 'unknown' })
     expect(buildAttentionCards(0, tasks, [], workers, new Map([[url, 'merged']])).map(card => card.type)).toEqual(['blocked', 'failure'])
   })
@@ -40,8 +40,40 @@ describe('First Mate attention projection', () => {
   it('matches a legacy default-key call to the same worker hold when the request text agrees', () => {
     const cards = buildAttentionCards(0,
       [{ id: 'alpha', hints: { open_decisions: [{ key: 'default', verb: 'needs-decision', summary: 'Choose the release channel' }] } }],
-      [{ id: 'alpha-release', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the release channel' }],
+      [{ id: 'alpha-release', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the release channel', body_lines: ['Origin: alpha'] }],
       [worker()], new Map())
     expect(cards).toHaveLength(1)
+  })
+
+  it('resolves a call to its legacy decision hold even when the texts differ', () => {
+    const cards = buildAttentionCards(0,
+      [{ id: 'alpha', hints: { open_decisions: [{ key: 'api-shape', verb: 'needs-decision', summary: 'Pick API shape' }] } }],
+      [{ id: 'alpha-decision-api-shape', title: 'API shape', state: 'in_flight', hold_kind: 'captain', hold_reason: 'Choose REST or GraphQL', hold_age_days: 2 }],
+      [worker()], new Map())
+    expect(cards).toMatchObject([{ type: 'decision', headline: 'Pick API shape', detail: 'API shape', ageDays: 2 }])
+  })
+
+  it('keeps holds with a shared id prefix apart', () => {
+    const holds = ['alpha', 'alpha-editor-call'].map(id => ({ id, title: id, state: 'in_flight', hold_kind: 'captain', hold_reason: `Decide ${id}` }))
+    const cards = buildAttentionCards(0,
+      [{ id: 'alpha', hints: { open_decisions: [{ key: 'captain-hold-alpha-editor-call-1', verb: 'needs-decision', summary: 'Decide editor call' }] } }],
+      holds, [worker()], new Map())
+    expect(cards.map(card => card.key)).toEqual(['attention-0:alpha:decision:captain-hold-alpha-editor-call-1', 'attention-0:hold:alpha'])
+  })
+
+  it('resolves a single migrated-prefix hold and ignores an ambiguous one', () => {
+    const tasks = [{ id: 'alpha', hints: { open_decisions: [{ key: 'api-shape', verb: 'needs-decision', summary: 'Pick API shape' }] } }]
+    const hold = (id: string) => ({ id, state: 'in_flight', hold_kind: 'captain', hold_reason: 'Choose REST or GraphQL' })
+    expect(buildAttentionCards(0, tasks, [hold('fm-alpha-decision-api-shape')], [worker()], new Map())).toHaveLength(1)
+    expect(buildAttentionCards(0, tasks, [hold('fm-api-shape'), hold('bd-api-shape')], [worker()], new Map())).toHaveLength(3)
+    expect(buildAttentionCards(0, tasks, [hold('beta-decision-api-shape')], [worker()], new Map())).toHaveLength(2)
+  })
+
+  it('attributes a standalone hold only by exact id or its recorded origin', () => {
+    const workers = [worker({ id: 'api', key: 'cockpit-0-api' })]
+    const hold = { id: 'api-v2-cutover', state: 'queued', hold_kind: 'captain', hold_reason: 'Approve cutover' }
+    expect(buildAttentionCards(0, [], [hold], workers, new Map())[0]).toMatchObject({ workerKey: null, workerId: null })
+    expect(buildAttentionCards(0, [], [{ ...hold, body_lines: ['Captain hold set: 2026-09-27', 'Origin: api'] }], workers, new Map())[0])
+      .toMatchObject({ workerKey: 'cockpit-0-api', workerId: 'api' })
   })
 })

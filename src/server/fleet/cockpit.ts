@@ -66,6 +66,8 @@ export class CockpitFleet {
   private python: Promise<boolean> | null = null
   private sizes = new Map<string, { cols: number; rows: number }>()
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
+  private reviewing = new Set<string>()
+  private ready = false
 
   constructor() {
     const config = loadConfig({ _rootDir: getConfigRoot() })
@@ -91,8 +93,8 @@ export class CockpitFleet {
     this.views.stop()
   }
 
-  list(): { workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
-    return { workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.errors }
+  list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
+    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -155,6 +157,9 @@ export class CockpitFleet {
         })
         this.targets = targets
         this.errors = errors
+        this.ready = true
+        const pulls = new Set(workers.map(worker => worker.prUrl))
+        for (const url of this.reviews.keys()) if (!pulls.has(url)) this.reviews.delete(url)
         for (const [key, ref] of targets) {
           if (this.views.portOf(key) === null) continue
           void this.views.ensure(key, ref.id, ref.target)
@@ -204,7 +209,7 @@ export class CockpitFleet {
       }))
       const presentWorkers = workers.filter((w): w is CockpitWorker => w !== null)
       const pullUrls = [...new Set(presentWorkers.map(worker => worker.prUrl).filter((url): url is string => !!url))]
-      const reviewStatuses = new Map(await Promise.all(pullUrls.map(async url => [url, await this.reviewStatus(url)] as const)))
+      const reviewStatuses = new Map(pullUrls.map(url => [url, this.reviewStatus(url)] as const))
       const attention = buildAttentionCards(index, snapshot.tasks, backlog, presentWorkers, reviewStatuses)
       return { workers: presentWorkers, attention, targets, error: null }
     } catch (err) {
@@ -212,11 +217,16 @@ export class CockpitFleet {
     }
   }
 
-  private async reviewStatus(url: string): Promise<ReviewStatus> {
+  private reviewStatus(url: string): ReviewStatus {
     const cached = this.reviews.get(url)
-    if (cached && cached.until > Date.now()) return cached.status
+    if (!cached || cached.until <= Date.now()) void this.fetchReviewStatus(url, cached?.status)
+    return cached?.status ?? 'unknown'
+  }
+
+  private async fetchReviewStatus(url: string, previous: ReviewStatus | undefined): Promise<void> {
     const parsed = parsePullUrl(url)
-    if (!parsed) return 'unknown'
+    if (!parsed || this.reviewing.has(url)) return
+    this.reviewing.add(url)
     let status: ReviewStatus = 'unknown'
     try {
       // GitHub is authoritative for merge state; First Mate's PR URL can outlive a merge.
@@ -225,10 +235,12 @@ export class CockpitFleet {
       if (pull.merged_at) status = 'merged'
       else if (pull.state === 'open' || pull.state === 'closed') status = pull.state
     } catch (err) {
-      log.warn('fleet', `pull request status unavailable: ${(err as Error).message}`)
+      if (previous !== 'unknown') log.warn('fleet', `pull request status unavailable: ${(err as Error).message}`)
+    } finally {
+      this.reviewing.delete(url)
     }
-    this.reviews.set(url, { status, until: Date.now() + (status === 'unknown' ? 20_000 : 60_000) })
-    return status
+    this.reviews.set(url, { status, until: Date.now() + (status === 'unknown' ? 300_000 : 60_000) })
+    if (status !== (previous ?? 'unknown')) void this.refresh()
   }
 }
 
