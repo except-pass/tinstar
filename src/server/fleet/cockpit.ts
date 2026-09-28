@@ -11,10 +11,11 @@ import { FirstmateViews, parseWindowRef } from '../firstmate/views'
 import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
+import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
 
 const execFileAsync = promisify(execFile)
 
-interface SnapshotTask {
+interface SnapshotTask extends AttentionTask {
   id?: unknown
   kind?: unknown
   project?: unknown
@@ -53,6 +54,7 @@ export function objectiveFromBrief(text: string): string | null {
 
 export class CockpitFleet {
   private workers: CockpitWorker[] = []
+  private attention: AttentionCard[] = []
   private targets = new Map<string, { id: string; target: string | null }>()
   private watchers: LedgerWatcher[] = []
   private timer: ReturnType<typeof setInterval> | null = null
@@ -63,6 +65,7 @@ export class CockpitFleet {
   private errors: string[] = []
   private python: Promise<boolean> | null = null
   private sizes = new Map<string, { cols: number; rows: number }>()
+  private reviews = new Map<string, { status: ReviewStatus; until: number }>()
 
   constructor() {
     const config = loadConfig({ _rootDir: getConfigRoot() })
@@ -88,8 +91,8 @@ export class CockpitFleet {
     this.views.stop()
   }
 
-  list(): { workers: Array<CockpitWorker & { terminalPid: number | null }>; errors: string[] } {
-    return { workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), errors: this.errors }
+  list(): { workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
+    return { workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -124,6 +127,7 @@ export class CockpitFleet {
         this.again = false
         const rows = await Promise.all(this.homes.map((home, index) => this.readHome(home, index)))
         const workers = rows.flatMap(row => row.workers)
+        const attention = rows.flatMap(row => row.attention)
         const targets = new Map(rows.flatMap(row => [...row.targets]))
         const errors = rows.flatMap(row => row.error ? [row.error] : [])
         // Preserve a home's last known workers if a transient snapshot read fails.
@@ -134,6 +138,7 @@ export class CockpitFleet {
             const target = this.targets.get(worker.key)
             if (target) targets.set(worker.key, target)
           }
+          attention.push(...this.attention.filter(card => card.key.startsWith(`attention-${index}:`)))
         }
         for (const old of this.workers) {
           if (targets.has(old.key)) continue
@@ -141,6 +146,13 @@ export class CockpitFleet {
           this.sizes.delete(old.key)
         }
         this.workers = workers
+        const seenPulls = new Set<string>()
+        this.attention = attention.filter(card => {
+          if (card.type !== 'review' || !card.prUrl) return true
+          if (seenPulls.has(card.prUrl)) return false
+          seenPulls.add(card.prUrl)
+          return true
+        })
         this.targets = targets
         this.errors = errors
         for (const [key, ref] of targets) {
@@ -156,6 +168,7 @@ export class CockpitFleet {
 
   private async readHome(home: string, index: number): Promise<{
     workers: CockpitWorker[]
+    attention: AttentionCard[]
     targets: Map<string, { id: string; target: string | null }>
     error: string | null
   }> {
@@ -164,9 +177,10 @@ export class CockpitFleet {
       const { stdout } = await execFileAsync(join(home, 'bin', 'fm-fleet-snapshot.sh'), ['--json'], {
         timeout: 18_000, maxBuffer: 16 * 1024 * 1024,
       })
-      const snapshot = JSON.parse(stdout) as { schema?: string; tasks?: SnapshotTask[]; backlog?: { records?: Array<{ id?: string; title?: string }> } }
+      const snapshot = JSON.parse(stdout) as { schema?: string; tasks?: SnapshotTask[]; backlog?: { records?: AttentionBacklogRow[] } }
       if (snapshot.schema !== 'fm-fleet-snapshot.v1' || !Array.isArray(snapshot.tasks)) throw new Error('unexpected snapshot format')
-      const titles = new Map((snapshot.backlog?.records ?? []).map(r => [r.id, r.title]))
+      const backlog = Array.isArray(snapshot.backlog?.records) ? snapshot.backlog.records : []
+      const titles = new Map(backlog.map(r => [r.id, r.title]))
       const workers = await Promise.all(snapshot.tasks.map(async task => {
         const id = str(task.id, '')
         if (!id) return null
@@ -178,7 +192,7 @@ export class CockpitFleet {
           const brief = await readFile(join(home, 'data', id, 'brief.md'), 'utf8')
           objective = objectiveFromBrief(brief) ?? objective
         } catch { /* backlog title is the documented fallback */ }
-        const prUrl = typeof task.pr?.url === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\/?$/.test(task.pr.url)
+        const prUrl = typeof task.pr?.url === 'string' && parsePullUrl(task.pr.url)
           ? task.pr.url : null
         return {
           key, id, home, kind: str(task.kind), state: str(task.current_state?.state),
@@ -188,10 +202,33 @@ export class CockpitFleet {
           branch: str(task.branch), prUrl, terminalAvailable: !!target,
         } satisfies CockpitWorker
       }))
-      return { workers: workers.filter((w): w is CockpitWorker => w !== null), targets, error: null }
+      const presentWorkers = workers.filter((w): w is CockpitWorker => w !== null)
+      const pullUrls = [...new Set(presentWorkers.map(worker => worker.prUrl).filter((url): url is string => !!url))]
+      const reviewStatuses = new Map(await Promise.all(pullUrls.map(async url => [url, await this.reviewStatus(url)] as const)))
+      const attention = buildAttentionCards(index, snapshot.tasks, backlog, presentWorkers, reviewStatuses)
+      return { workers: presentWorkers, attention, targets, error: null }
     } catch (err) {
-      return { workers: [], targets, error: `${home}: ${(err as Error).message}` }
+      return { workers: [], attention: [], targets, error: `${home}: ${(err as Error).message}` }
     }
+  }
+
+  private async reviewStatus(url: string): Promise<ReviewStatus> {
+    const cached = this.reviews.get(url)
+    if (cached && cached.until > Date.now()) return cached.status
+    const parsed = parsePullUrl(url)
+    if (!parsed) return 'unknown'
+    let status: ReviewStatus = 'unknown'
+    try {
+      // GitHub is authoritative for merge state; First Mate's PR URL can outlive a merge.
+      const { stdout } = await execFileAsync('gh', ['api', parsed.apiPath], { timeout: 8_000, maxBuffer: 1024 * 1024 })
+      const pull = JSON.parse(stdout) as { state?: unknown; merged_at?: unknown }
+      if (pull.merged_at) status = 'merged'
+      else if (pull.state === 'open' || pull.state === 'closed') status = pull.state
+    } catch (err) {
+      log.warn('fleet', `pull request status unavailable: ${(err as Error).message}`)
+    }
+    this.reviews.set(url, { status, until: Date.now() + (status === 'unknown' ? 20_000 : 60_000) })
+    return status
   }
 }
 
