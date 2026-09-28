@@ -14,6 +14,7 @@ import time
 import tty
 
 SIZE_POLL_SECONDS = 0.5
+SIZE_REPEAT_SECONDS = 5
 
 
 def worker_size(window_id):
@@ -62,7 +63,8 @@ def main() -> int:
 
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
-    next_poll = time.monotonic() + SIZE_POLL_SECONDS
+    started = time.monotonic()
+    next_poll = started + SIZE_POLL_SECONDS
     try:
         while True:
             ready, _, _ = select.select([input_fd, master], [], [], SIZE_POLL_SECONDS)
@@ -73,6 +75,8 @@ def main() -> int:
                     size = current
                     set_size(master, size)
                     report_size(output_fd, size)
+            if not ready and time.monotonic() - started < SIZE_REPEAT_SECONDS:
+                report_size(output_fd, size)
             if input_fd in ready:
                 data = os.read(input_fd, 65536)
                 if not data:

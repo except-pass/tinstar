@@ -56,9 +56,9 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
   const alphaSize = () => tmux('display-message', '-p', '-t', 'firstmate:fm-alpha', '#{window_width}x#{window_height}')
   const operator = (...args: string[]) => execFileSync(realTmux, ['-L', operatorSocket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   const task = (id: string) => ({
-    id, kind: 'worker', project: `/private/projects/${id}`, branch: `fm/${id}`,
-    paths: { worktree: { path: `/private/worktrees/${id}` } },
-    current_state: { state: 'working', detail: `${id} active`, observed_at: '2026-09-28T12:00:00Z', freshness: 'fresh' },
+    id, kind: 'worker', project: `/private/projects/${id}-service-with-a-realistically-long-name`, branch: `fm/${id}-feature-branch-with-a-long-descriptive-name`,
+    paths: { worktree: { path: `/private/worktrees/${id}/nested/checkouts/${id}-service-with-a-realistically-long-name` } },
+    current_state: { state: 'working', detail: `${id} active; running the focused test suite after rebasing onto the latest main and waiting for the review gate`, observed_at: '2026-09-28T12:00:00Z', freshness: 'fresh' },
     endpoint: { target: `firstmate:fm-${id}` }, pr: { url: null },
   })
   const snapshot = (ids: string[]) => writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
@@ -74,7 +74,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
     for (const id of ['alpha', 'bravo']) {
       mkdirSync(join(home, 'data', id), { recursive: true })
-      writeFileSync(join(home, 'data', id, 'brief.md'), `# Brief\n\n## Captain's intent\n\n${id} brief objective\n\n## Firstmate spec\n\nOther text\n`)
+      writeFileSync(join(home, 'data', id, 'brief.md'), `# Brief\n\n## Captain's intent\n\n${id} brief objective. ${'Ship the change end to end, keep every worker window safe, and prove it with private screenshots before asking for review. '.repeat(4)}\n\nSecond paragraph with more operator context.\n\n## Firstmate spec\n\nOther text\n`)
     }
     snapshot(['alpha', 'bravo'])
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
@@ -119,7 +119,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
     expect(alphaSize()).toBe('220x60')
     await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
-    for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]) {
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]) {
       await page.setViewportSize(viewport)
       await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
@@ -193,6 +193,16 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(second.locator('.cockpit-worker-button')).toHaveCount(2, { timeout: 30_000 })
     await expect(second.getByRole('button', { name: /charlie .*WORKING/i })).toBeVisible()
 
+    const alphaTtyd = () => (fetch(`${base}/api/fleet`).then(r => r.json()) as Promise<{ data: { workers: Array<{ id: string; terminalPid: number | null }> } }>)
+      .then(body => body.data.workers.find(w => w.id === 'alpha')?.terminalPid ?? null)
+    const crashedTtyd = await alphaTtyd()
+    expect(crashedTtyd).not.toBeNull()
+    process.kill(crashedTtyd!, 'SIGKILL')
+    await expect.poll(alphaTtyd, { timeout: 15_000 }).not.toBe(crashedTtyd)
+    await expect.poll(alphaTtyd, { timeout: 15_000 }).not.toBeNull()
+    await expect.poll(() => promptProblems(second, 'alpha'), { timeout: 15_000 }).toEqual([])
+    console.log(`private alpha ttyd recovered in place: ${crashedTtyd} -> ${await alphaTtyd()}`)
+
     // An operator client resizes the worker, then detaches while the cockpit view
     // is the only client left on the window: the view must not impose its size.
     await expect.poll(() => xtermSize(second, 'alpha')).toBe('220x60')
@@ -205,6 +215,10 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     console.log(`private worker alpha size with operator attached=${operatorSize}`)
     await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 3_000 }).toBe(operatorSize)
     await expect(second.locator('iframe[title="alpha terminal"]')).toHaveAttribute('data-mounted', 'before-operator')
+    await second.getByRole('button', { name: 'Overview' }).click()
+    await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
+    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 5_000 }).toBe(operatorSize)
+    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
     await delay(1500)
     operator('kill-server')
     await expect.poll(() => tmux('list-clients', '-F', '#{session_name}').split('\n')).not.toContain('firstmate')

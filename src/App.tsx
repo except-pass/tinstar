@@ -7,7 +7,7 @@ import './cockpit.css'
 interface Worker {
   key: string; id: string; home: string; kind: string; state: string; detail: string
   observedAt: string | null; freshness: string; objective: string; project: string
-  worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean
+  worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
 }
 interface FleetData { workers: Worker[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
@@ -104,11 +104,16 @@ export default function App() {
     return () => window.removeEventListener('message', onMessage)
   }, [cycle])
 
+  const terminalsRef = useRef(terminals)
+  useEffect(() => { terminalsRef.current = terminals }, [terminals])
   const currentKey = current?.key ?? null
   const currentTerminalAvailable = current?.terminalAvailable ?? false
+  const currentTerminalPid = current?.terminalPid ?? null
   useEffect(() => {
     if (!currentKey || !currentTerminalAvailable) return
     const key = currentKey
+    const known = terminalsRef.current[key]
+    if (known?.state === 'live' && known.pid === currentTerminalPid) return
     setOpening(previous => ({ ...previous, [key]: true }))
     void apiFetch(`/api/fleet/${encodeURIComponent(key)}/terminal`)
       .then(async res => {
@@ -123,7 +128,7 @@ export default function App() {
       .catch(err => setTerminals(previous => previous[key]?.state === 'live' ? previous
         : { ...previous, [key]: { state: 'unavailable', reason: (err as Error).message } }))
       .finally(() => setOpening(previous => ({ ...previous, [key]: false })))
-  }, [currentKey, currentTerminalAvailable, fleet])
+  }, [currentKey, currentTerminalAvailable, currentTerminalPid, fleet])
 
   useEffect(() => {
     if (!focusTerminal.current) return
@@ -172,12 +177,12 @@ export default function App() {
         </div>}
       </> : <>
         <header className="cockpit-worker-header" style={{ '--worker-color': identityColor(current.id) } as React.CSSProperties}>
-          <div className="cockpit-worker-identity"><Face worker={current} size={68} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1>{current.id}</h1><StateChip state={current.state} /></div></div>
+          <div className="cockpit-worker-identity"><Face worker={current} size={68} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><StateChip state={current.state} /></div></div>
           <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
         </header>
         <div className="cockpit-worker-content"><section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
-          <div className="cockpit-facts"><div><span>PROJECT</span><strong>{current.project}</strong></div><div><span>WORKTREE</span><strong>{current.worktree}</strong></div><div><span>BRANCH</span><strong>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
-          <div className="cockpit-status-detail"><StateChip state={current.state} /><span>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
+          <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
+          <div className="cockpit-status-detail"><StateChip state={current.state} /><span title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
           <section className="cockpit-terminal"><div className="cockpit-terminal-heading"><span><span className="material-symbols-outlined">terminal</span> LIVE TERMINAL</span><small>Direct terminal input</small></div><div className="cockpit-terminal-stage">
             {workers.flatMap(worker => {
               const terminal = terminals[worker.key]

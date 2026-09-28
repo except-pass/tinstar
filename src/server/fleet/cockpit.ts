@@ -88,8 +88,8 @@ export class CockpitFleet {
     this.views.stop()
   }
 
-  list(): { workers: CockpitWorker[]; errors: string[] } {
-    return { workers: this.workers, errors: this.errors }
+  list(): { workers: Array<CockpitWorker & { terminalPid: number | null }>; errors: string[] } {
+    return { workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), errors: this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -143,6 +143,11 @@ export class CockpitFleet {
         this.workers = workers
         this.targets = targets
         this.errors = errors
+        for (const [key, ref] of targets) {
+          if (this.views.portOf(key) === null) continue
+          void this.views.ensure(key, ref.id, ref.target)
+            .catch(err => log.warn('fleet', `terminal view check failed: ${(err as Error).message}`))
+        }
       } while (this.again)
     })().catch(err => log.warn('fleet', `snapshot refresh failed: ${(err as Error).message}`))
       .finally(() => { this.polling = null })
