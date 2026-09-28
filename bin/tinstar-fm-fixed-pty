@@ -77,15 +77,15 @@ def main() -> int:
             if now >= next_poll:
                 next_poll = now + SIZE_POLL_SECONDS
                 current = worker_size(window_id)
-                if current is not None and current != size:
+                changed = current is not None and current != size
+                if changed:
                     size = current
                     set_size(master, size)
-                    if report_due is None:
-                        report_due = now
-                elif now - started < SIZE_REPEAT_SECONDS and report_due is None:
-                    report_due = now
+                if report_due is None and (changed or now - started < SIZE_REPEAT_SECONDS):
+                    report_due = time.monotonic()
             if report_due is not None and (
-                now - last_output >= REPORT_QUIET_SECONDS or now - report_due >= REPORT_MAX_DELAY_SECONDS
+                (master not in ready and now - last_output >= REPORT_QUIET_SECONDS)
+                or now - report_due >= REPORT_MAX_DELAY_SECONDS
             ):
                 report_size(output_fd, size)
                 report_due = None

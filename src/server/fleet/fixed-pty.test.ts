@@ -12,18 +12,25 @@ const UNITS = ['\x1b[38;5;208m', '█▓▒░', '\x1b[0m', ' café ✦ ', '\x1b
 const LINE = Buffer.concat(UNITS)
 const BOUNDARIES = new Set(UNITS.reduce<number[]>((acc, unit) => [...acc, acc[acc.length - 1]! + unit.length], [0]).map(n => n % LINE.length))
 const REPORT = /\x1b\]7337;(\d+);(\d+)\x07/g
+const QUIET_SECONDS = 0.02
+const MAX_DELAY_SECONDS = 0.15
+const RELAY_SCHEDULING_SECONDS = 0.1
 
 describe.skipIf(!hasPython)('tinstar-fm-fixed-pty size reports', () => {
   it('reports the size while the worker streams, only between whole escape sequences and characters', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tinstar-fixed-pty-'))
     try {
-      writeFileSync(join(dir, 'tmux'), '#!/bin/sh\necho "120 40"\n')
+      writeFileSync(join(dir, 'tmux'), `#!/usr/bin/env python3
+import os, time
+print("120 40")
+open(os.environ["TINSTAR_TEST_TIMELINE"], "a").write("due %.6f\\n" % time.monotonic())
+`)
       chmodSync(join(dir, 'tmux'), 0o755)
       const units = JSON.stringify(UNITS.map(unit => [...unit]))
       writeFileSync(join(dir, 'worker'), `#!/usr/bin/env python3
 import os, termios, time
 units = [bytes(u) for u in ${units}]
-holds = open(os.environ["TINSTAR_TEST_HOLDS"], "a", buffering=1)
+timeline = open(os.environ["TINSTAR_TEST_TIMELINE"], "a", buffering=1)
 os.system("stty -opost")
 offset = 0
 end = time.monotonic() + 6
@@ -32,19 +39,18 @@ while time.monotonic() < end:
     while time.monotonic() < burst:
         for unit in units:
             half = max(1, len(unit) // 2)
+            before = time.monotonic()
             os.write(1, unit[:half])
             offset += half
-            split = time.monotonic()
             termios.tcdrain(1)
             os.write(1, unit[half:])
-            if time.monotonic() - split >= 0.015:
-                holds.write("%d\\n" % offset)
+            timeline.write("split %d %.6f %.6f\\n" % (offset, before, time.monotonic()))
             offset += len(unit) - half
-    time.sleep(0.04)
+    time.sleep(0.06)
 `)
       chmodSync(join(dir, 'worker'), 0o755)
       const child = spawn('python3', [relay, join(dir, 'worker'), 'firstmate', '@1', 'fm-a', '120', '40'], {
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TINSTAR_TEST_HOLDS: join(dir, 'holds') },
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TINSTAR_TEST_TIMELINE: join(dir, 'timeline') },
         stdio: ['pipe', 'pipe', 'inherit'],
       })
       const exited = new Promise(resolve => child.on('exit', resolve))
@@ -65,8 +71,23 @@ while time.monotonic() < end:
       }
       expect(stream).toBeGreaterThan(LINE.length * 20)
       expect(offsets.length).toBeGreaterThanOrEqual(8)
-      const quietSplits = new Set(readFileSync(join(dir, 'holds'), { encoding: 'utf8', flag: 'a+' }).split('\n').filter(Boolean).map(Number))
-      expect(offsets.filter(offset => !BOUNDARIES.has(offset % LINE.length) && !quietSplits.has(offset))).toEqual([])
+      const splits = new Map<number, [number, number]>()
+      const dues: number[] = []
+      for (const [kind, ...values] of readFileSync(join(dir, 'timeline'), 'utf8').split('\n').map(line => line.split(' '))) {
+        if (kind === 'split') splits.set(Number(values[0]), [Number(values[1]), Number(values[2])])
+        if (kind === 'due') dues.push(Number(values[0]))
+      }
+      const unexplained = offsets.filter(offset => {
+        if (BOUNDARIES.has(offset % LINE.length)) return false
+        const split = splits.get(offset)
+        if (!split) return true
+        const [before, after] = split
+        if (after - before >= QUIET_SECONDS) return false
+        const latest = after + RELAY_SCHEDULING_SECONDS
+        const earlier = dues.filter(time => time <= latest)
+        return !earlier.length || Math.max(...earlier) + MAX_DELAY_SECONDS > latest
+      })
+      expect(unexplained).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
