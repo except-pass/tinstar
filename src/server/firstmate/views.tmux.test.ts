@@ -180,6 +180,7 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
   it('a view preserves a worker window whose size differs from the fleet session', async () => {
     const { wid } = fleet()
     tm('resize-window', '-t', wid, '-x', '190', '-y', '82')
+    tm('set-option', '-uw', '-t', wid, 'window-size')
     const size = () => tm('display-message', '-p', '-t', wid, '#{window_width}x#{window_height}')
     expect(size()).toBe('190x82')
     const c = attachViaScript('firstmate', wid, 'fm-demo')
