@@ -177,6 +177,21 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(windowIds('=firstmate')).toContain(wid)
   })
 
+  it('a view preserves a worker window whose size differs from the fleet session', async () => {
+    const { wid } = fleet()
+    tm('resize-window', '-t', wid, '-x', '190', '-y', '82')
+    tm('set-option', '-uw', '-t', wid, 'window-size')
+    const size = () => tm('display-message', '-p', '-t', wid, '#{window_width}x#{window_height}')
+    expect(size()).toBe('190x82')
+    const c = attachViaScript('firstmate', wid, 'fm-demo')
+    expect(await until(armed)).toBe(true)
+    await sleep(750)
+    expect(size()).toBe('190x82')
+    killClient(c)
+    expect(await until(() => viewSessions().length === 0)).toBe(true)
+    expect(size()).toBe('190x82')
+  })
+
   it('killing the origin window destroys the view', async () => {
     const { wid } = fleet()
     attachViaScript('firstmate', wid, 'fm-demo')

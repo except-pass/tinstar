@@ -34,6 +34,7 @@ import { announceBindChangeOnce } from './bindNotice'
 import { seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
 import { getReachCoordinator } from './reach'
 import { decideStaticServe } from './staticServe'
+import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import {
   createSessionRequestHandler,
   createSessionUpgradeHandler,
@@ -99,6 +100,9 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const ctx = initBackend()
+  const cockpitFleet = new CockpitFleet()
+  cockpitFleet.start()
+  process.on('exit', () => cockpitFleet.stop())
   const proxy = httpProxy.createProxyServer({ ws: true })
 
   function safeWriteHead(res: import('node:http').ServerResponse, status: number, headers: Record<string, string>) {
@@ -123,6 +127,7 @@ export function startServer(opts: ServerOptions) {
 
     // 2. API requests
     try {
+      if (await handleCockpitRequest(cockpitFleet, req, res)) return
       if (await handlePluginRuntime(req, res, { configRoot: configDir })) return
       if (await handlePluginsConfig(req, res, { configRoot: configDir })) return
       if (await handleFileUpload(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '', configRoot: configDir })) return
@@ -176,7 +181,7 @@ export function startServer(opts: ServerOptions) {
   }
 
   const sessionRequestHandler = createSessionRequestHandler({
-    getRun: name => ctx.docStore.getRun(name),
+    getRun: name => cockpitFleet.portOf(name) ? { port: cockpitFleet.portOf(name) } : ctx.docStore.getRun(name),
     proxyWeb: (req, res, options) => proxy.web(req, res, options),
     onNoTarget: (sessionName, res) => {
       if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
@@ -186,7 +191,7 @@ export function startServer(opts: ServerOptions) {
   })
 
   const upgradeHandler = createSessionUpgradeHandler({
-    getRun: name => ctx.docStore.getRun(name),
+    getRun: name => cockpitFleet.portOf(name) ? { port: cockpitFleet.portOf(name) } : ctx.docStore.getRun(name),
     allowedOrigins: () => sessionUpgradeOrigins(boundPort),
     proxyWs: (req, socket, head, options) => proxy.ws(req, socket, head, options),
     onRefused: detail => log.warn('proxy', `upgrade refused (${detail.reason})`, detail),

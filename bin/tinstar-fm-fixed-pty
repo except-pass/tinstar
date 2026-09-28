@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Relay a browser terminal into a tmux client on a private PTY that follows the worker window's size."""
+
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+import tty
+
+SIZE_POLL_SECONDS = 0.5
+SIZE_REPEAT_SECONDS = 5
+REPORT_QUIET_SECONDS = 0.02
+REPORT_MAX_DELAY_SECONDS = 0.15
+
+
+def worker_size(window_id):
+    try:
+        out = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", window_id, "#{window_width} #{window_height}"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.split()
+        cols, rows = int(out[0]), int(out[1])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+    return (cols, rows) if cols > 0 and rows > 0 else None
+
+
+def set_size(fd, size):
+    cols, rows = size
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def report_size(fd, size):
+    os.write(fd, ("\x1b]7337;%d;%d\x07" % size).encode())
+
+
+def main() -> int:
+    script, session, window_id, window_name, cols, rows = sys.argv[1:]
+    pid, master = pty.fork()
+    if pid == 0:
+        os.environ["TINSTAR_FIXED_PTY"] = "1"
+        os.execv(script, [script, session, window_id, window_name])
+
+    size = (int(cols), int(rows))
+    set_size(master, size)
+    input_fd = sys.stdin.fileno()
+    output_fd = sys.stdout.fileno()
+    report_size(output_fd, size)
+    old_mode = termios.tcgetattr(input_fd) if os.isatty(input_fd) else None
+    if old_mode is not None:
+        tty.setraw(input_fd)
+
+    def stop(_signal, _frame):
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except ProcessLookupError:
+            pass
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGHUP, stop)
+    signal.signal(signal.SIGTERM, stop)
+    started = time.monotonic()
+    next_poll = started + SIZE_POLL_SECONDS
+    last_output = started
+    report_due = None
+    try:
+        while True:
+            timeout = SIZE_POLL_SECONDS if report_due is None else REPORT_QUIET_SECONDS
+            ready, _, _ = select.select([input_fd, master], [], [], timeout)
+            now = time.monotonic()
+            if now >= next_poll:
+                next_poll = now + SIZE_POLL_SECONDS
+                current = worker_size(window_id)
+                changed = current is not None and current != size
+                if changed:
+                    size = current
+                    set_size(master, size)
+                if report_due is None and (changed or now - started < SIZE_REPEAT_SECONDS):
+                    report_due = time.monotonic()
+            if report_due is not None and (
+                (master not in ready and now - last_output >= REPORT_QUIET_SECONDS)
+                or now - report_due >= REPORT_MAX_DELAY_SECONDS
+            ):
+                report_size(output_fd, size)
+                report_due = None
+            if input_fd in ready:
+                data = os.read(input_fd, 65536)
+                if not data:
+                    break
+                os.write(master, data)
+            if master in ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                os.write(output_fd, data)
+                last_output = time.monotonic()
+    finally:
+        if old_mode is not None:
+            termios.tcsetattr(input_fd, termios.TCSADRAIN, old_mode)
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except ProcessLookupError:
+            pass
+        os.close(master)
+        os.waitpid(pid, 0)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

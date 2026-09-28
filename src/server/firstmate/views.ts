@@ -188,6 +188,10 @@ export class FirstmateViews {
     return this.live.get(runId)?.port ?? null
   }
 
+  pidOf(runId: string): number | null {
+    return this.live.get(runId)?.child.pid ?? null
+  }
+
   /** Make sure a ttyd serves `runId`'s worker window. Idempotent; concurrent calls share one attempt. */
   ensure(runId: string, task: string, windowTarget: string | null): Promise<TerminalResult> {
     const pending = this.inflight.get(runId)
@@ -215,7 +219,8 @@ export class FirstmateViews {
     try {
       windowId = await this.resolveWindowId(ref)
     } catch (err) {
-      this.stopView(runId, false)
+      const current = this.live.get(runId)
+      if (current && current.child.exitCode === null && current.child.signalCode === null) return { state: 'live', port: current.port }
       return { state: 'unavailable', reason: `tmux unreadable: ${(err as Error).message.split('\n')[0]}` }
     }
     if (!windowId) {

@@ -11,7 +11,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 ## Project Structure
 
 - **Frontend**: React + Tailwind, served by Vite
-- **Backend**: Vite plugin server (`src/server/`) — event bus, document store, SSE, session management
+- **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read and terminal routes at `src/server/fleet/cockpit.ts`
 - **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
 - **E2E tests**: Playwright (`e2e/`), run with `TINSTAR_FAST_SIM=1 npx playwright test`
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
@@ -23,6 +23,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - `TINSTAR_FAST_SIM=1 npm run dev` — start with mock data (for testing)
 - Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
 - `npx playwright test` — E2E tests (needs `TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:<port>`)
+- Cockpit regression runs with `npx playwright test --config playwright.cockpit.config.ts`; it starts its own private tmux server and First Mate test home.
 
 ## Multi-Agent / NATS
 

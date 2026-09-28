@@ -103,6 +103,17 @@ describe('FirstmateViews.ensure', () => {
     expect(broken.spawned).toHaveLength(0)
   })
 
+  it('keeps a healthy ttyd when a later tmux read fails transiently', async () => {
+    let broken = false
+    const h = harness({ tmux: async () => { if (broken) throw Object.assign(new Error('timeout'), { stderr: 'timed out' }); return '@4 fm-fix-login\n' } })
+    expect(await h.views.ensure('fm--fix-login', 'fix-login', 'firstmate:fm-fix-login')).toEqual({ state: 'live', port: 8781 })
+    broken = true
+    expect(await h.views.ensure('fm--fix-login', 'fix-login', 'firstmate:fm-fix-login')).toEqual({ state: 'live', port: 8781 })
+    expect(h.spawned).toHaveLength(1)
+    expect(h.spawned[0]!.child.killed).toEqual([])
+    expect(h.views.portOf('fm--fix-login')).toBe(8781)
+  })
+
   it('restarts when the worker window id changes (relaunch), releasing the old port', async () => {
     let windows = '@4 fm-fix-login\n'
     const h = harness({ tmux: async () => windows })
