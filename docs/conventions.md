@@ -46,10 +46,6 @@ Use `{ ...existing, foo: x }`, never `{ ...makeFreshRun() }`. The shallow-equal 
 
 `emitSessionEvent` is typed `<T extends BusEventType>(type: T, payload: PayloadFor<T>)` — step 3 fails to compile if you forget steps 1–2. (Before V5 these emits were cast as `Parameters<typeof bus.emit>[0]`, hiding mismatches; one live bug had `managed_session.nats_orphaned` emitted but not in the union, and another sent `{ session }` where `{ name, state }` was declared.)
 
-### `JSON.parse(e.data)` inside SSE event listeners must try/catch
-
-The `telemetry:hud`, `canvas:viewport`, and `projects_changed` listeners in [`useServerEvents.ts`](../src/hooks/useServerEvents.ts) wrap their parse in try/catch and silently drop malformed frames. `snapshot`, `delta`, `file_watch`, `nats_traffic`, and `ready_queue_update` currently don't — one malformed server frame crashes those handlers. Treat the wrapped pattern as the rule; the un-wrapped ones are pending fixes.
-
 ---
 
 ## Frontend
@@ -57,20 +53,6 @@ The `telemetry:hud`, `canvas:viewport`, and `projects_changed` listeners in [`us
 ### HTTP goes through `apiFetch` / `apiUrl`
 
 Both live in [`src/apiClient.ts`](../src/apiClient.ts) and honor `globalThis.__TINSTAR_API_BASE__`, which the Tauri desktop shell injects to route HTTP to a non-`/` origin. Bare `fetch('/api/...')` 404s in Tauri.
-
-Dynamic `import()` of plugin code: wrap the URL with `apiUrl(...)` before passing to `import()` — see [`externalLoader.ts`](../src/core/pluginHost/externalLoader.ts).
-
-### localStorage prefs go through `uiPrefs.ts`
-
-[`src/lib/uiPrefs.ts`](../src/lib/uiPrefs.ts) is the only file that should call `localStorage.getItem`/`setItem` directly. Singleton booleans/numbers fold into one `tinstar-ui-prefs` blob; per-id families (hotgroups, prompt-stash, hidden runs) keep their own keys but go through `readJSON`/`writeJSON` helpers.
-
-The sole documented exception is `tinstar-layouts-v3` (widget layouts cache) in [`useWidgetLayouts`](../src/hooks/useWidgetLayouts.ts). Don't add new exceptions — extend the `UiPrefs` interface instead.
-
-### Custom window events go through `windowEvents.ts`
-
-Use [`dispatchWindowEvent`](../src/lib/windowEvents.ts) on the dispatch side and `useWindowEvent` (React hook) or the `EV` constants (for sites that share useEffect state with the listener) on the receive side. Raw `window.dispatchEvent(new CustomEvent('tinstar:foo'))` is the rot — string typos on either side silently break the connection.
-
-The `tinstar:open-linked-file` event is bubble-based DOM (dispatched on `e.currentTarget`), not window-routed. It's intentionally outside this registry.
 
 ### Component file naming
 
@@ -82,13 +64,9 @@ Components in `src/components/` are `PascalCase.tsx`. Hooks in `src/hooks/` are 
 
 ### Server may not import from frontend; frontend may not runtime-import from server
 
-The dependency graph runs `src-tauri → packages → src/server ← src/domain → src/{components,hooks,widgets,context,lib,plugins,core,data,hotkeys}`. Server code must not import React, JSX, or anything under `src/components/*` / `src/hooks/*` / etc. Frontend code may `import type` from `src/server/observability/types` (wire schemas for SSE/telemetry are shared) but not runtime values.
+The server uses shared domain types and pure utilities. It must not import React or JSX. The frontend can `import type` from server wire schemas, but must not runtime-import server modules.
 
 Shared types live in [`src/domain/types.ts`](../src/domain/types.ts). `src/types.ts` is a re-export shim — new types go in `domain/`, not the shim.
-
-### Plugins: built-in vs external
-
-Built-in and external plugins both consume only [`@tinstar/plugin-api`](../packages/plugin-api/src/index.ts); host runtime imports from `src/plugins/*/src/**` are forbidden by ESLint. See [ADR 0002](./adrs/0002-plugin-api-boundary.md).
 
 ---
 
@@ -100,7 +78,7 @@ See [docs/testing.md](./testing.md#type-checking).
 
 The headline traps:
 - `npx tsc --noEmit` against the root tsconfig is a no-op — use `-p tsconfig.app.json`.
-- `npx vitest run` without `--exclude='e2e/**'` crashes on every Playwright spec.
+- `npx vitest run` without `--exclude='e2e/**'` collects the Playwright spec as a unit test.
 
 ---
 

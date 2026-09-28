@@ -1857,8 +1857,7 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
 
 // --- Canvas widget placement (host placement API) ---
 
-/** Gap (canvas units) placed between a widget and its `nearNodeId` reference.
- *  Mirrors RUN_GAP in useWidgetLayouts.ts. */
+/** Gap (canvas units) placed between a widget and its `nearNodeId` reference. */
 const PLACEMENT_GAP = 20
 const DEFAULT_BROWSER_SIZE = { width: 800, height: 600 }
 const DEFAULT_EDITOR_SIZE = { width: 640, height: 480 }
@@ -2632,8 +2631,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/state — raw SSE snapshot shape (ADR 0001 exception); useServerEvents
-  // consumes the same shape over SSE, so the body cannot be wrapped in the envelope.
+  // GET /api/state — raw SSE snapshot shape (ADR 0001 exception); SSE clients
+  // consume the same shape, so the body cannot be wrapped in the envelope.
   if (method === 'GET' && url === '/api/state') {
     const sessDir = ctx.sessionConfig?.dirs.sessions
     const sessions = sessDir ? await listSessions(sessDir) : []
@@ -3367,7 +3366,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // join the session's slot (+ snap edge) and seed a tiled position. This is the
       // default for API/agent-created editors that have no other placement context.
       // Interactive drops pass `snapToSession: false` and run their own drop-point-driven
-      // snap client-side (see InfiniteCanvas applyDropSnap), so the seed isn't computed.
+      // snap client-side, so the seed isn't computed.
       const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession })
       const widget: EditorWidget = {
         id: widgetId,

@@ -10,7 +10,7 @@
 //   1. UNIVERSAL presets — the small curated set below, on EVERY notice.
 //   2. AGENT-DECLARED follow-ups — a `FollowUp` A2UI component the posting agent
 //      puts in the notice content, naming a question it expects for THIS notice.
-//      This extends the existing host control model (controls.ts / catalog.tsx);
+//      This extends the existing host control model (controls.ts);
 //      web_core's MessageProcessor/action runtime stays deferred.
 //   3. FREEFORM text.
 import type { A2uiComponent, A2uiContent } from '../domain/types'

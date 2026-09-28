@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-//
 // The slice's own two surfaces, end to end (plan U8, R20/R21/R22/R23).
 //
 // EVERY LAYER HERE IS THE SHIPPED ONE. The two cards are written as `.tinstar/slate/
@@ -7,7 +5,7 @@
 //
 //   file → SlateWatcher (real fs) → reconcileSlateEpoch → SurfaceService
 //        → DocumentStore → SurfaceRefreshCoordinator → runWitness (real `git`)
-//        → recordWitnessResult → slateSurfaceFromCanonical → A2uiRenderer
+//        → recordWitnessResult → slateSurfaceFromCanonical
 //
 // `slate-source.test.ts` states the reason in the file's own words — "an entry shaped
 // by hand is a shape nothing upstream emits, so a test using one proves agreement
@@ -27,16 +25,12 @@
 // map the witness consults is the SHIPPED one, so the merge state these cards report
 // is the merge state of the real plan.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
-import { createElement } from 'react'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { A2uiRenderer } from '../../../a2ui/A2uiRenderer'
-import { SurfaceAge } from '../../../components/RunWorkspaceWidget/SurfaceAge'
 import { DocumentStore } from '../../stores/document-store'
 import { SlateWatcher, type SlateFs, type SlateTimers } from '../../sessions/slate-watcher'
 import { execCommand } from '../../infra/execCommand'
@@ -440,16 +434,14 @@ async function sweepAndWait(c: Chain): Promise<void> {
   await c.coord.witnessPass()
 }
 
-/** Every step row the renderer draws for a projected surface, as label → status.
- *  Through the REAL `A2uiRenderer` and the real catalog — the projection could carry
- *  a status the renderer never draws and every server assertion would still pass. */
-function renderedSteps(card: SlateSurface): Record<string, string> {
-  cleanup()
-  render(createElement(A2uiRenderer, { content: card.body! }))
+/** Every step row of a projected surface's Stepper, as label → status. */
+function projectedSteps(card: SlateSurface): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const row of screen.getAllByTestId('stepper-step')) {
-    const label = row.querySelector('[data-testid="stepper-label"]')?.textContent ?? ''
-    out[label] = row.getAttribute('data-status') ?? ''
+  for (const component of card.body!.components) {
+    if (component.component !== 'Stepper' || !Array.isArray(component.steps)) continue
+    for (const step of component.steps as { label: string; status?: string }[]) {
+      out[step.label] = step.status ?? ''
+    }
   }
   return out
 }
@@ -481,7 +473,7 @@ describe('the two slice surfaces, over the real chain', { timeout: 30_000 }, () 
     await sweepAndWait(c)
     const firstLook = c.card('recursive-surfaces-roadmap')
     expect(firstLook.freshness!.witnessedAt).toBeUndefined()
-    expect(renderedSteps(firstLook)).toEqual(
+    expect(projectedSteps(firstLook)).toEqual(
       Object.fromEntries(UNITS.map(u => [u.label, u.landed ? 'done' : 'pending'])),
     )
 
@@ -493,25 +485,18 @@ describe('the two slice surfaces, over the real chain', { timeout: 30_000 }, () 
 
     const roadmap = c.card('recursive-surfaces-roadmap')
     expect(roadmap.freshness!.witnessedAt).toBe(c.clock.now)
-    // Scenario 1, at the render layer: what the browser draws matches what actually
+    // Scenario 1: the projected rail matches what actually
     // merged. U1, U2, U3 and U6 are on the fixture's ref; U4, U5, U7 and U8 are not.
-    expect(renderedSteps(roadmap)).toEqual(
+    expect(projectedSteps(roadmap)).toEqual(
       Object.fromEntries(UNITS.map(u => [u.label, u.landed ? 'done' : 'pending'])),
     )
 
     // Scenario 2 / AE1. A unit that has NOT landed is witnessed AND pending. The
     // absence is an answer a completed lookup returned, not an unknown: the claim
-    // carries a value, carries no problem, and the card wears a witness age.
+    // carries a value and carries no problem.
     const u4 = roadmap.freshness!.claimObservations!.u4!
     expect(u4.value).toBe('pending')
     expect(u4.problem).toBeUndefined()
-    cleanup()
-    render(createElement(SurfaceAge, {
-      witnessedAt: roadmap.freshness!.witnessedAt,
-      unwitnessed: roadmap.unwitnessed,
-      now: c.clock.now,
-    }))
-    expect(screen.getByTestId('surface-age').getAttribute('data-witness')).toBe('witnessed')
 
     // The infra card is witnessed off the same pass, against its own stubbed host.
     const infra = c.card('standalone-api-reachable')
@@ -660,7 +645,7 @@ describe('the two slice surfaces, over the real chain', { timeout: 30_000 }, () 
     await sweepAndWait(c)
     c.clock.now += 61_000
     await sweepAndWait(c)
-    expect(renderedSteps(c.card('recursive-surfaces-roadmap'))[UNITS[3]!.label]).toBe('pending')
+    expect(projectedSteps(c.card('recursive-surfaces-roadmap'))[UNITS[3]!.label]).toBe('pending')
 
     // U4 lands on the tracked ref, under the `Plan:` trailer convention.
     const pusher = join(root, 'pusher')
@@ -678,7 +663,7 @@ describe('the two slice surfaces, over the real chain', { timeout: 30_000 }, () 
     await sweepAndWait(c)
 
     // The rail corrected itself with no agent involved (R22) …
-    expect(renderedSteps(c.card('recursive-surfaces-roadmap'))[UNITS[3]!.label]).toBe('done')
+    expect(projectedSteps(c.card('recursive-surfaces-roadmap'))[UNITS[3]!.label]).toBe('done')
     expect(c.delivered).toEqual([])
     // … the delta is on the record …
     expect(c.surface('recursive-surfaces-roadmap').freshness.claimRebuild!.moves)

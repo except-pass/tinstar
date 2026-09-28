@@ -64,8 +64,8 @@ export interface SurfaceRouteContext {
  *
  * Deliberately NOT inferred from the caller. An intent is a claim about what the
  * user did, and the three human ones are the ones a UI must only send from a real
- * event handler — see `slateRefresh.tsx`, where mount, focus, visibility, and SSE
- * delivery are all explicitly not intents.
+ * event handler — mount, focus, visibility, and SSE delivery are all explicitly
+ * not intents.
  */
 export const REFRESH_INTENTS = ['navigate', 'interact', 'explicit', 'bulk-check'] as const
 export type RefreshIntent = typeof REFRESH_INTENTS[number]
@@ -73,8 +73,8 @@ export type RefreshIntent = typeof REFRESH_INTENTS[number]
 /** The three that mean a person is looking at this Surface right now. */
 const HUMAN_INTENTS: readonly RefreshIntent[] = ['navigate', 'interact', 'explicit']
 
-/** Header carrying the caller's stable actor id. The browser sends the id it
- *  minted in `uiPrefs`; a managed session sends its session name.
+/** Header carrying the caller's stable actor id. A browser sends an id it minted
+ *  and persisted; a managed session sends its session name.
  *
  *  THIS IS ROUTING IDENTITY, NOT AUTHENTICATION (KTD6). Tinstar has no human
  *  auth layer, the first release is explicitly one trusted local human, and a

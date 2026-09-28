@@ -13,16 +13,13 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - **Frontend**: React + Tailwind, served by Vite
 - **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read and terminal routes at `src/server/fleet/cockpit.ts`
 - **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
-- **E2E tests**: Playwright (`e2e/`), run with `TINSTAR_FAST_SIM=1 npx playwright test`
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 - **Shared vocabulary**: `CONCEPTS.md` (repo root) — domain terms (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
 
 ## Key Commands
 
 - `npm run dev` — start dev server (clean UI, no mock data)
-- `TINSTAR_FAST_SIM=1 npm run dev` — start with mock data (for testing)
 - Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
-- `npx playwright test` — E2E tests (needs `TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:<port>`)
 - Cockpit regression runs with `npx playwright test --config playwright.cockpit.config.ts`; it starts its own private tmux server and First Mate test home.
 
 ## Multi-Agent / NATS
@@ -48,14 +45,12 @@ Edits to files under `agent-skills/` go live immediately for any machine that in
 
 ## Conventions
 
-Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, localStorage, plugin boundaries, etc.). It's short and grouped by area.
+Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, layering, etc.). It's short and grouped by area.
 
-The four highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
+The two highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
 
 - Server-side config paths go through `getConfigRoot()` — not `homedir()`. Honors `TINSTAR_CONFIG_HOME` so a second backend doesn't stomp the primary.
 - Frontend HTTP goes through `apiFetch` / `apiUrl` from `src/apiClient.ts` — bare `fetch` 404s in Tauri.
-- UI prefs go through `src/lib/uiPrefs.ts` — only `tinstar-layouts-v3` (widget layouts cache) is a documented localStorage exception.
-- Simulator only auto-starts when `TINSTAR_FAST_SIM=1` is set.
 
 Session state changes emit to the event bus as `managed_session.*` events (see [docs/conventions.md](docs/conventions.md) for the "adding a BusEvent" recipe).
 

@@ -85,13 +85,11 @@ export function isUnwitnessed(s: Surface): boolean {
 }
 
 /**
- * How many step entries one `Stepper` is examined for a claim binding.
+ * How many step entries one `Stepper` is examined for a claim binding (60 rows × 20).
  *
- * Mirrors the catalog's own `MAX_SCAN` (60 rows × 20) rather than importing it: that
- * constant lives in `a2ui/catalog.tsx`, a React module the server bundle may not
- * pull in. The bound is for the same reason the catalog's is — `steps` expands one
- * A2UI node into an unbounded array, and this walk runs on every projection of every
- * Surface on every run, which is the hottest loop the storm guard sits behind.
+ * The bound exists because `steps` expands one A2UI node into an
+ * unbounded array, and this walk runs on every projection of every Surface on every
+ * run, which is the hottest loop the storm guard sits behind.
  */
 const MAX_BOUND_STEPS = 1200
 

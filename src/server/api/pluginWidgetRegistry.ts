@@ -66,8 +66,8 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
   const out: ResolvedWidgetType[] = []
 
   // Bundled built-in plugins (browser, file-editor, image-viewer, saloon).
-  // Their components are loaded on the client via core/pluginHost/bundled.ts;
-  // here we list them in the palette like externals. A built-in widget opts
+  // Only this server-side registry listing remains; no client loads their
+  // components. They are listed like externals. A built-in widget opts
   // into the palette by setting `spawn` explicitly — widgets that omit it stay
   // out (they're spawned via their own affordances, e.g. opening a file), so
   // only deliberately-palette-draggable built-ins (the Saloon) surface.

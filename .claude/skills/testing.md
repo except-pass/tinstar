@@ -12,8 +12,10 @@ Tests verify **user-visible behavior**, not implementation details. A good test 
 ## Running Tests
 
 ```bash
-TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test
+npx playwright test
 ```
+
+The cockpit spec starts its own isolated server, tmux socket and First Mate test home. See [docs/testing.md](../../docs/testing.md).
 
 ## Selectors (priority order)
 
@@ -42,7 +44,7 @@ test('user can create a project', async ({ page }) => {
 - **Independent tests** — no shared state, any execution order
 - **Fixtures for setup** — `loginAsUser()`, `createProject()`, not repeated boilerplate
 - **Unique test data** — `const name = \`test-\${Date.now()}\``
-- **Real backend** — E2E tests use the simulator, not mocks
+- **Real backend** — E2E tests drive a real isolated server and tmux, not mocks
 - **Verify persistence** — reload when appropriate to confirm state survived
 
 ## Exploratory Testing Methodology
