@@ -398,7 +398,6 @@ export const BASE_CONFIG = {
       turnLength: true,
       timeline: true,
     },
-    // Keep in sync with DEFAULT_WIDGET_SIZE_PRESETS in src/widgets/widgetSizePresets.ts
     widgetSizePresets: {
       small: 0.35,
       medium: 0.6,

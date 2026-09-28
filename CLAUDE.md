@@ -45,7 +45,7 @@ Edits to files under `agent-skills/` go live immediately for any machine that in
 
 ## Conventions
 
-Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, localStorage, plugin boundaries, etc.). It's short and grouped by area.
+Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, layering, etc.). It's short and grouped by area.
 
 The three highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
 
