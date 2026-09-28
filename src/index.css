@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 @layer base {
-  *, ::before, ::after {
+  * {
     @apply border-primary/10;
   }
 
