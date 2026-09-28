@@ -110,8 +110,8 @@ def main() -> int:
             os.kill(pid, signal.SIGHUP)
         except ProcessLookupError:
             pass
-        os.waitpid(pid, 0)
         os.close(master)
+        os.waitpid(pid, 0)
     return 0
 
 
