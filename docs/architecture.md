@@ -171,9 +171,11 @@ Runs on startup and every 30 seconds:
 
 ### Entry points
 
-`index.html` → `main.tsx` → `App.tsx` → `WorkspaceShell.tsx`
+`index.html` → `main.tsx` → `App.tsx`
 
-`WorkspaceShell` is the root component. It wraps everything in a `SelectionProvider` and renders the top bar, sidebar, canvas, and dialogs.
+`App.tsx` renders the V6 worker cockpit (rail, Overview, worker view) from `GET /api/fleet`. The canvas described below (`WorkspaceShell` and its tree) is no longer mounted; its code remains until it is deleted.
+
+`WorkspaceShell` was the V5 root component. It wraps everything in a `SelectionProvider` and renders the top bar, sidebar, canvas, and dialogs.
 
 ### State management
 

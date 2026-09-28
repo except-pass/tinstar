@@ -6,6 +6,8 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 
 **Status: cards (M1), the live terminal view (M2), and the Claude conversation link / status light / timeline (M3).** Not built yet: the prompt composer, starting or stopping workers from Tinstar, and cost/token telemetry.
 
+> **V6:** the page at `/` is now the worker cockpit, and the standalone backend no longer starts this observer. The cockpit (`src/server/fleet/cockpit.ts`) reads each configured home through `<home>/bin/fm-fleet-snapshot.sh --json` (re-run on ledger changes and every 20 s) and serves `GET /api/fleet` and `GET /api/fleet/:key/terminal`. Its terminals use the view described below (`views.ts`, `bin/tinstar-fm-view`), proxied at `/s/<key>/`. The card, dismiss, Inbox and conversation-link sections describe the V5 observer.
+
 ## Turn it on
 
 1. In the first mate home, enable the ledger: `touch <home>/config/fleet-ledger`.
@@ -16,7 +18,7 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
    ```
 
 3. For the live terminal, install [`ttyd`](https://github.com/tsl0922/ttyd) (the same requirement as any Tinstar session). Without it the cards still work and say "No live terminal".
-4. Restart Tinstar. With no homes configured — the default — the observer never starts. It also never starts under `TINSTAR_FAST_SIM=1`.
+4. Restart Tinstar. With no homes configured — the default — the cockpit shows no workers.
 
 ## What you get
 
@@ -42,7 +44,7 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 | `reducer.ts` | Pure fold of ledger records into one worker per task. Ignores unknown events/members, tolerates duplicates and a status that precedes its `dispatched`, refuses unsafe task ids. |
 | `meta.ts` | Interim join: reads `<home>/state/<task>.meta` for `worktree=`, `window=` (the terminal view), `project=` (fallback when the ledger names no project) and `spawn_gen=` (spawn time for the conversation link). That format is the first mate's **undocumented internal** state, so it is best-effort — absent file, missing keys and unknown keys are all tolerated. |
 | `views.ts` | The terminal view: one ttyd per worker, its own port window (`firstmate.ports`, default 8781–8830), reached through the existing `/s/<runId>/` proxy (`Run.port`). Boot sweep of orphaned ttyds and abandoned view sessions. |
-| `observer.ts` | Projects workers onto docstore-only Runs, derives attention, handles dismiss and the conversation override, refreshes the linked transcript's activity. Started from `src/server/index.ts`. |
+| `observer.ts` | Projects workers onto docstore-only Runs, derives attention, handles dismiss and the conversation override, refreshes the linked transcript's activity. Not started in V6 (see above). |
 | `transcript-link.ts` | Heuristic link from a worker to its Claude Code conversation (see below). |
 
 ### How the terminal view is safe
@@ -51,6 +53,7 @@ Tinstar follows the first mate's documented, opt-in **fleet activity ledger** (`
 
 - **Closing or deleting a view can never kill the worker.** tmux closes only the windows linked to a killed session *and no other session*, and the worker's window is still linked into the first mate's session. `unlink-window` without `-k` refuses to remove a last link. When the worker's window is closed, it leaves the view and the view dies with it. No bookkeeping is needed: the browser disconnecting detaches the client and `destroy-unattached` removes the view.
 - **Names.** View sessions never start with `tinstar-` or with the first mate's session name (the first mate runs a bare `tmux has-session -t firstmate`, which prefix-matches).
+- **The view never resizes the worker.** The view session is created at the worker window's size (`new-session -x -y`) and attached with `-f ignore-size`. ttyd resizes its PTY whenever a browser connects or resizes, so the view script re-execs itself under `bin/tinstar-fm-fixed-pty` (requires `python3`): tmux runs on a private inner PTY that follows the worker window's size (read with `display-message` every 0.5 s), and browser resizes only reach the outer PTY. The relay reports the worker size to the browser as an OSC 7337 sequence, sent only at an output boundary, and `public/terminal-wrapper.html` (`?cols=&rows=`) pins xterm to that size and scales the frame to fit.
 - **Keyboard.** `prefix None` plus an empty key table passes every key to the pane, so `C-b` and `C-h` reach the worker and tmux commands (`prefix &`) are unreachable from the card. Mouse is off on purpose: wheel-scrolling would put the worker's *pane* into copy-mode, shared by every viewer, and the first mate's `send-keys` has no copy-mode escape.
 - **You are typing into the real composer.** As with attaching a terminal yourself, text you type can interleave with a steering message the first mate sends at the same moment.
 - **What Tinstar runs in tmux.** Only `list-windows` and `list-sessions` (read-only) and `kill-session` on abandoned `tsview-…` sessions. `views.test.ts` asserts this against the recorded calls.
