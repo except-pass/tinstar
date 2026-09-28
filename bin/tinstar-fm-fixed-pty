@@ -15,6 +15,8 @@ import tty
 
 SIZE_POLL_SECONDS = 0.5
 SIZE_REPEAT_SECONDS = 5
+REPORT_QUIET_SECONDS = 0.02
+REPORT_MAX_DELAY_SECONDS = 0.15
 
 
 def worker_size(window_id):
@@ -65,18 +67,28 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop)
     started = time.monotonic()
     next_poll = started + SIZE_POLL_SECONDS
+    last_output = started
+    report_due = None
     try:
         while True:
-            ready, _, _ = select.select([input_fd, master], [], [], SIZE_POLL_SECONDS)
-            if time.monotonic() >= next_poll:
-                next_poll = time.monotonic() + SIZE_POLL_SECONDS
+            timeout = SIZE_POLL_SECONDS if report_due is None else REPORT_QUIET_SECONDS
+            ready, _, _ = select.select([input_fd, master], [], [], timeout)
+            now = time.monotonic()
+            if now >= next_poll:
+                next_poll = now + SIZE_POLL_SECONDS
                 current = worker_size(window_id)
                 if current is not None and current != size:
                     size = current
                     set_size(master, size)
-                    report_size(output_fd, size)
-                elif time.monotonic() - started < SIZE_REPEAT_SECONDS:
-                    report_size(output_fd, size)
+                    if report_due is None:
+                        report_due = now
+                elif now - started < SIZE_REPEAT_SECONDS and report_due is None:
+                    report_due = now
+            if report_due is not None and (
+                now - last_output >= REPORT_QUIET_SECONDS or now - report_due >= REPORT_MAX_DELAY_SECONDS
+            ):
+                report_size(output_fd, size)
+                report_due = None
             if input_fd in ready:
                 data = os.read(input_fd, 65536)
                 if not data:
@@ -90,6 +102,7 @@ def main() -> int:
                 if not data:
                     break
                 os.write(output_fd, data)
+                last_output = time.monotonic()
     finally:
         if old_mode is not None:
             termios.tcsetattr(input_fd, termios.TCSADRAIN, old_mode)

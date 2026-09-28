@@ -15,6 +15,12 @@ const xtermSize = async (page: Page, id: string) => {
     return term ? `${term.cols}x${term.rows}` : 'missing'
   }).catch(() => 'missing')
 }
+const leakedSequences = (page: Page, id: string) => page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))!.evaluate(() => {
+  const term = (window as unknown as { term: { buffer: { active: { length: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
+  const lines: string[] = []
+  for (let y = 0; y < term.buffer.active.length; y++) lines.push(term.buffer.active.getLine(y)?.translateToString(true) ?? '')
+  return lines.filter(line => /\uFFFD|\d+;5;\d+m|7337;|\[0m/.test(line))
+})
 const promptProblems = async (page: Page, id: string) => {
   const problems = await page.evaluate(() => {
     const found: string[] = []
@@ -79,7 +85,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     snapshot(['alpha', 'bravo'])
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha',
-      "seq 1 200; printf 'PROMPT_BOTTOM> '; (i=0; while :; do i=$((i+1)); printf '\\033%s\\033[1;1HBUSY %s\\033%s' 7 \"$i\" 8; sleep 0.1; done) & exec cat")
+      "seq 1 200; printf 'PROMPT_BOTTOM> '; (i=0; while :; do i=$((i+1)); printf '\\033%s\\033[1;1H\\033[38;5;%dm█▓▒░ BUSY ✦ café %s\\033[0m\\033%s' 7 $((i % 256)) \"$i\" 8; sleep 0.05; done) & exec cat")
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', 'cat')
     const before = windows()
     const sizesBefore = windowSizes()
@@ -221,6 +227,9 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await second.getByRole('button', { name: 'Overview' }).click()
     await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
     await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 5_000 }).toBe(operatorSize)
+    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
+    await delay(5500)
+    expect(await leakedSequences(second, 'alpha')).toEqual([])
     await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
     await delay(1500)
     operator('kill-server')
