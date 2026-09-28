@@ -175,7 +175,10 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     expect(frameSizesAfter).toEqual(frameSizes)
     expect(ttydPidsAfter).toEqual(ttydPids)
     expect(windowSizes()).toBe(sizesBefore)
+    await page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes('session=cockpit-0-alpha&'))!
+      .evaluate(() => { const el = document.scrollingElement || document.documentElement; el.scrollTop = 0 })
     await page.getByRole('button', { name: /alpha .*WORKING/i }).click()
+    await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     await page.setViewportSize({ width: 1100, height: 900 })
     await delay(1000)
     expect(windowSizes()).toBe(sizesBefore)
