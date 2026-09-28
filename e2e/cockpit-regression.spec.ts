@@ -32,11 +32,13 @@ const promptProblems = async (page: Page, id: string) => {
     return found
   })
   const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
-  const fits = await wrapper?.evaluate(() => {
-    const r = document.getElementById('term')!.getBoundingClientRect()
-    return r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1
+  const anchored = await wrapper?.evaluate(() => {
+    const term = document.getElementById('term')!
+    const r = term.getBoundingClientRect()
+    const view = document.documentElement.clientHeight
+    return !term.style.transform && r.left >= -1 && r.bottom <= view + 1 && r.bottom >= Math.min(r.height, view) - 1
   })
-  if (!fits) problems.push('terminal larger than stage')
+  if (!anchored) problems.push('terminal not full size and anchored to its bottom row')
   const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
     return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
