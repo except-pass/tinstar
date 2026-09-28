@@ -90,7 +90,9 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha',
       "seq 1 200; printf 'PROMPT_BOTTOM> '; (i=0; while :; do i=$((i+1)); printf '\\033%s\\033[1;1H\\033[38;5;%dm█▓▒░ BUSY ✦ café %s\\033[0m\\033%s' 7 $((i % 256)) \"$i\" 8; sleep 0.05; done) & exec cat")
-    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', 'cat')
+    // This pane stays idle after printing its prompt, so startup must paint its
+    // existing screen without relying on later output to repair the first frame.
+    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', "seq 1 200; printf 'PROMPT_BOTTOM> '; exec cat")
     const before = windows()
     const sizesBefore = windowSizes()
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
@@ -118,6 +120,8 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await page.locator('.cockpit-objective').click()
     await page.keyboard.press('Control+]')
     await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
+    await expect.poll(() => promptProblems(page, 'bravo')).toEqual([])
+    await page.screenshot({ path: test.info().outputPath('private-idle-static-prompt-1280x720.png') })
     await page.keyboard.press('Control+[')
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     const jump = page.getByRole('textbox', { name: 'Jump to worker' })
