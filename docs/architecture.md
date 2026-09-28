@@ -17,7 +17,7 @@ Tinstar is a real-time dashboard for orchestrating and monitoring Claude Code se
 | Session isolation | tmux sessions | Local tmux sessions managed by the backend |
 | Browser regression | Playwright 1.58 | Cockpit spec with a private tmux socket and test home |
 
-No external state management library (Redux, Zustand, etc.). State flows from the server via SSE and is held in React state + in-memory repositories.
+No external state management library (Redux, Zustand, etc.). The cockpit reads `GET /api/fleet` with `fetch` and holds the result in React state.
 
 ---
 
@@ -37,8 +37,8 @@ No external state management library (Redux, Zustand, etc.). State flows from th
 │  │ ttyd iframes (one per session, proxied through Caddy)    │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-         │ fetch              ▲ SSE
-         ▼                    │
+         │ fetch
+         ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Vite Dev Server (:5273)                       │
 │                                                                 │
@@ -92,11 +92,11 @@ The backend is a **Vite plugin** (`tinstarBackend()` in `src/server/index.ts`) t
 | OTel Store | `src/server/stores/otel-store.ts` | In-memory span and metric storage indexed by trace ID. |
 | Document Processor | `src/server/processors/document-processor.ts` | Subscribes to bus events, writes into document store. |
 | OTel Processor | `src/server/processors/otel-processor.ts` | Subscribes to bus events, records spans/metrics. |
-| SSE Broadcaster | `src/server/api/sse.ts` | Pushes document store changes to all connected browsers. Sends full snapshot on connect, then incremental deltas. 15s heartbeat. |
+| SSE Broadcaster | `src/server/api/sse.ts` | Pushes document store changes to all connected SSE clients. Sends full snapshot on connect, then incremental deltas. 15s heartbeat. |
 | API Routes | `src/server/api/routes.ts` | REST endpoints for CRUD, session management, hooks, and simulator control. |
 | Session Manager | `src/server/sessions/` | Tmux backend, reconciliation, workspace/worktree management. |
 | Simulator | `src/server/simulator/` | Mock event generator for development and testing. |
-| Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to the canvas HUD. Disabled with `TINSTAR_TELEMETRY=0`; under `TINSTAR_FAST_SIM=1` the supervisor short-circuits to a synthetic fixture. |
+| Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to connected clients. Disabled with `TINSTAR_TELEMETRY=0`; under `TINSTAR_FAST_SIM=1` the supervisor short-circuits to a synthetic fixture. |
 | Logger | `src/server/logger.ts` | Structured logging to console + `~/.config/tinstar/server.log`. Format: `[ISO] [LEVEL] [TAG] message {json}`. |
 
 ### Startup sequence
