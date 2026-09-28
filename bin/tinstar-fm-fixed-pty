@@ -75,8 +75,8 @@ def main() -> int:
                     size = current
                     set_size(master, size)
                     report_size(output_fd, size)
-            if not ready and time.monotonic() - started < SIZE_REPEAT_SECONDS:
-                report_size(output_fd, size)
+                elif time.monotonic() - started < SIZE_REPEAT_SECONDS:
+                    report_size(output_fd, size)
             if input_fd in ready:
                 data = os.read(input_fd, 65536)
                 if not data:

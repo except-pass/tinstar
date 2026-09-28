@@ -78,7 +78,8 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     }
     snapshot(['alpha', 'bravo'])
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
-    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "seq 1 200; printf 'PROMPT_BOTTOM> '; exec cat")
+    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha',
+      "seq 1 200; printf 'PROMPT_BOTTOM> '; (i=0; while :; do i=$((i+1)); printf '\\033%s\\033[1;1HBUSY %s\\033%s' 7 \"$i\" 8; sleep 0.1; done) & exec cat")
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', 'cat')
     const before = windows()
     const sizesBefore = windowSizes()
@@ -197,9 +198,11 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       .then(body => body.data.workers.find(w => w.id === 'alpha')?.terminalPid ?? null)
     const crashedTtyd = await alphaTtyd()
     expect(crashedTtyd).not.toBeNull()
+    await second.locator('iframe[title="alpha terminal"]').evaluate(frame => { frame.dataset.mounted = 'before-crash' })
     process.kill(crashedTtyd!, 'SIGKILL')
     await expect.poll(alphaTtyd, { timeout: 15_000 }).not.toBe(crashedTtyd)
     await expect.poll(alphaTtyd, { timeout: 15_000 }).not.toBeNull()
+    await expect(second.locator('iframe[title="alpha terminal"]')).not.toHaveAttribute('data-mounted', 'before-crash', { timeout: 15_000 })
     await expect.poll(() => promptProblems(second, 'alpha'), { timeout: 15_000 }).toEqual([])
     console.log(`private alpha ttyd recovered in place: ${crashedTtyd} -> ${await alphaTtyd()}`)
 
