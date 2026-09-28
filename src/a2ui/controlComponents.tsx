@@ -180,8 +180,8 @@ export function SubmitControl({ node }: { node: A2uiComponent }): ReactNode {
 // Choice group is, so the two coexist on one surface without clobbering.
 // ---------------------------------------------------------------------------
 
-// One tone per heat step, LITERAL class strings so Tailwind's JIT emits them
-// (same discipline as catalog.tsx's STEP_NODE). The ramp is a single amber
+// One tone per heat step, LITERAL class strings so Tailwind's JIT emits them.
+// The ramp is a single amber
 // INTENSITY, not a hue shift: the palette reserves red for a failed action, and
 // the only meaning color carries here is "this end is the dangerous one". The
 // label beside the chip is what distinguishes one dimension from another.
@@ -233,7 +233,7 @@ function SectionLabel({ text }: { text: string }): ReactNode {
 }
 
 /** The truncation notice for a capped Decision section (options or risks) — the
- *  same "say so out loud" posture as Stepper's overflow row (catalog.tsx). Unlike
+ *  same "say so out loud" posture as Stepper's overflow row. Unlike
  *  Stepper, Decision has exactly ONE truncation cause (the hard row cap): there is
  *  no scan window to run out of, so there is only ever this one message. This is
  *  the component whose entire thesis is that a risk must never be quietly
@@ -283,8 +283,7 @@ export function DecisionControl({ node }: { node: A2uiComponent }): ReactNode {
             <span className="min-w-0">
               <span className="font-sans text-[13px] leading-[1.4] text-ink-high block">{opt.label}</span>
               {/* The glyph is decorative (aria-hidden); an sr-only word carries the same
-                  distinction to assistive tech, matching StepperRail's status-text pattern
-                  (catalog.tsx) — without it, gain/cost/wrong-if read as three indistinguishable
+                  distinction to assistive tech — without it, gain/cost/wrong-if read as three indistinguishable
                   plain lines to a screen reader. */}
               {opt.gain && (
                 <span className="font-sans text-[12.5px] leading-[1.5] text-ink-mid block">

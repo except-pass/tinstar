@@ -234,7 +234,7 @@ function hasLegacyRandomRecapId(entry: RecapEntry): boolean {
  * Bound how many recap entries a run keeps in memory, on disk, and on the wire.
  *
  * The board SSE snapshot and every run delta ship the full `recapEntries` array,
- * and the PromptComposer remounts markdown for each entry on parent re-render.
+ * and clients render markdown for each entry.
  * An unbounded history makes typing and window switches feel sluggish long before
  * RAM is the problem. Keep the newest entries — older turns are still in the
  * agent transcript if someone needs them.
@@ -633,8 +633,8 @@ export class DocumentStore {
     if (this.runs.has(id)) {
       this.runs.delete(id)
       this.changes.emit('change', { entity: 'run', id, data: null })
-      // Node-id convention: a run's canvas node is `run-${id}` (see grouping.ts
-      // and WorkspaceShell synthetic nodes); pins key off that prefixed id.
+      // Node-id convention: a run's canvas node is `run-${id}`; pins key off
+      // that prefixed id.
       this.pruneWidgetFromGraphs(`run-${id}`)
       this.removePinsForNodeAcrossSpaces(`run-${id}`)
       // Cascade: a notice must not outlive the run that posted it (R20).
@@ -793,8 +793,8 @@ export class DocumentStore {
     this.editorWidgets.delete(id)
     this.changes.emit('change', { entity: 'editorWidget', id, data: null })
     // Widget ids are already type-prefixed (shortId('editor') → `editor-...`) and
-    // the canvas node id is that same id (WorkspaceShell synthetic nodes use id: w.id),
-    // so the bare id is the pin nodeId — no extra prefix.
+    // the canvas node id is that same id, so the bare id is the pin nodeId — no
+    // extra prefix.
     this.pruneWidgetFromGraphs(id)
     this.removePinsForNodeAcrossSpaces(id)
   }

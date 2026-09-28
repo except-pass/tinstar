@@ -119,7 +119,7 @@ export interface TinstarConfig {
       turnLength: boolean
       timeline: boolean
     }
-    /** S/M/L quick-resize presets. Shape mirrors widgetSizePresets.ts on the client. */
+    /** S/M/L quick-resize presets. */
     widgetSizePresets: {
       small: number
       medium: number

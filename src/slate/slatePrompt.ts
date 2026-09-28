@@ -2,12 +2,12 @@
 // adds a point, replies on a thread, or submits a control answer.
 //
 // Same delivery pattern as the Roundup notices (src/notices/followUpPrompt.ts,
-// answerPrompt.ts) and note replies (src/pins/replyPrompt.ts): the server bakes a
-// human-readable block — including the exact curl the agent should run to reply —
-// and submits it to the run's session (the point's `runId`, which IS the tmux
-// session name). The point/reply is already persisted before this is delivered, so
-// delivery is best-effort; an unreachable session just means the agent reads it
-// later. React-free, server-only (rides the esbuild bundle with the answer route).
+// answerPrompt.ts): the server bakes a human-readable block — including the exact
+// curl the agent should run to reply — and submits it to the run's session (the
+// point's `runId`, which IS the tmux session name). The point/reply is already
+// persisted before this is delivered, so delivery is best-effort; an unreachable
+// session just means the agent reads it later. React-free, server-only (rides the
+// esbuild bundle with the answer route).
 //
 // The injection guardrail (plan KTD6): an injected comment is a NOTE, not a command
 // to drop in-flight work. Every prompt says so, so a mid-tool-use injection can't

@@ -1,10 +1,9 @@
 // The prompt an agent receives when the user asks a follow-up question about one
 // of its Roundup notices.
 //
-// Same delivery pattern as the answer path (answerPrompt.ts) and note replies
-// (src/pins/replyPrompt.ts): the server bakes a human-readable block — including
-// the exact curl the agent should run — and submits it to the posting session
-// (notice.runId). The question is already persisted on the thread before this is
+// Same delivery pattern as the answer path (answerPrompt.ts): the server bakes
+// a human-readable block — including the exact curl the agent should run — and
+// submits it to the posting session (notice.runId). The question is already persisted on the thread before this is
 // delivered, so delivery is best-effort; an unreachable session just means the
 // agent reads it later off GET /api/notices.
 //
