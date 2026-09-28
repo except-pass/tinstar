@@ -188,6 +188,10 @@ export class FirstmateViews {
     return this.live.get(runId)?.port ?? null
   }
 
+  pidOf(runId: string): number | null {
+    return this.live.get(runId)?.child.pid ?? null
+  }
+
   /** Make sure a ttyd serves `runId`'s worker window. Idempotent; concurrent calls share one attempt. */
   ensure(runId: string, task: string, windowTarget: string | null): Promise<TerminalResult> {
     const pending = this.inflight.get(runId)

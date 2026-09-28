@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Relay a browser terminal into a tmux client on a fixed-size private PTY."""
+"""Relay a browser terminal into a tmux client on a private PTY that follows the worker window's size."""
 
 import fcntl
 import os
@@ -7,9 +7,30 @@ import pty
 import select
 import signal
 import struct
+import subprocess
 import sys
 import termios
+import time
 import tty
+
+SIZE_POLL_SECONDS = 0.5
+
+
+def worker_size(window_id):
+    try:
+        out = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", window_id, "#{window_width} #{window_height}"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.split()
+        cols, rows = int(out[0]), int(out[1])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+    return (cols, rows) if cols > 0 and rows > 0 else None
+
+
+def set_size(fd, size):
+    cols, rows = size
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
 def main() -> int:
@@ -19,7 +40,8 @@ def main() -> int:
         os.environ["TINSTAR_FIXED_PTY"] = "1"
         os.execv(script, [script, session, window_id, window_name])
 
-    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", int(rows), int(cols), 0, 0))
+    size = (int(cols), int(rows))
+    set_size(master, size)
     input_fd = sys.stdin.fileno()
     output_fd = sys.stdout.fileno()
     old_mode = termios.tcgetattr(input_fd) if os.isatty(input_fd) else None
@@ -35,9 +57,16 @@ def main() -> int:
 
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
+    next_poll = time.monotonic() + SIZE_POLL_SECONDS
     try:
         while True:
-            ready, _, _ = select.select([input_fd, master], [], [])
+            ready, _, _ = select.select([input_fd, master], [], [], SIZE_POLL_SECONDS)
+            if time.monotonic() >= next_poll:
+                next_poll = time.monotonic() + SIZE_POLL_SECONDS
+                current = worker_size(window_id)
+                if current is not None and current != size:
+                    size = current
+                    set_size(master, size)
             if input_fd in ready:
                 data = os.read(input_fd, 65536)
                 if not data:

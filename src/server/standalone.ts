@@ -100,7 +100,7 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const ctx = initBackend()
-  const cockpitFleet = new CockpitFleet(ctx.sse)
+  const cockpitFleet = new CockpitFleet()
   cockpitFleet.start()
   process.on('exit', () => cockpitFleet.stop())
   const proxy = httpProxy.createProxyServer({ ws: true })

@@ -49,6 +49,8 @@
   <script>
     var params = new URLSearchParams(location.search)
     var session = params.get('session') || ''
+    var fixedCols = Number(params.get('cols')) || 0
+    var fixedRows = Number(params.get('rows')) || 0
     var termEl = document.getElementById('term')
     var errorOverlay = document.getElementById('error-overlay')
     var errorMsg = document.getElementById('error-msg')
@@ -233,11 +235,48 @@
       }
     })
 
+    function fitPinnedFrame() {
+      if (!fixedCols || !fixedRows) return
+      try {
+        var term = termEl.contentWindow && termEl.contentWindow.term
+        var screen = term && term.element && term.element.querySelector('.xterm-screen')
+        var viewport = term && term.element && term.element.querySelector('.xterm-viewport')
+        if (!screen || !screen.offsetWidth) return
+        var bar = viewport ? viewport.offsetWidth - viewport.clientWidth : 0
+        var width = Math.ceil(screen.offsetWidth + bar + 10)
+        var height = Math.ceil(screen.offsetHeight + 10)
+        var scale = Math.min(1, window.innerWidth / width, window.innerHeight / height)
+        termEl.style.width = width + 'px'
+        termEl.style.height = height + 'px'
+        termEl.style.transformOrigin = '0 0'
+        termEl.style.transform = 'scale(' + scale + ')'
+      } catch (_) {}
+    }
+
+    function pinTerminalSize(win) {
+      var term = win.term
+      if (!fixedCols || !fixedRows || term.__tinstarPinned) return
+      term.__tinstarPinned = true
+      var resize = term.resize.bind(term)
+      term.resize = function() {
+        resize(fixedCols, fixedRows)
+        term.refresh(0, term.rows - 1)
+      }
+      term.resize()
+      if (win.ResizeObserver && term.element) {
+        var screen = term.element.querySelector('.xterm-screen')
+        if (screen) new win.ResizeObserver(fitPinnedFrame).observe(screen)
+      }
+      fitPinnedFrame()
+    }
+    window.addEventListener('resize', fitPinnedFrame)
+
     // Layer 2a: xterm.js custom key handler
     function tryAttachXterm() {
       try {
         var win = termEl.contentWindow
         if (!win || !win.term || !win.term.attachCustomKeyEventHandler) return false
+        pinTerminalSize(win)
         win.term.attachCustomKeyEventHandler(function(e) {
           if (e.type !== 'keydown') return true
           if (notifyCycle(e)) return false

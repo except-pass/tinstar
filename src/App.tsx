@@ -10,7 +10,7 @@ interface Worker {
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean
 }
 interface FleetData { workers: Worker[]; errors: string[] }
-type Terminal = { state: 'live'; port: number } | { state: 'unavailable'; reason: string }
+type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
 
 function identityColor(id: string): string {
   let hash = 2166136261
@@ -116,13 +116,14 @@ export default function App() {
         const next: Terminal = body.ok && body.data ? body.data : { state: 'unavailable', reason: body.error?.message ?? 'Terminal unavailable' }
         setTerminals(previous => {
           const old = previous[key]
-          if (old?.state === 'live' && next.state === 'live' && old.port === next.port) return previous
+          if (old?.state === 'live' && next.state === 'live' && old.port === next.port && old.pid === next.pid
+            && old.cols === next.cols && old.rows === next.rows) return previous
           return { ...previous, [key]: next }
         })
       })
       .catch(err => setTerminals(previous => ({ ...previous, [key]: { state: 'unavailable', reason: (err as Error).message } })))
       .finally(() => setOpening(previous => ({ ...previous, [key]: false })))
-  }, [currentKey, currentTerminalAvailable])
+  }, [currentKey, currentTerminalAvailable, fleet])
 
   useEffect(() => {
     if (!focusTerminal.current) return
@@ -182,9 +183,9 @@ export default function App() {
               const terminal = terminals[worker.key]
               if (terminal?.state !== 'live') return []
               const active = current.key === worker.key
-              return [<iframe key={`${worker.key}:${terminal.port}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
+              return [<iframe key={`${worker.key}:${terminal.port}:${terminal.pid}:${terminal.cols}x${terminal.rows}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}&cols=${terminal.cols}&rows=${terminal.rows}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
             })}
-            {opening[current.key] && terminals[current.key]?.state !== 'live' && <p className="cockpit-terminal-placeholder">Connecting to terminal…</p>}
+            {opening[current.key] && !terminals[current.key] && <p className="cockpit-terminal-placeholder">Connecting to terminal…</p>}
             {!current.terminalAvailable && <p className="cockpit-terminal-placeholder">Terminal endpoint unavailable</p>}
             {terminals[current.key]?.state === 'unavailable' && <p className="cockpit-terminal-placeholder">{(terminals[current.key] as Extract<Terminal, { state: 'unavailable' }>).reason}</p>}
           </div></section>

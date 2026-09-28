@@ -53,7 +53,9 @@ read -r worker_cols worker_rows <<< "$worker_size"
 
 # ttyd changes its own PTY size when a browser connects or resizes. A linked
 # tmux window would pass that change through to the real worker. Put tmux on a
-# fixed inner PTY instead; only the outer browser-facing PTY changes size.
+# private inner PTY instead: the browser only resizes the outer PTY, and the inner
+# one follows the worker window's own size, so the view never imposes a size even
+# when it is the last tmux client attached to the window.
 if [ "${TINSTAR_FIXED_PTY:-}" != 1 ]; then
   command -v python3 >/dev/null 2>&1 || die "python3 required for a size-safe terminal view"
   exec python3 "$(dirname "$0")/tinstar-fm-fixed-pty" "$0" "$fm_session" "$window_id" "$window_name" "$worker_cols" "$worker_rows"

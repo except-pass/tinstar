@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -7,6 +7,21 @@ import { tmpdir } from 'node:os'
 const repo = resolve(import.meta.dirname, '..')
 const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const xtermSize = async (page: Page, id: string) => {
+  const frame = page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))
+  if (!frame) return 'missing'
+  return frame.evaluate(() => {
+    const term = (window as unknown as { term?: { cols: number; rows: number } }).term
+    return term ? `${term.cols}x${term.rows}` : 'missing'
+  }).catch(() => 'missing')
+}
+const terminalFitsStage = (page: Page, id: string) => {
+  const frame = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
+  return frame!.evaluate(() => {
+    const r = document.getElementById('term')!.getBoundingClientRect()
+    return r.width <= innerWidth + 1 && r.height <= innerHeight + 1
+  })
+}
 
 test('regression: private First Mate fleet, terminal input, cycling and window survival', async ({ browser }) => {
   test.setTimeout(120_000)
@@ -15,12 +30,15 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
   const config = join(root, 'config')
   const bin = join(root, 'bin')
   const socket = `cockpit-${process.pid}-${Date.now()}`
+  const operatorSocket = `${socket}-operator`
   const port = 39000 + Math.floor(Math.random() * 10000)
   const portStart = 49000 + Math.floor(Math.random() * 10000)
   let server: ChildProcess | null = null
   const tmux = (...args: string[]) => execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   const windows = () => tmux('list-windows', '-t', 'firstmate', '-F', '#{window_id}:#{window_name}')
   const windowSizes = () => tmux('list-windows', '-t', 'firstmate', '-F', '#{window_id}:#{window_width}x#{window_height}')
+  const alphaSize = () => tmux('display-message', '-p', '-t', 'firstmate:fm-alpha', '#{window_width}x#{window_height}')
+  const operator = (...args: string[]) => execFileSync(realTmux, ['-L', operatorSocket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   const task = (id: string) => ({
     id, kind: 'worker', project: `/private/projects/${id}`, branch: `fm/${id}`,
     paths: { worktree: { path: `/private/worktrees/${id}` } },
@@ -43,7 +61,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       writeFileSync(join(home, 'data', id, 'brief.md'), `# Brief\n\n## Captain's intent\n\n${id} brief objective\n\n## Firstmate spec\n\nOther text\n`)
     }
     snapshot(['alpha', 'bravo'])
-    tmux('new-session', '-d', '-s', 'firstmate', '-n', 'supervisor')
+    tmux('new-session', '-d', '-s', 'firstmate', '-x', '220', '-y', '60', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', 'cat')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', 'cat')
     const before = windows()
@@ -83,6 +101,9 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     const terminalInput = page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').getByRole('textbox', { name: 'Terminal input' })
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
+    expect(alphaSize()).toBe('220x60')
+    await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
+    expect(await terminalFitsStage(page, 'alpha')).toBe(true)
     await page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').locator('.xterm-screen').click()
     await page.keyboard.type('COCKPIT_PRIVATE_INPUT')
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-alpha')).toContain('COCKPIT_PRIVATE_INPUT')
@@ -124,6 +145,9 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await page.setViewportSize({ width: 1100, height: 900 })
     await delay(1000)
     expect(windowSizes()).toBe(sizesBefore)
+    console.log(`private worker window sizes after viewport resize=${windowSizes()}`)
+    expect(await xtermSize(page, 'alpha')).toBe('220x60')
+    expect(await terminalFitsStage(page, 'alpha')).toBe(true)
     console.log(`private ttyd PIDs before=${ttydPids.join(',')} after=${ttydPidsAfter.join(',')}`)
     console.log(`private iframe sizes before=${frameSizes.join(',')} after=${frameSizesAfter.join(',')}`)
     await page.reload()
@@ -146,10 +170,34 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
     await expect(second.locator('.cockpit-worker-button')).toHaveCount(2, { timeout: 30_000 })
     await expect(second.getByRole('button', { name: /charlie .*WORKING/i })).toBeVisible()
+
+    // An operator client resizes the worker, then detaches while the cockpit view
+    // is the only client left on the window: the view must not impose its size.
+    await expect.poll(() => xtermSize(second, 'alpha')).toBe('220x60')
+    tmux('select-window', '-t', 'firstmate:fm-alpha')
+    operator('new-session', '-d', '-s', 'operator', '-x', '200', '-y', '50',
+      `env -u TMUX '${realTmux}' -L '${socket}' attach-session -t firstmate`)
+    await expect.poll(alphaSize).not.toBe('220x60')
+    const operatorSize = alphaSize()
+    console.log(`private worker alpha size with operator attached=${operatorSize}`)
+    await delay(1500)
+    operator('kill-server')
+    await expect.poll(() => tmux('list-clients', '-F', '#{session_name}').split('\n')).not.toContain('firstmate')
+    await delay(1500)
+    console.log(`private worker alpha size after operator detach=${alphaSize()}`)
+    expect(alphaSize()).toBe(operatorSize)
+    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 15_000 }).toBe(operatorSize)
+    await second.reload()
+    await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
+    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 15_000 }).toBe(operatorSize)
+    expect(await terminalFitsStage(second, 'alpha')).toBe(true)
+    console.log(`private worker alpha size after reconnect=${alphaSize()}`)
+    expect(alphaSize()).toBe(operatorSize)
     await second.close()
   } finally {
     server?.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* private server already gone */ }
+    try { operator('kill-server') } catch { /* operator server already gone */ }
     rmSync(root, { recursive: true, force: true })
   }
 })

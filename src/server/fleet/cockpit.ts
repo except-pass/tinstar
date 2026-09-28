@@ -7,9 +7,8 @@ import { ok, fail } from '../api/envelope'
 import { getConfigRoot } from '../configRoot'
 import { loadConfig, firstmatePortWindow } from '../sessions/config'
 import { LedgerWatcher } from '../firstmate/ledger-watcher'
-import { FirstmateViews } from '../firstmate/views'
+import { FirstmateViews, parseWindowRef } from '../firstmate/views'
 import { log } from '../logger'
-import type { SSEBroadcaster } from '../api/sse'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 
@@ -62,8 +61,9 @@ export class CockpitFleet {
   private views: FirstmateViews
   private homes: string[]
   private errors: string[] = []
+  private python: Promise<boolean> | null = null
 
-  constructor(private readonly sse: SSEBroadcaster) {
+  constructor() {
     const config = loadConfig({ _rootDir: getConfigRoot() })
     this.homes = config.firstmate.homes
     this.views = new FirstmateViews({ window: firstmatePortWindow(config) })
@@ -96,7 +96,23 @@ export class CockpitFleet {
   async terminal(key: string) {
     const ref = this.targets.get(key)
     if (!ref) return null
-    return { key, ...await this.views.ensure(key, ref.id, ref.target) }
+    this.python ??= execFileAsync('python3', ['-c', '']).then(() => true, () => false)
+    if (!await this.python) return { key, state: 'unavailable' as const, reason: 'python3 is required for a size-safe terminal view' }
+    const result = await this.views.ensure(key, ref.id, ref.target)
+    if (result.state !== 'live') return { key, ...result }
+    const size = await this.windowSize(ref.target)
+    if (!size) return { key, state: 'unavailable' as const, reason: 'worker window size unavailable' }
+    return { key, ...result, pid: this.views.pidOf(key), ...size }
+  }
+
+  private async windowSize(target: string | null): Promise<{ cols: number; rows: number } | null> {
+    const ref = parseWindowRef(target)
+    if (!ref) return null
+    try {
+      const { stdout } = await execFileAsync('tmux', ['list-windows', '-t', `=${ref.session}`, '-F', '#{window_name} #{window_width} #{window_height}'], { timeout: 10_000 })
+      const [, cols, rows] = stdout.split('\n').map(line => line.split(' ')).find(([name]) => name === ref.windowName) ?? []
+      return Number(cols) > 0 && Number(rows) > 0 ? { cols: Number(cols), rows: Number(rows) } : null
+    } catch { return null }
   }
 
   refresh(): Promise<void> {
@@ -121,7 +137,6 @@ export class CockpitFleet {
         this.workers = workers
         this.targets = targets
         this.errors = errors
-        this.sse.broadcastEvent('fleet_changed', { count: workers.length })
       } while (this.again)
     })().catch(err => log.warn('fleet', `snapshot refresh failed: ${(err as Error).message}`))
       .finally(() => { this.polling = null })
