@@ -1,5 +1,7 @@
 # Tinstar Vision
 
+> Historical canvas vision. The [Tin Star V6 requirements](brainstorms/2026-09-24-tinstar-v6-requirements.md) supersede this document for current product direction.
+
 A real-time collaborative canvas where teams manage AI agent workflows. Technical, non-technical, and management personas all see the same work through different widgets. Like VS Code is language-agnostic, Tinstar is agent-agnostic.
 
 ## Pillars
