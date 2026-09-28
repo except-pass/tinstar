@@ -61,12 +61,13 @@ describe('First Mate attention projection', () => {
     expect(cards.map(card => card.key)).toEqual(['attention-0:alpha:decision:captain-hold-alpha-editor-call-1', 'attention-0:hold:alpha'])
   })
 
-  it('resolves a single migrated-prefix hold and ignores an ambiguous one', () => {
-    const tasks = [{ id: 'alpha', hints: { open_decisions: [{ key: 'api-shape', verb: 'needs-decision', summary: 'Pick API shape' }] } }]
-    const hold = (id: string) => ({ id, state: 'in_flight', hold_kind: 'captain', hold_reason: 'Choose REST or GraphQL' })
-    expect(buildAttentionCards(0, tasks, [hold('fm-alpha-decision-api-shape')], [worker()], new Map())).toHaveLength(1)
-    expect(buildAttentionCards(0, tasks, [hold('fm-api-shape'), hold('bd-api-shape')], [worker()], new Map())).toHaveLength(3)
-    expect(buildAttentionCards(0, tasks, [hold('beta-decision-api-shape')], [worker()], new Map())).toHaveLength(2)
+  it('keeps a similarly named hold from another origin as its own card', () => {
+    const tasks = [{ id: 'alpha', hints: { open_decisions: [{ key: 'review', verb: 'blocked', summary: 'Need reviewer' }] } }]
+    const hold = { id: 'ui-review', state: 'in_flight', hold_kind: 'captain', hold_reason: 'Approve UI review', hold_age_days: 4, body_lines: ['Origin: beta'] }
+    expect(buildAttentionCards(0, tasks, [hold], [worker()], new Map())).toMatchObject([
+      { key: 'attention-0:alpha:blocked:review', ageDays: null },
+      { key: 'attention-0:hold:ui-review', ageDays: 4 },
+    ])
   })
 
   it('attributes a standalone hold only by exact id or its recorded origin', () => {

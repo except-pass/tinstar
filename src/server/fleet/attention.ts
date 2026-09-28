@@ -61,7 +61,7 @@ const holdOrigin = (row: AttentionBacklogRow): string | null => {
   return null
 }
 
-/** First Mate's own resolution order: exact id, legacy decision id, the published hold key, then one migrated-prefix row. */
+/** First Mate's own resolution order: exact id, legacy decision id, then the published hold key. */
 function resolveHold(holds: AttentionBacklogRow[], taskId: string, key: string): AttentionBacklogRow | undefined {
   const legacy = `${taskId}-decision-${key}`
   const published = /^captain-hold-(.+)-\d+$/.exec(key)?.[1]
@@ -69,11 +69,7 @@ function resolveHold(holds: AttentionBacklogRow[], taskId: string, key: string):
     const row = id && holds.find(item => item.id === id)
     if (row) return row
   }
-  const migrated = holds.filter(item => [key, legacy].some(id => {
-    const row = String(item.id)
-    return row.endsWith(`-${id}`) && !row.slice(0, -id.length - 1).includes('-')
-  }))
-  return migrated.length === 1 ? migrated[0] : undefined
+  return undefined
 }
 
 /** Projects First Mate's keyed calls and backlog holds without changing either source. */

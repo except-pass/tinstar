@@ -219,7 +219,7 @@ export class CockpitFleet {
 
   private reviewStatus(url: string): ReviewStatus {
     const cached = this.reviews.get(url)
-    if (!cached || cached.until <= Date.now()) void this.fetchReviewStatus(url, cached?.status)
+    if (!cached || (cached.status !== 'merged' && cached.until <= Date.now())) void this.fetchReviewStatus(url, cached?.status)
     return cached?.status ?? 'unknown'
   }
 
@@ -235,7 +235,8 @@ export class CockpitFleet {
       if (pull.merged_at) status = 'merged'
       else if (pull.state === 'open' || pull.state === 'closed') status = pull.state
     } catch (err) {
-      if (previous !== 'unknown') log.warn('fleet', `pull request status unavailable: ${(err as Error).message}`)
+      if (previous === 'merged' || previous === 'closed') status = previous
+      else if (previous !== 'unknown') log.warn('fleet', `pull request status unavailable: ${(err as Error).message}`)
     } finally {
       this.reviewing.delete(url)
     }
