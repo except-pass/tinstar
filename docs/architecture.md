@@ -15,7 +15,7 @@ Tinstar is a real-time dashboard for orchestrating and monitoring Claude Code se
 | Backend | Vite plugin (Node.js) | Runs inside the Vite dev server process |
 | Terminal emulator | ttyd + xterm.js | Web-based terminal inside iframes |
 | Session isolation | tmux sessions | Local tmux sessions managed by the backend |
-| E2E tests | Playwright 1.58 | Runs against `TINSTAR_FAST_SIM=1` dev server |
+| Browser regression | Playwright 1.58 | Cockpit spec with a private tmux socket and test home |
 
 No external state management library (Redux, Zustand, etc.). State flows from the server via SSE and is held in React state + in-memory repositories.
 
@@ -27,20 +27,11 @@ No external state management library (Redux, Zustand, etc.). State flows from th
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Browser                                 │
 │                                                                 │
-│  ┌──────────────┐   SSE stream    ┌──────────────────────────┐  │
-│  │ EventSource  │◄────────────────│  React state + repos     │  │
-│  │ /api/events  │   (snapshot +   │  (RunRepo, TaxonomyRepo) │  │
-│  └──────────────┘    deltas)      └──────────┬───────────────┘  │
-│                                              │                  │
-│  ┌──────────────┐   fetch()       ┌──────────▼───────────────┐  │
-│  │ REST calls   │────────────────►│  Components + Canvas     │  │
-│  │ POST/PATCH/  │                 │  (GroupingControls,       │  │
-│  │ DELETE       │                 │   HierarchySidebar,       │  │
-│  └──────────────┘                 │   InfiniteCanvas, etc.)   │  │
-│                                   └──────────────────────────┘  │
-│  ┌──────────────┐                                               │
-│  │ localStorage │  tinstar-dimensions, tinstar-layouts-v3       │
-│  └──────────────┘                                               │
+│  ┌──────────────┐   fetch()       ┌──────────────────────────┐  │
+│  │ REST calls   │────────────────►│  Cockpit (App.tsx)       │  │
+│  │ /api/fleet   │                 │  rail, Overview,         │  │
+│  │              │                 │  worker view             │  │
+│  └──────────────┘                 └──────────────────────────┘  │
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │ ttyd iframes (one per session, proxied through Caddy)    │   │
@@ -173,156 +164,19 @@ Runs on startup and every 30 seconds:
 
 `index.html` → `main.tsx` → `App.tsx`
 
-`App.tsx` renders the V6 worker cockpit (rail, Overview, worker view) from `GET /api/fleet`. The canvas described below (`WorkspaceShell` and its tree) is no longer mounted; its code remains until it is deleted.
-
-`WorkspaceShell` was the V5 root component. It wraps everything in a `SelectionProvider` and renders the top bar, sidebar, canvas, and dialogs.
-
-### State management
-
-**No external state library.** Three state tiers:
-
-| Tier | What | Mechanism | Persistence |
-|------|------|-----------|-------------|
-| Server data | Entities, runs, sessions | SSE stream → React state → in-memory repos (`RunRepository`, `TaxonomyRepository`) | Server owns it; frontend is a cache |
-| UI selection | Selected node, expanded nodes, hover | React context + `useReducer` (`SelectionProvider`) | None (ephemeral) |
-| Layout config | Grouping dimensions, widget positions/sizes | React state | `localStorage` |
-
-### localStorage keys
-
-| Key | Value | Purpose |
-|-----|-------|---------|
-| `tinstar-dimensions` | `["initiative", "epic", "task"]` | Active grouping hierarchy order |
-| `tinstar-layouts-v3-{spaceId}` | `{ [nodeId]: { x, y, width, height } }` | Widget positions and sizes on the infinite canvas (per space) |
-
-Dimensions are read on mount (default: `['initiative', 'epic', 'task']`). Layouts are namespaced by active space — switching spaces restores that space's widget positions. Layouts are validated on load — if >20% of nodes are missing layout data, a fresh layout is generated.
-
-### SSE connection (`useServerEvents` hook)
-
-1. Opens `EventSource` to `/api/events`
-2. Receives `snapshot` event with full state (activeSpaceId, spaces, initiatives, epics, tasks, worktrees, runs — entities filtered to active space, spaces unfiltered)
-3. Receives `delta` events with incremental updates (upsert or delete by entity type + ID; non-active-space entity deltas suppressed, space deltas always sent)
-4. Maintains `ServerState` in React state; immutable update pattern
-
-The `useBackendState` hook wraps `useServerEvents` and memoizes `RunRepository` + `TaxonomyRepository` instances for stable object identity.
-
-### Component tree
-
-```
-WorkspaceShell
-├── SelectionProvider (context)
-├── GroupingControls (top bar — drag-to-reorder dimension pills)
-├── HierarchySidebar (tree view — drag-to-reparent entities)
-├── InfiniteCanvas
-│   ├── GroupContainer (initiative/epic/task containers — depth-based styling)
-│   └── CanvasWidget
-│       └── RunWorkspaceWidget
-│           ├── RunWorkspaceHeader (status badge, breadcrumb)
-│           ├── TouchedFilesPanel (file diffs)
-│           └── RunSessionPanel (recap entries, ttyd iframe)
-├── CreateEntityDialog
-├── CreateSessionDialog
-├── EntityMenu (right-click context menu)
-└── EntitySettingsDialog (inheritance-based settings)
-```
-
-### Layout engine (`useWidgetLayouts` hook)
-
-Custom implementation (no external grid library). Three-phase algorithm:
-
-1. **Bottom-up sizing:** Runs get default size (900x400). Containers wrap children with padding.
-2. **Root grid packing:** `ceil(sqrt(n))` columns, left-to-right placement with 40px gaps.
-3. **Top-down absolutization:** Convert parent-relative positions to absolute canvas coordinates.
-
-Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when children outgrow bounds). All layout changes persist to localStorage immediately.
-
-### Infinite canvas (`useCanvasCamera` hook)
-
-- **Zoom:** Ctrl+scroll or trackpad pinch (zoom-to-cursor)
-- **Pan:** Space+drag or middle-mouse drag
-- **Reset:** Alt+Z resets zoom to 1x
-
-### Custom hooks
-
-| Hook | Purpose |
-|------|---------|
-| `useServerEvents()` | SSE connection, snapshot/delta processing |
-| `useBackendState()` | Wraps SSE state in memoized repositories |
-| `useWidgetLayouts(tree)` | Canvas layout generation, mutation, persistence |
-| `useCanvasCamera()` | Zoom, pan, cursor management |
-| `useSelection()` | Selected/expanded/hovered node state from context |
-| `useSidebarDrag(...)` | Hierarchical drag-to-reparent with drop indicators, auto-expand, edge scrolling |
+`App.tsx` renders the V6 worker cockpit (rail, Overview, worker view) from `GET /api/fleet`. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
 ### Domain layer (`src/domain/`)
 
 | File | Purpose |
 |------|---------|
-| `grouping.ts` | `buildGroupTree()` — recursive hierarchical grouping of runs by dimensions. Handles orphans and empty entities. |
-| `repositories.ts` | `RunRepository`, `TaxonomyRepository` — read-only in-memory access with query methods. |
-| `view-models.ts` | `buildWorkspaceView()` — builds sidebar tree + run summary view models from repos + dimensions. |
-| `dimension-meta.ts` | Static metadata registry for dimensions (labels, icons). |
-| `status-colors.ts` | Tailwind classes and hex colors for session status indicators. |
 | `mock-data.ts` | Sample entities and runs for development. |
 
 ---
 
 ## Plugin System
 
-Since V5, the canvas widgets and a subset of chrome are extended via a **trusted, in-process plugin system**. Built-in widgets (browser, nats-traffic, file-editor, image-viewer) ship as bundled plugins. Saloon, minimap, run-workspace, and hierarchy sidebar remain core.
-
-**Built-in vs external plugins — the boundary is enforced by ESLint.** Built-in plugins under `src/plugins/<name>/` and external plugins (npm/path-loaded via `externalLoader`) both consume `@tinstar/plugin-api` only. The lone allowed host import is `import type` from `src/domain/types.ts` (built-in plugins use it to type their widget data; external plugins declare their own data types). All runtime imports from host modules (`src/components/*`, `src/hooks/*`, `src/hotkeys/*`, `src/widgets/*`, `src/apiClient`) are blocked by ESLint. `src/lib/windowEvents` (typed registry of `tinstar:*` DOM events) is shared schema and allowed for plugins that bridge to those events; `src/lib/uiPrefs` is host-only and blocked.
-
-The path forward for new plugin needs: extend `TinstarPluginAPI` in `packages/plugin-api/src/index.ts` with the host facility, expose it through `createApi.ts`, add tests under `src/core/pluginApi/__tests__/`. See [ADR 0002](./adrs/0002-plugin-api-boundary.md).
-
-### Key components
-
-| Component | File | Responsibility |
-|---|---|---|
-| Public types | `packages/plugin-api/src/index.ts` | `TinstarPluginAPI`, `WidgetRegistration`, `Plugin`, `PluginManifest`, `Disposable` |
-| Registry | `src/core/pluginHost/registry.ts` | `PluginRegistry` — tracks plugin records, lifecycle, disposables; awaits `activate()`; captures error + stack on failure |
-| Manifest parser | `src/core/pluginHost/manifest.ts` | Validates `package.json` `tinstar` block; hard-rejects `apiVersion` mismatch |
-| Boot loader | `src/core/pluginHost/loader.ts` | `bootAllPlugins` — iterates bundled then external, honors `disabled[]` |
-| Bundled index | `src/core/pluginHost/bundled.ts` | Static `BUNDLED_PLUGINS` record — one entry per `src/plugins/<name>/` |
-| External loader | `src/core/pluginHost/externalLoader.ts` | Dynamic-import path; 10s fetch timeout; injectable `importFn` for testability |
-| Per-plugin API factory | `src/core/pluginApi/createApi.ts` | Builds the `TinstarPluginAPI` instance handed to `activate(api)` |
-| SSE event bridge | `src/core/pluginApi/eventBridge.ts` | One `EventSource` shared by all plugin subscribers; routes by exact channel name |
-| `plugins.json` | `src/core/pluginHost/{pluginsConfig,writePluginsConfig}.ts` | Tolerant read; atomic write via `.tmp + rename` |
-| Server route | `src/server/api/pluginsConfigRoute.ts` | `GET/PUT /api/plugins-config`; 5s body-read timeout, 1MB cap |
-| Plugin-runtime route | `src/server/api/pluginRuntime.ts` | Serves `api.js` + `react.js` passthroughs; serves local-folder externals with traversal + symlink-escape protection |
-| Settings UI | `src/components/Settings/PluginsTab.tsx` | Toggle enable/disable; refuses to save before successful initial fetch |
-| Failed banner | `src/components/PluginFailedBanner.tsx` | Top-right toast for `state: 'failed'` plugins, dismissible per-name |
-| Bundled plugin packages | `src/plugins/<name>/` | Manifest + `activate(api)` entry, one folder per plugin |
-
-### Activation flow
-
-```
-┌── App boot (src/widgets/index.ts) ───────────────────────────────┐
-│                                                                  │
-│  fetchPluginsConfig() ──► GET /api/plugins-config                │
-│         │                                                        │
-│         ▼                                                        │
-│  bootAllPlugins(BUNDLED_PLUGINS, config, registry, importFn)     │
-│         │                                                        │
-│         ├─► for each bundled plugin in BUNDLED_PLUGINS:          │
-│         │     parseManifest(pkg) → ManifestError ⇒ skip + log    │
-│         │     if disabled.has(name)            ⇒ skip            │
-│         │     registry.activate(record, module, createPluginApi) │
-│         │       → state: pending → active (or failed)            │
-│         │                                                        │
-│         └─► for each external entry in config.external:          │
-│               importFn(entry) → fetch pkg.json → import(main)    │
-│               parseManifest, registry.activate                    │
-│                                                                  │
-│  pluginsReady (Promise) resolves                                 │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### External plugin runtime
-
-External plugins ship as pre-built ESM bundles in their own repos. The host:
-1. Injects an `<script type="importmap">` into `index.html` mapping `@tinstar/plugin-api` → `/api/plugin-runtime/api.js` and `react` → `/api/plugin-runtime/react.js`.
-2. `src/main.tsx` mounts React on `window.__tinstar_react` before any render.
-3. The runtime route serves a thin passthrough so external plugins share the host's React instance (cross-realm React would break hooks).
-4. For local-folder externals (`{ "path": "/abs/path" }`), `/api/plugin-runtime/local/<name>/*` serves the plugin's built JS with path-traversal + symlink-escape guards.
+The V5 frontend plugin host (widget registry, bundled and external plugin loading, the importmap and `window.__tinstar_react`) was removed with the canvas. What remains is server-side: `src/server/api/builtinPluginManifests.ts` reads the `src/plugins/<name>/package.json` manifests, `src/server/api/pluginsConfigRoute.ts` serves `GET/PUT /api/plugins-config` using `src/core/pluginHost/{pluginsConfig,writePluginsConfig,manifest}.ts`, and `src/server/api/pluginRuntime.ts` still serves `/api/plugin-runtime/*`, which no client loads any more. The public types stay in `packages/plugin-api/src/index.ts`. See [ADR 0002](./adrs/0002-plugin-api-boundary.md) for the V5 design.
 
 ### Where plugin state lives
 
@@ -381,14 +235,9 @@ Full design + author guides under [`docs/plugins/`](plugins/):
 }
 ```
 
-### Frontend (browser-side, localStorage)
+### Frontend
 
-| Key | Content | Updated |
-|-----|---------|---------|
-| `tinstar-dimensions` | JSON array of active grouping dimensions | On dimension reorder/toggle |
-| `tinstar-layouts-v3` | JSON object mapping node IDs to `{x, y, width, height}` | On every widget move/resize |
-
-All entity and run data lives on the server. The frontend holds it in memory (via SSE) but does not persist it — a page refresh fetches a fresh snapshot.
+The cockpit persists nothing in the browser. It reads the fleet from `GET /api/fleet`; a page refresh fetches a fresh copy.
 
 ---
 
@@ -396,7 +245,7 @@ All entity and run data lives on the server. The frontend holds it in memory (vi
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `TINSTAR_FAST_SIM` | unset | When `1`: auto-start simulator with instant event emission, skip delays. Used for development and E2E tests. |
+| `TINSTAR_FAST_SIM` | unset | When `1`: auto-start simulator with instant event emission, skip delays. Used for development. |
 | `TINSTAR_NO_SESSIONS` | unset | When `1`: disable session management entirely. Useful for CI or frontend-only development. |
 | `TINSTAR_DASHBOARD_PORT` | `5273` | Port the Vite dev server listens on. Used in hook callback URLs. |
 
@@ -421,17 +270,6 @@ Custom CSS includes thin cyan scrollbars, neon text/border utilities, and panel 
 
 ## Testing
 
-E2E tests live in `e2e/` and run with Playwright against the simulator:
-
-```bash
-TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test
-```
-
-Playwright config auto-starts the dev server with `TINSTAR_FAST_SIM=1`. Tests cover:
-- Entity CRUD (create, rename, delete)
-- Run interactions (selection, status display)
-- Canvas interactions (pan, zoom, drag)
-- Sidebar drag-to-reparent
-- Data persistence across restarts
+The cockpit regression lives in `e2e/cockpit-regression.spec.ts` and runs with `npx playwright test`. It starts an isolated server, a private tmux socket and a private First Mate test home.
 
 Type checking and unit-test invocation: see [docs/testing.md](./testing.md#type-checking).

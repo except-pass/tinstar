@@ -47,11 +47,10 @@ Edits to files under `agent-skills/` go live immediately for any machine that in
 
 Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, layering, etc.). It's short and grouped by area.
 
-The three highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
+The two highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
 
 - Server-side config paths go through `getConfigRoot()` — not `homedir()`. Honors `TINSTAR_CONFIG_HOME` so a second backend doesn't stomp the primary.
 - Frontend HTTP goes through `apiFetch` / `apiUrl` from `src/apiClient.ts` — bare `fetch` 404s in Tauri.
-- Simulator only auto-starts when `TINSTAR_FAST_SIM=1` is set.
 
 Session state changes emit to the event bus as `managed_session.*` events (see [docs/conventions.md](docs/conventions.md) for the "adding a BusEvent" recipe).
 

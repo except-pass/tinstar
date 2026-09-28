@@ -1,7 +1,5 @@
-// Manifests (package.json only) of the bundled built-in plugins, for the
-// widget-registry/palette listing. This deliberately imports ONLY the JSON
-// manifests — NOT the plugin modules under src/plugins/*/src — so the server
-// bundle stays free of client/React component code.
+// Manifests (package.json only) of the built-in plugins, for the server's
+// widget-registry listing (pluginWidgetRegistry.ts).
 import browserPkg from '../../plugins/browser/package.json'
 import natsTrafficPkg from '../../plugins/nats-traffic/package.json'
 import fileEditorPkg from '../../plugins/file-editor/package.json'
