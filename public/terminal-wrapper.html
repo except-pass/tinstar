@@ -147,6 +147,12 @@
       handleLoadFailure('Failed to load terminal iframe')
     })
 
+    function revealPrompt() {
+      var page = document.scrollingElement || document.documentElement
+      page.scrollLeft = 0
+      page.scrollTop = page.scrollHeight
+    }
+
     // Start loading
     loadTerminal()
 
@@ -159,6 +165,10 @@
           && e.data.sessionName === session && typeof e.data.active === 'boolean') {
         focusPresentationActive = e.data.active
         termEl.dataset.focusPresentation = focusPresentationActive ? 'focus' : 'canvas'
+        return
+      }
+      if (e.data && e.data.type === 'terminal-reveal-prompt' && e.data.sessionName === session) {
+        requestAnimationFrame(revealPrompt)
         return
       }
       if (e.data && e.data.type === 'terminal-focus') {
@@ -249,8 +259,7 @@
         // the bottom where the prompt lives.
         termEl.style.width = Math.ceil(screen.offsetWidth + bar + 10) + 'px'
         termEl.style.height = Math.ceil(screen.offsetHeight + 10) + 'px'
-        var page = document.scrollingElement || document.documentElement
-        page.scrollTop = page.scrollHeight
+        requestAnimationFrame(revealPrompt)
       } catch (_) {}
     }
 

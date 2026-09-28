@@ -131,15 +131,19 @@ export default function App() {
   }, [currentKey, currentTerminalAvailable, currentTerminalPid, fleet])
 
   useEffect(() => {
-    if (!focusTerminal.current) return
-    focusTerminal.current = false
     const frame = [...document.querySelectorAll<HTMLIFrameElement>('.cockpit-terminal-frame')].find(f => f.dataset.session === currentKey)
     if (!frame) {
-      if (document.activeElement instanceof HTMLIFrameElement) document.activeElement.blur()
+      if (focusTerminal.current && document.activeElement instanceof HTMLIFrameElement) document.activeElement.blur()
+      focusTerminal.current = false
       return
     }
-    frame.focus()
-    frame.contentWindow?.postMessage({ type: 'terminal-focus' }, new URL(frame.src).origin)
+    const origin = new URL(frame.src).origin
+    if (focusTerminal.current) {
+      focusTerminal.current = false
+      frame.focus()
+      frame.contentWindow?.postMessage({ type: 'terminal-focus' }, origin)
+    }
+    frame.contentWindow?.postMessage({ type: 'terminal-reveal-prompt', sessionName: currentKey }, origin)
   }, [currentKey])
 
   const states = useMemo(() => {

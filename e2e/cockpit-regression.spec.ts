@@ -32,13 +32,15 @@ const promptProblems = async (page: Page, id: string) => {
     return found
   })
   const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
-  const anchored = await wrapper?.evaluate(() => {
+  const anchor = await wrapper?.evaluate(() => {
     const term = document.getElementById('term')!
     const r = term.getBoundingClientRect()
     const view = document.documentElement.clientHeight
-    return !term.style.transform && r.left >= -1 && r.bottom <= view + 1 && r.bottom >= Math.min(r.height, view) - 1
+    return { transformed: !!term.style.transform, left: r.left, bottom: r.bottom, height: r.height, view }
   })
-  if (!anchored) problems.push('terminal not full size and anchored to its bottom row')
+  if (!anchor || anchor.transformed || anchor.left < -1 || anchor.bottom > anchor.view + 1 || anchor.bottom < Math.min(anchor.height, anchor.view) - 1) {
+    problems.push(`terminal not full size and anchored to its bottom row: ${JSON.stringify(anchor)}`)
+  }
   const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
     return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
@@ -173,11 +175,13 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     expect(frameSizesAfter).toEqual(frameSizes)
     expect(ttydPidsAfter).toEqual(ttydPids)
     expect(windowSizes()).toBe(sizesBefore)
+    await page.getByRole('button', { name: /alpha .*WORKING/i }).click()
     await page.setViewportSize({ width: 1100, height: 900 })
     await delay(1000)
     expect(windowSizes()).toBe(sizesBefore)
     console.log(`private worker window sizes after viewport resize=${windowSizes()}`)
     expect(await xtermSize(page, 'alpha')).toBe('220x60')
+    await page.screenshot({ path: test.info().outputPath('private-prompt-1100x900-after-cycle.png') })
     await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     console.log(`private ttyd PIDs before=${ttydPids.join(',')} after=${ttydPidsAfter.join(',')}`)
     console.log(`private iframe sizes before=${frameSizes.join(',')} after=${frameSizesAfter.join(',')}`)
