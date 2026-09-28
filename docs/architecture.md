@@ -164,7 +164,7 @@ Runs on startup and every 30 seconds:
 
 `index.html` → `main.tsx` → `App.tsx`
 
-`App.tsx` renders the V6 worker cockpit (rail, Overview, worker view) from `GET /api/fleet`. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
+`App.tsx` renders the V6 worker cockpit (rail with the Needs You queue, Overview, worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array; opening a card only shows its detail and never answers or resolves anything. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
 ### Domain layer (`src/domain/`)
 
