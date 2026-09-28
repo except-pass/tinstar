@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyGraph, addSnap, removeSnap, snapNeighbors,
   addMember, removeMember, slotsForNode, nodesInSlot,
-  planBreak, migrateSnapEdges,
+  planBreak, migrateSnapEdges, nextFreeSlot,
 } from './constellationGraph'
-import { nextFreeSlot } from '../hooks/useConstellationGraph'
 
 describe('constellationGraph', () => {
   it('emptyGraph carries the spaceId and no edges', () => {

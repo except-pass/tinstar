@@ -59,8 +59,6 @@
     var loadAttempts = 0
     var maxAutoRetries = 3
     var loadTimer = null
-    var focusPresentationActive = false
-    termEl.dataset.focusPresentation = 'canvas'
 
     function showError(msg) {
       errorMsg.textContent = msg
@@ -156,17 +154,9 @@
     // Start loading
     loadTerminal()
 
-    // ── Focus forwarding (unchanged) ──
-
     // Parent asks us to focus the xterm terminal
     window.addEventListener('message', function(e) {
       if (e.source !== window.parent) return
-      if (e.data && e.data.type === 'terminal-focus-presentation'
-          && e.data.sessionName === session && typeof e.data.active === 'boolean') {
-        focusPresentationActive = e.data.active
-        termEl.dataset.focusPresentation = focusPresentationActive ? 'focus' : 'canvas'
-        return
-      }
       if (e.data && e.data.type === 'terminal-reveal-prompt' && e.data.sessionName === session) {
         requestAnimationFrame(revealPrompt)
         return
@@ -184,15 +174,6 @@
       }
     })
     window.parent.postMessage({ type: 'terminal-wrapper-ready', sessionName: session }, '*')
-
-    // Intercept Ctrl+Shift+\ and notify parent to release terminal focus.
-    var notifyEscapeLocked = false
-    function notifyEscape() {
-      if (notifyEscapeLocked) return
-      notifyEscapeLocked = true
-      setTimeout(function() { notifyEscapeLocked = false }, 500)
-      window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
-    }
 
     var handledCycleEvents = new WeakSet()
     function cycleAction(e) {
@@ -213,37 +194,8 @@
       return true
     }
 
-    function mouseCycleAction(e) {
-      if (e.button === 3) return 'ready-prev'
-      if (e.button === 4) return 'ready-next'
-      return null
-    }
-
-    function consumeFocusMouse(e) {
-      var action = mouseCycleAction(e)
-      if (!focusPresentationActive || !action) return false
-      e.preventDefault()
-      e.stopPropagation && e.stopPropagation()
-      if (e.type === 'mouseup') {
-        window.parent.postMessage({ type: 'terminal-session-cycle', sessionName: session, action: action }, '*')
-      }
-      return true
-    }
-
-    function attachMouseCycleListeners(target) {
-      target.addEventListener('mousedown', consumeFocusMouse, true)
-      target.addEventListener('mouseup', consumeFocusMouse, true)
-      target.addEventListener('auxclick', consumeFocusMouse, true)
-    }
-
-    attachMouseCycleListeners(window)
-
     window.addEventListener('keydown', function(e) {
-      if (notifyCycle(e)) return
-      if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
-        e.preventDefault()
-        notifyEscape()
-      }
+      notifyCycle(e)
     })
 
     function fitPinnedFrame() {
@@ -303,10 +255,6 @@
         win.term.attachCustomKeyEventHandler(function(e) {
           if (e.type !== 'keydown') return true
           if (notifyCycle(e)) return false
-          if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
-            notifyEscape()
-            return false
-          }
           // Ctrl+V: suppress xterm's \x16 so the browser fires a paste event instead
           if (e.code === 'KeyV' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
             return false
@@ -320,14 +268,8 @@
     // Layer 2b: capture-phase DOM listener (fallback)
     function tryAttachKeydown() {
       try {
-        attachMouseCycleListeners(termEl.contentWindow)
         termEl.contentWindow.addEventListener('keydown', function(e) {
           if (notifyCycle(e)) return
-          if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
-            e.preventDefault()
-            e.stopPropagation()
-            notifyEscape()
-          }
           // Ctrl+V: read clipboard and paste into terminal
           if (e.code === 'KeyV' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
             e.preventDefault()
@@ -342,21 +284,6 @@
                 }
               } catch(err) {}
             }).catch(function() {})
-          }
-        }, true)
-        termEl.contentWindow.addEventListener('wheel', function(e) {
-          if (!e.deltaY) return
-          var doc = termEl.contentDocument
-          var viewport = doc && doc.querySelector('.xterm-viewport')
-          if (!viewport) return
-          var atStart = viewport.scrollTop <= 0
-          var atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1
-          if ((e.deltaY < 0 && atStart) || (e.deltaY > 0 && atEnd)) {
-            window.parent.postMessage({
-              type: 'terminal-scroll-boundary',
-              sessionName: session,
-              direction: e.deltaY < 0 ? 'previous' : 'next'
-            }, '*')
           }
         }, true)
         termEl.dataset.bridgeReady = 'true'
