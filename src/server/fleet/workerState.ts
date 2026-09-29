@@ -14,8 +14,9 @@ export interface MateHomeActivity {
 
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : ''
 
-// Publisher shape: `<state> [key=child-outcome-<id>-<state>-<fp8>]: child <id> <state>: <note>`, done or failed.
-const CHILD_OUTCOME = /^(done|failed) \[key=child-outcome-[^\]]+\](?: \[[^\]]*\])*: child \S+ \1:/
+// Publisher shapes, done or failed: `<state> [key=child-outcome-<id>-<state>-<fp8>]: child <id> <state>: <note>`
+// and the fallback `<state> [key=inactive-outcome-<mate>-<id>-<state>]: inactive terminal child=<id> fingerprint=<fp>`.
+const CHILD_OUTCOME = /^(done|failed) \[key=(?:child-outcome-[^\]]+\](?: \[[^\]]*\])*: child \S+ \1:|inactive-outcome-[^\]]+\](?: \[[^\]]*\])*: inactive terminal child=\S+)/
 const WAITING = new Set(['no_active_work', 'externally_held', 'captain_decision'])
 
 /** A child-outcome line is another task finishing or failing, not the mate's own outcome. */

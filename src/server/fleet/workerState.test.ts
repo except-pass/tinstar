@@ -70,6 +70,16 @@ describe('displayed worker state', () => {
     expect(displayedWorkerState(failed, busy)).toEqual({ state: 'working', detail })
   })
 
+  it('shows a second mate working or idle when its last line is the inactive-outcome fallback for a child', () => {
+    const detail = 'inactive terminal child=kd-widget fingerprint=0a1b2c3d4e5f'
+    const fallback = (state: string) => childDone({
+      current_state: { state, source: 'status-log', detail },
+      hints: { last_event_text: `${state} [key=inactive-outcome-kd-kd-widget-${state}] [at=1790000000]: ${detail}` },
+    })
+    expect(displayedWorkerState(fallback('done'), waiting)).toEqual({ state: 'idle', detail })
+    expect(displayedWorkerState(fallback('failed'), busy)).toEqual({ state: 'working', detail })
+  })
+
   it('reads only the latest status line in the publisher shape', () => {
     expect(displayedWorkerState(childDone({
       hints: { last_event_text: 'done [key=child-outcome-widget-done-abcdef12] [at=1790000000]: report complete' },
