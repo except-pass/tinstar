@@ -11,7 +11,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 ## Project Structure
 
 - **Frontend**: React + Tailwind, served by Vite
-- **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read and terminal routes at `src/server/fleet/cockpit.ts`
+- **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read, message and terminal routes at `src/server/fleet/cockpit.ts`
 - **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 - **Shared vocabulary**: `CONCEPTS.md` (repo root) — domain terms (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
