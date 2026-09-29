@@ -47,7 +47,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 | Module | File(s) | Purpose |
 |--------|---------|---------|
-| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages` and `GET /api/fleet/:key/terminal` ([details](./features/firstmate-observer.md)). |
+| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages`, `POST /api/fleet/:key/direct` and `GET /api/fleet/:key/terminal` ([details](./features/firstmate-observer.md)). |
 | Needs You cards | `src/server/fleet/attention.ts` | Derives decision, blocked, failure and review-ready cards from each snapshot. |
 | First Mate inbox | `src/server/fleet/inbox.ts` | Sends answers and messages through `fm-inbox.sh`; keeps unfinished ones in `fleet-outbox.json`. |
 | Fleet config and ports | `src/server/fleet/config.ts`, `src/server/fleet/ports.ts` | Reads `firstmate.homes` and `firstmate.ports` from `config.json`; allocates loopback ttyd ports in that window. |
