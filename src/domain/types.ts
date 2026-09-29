@@ -132,28 +132,7 @@ export interface RunData {
   backend: 'tmux' | null
   backendInfo?: string
   agentIcon?: string
-  natsEnabled?: boolean
-  natsSubject?: string
-  natsSubscriptions?: string[]
-  /**
-   * ISO timestamp when the session's NATS control socket was detected
-   * as orphaned. null means healthy or NATS disabled. Mirrors
-   * Session.natsControlOrphanedAt — drives the Saloon broker-health dot.
-   */
-  natsControlOrphanedAt?: string | null
-  parentId?: string  // ID of the run that spawned this one (for hands)
-  breakoutRooms?: string[]  // NATS room subjects for parent-child communication
   attention?: AttentionState
-  /** Widget type that renders this run's canvas node. Absent ⇒ 'run-workspace'
-   *  (the default session-view). Set to a registered session-view plugin widget
-   *  type (e.g. 'roborev-cockpit') to render that plugin as the session's view. */
-  view?: string
-  /** Persistent state for a plugin session-view (its api.widget.useData blob).
-   *  Unused by the default run-workspace view. */
-  viewData?: unknown
-  /** V5: when false, the canvas did not pan/zoom to this run when it first
-   *  appeared. Nothing sets it since the session spawn API was removed. */
-  focusOnCreate?: boolean
   /** The run's Slate surfaces (see The Slate). A server-authoritative projection
    *  populated by the Slate watcher from `.tinstar/slate/*`. Adding this field is
    *  a 2-place change (this type and `runShallowEqual`) — the second fails
@@ -1754,30 +1733,6 @@ export interface AttentionState {
   setAt: string        // ISO 8601
 }
 
-export interface PluginWidgetInstance {
-  id: string                                                    // host-generated: `pw-${shortId}`
-  pluginId: string                                              // matches manifest.name
-  widgetType: string                                            // matches manifest.contributes.widgets[].type
-  spaceId: string
-  sessionId?: string                                            // spawning session; scope inheritance only
-  scope?: OrganizationalScope
-  position: { x: number; y: number }
-  size: { width: number; height: number }
-  data: unknown                                                 // plugin-controlled; capped at 64KB serialized
-  createdAt: string                                             // ISO 8601
-  updatedAt: string                                             // ISO 8601
-  attention?: AttentionState
-}
-
-export interface TopicMetadata {
-  subject: string
-  name?: string
-  description?: string
-  kind: 'broadcast' | 'dm' | 'breakout' | 'custom'
-  createdAt: string
-  createdBy?: string
-}
-
 // --- Grouping ---
 
 export type LegacyEntityDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -1801,8 +1756,6 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'tmux' | null
-  /** Run leaves only: `run.view`, so layout can size a plugin-viewed run by its own widget. */
-  view?: string
   agentIcon?: string
   percentDone?: number | null
   status?: string

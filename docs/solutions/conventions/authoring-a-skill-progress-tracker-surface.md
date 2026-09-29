@@ -28,7 +28,7 @@ A multi-phase skill (the compound-engineering pipeline: **brainstorm → plan �
 
 The Slate already carries everything needed to answer it. A skill writes `<run-workdir>/.tinstar/slate/<slug>.json`, the watcher validates and projects it onto `run.slate`, and the client renders the file-owned A2UI body in a standalone card. **No new plumbing** — no surface `kind`, no server change, no schema change.
 
-What was missing was the ability to say *which* phase is which. A2UI's contract is "JSON carries structure, never color" (`docs/slate-design-language.md`), and `Text` has no status prop — so an authored `Column` of `Text` rows is unavoidably **monochrome**. It can only distinguish phases by glyph (`✓ ▸ ○`), throwing away the design system's whole status vocabulary. The `Stepper` primitive (Slate S3) closes that gap: it is the one A2UI component that colors a row by state.
+What was missing was the ability to say *which* phase is which. A2UI's contract is "JSON carries structure, never color" (the V5 Slate design language), and `Text` has no status prop — so an authored `Column` of `Text` rows is unavoidably **monochrome**. It can only distinguish phases by glyph (`✓ ▸ ○`), throwing away the design system's whole status vocabulary. The `Stepper` primitive (Slate S3) closes that gap: it is the one A2UI component that colors a row by state.
 
 This page is the convention any skill copies to get a live progress tracker.
 
@@ -111,6 +111,5 @@ The CE pipeline is the first rider, but nothing here is CE-specific: a release c
 ## Related
 
 - [`docs/solutions/documentation-gaps/slate-surface-authoring-contract.md`](../documentation-gaps/slate-surface-authoring-contract.md) — the full file + A2UI contract this convention specializes, including the vacuum test and the component vocabulary table.
-- [`docs/slate-design-language.md`](../../slate-design-language.md) — where the status hues and the "cyan means live" rule come from.
 - [`docs/examples/slate/skill-progress-tracker.json`](../../examples/slate/skill-progress-tracker.json) — the committed reference example, guarded by `src/a2ui/__tests__/progressTrackerExample.test.ts`.
 - [`docs/solutions/conventions/agent-prompt-delivery-and-surface-refresh.md`](./agent-prompt-delivery-and-surface-refresh.md) — the refresh machinery this convention deliberately opts out of.

@@ -14,7 +14,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read, message and terminal routes at `src/server/fleet/cockpit.ts`
 - **Workers**: First Mate owns worker creation, dispatch, supervision and lifecycle; Tin Star only reads its fleet snapshot and opens terminal views that link, never own, worker windows (`src/server/firstmate/views.ts`). Config lives under `getConfigRoot()` (default `~/.config/tinstar/`)
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
-- **Shared vocabulary**: `CONCEPTS.md` (repo root) — domain terms (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
+- **Shared vocabulary**: `CONCEPTS.md` (repo root) — current cockpit terms and pointers to their code.
 
 ## Key Commands
 
@@ -33,4 +33,11 @@ The two highest-leverage rules, restated here because they're rarely-violated-bu
 
 ## Releasing
 
-Cutting a release (tag `main` → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)** — releases are now cut directly from `main` (the dev branch), not from an accumulating release branch. The trap worth restating: **`@tinstar/plugin-api` is a separate npm publish, gated on `git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts`** — publish it only when that shipped surface actually changed, and run the diff rather than deciding from memory.
+Cutting a release (tag `main` → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)**. The V5 plugin host is gone; `@tinstar/plugin-api` remains a separate published package with no host in 6.0.0. Its npm deprecation requires a separate explicit publish decision.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

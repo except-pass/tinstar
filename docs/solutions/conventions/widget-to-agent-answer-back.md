@@ -38,4 +38,3 @@ Both caught by roborev, not the build — interactive agent-authored UI is a rev
 
 - `docs/solutions/tooling-decisions/adopting-a2ui-for-agent-authored-ui.md` — the controls are A2UI *schema* component types rendered by the host custom walker; the web_core action runtime stays deferred (a form doesn't need a streaming data-model runtime).
 - `docs/solutions/conventions/adding-a-docstore-entity-and-plugin-widget.md` — the deploy trap and two-place plugin registration still apply.
-- `docs/features/2026-06-13-note-replies-design.md` — the original notes/pins reply design this pattern generalizes.

@@ -1,26 +1,15 @@
 # Tinstar Vision
 
-> Historical canvas vision. The [Tin Star V6 requirements](brainstorms/2026-09-24-tinstar-v6-requirements.md) supersede this document for current product direction.
+Tinstar is the operator's visual cockpit for a [First Mate](https://github.com/kunchenguid/firstmate) fleet. It presents live worker state, attention, messages and quota without taking ownership of worker dispatch or lifecycle.
 
-A real-time collaborative canvas where teams manage AI agent workflows. Technical, non-technical, and management personas all see the same work through different widgets. Like VS Code is language-agnostic, Tinstar is agent-agnostic.
+The first release focuses on an overview, direct worker navigation, safe terminal views, four Needs You card types, and answers and messages through First Mate's inbox. The [V6 requirements](brainstorms/2026-09-24-tinstar-v6-requirements.md) are the product contract; the [release plan](plans/2026-09-28-001-feat-v6-cockpit-plan.md) records which requirements are in this release and which remain for later work.
 
-## Pillars
+## Design principles
 
-### Multi-user collaboration
-Same canvas, multiple users, real-time. The event bus and document store are already designed around broadcast — SSE pushes every state change to all connected clients. The path forward is multi-user identity, permissions, and shared cursor presence. State is server-authoritative; clients are projections.
+- Show First Mate's observed state, including unknown or stale values, without inventing certainty.
+- Make a worker recognizable across the rail and worker view through stable identity, face and color.
+- Keep attention cards distinct by type and make their actions explicit.
+- Send answers and messages through First Mate's documented inbox; show saved, acknowledged and resolved as separate states.
+- Link terminal views to worker windows without changing the worker's tmux lifecycle or size.
 
-### Persona-driven widgets
-The widget model is the abstraction layer between raw agent work and human understanding. Technical users see terminals, file diffs, and JSONL transcripts. Managers see throughput, cost, and team activity. Same underlying data (runs, sessions, git diffs, transcripts), different projections. Don't build three products — build one composable widget system where personas are just default widget presets.
-
-### Agent agnosticism
-Today it includes Claude Code, Codex, Cursor Agent, and Grok. The abstraction is a plugin/adapter that implements: session lifecycle (start, stop, resume), transcript parsing (how to read logs), status detection (running vs idle vs blocked), and file tracking (what changed). Everything agent-specific lives behind this interface. The process-tree detection we just built proves the direction — it works across providers because it targets OS-level signals (child PIDs), not agent internals. The hook removal proves the inverse — agent-specific hooks were fragile and got ripped out.
-
-## Decision guardrails
-
-When facing a design choice, prefer:
-
-- **Agent-agnostic OS signals over agent-specific hooks or APIs** — process trees, file modification times, and transcript file formats are stable across agent versions. Agent-internal hooks break on upgrades.
-- **Composable widgets over purpose-built views** — a "manager dashboard" is a widget layout, not a separate page. Every view is a canvas arrangement.
-- **Observable artifacts over agent cooperation** — assume the agent doesn't know Tinstar exists. Derive everything from what the agent leaves behind: transcripts, files, processes, git state.
-- **Server-authoritative state over client-local state** — collaboration requires a single source of truth. Widget layouts can be local; session state, run data, and file tracking cannot.
-- **Extraction over integration** — when you find agent-specific logic in core code, extract it into an adapter. Don't add more.
+The earlier canvas, widget and plugin vision belongs to the V5 history. It does not describe the current product.
