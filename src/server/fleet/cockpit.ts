@@ -23,8 +23,8 @@ interface SnapshotTask extends AttentionTask {
   kind?: unknown
   project?: unknown
   branch?: unknown
-  paths?: { worktree?: { path?: unknown }; status_log?: { last_event?: { raw?: unknown; note?: unknown } } }
-  current_state?: { state?: unknown; source?: unknown; detail?: unknown; raw?: unknown; observed_at?: unknown; freshness?: unknown }
+  paths?: { worktree?: { path?: unknown } }
+  current_state?: { state?: unknown; source?: unknown; detail?: unknown; observed_at?: unknown; freshness?: unknown }
   endpoint?: { target?: unknown; exists?: unknown; agent_alive?: unknown; status?: unknown }
   hints?: AttentionTask['hints'] & { last_event_text?: unknown }
   pr?: { url?: unknown }

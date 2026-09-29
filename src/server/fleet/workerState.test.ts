@@ -6,7 +6,6 @@ const childDone = (over: MateSnapshot = {}): MateSnapshot => ({
   current_state: {
     state: 'done', source: 'status-log',
     detail: 'child kd-widget done: report and visual review complete',
-    raw: 'state: done · source: status-log · child kd-widget done: report and visual review complete',
   },
   hints: { last_event_text: 'done [key=child-outcome-kd-widget-done-05b032a1] [at=1790000000]: child kd-widget done: report and visual review complete' },
   endpoint: { exists: true, agent_alive: 'alive', status: 'alive' },
@@ -61,13 +60,26 @@ describe('displayed worker state', () => {
     }), null)).toEqual({ state: 'unknown', detail: 'child kd-widget done: report and visual review complete' })
   })
 
-  it('recognizes a child-outcome key when the detail note no longer has the publisher prefix', () => {
-    expect(displayedWorkerState({
-      kind: 'secondmate',
-      current_state: { state: 'done', source: 'status-log', detail: 'report complete' },
+  it('shows a second mate working or idle when its last line is a child failed, keeping the child failure as detail', () => {
+    const detail = 'child kd-widget failed: build broke on main'
+    const failed = childDone({
+      current_state: { state: 'failed', source: 'status-log', detail },
+      hints: { last_event_text: 'failed [key=child-outcome-kd-widget-failed-0a1b2c3d] [at=1790000000]: child kd-widget failed: build broke on main' },
+    })
+    expect(displayedWorkerState(failed, waiting)).toEqual({ state: 'idle', detail })
+    expect(displayedWorkerState(failed, busy)).toEqual({ state: 'working', detail })
+  })
+
+  it('reads only the latest status line in the publisher shape', () => {
+    expect(displayedWorkerState(childDone({
       hints: { last_event_text: 'done [key=child-outcome-widget-done-abcdef12] [at=1790000000]: report complete' },
-      endpoint: { agent_alive: 'alive' },
-    }, null)).toEqual({ state: 'idle', detail: 'report complete' })
+    }), waiting)).toEqual({ state: 'done', detail: 'child kd-widget done: report and visual review complete' })
+    expect(displayedWorkerState(childDone({
+      hints: { last_event_text: 'done [at=1790000000]: child kd-widget done: report and visual review complete' },
+    }), waiting)).toEqual({ state: 'done', detail: 'child kd-widget done: report and visual review complete' })
+    expect(displayedWorkerState(childDone({
+      current_state: { state: 'failed', source: 'status-log', detail: 'own charter failed' },
+    }), waiting)).toEqual({ state: 'failed', detail: 'own charter failed' })
   })
 
   it('reads active child counts from the snapshot summary', () => {
@@ -76,6 +88,7 @@ describe('displayed worker state', () => {
         records: [
           { id: 'kd', current: { state: 'no_active_work' }, active_children: [], counts: { active_children: 0 } },
           { id: 'busy-mate', current: { state: 'active_child_work' }, active_children: [{ id: 'one' }], counts: { active_children: 3 } },
+          { id: 'uncounted', current: { state: 'active_child_work' }, active_children: [{ id: 'one' }] },
           { id: '', current: { state: 'active_child_work' } },
           { current: { state: 'no_active_work' } },
         ],
@@ -83,7 +96,8 @@ describe('displayed worker state', () => {
     })
     expect(mates.get('kd')).toEqual({ state: 'no_active_work', activeChildren: 0 })
     expect(mates.get('busy-mate')).toEqual({ state: 'active_child_work', activeChildren: 3 })
-    expect(mates.size).toBe(2)
+    expect(mates.get('uncounted')).toEqual({ state: 'active_child_work', activeChildren: 0 })
+    expect(mates.size).toBe(3)
     expect(secondmateActivityById({}).size).toBe(0)
   })
 })
