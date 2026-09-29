@@ -23,7 +23,7 @@ applies_when:
   - "Adding a new per-machine Claude Code integration that lives in ~/.claude/settings.json"
 ---
 
-> Superseded. The cockpit quota rail no longer reads a statusline ingest. It polls `quota-axi --json --no-credential-refresh`. This note is the record of the old hook.
+> Superseded. The cockpit quota rail no longer reads a statusline ingest. It polls `quota-axi --json --full --no-credential-refresh`. This note is the record of the old hook.
 
 # Context meter reads "--" forever — onboarding never installed the Claude statusline hook
 

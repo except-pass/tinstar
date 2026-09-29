@@ -84,6 +84,17 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
     expect(await claudeTip.evaluate(element => element.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0)
     await page.screenshot({ path: test.info().outputPath('quota-hover-1440x900.png') })
 
+    for (const name of ['Codex, 18% remaining', 'Kimi, 3% remaining']) {
+      const meter = rail.getByRole('button', { name })
+      await meter.hover()
+      const tip = meter.getByRole('tooltip')
+      await expect(tip).toBeVisible()
+      const box = await tip.evaluate(element => element.getBoundingClientRect().toJSON() as DOMRect)
+      expect(box.left).toBeGreaterThanOrEqual(0)
+      expect(box.right).toBeLessThanOrEqual(1440)
+    }
+    await expect(rail.getByRole('button', { name: 'Kimi, 3% remaining' }).getByRole('tooltip')).toContainText('stale reading')
+
     await page.mouse.move(0, 0)
     const grok = rail.getByRole('button', { name: 'Grok, no reading' })
     await grok.focus()

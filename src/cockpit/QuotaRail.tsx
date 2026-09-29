@@ -72,7 +72,6 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
           : runOutLabel(provider, now)}</dd>
         <dt>Plan</dt><dd>{provider.plan ?? '—'}</dd>
         <dt>Refreshed</dt><dd>{ageLabel(provider.refreshedAt, now)}</dd>
-        {provider.account && <><dt>Account</dt><dd>{provider.account}</dd></>}
       </dl>
       {provider.error && <p>{provider.error}</p>}
     </span>

@@ -75,7 +75,7 @@ describe('QuotaAxiPoller', () => {
 })
 
 describe('runQuotaAxi', () => {
-  it('runs quota-axi --json --no-credential-refresh and returns stdout', async () => {
+  it('runs quota-axi --json --full --no-credential-refresh and returns stdout', async () => {
     const calls: string[][] = []
     const spawnImpl: QuotaSpawn = (command, args) => {
       calls.push([command, ...args])

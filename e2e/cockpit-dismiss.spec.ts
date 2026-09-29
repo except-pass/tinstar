@@ -79,6 +79,7 @@ async function startCockpit(request: APIRequestContext, names: string[], kind: D
     for (const path of [config, bin]) mkdirSync(path, { recursive: true })
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
+    writeFileSync(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes } }))
     for (const home of homes) {
       for (const path of [join(home, 'bin'), join(home, 'state'), join(home, 'data', 'alpha')]) mkdirSync(path, { recursive: true })

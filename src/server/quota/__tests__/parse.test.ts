@@ -22,7 +22,6 @@ describe('parseQuotaAxiReport', () => {
       runway: 'projected_exhaustion',
       error: null,
       refreshedAt: '2026-09-29T11:58:00.000Z',
-      account: null,
     })
 
     expect(report.providers[1]).toMatchObject({
@@ -51,6 +50,8 @@ describe('parseQuotaAxiReport', () => {
       level: 'critical',
       runway: 'exhausted_now',
       projectedRunOutAt: '2026-09-29T12:00:00.000Z',
+      error: 'stale reading',
+      refreshedAt: '2026-09-29T10:00:00.000Z',
     })
   })
 
@@ -76,26 +77,16 @@ describe('parseQuotaAxiReport', () => {
     ])
   })
 
-  it('keeps one icon per provider and uses the tightest account', () => {
+  it('does not present a stale reading without a refresh time as just refreshed', () => {
     const report = parseQuotaAxiReport({
       generatedAt: '2026-09-29T12:00:00.000Z',
-      providers: [
-        { ...provider('codex', 40), accountKey: 'work', plan: 'plus' },
-        {
-          ...provider('codex', 12),
-          accountKey: 'personal',
-          plan: 'plus',
-          state: { status: 'error', error: 'personal window lagged' },
-        },
-      ],
+      providers: [{ ...provider('codex', 40), state: { status: 'stale', stale: true } }],
     })
-    expect(report.providers).toHaveLength(1)
     expect(report.providers[0]).toMatchObject({
       id: 'codex',
-      account: 'personal',
-      remainingPercent: 12,
-      level: 'low',
-      error: 'personal window lagged',
+      remainingPercent: 40,
+      refreshedAt: null,
+      error: 'stale reading',
     })
   })
 

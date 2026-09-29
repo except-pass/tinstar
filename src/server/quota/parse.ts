@@ -8,8 +8,6 @@ export interface QuotaLimitingWindow {
 
 export interface QuotaMeterProvider {
   id: string
-  /** Set when several accounts were collapsed and this row is the tightest. */
-  account: string | null
   plan: string | null
   /** Rounded percent remaining. Null when this provider produced no reading. */
   remainingPercent: number | null
@@ -58,9 +56,8 @@ interface RawProvider {
   provider?: unknown
   plan?: unknown
   notSetUp?: unknown
-  accountKey?: unknown
   windows?: unknown
-  state?: { status?: unknown; error?: unknown; refreshedAt?: unknown }
+  state?: { status?: unknown; stale?: unknown; error?: unknown; refreshedAt?: unknown }
   quotaSemantics?: { effectiveAvailability?: unknown }
 }
 
@@ -92,13 +89,13 @@ export function parseQuotaAxiReport(payload: unknown): ParsedQuotaReport {
   const fetchedAt = typeof body.generatedAt === 'string' ? body.generatedAt : null
   const rows: QuotaMeterProvider[] = []
   for (const item of body.providers) {
-    const provider = readProvider(item, fetchedAt)
+    const provider = readProvider(item)
     if (provider) rows.push(provider)
   }
-  return { fetchedAt, providers: collapseAccounts(rows) }
+  return { fetchedAt, providers: rows }
 }
 
-function readProvider(item: unknown, fetchedAt: string | null): (QuotaMeterProvider & { account: string | null }) | null {
+function readProvider(item: unknown): QuotaMeterProvider | null {
   if (!item || typeof item !== 'object') return null
   const raw = item as RawProvider
   if (raw.notSetUp === true) return null
@@ -112,11 +109,9 @@ function readProvider(item: unknown, fetchedAt: string | null): (QuotaMeterProvi
   const projected = runway === 'projected_exhaustion' || runway === 'exhausted_now'
     ? stringOrNull(scope?.runway?.projectedExhaustedAt)
     : null
-  const refreshedAt = stringOrNull(raw.state?.refreshedAt) ?? fetchedAt
 
   return {
     id: raw.provider,
-    account: stringOrNull(raw.accountKey),
     plan: stringOrNull(raw.plan),
     remainingPercent: remaining,
     level: quotaLevel(remaining),
@@ -124,31 +119,8 @@ function readProvider(item: unknown, fetchedAt: string | null): (QuotaMeterProvi
     projectedRunOutAt: projected,
     runway,
     error: providerError(raw, remaining),
-    refreshedAt,
+    refreshedAt: stringOrNull(raw.state?.refreshedAt),
   }
-}
-
-function collapseAccounts(rows: QuotaMeterProvider[]): QuotaMeterProvider[] {
-  const groups: QuotaMeterProvider[][] = []
-  const index = new Map<string, number>()
-  for (const row of rows) {
-    const at = index.get(row.id)
-    if (at == null) {
-      index.set(row.id, groups.length)
-      groups.push([row])
-    } else {
-      groups[at]!.push(row)
-    }
-  }
-  return groups.map(group => {
-    if (group.length === 1) return { ...group[0]!, account: null }
-    const ranked = group.filter(row => row.remainingPercent != null)
-    const chosen = ranked.length === 0
-      ? group[0]!
-      : ranked.reduce((tightest, row) => row.remainingPercent! < tightest.remainingPercent! ? row : tightest)
-    const errors = [...new Set(group.map(row => row.error).filter((error): error is string => !!error))]
-    return { ...chosen, error: errors.length ? errors.join('; ') : null }
-  })
 }
 
 function readWindows(raw: RawProvider): NormalizedWindow[] {
@@ -219,6 +191,7 @@ function providerError(raw: RawProvider, remaining: number | null): string | nul
   if (status === 'auth_required') return 'sign-in required'
   if (status === 'rate_limited') return 'rate limited'
   if (remaining == null && status && status !== 'fresh') return 'no reading'
+  if (raw.state?.stale === true || status === 'stale') return 'stale reading'
   return null
 }
 

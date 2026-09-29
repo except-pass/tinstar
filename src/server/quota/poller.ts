@@ -2,8 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { parseQuotaAxiReport, type QuotaMeterSnapshot } from './parse'
 
 export const QUOTA_AXI_COMMAND = 'quota-axi'
-/** Never pass a flag that asks the vendor CLI to refresh a login. */
-export const QUOTA_AXI_ARGS = ['--json', '--no-credential-refresh'] as const
+/**
+ * Never pass a flag that asks the vendor CLI to refresh a login.
+ * `--full` is what carries each provider's `state.refreshedAt`.
+ */
+export const QUOTA_AXI_ARGS = ['--json', '--full', '--no-credential-refresh'] as const
 export const QUOTA_POLL_INTERVAL_MS = 2 * 60_000
 export const QUOTA_COMMAND_TIMEOUT_MS = 20_000
 
@@ -33,7 +36,7 @@ export interface QuotaAxiPollerOptions {
 }
 
 /**
- * Runs `quota-axi --json --no-credential-refresh` on an interval.
+ * Runs `quota-axi --json --full --no-credential-refresh` on an interval.
  * A tick that starts while a read is still running does nothing.
  * A failed read keeps the last good providers and records the error.
  */

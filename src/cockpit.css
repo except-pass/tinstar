@@ -68,10 +68,8 @@
 .cockpit-quota-meter.is-low{color:#e2b15a}
 .cockpit-quota-meter.is-critical{color:#ff6b8a}
 .cockpit-quota-meter.is-error{color:#8aa0ab}
-.cockpit-quota-popover{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);width:max-content;max-width:220px;padding:8px 10px;border:1px solid #3a5260;border-radius:6px;background:#10181e;box-shadow:0 8px 24px #000a;text-align:left;color:#d5e3ea;z-index:4;pointer-events:none}
+.cockpit-quota-popover{display:none;position:absolute;bottom:calc(100% + 6px);left:0;width:max-content;max-width:220px;padding:8px 10px;border:1px solid #3a5260;border-radius:6px;background:#10181e;box-shadow:0 8px 24px #000a;text-align:left;color:#d5e3ea;z-index:4;pointer-events:none}
 .cockpit-quota-meter:hover .cockpit-quota-popover,.cockpit-quota-meter:focus .cockpit-quota-popover,.cockpit-quota-meter:focus-visible .cockpit-quota-popover{display:block}
-.cockpit-quota-meter:first-child .cockpit-quota-popover{left:0;right:auto;transform:none}
-.cockpit-quota-meter:last-child:not(:first-child) .cockpit-quota-popover{left:auto;right:0;transform:none}
 .cockpit-quota-popover strong{display:block;color:#eaf1f5;font:600 12px 'Chakra Petch',sans-serif}
 .cockpit-quota-popover dl{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin:6px 0 0}
 .cockpit-quota-popover dt{color:#7e99a6}

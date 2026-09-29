@@ -12,27 +12,27 @@ const snapshot: QuotaMeterSnapshot = {
   commandError: null,
   providers: [
     {
-      id: 'claude', account: null, plan: 'pro', remainingPercent: 64, level: 'normal',
+      id: 'claude', plan: 'pro', remainingPercent: 64, level: 'normal',
       limitingWindow: { id: 'seven_day', label: 'week', resetsAt: '2026-10-04T17:00:00.000Z' },
       projectedRunOutAt: '2026-10-02T03:00:00.000Z', runway: 'projected_exhaustion',
       error: null, refreshedAt: '2026-09-29T11:58:00.000Z',
     },
     {
-      id: 'codex', account: null, plan: 'plus', remainingPercent: 18, level: 'low',
+      id: 'codex', plan: 'plus', remainingPercent: 18, level: 'low',
       limitingWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z' },
       projectedRunOutAt: null, runway: 'through_reset',
       error: null, refreshedAt: '2026-09-29T11:59:00.000Z',
     },
     {
-      id: 'grok', account: null, plan: 'supergrok', remainingPercent: null, level: 'error',
+      id: 'grok', plan: 'supergrok', remainingPercent: null, level: 'error',
       limitingWindow: null, projectedRunOutAt: null, runway: null,
       error: 'usage endpoint rejected the session', refreshedAt: '2026-09-29T11:50:00.000Z',
     },
     {
-      id: 'kimi', account: null, plan: 'member', remainingPercent: 3, level: 'critical',
+      id: 'kimi', plan: 'member', remainingPercent: 3, level: 'critical',
       limitingWindow: { id: 'five_hour', label: 'session', resetsAt: '2026-09-29T14:00:00.000Z' },
       projectedRunOutAt: '2026-09-29T12:00:00.000Z', runway: 'exhausted_now',
-      error: null, refreshedAt: '2026-09-29T10:00:00.000Z',
+      error: 'stale reading', refreshedAt: '2026-09-29T10:00:00.000Z',
     },
   ],
 }
@@ -60,6 +60,10 @@ describe('cockpit provider quota', () => {
 
     const grok = within(rail.getByRole('button', { name: 'Grok, no reading' }))
     expect(grok.getByText('usage endpoint rejected the session')).toBeTruthy()
+
+    const kimi = within(within(rail.getByRole('button', { name: 'Kimi, 3% remaining' })).getByRole('tooltip'))
+    expect(kimi.getByText('stale reading')).toBeTruthy()
+    expect(kimi.getByText('2h ago')).toBeTruthy()
     expect(view.container.textContent?.toLowerCase()).not.toContain('unavailable')
   })
 
