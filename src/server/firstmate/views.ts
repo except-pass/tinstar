@@ -21,11 +21,13 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import type { PortWindow } from '../sessions/config'
+import type { PortWindow } from '../fleet/config'
 import { log } from '../logger'
 import { TERMINAL_AUTH_HEADER } from '../sessionProxy'
-import { findPort, healthCheck, releasePort, terminalBindAddress, ttydVersionRefusalNow } from '../sessions/backends/tmux'
-import { isSafeTaskId } from './reducer'
+import { findPort, healthCheck, releasePort, terminalBindAddress, ttydVersionRefusalNow } from '../fleet/ports'
+
+const isSafeTaskId = (task: unknown): task is string =>
+  typeof task === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(task) && !task.includes('..')
 
 const execFileAsync = promisify(execFile)
 

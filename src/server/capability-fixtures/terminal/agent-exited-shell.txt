@@ -1,3 +1,0 @@
-  ⎿  Interrupted by user
-
-ubuntu@host:~/repo/demo$

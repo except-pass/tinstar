@@ -212,7 +212,7 @@ describe('the loopback literal has one source', () => {
   it('is the same constant the terminal spawner binds', async () => {
     // R3: one setting governs the dashboard listener and every ttyd. Two
     // independent literals is how they drift.
-    const { terminalBindAddress } = await import('../../src/server/sessions/backends/tmux')
+    const { terminalBindAddress } = await import('../../src/server/fleet/ports')
     expect(terminalBindAddress()).toBe(LOOPBACK_BIND_ADDRESS)
     expect(resolveBindTargets(undefined).targets[0]!.host)
       .toBe(LOOPBACK_BIND_ADDRESS)

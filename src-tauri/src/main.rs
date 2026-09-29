@@ -7,6 +7,13 @@ mod config;
 mod dialog;
 
 fn resolve_api_base(cfg: Option<&config::DesktopConfig>) -> String {
+    // Use the same explicit API override as the CLI when launching a desktop
+    // app against an isolated backend. The saved desktop choice remains the default.
+    if let Ok(base) = std::env::var("TINSTAR_API_BASE") {
+        if !base.is_empty() {
+            return base;
+        }
+    }
     cfg.map(|c| c.backend.url.clone()).unwrap_or_default()
 }
 

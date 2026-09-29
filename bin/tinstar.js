@@ -1,353 +1,48 @@
 #!/usr/bin/env node
-// bin/tinstar.js — Tinstar CLI entry point
+import { join } from 'node:path'
 
-import { execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join, basename } from 'node:path'
-import { createInterface } from 'node:readline'
-import { getConfigRoot } from './configRoot.js'
-import { probeBun, describeMissingBun, BUN_INSTALL_HINT } from './natsRuntime.js'
-
-const GREEN = '\x1b[32m'
-const RED = '\x1b[31m'
-const YELLOW = '\x1b[33m'
-const DIM = '\x1b[2m'
-const BOLD = '\x1b[1m'
-const RESET = '\x1b[0m'
-
-function check(label, fn) {
-  try {
-    const result = fn()
-    console.log(`${GREEN}✓${RESET} ${label}${result ? ` ${DIM}(${result})${RESET}` : ''}`)
-    return true
-  } catch (err) {
-    console.log(`${RED}✗${RESET} ${label}`)
-    console.log(`  ${DIM}→ ${err.message}${RESET}`)
-    return false
-  }
-}
-
-// Non-fatal counterpart to check() — for a dependency an opt-in feature needs.
-// Prints and moves on; it must never gate the server starting.
-function warn(label, ...details) {
-  console.log(`${YELLOW}⚠${RESET} ${label}`)
-  for (const d of details) console.log(`  ${DIM}→ ${d}${RESET}`)
-}
-
-async function ask(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  return new Promise(resolve => {
-    rl.question(question, answer => {
-      rl.close()
-      resolve(answer.trim().toLowerCase())
-    })
-  })
-}
-
-// Every top-level subcommand the CLI dispatches. Anything else in the command
-// position is a typo — we refuse it rather than silently starting the server.
-const KNOWN_COMMANDS = [
-  'doctor', 'install-skills', 'install-statusline', 'status',
-  'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs', 'reach',
-  'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'surfaces', 'help',
-]
-
-// Levenshtein edit distance — for "did you mean" suggestions on typos.
-function editDistance(a, b) {
-  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
-  for (let i = 0; i <= a.length; i++) dp[i][0] = i
-  for (let j = 0; j <= b.length; j++) dp[0][j] = j
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      )
-    }
-  }
-  return dp[a.length][b.length]
-}
-
-// Closest known command within a typo-sized distance, else null.
-function suggestCommand(input) {
-  let best = null
-  let bestDistance = Infinity
-  for (const cmd of KNOWN_COMMANDS) {
-    const d = editDistance(input, cmd)
-    if (d < bestDistance) {
-      bestDistance = d
-      best = cmd
-    }
-  }
-  const threshold = Math.max(2, Math.floor(input.length / 3))
-  return bestDistance <= threshold ? best : null
-}
-
-// Port the server is about to bind — needed before the statusline shim is
-// registered, because a non-default port changes the ingest URL baked into it.
-function serverPort() {
-  const idx = process.argv.indexOf('--port')
-  const parsed = idx !== -1 ? parseInt(process.argv[idx + 1], 10) : NaN
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 5273
-}
-
-// Offer to register the cc-quota statusline hook with Claude Code. Non-fatal in
-// every branch: a declined or failed install still starts the server, it just
-// leaves the context meter dark — and says so, rather than failing silently.
-async function setupStatusline(skipSetup) {
-  const mod = await import('./install-statusline.js')
-  const port = serverPort()
-
-  let state
-  try {
-    state = mod.inspectStatusline({ port }).state
-  } catch {
-    return
-  }
-
-  if (state === 'ok') {
-    console.log(`${GREEN}✓${RESET} Claude statusline hook registered ${DIM}(context meter live)${RESET}`)
-    const missing = mod.missingShimDeps()
-    if (missing.length) {
-      console.log(`  ${DIM}→ but ${missing.join(' and ')} missing from PATH — the shim needs them${RESET}`)
-    }
-    console.log()
-    return
-  }
-
-  const label = {
-    missing: 'not registered yet',
-    drifted: 'out of date',
-    foreign: 'a different statusLine is registered',
-    unreadable: '~/.claude/settings.json is not valid JSON',
-  }[state] ?? state
-
-  console.log(`📊 Claude statusline hook — ${BOLD}${label}${RESET}`)
-  console.log(`   ${DIM}Powers the per-session context-fullness meter and the quota HUD.${RESET}`)
-
-  if (state === 'unreadable') {
-    console.log(`   ${DIM}Fix the file, then run: tinstar install-statusline${RESET}\n`)
-    return
-  }
-
-  if (skipSetup) {
-    console.log(`   ${DIM}Install it with: tinstar install-statusline${state === 'foreign' ? ' --force' : ''}${RESET}\n`)
-    return
-  }
-
-  const prompt = state === 'foreign'
-    ? `   Replace it with Tinstar's? Your current one is backed up. [y/N] `
-    : `   Install it now? [Y/n] `
-  const answer = await ask(prompt)
-  const yes = state === 'foreign'
-    ? answer === 'y' || answer === 'yes'
-    : answer !== 'n' && answer !== 'no'
-
-  if (!yes) {
-    console.log(`   ${DIM}Skipped — context meters will read "--". Run tinstar install-statusline later.${RESET}\n`)
-    return
-  }
-
-  mod.runInstall({ port, force: state === 'foreign' })
-  console.log()
-}
+const commands = new Set([
+  'doctor', 'install-statusline', 'status', 'reach',
+  'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs', 'help',
+])
 
 async function main() {
-  // Subcommand: doctor
-  if (process.argv[2] === 'doctor') {
-    const { doctor } = await import('./doctor.js')
-    return doctor()
-  }
-
-  // Subcommand: install-skills
-  if (process.argv[2] === 'install-skills') {
-    const { installSkills } = await import('./install-skills.js')
-    return installSkills(process.argv.slice(3))
-  }
-
-  // Subcommand: install-statusline
-  if (process.argv[2] === 'install-statusline') {
-    const { installStatusline } = await import('./install-statusline.js')
-    return installStatusline(process.argv.slice(3))
-  }
-
-  // Subcommand: status
-  if (process.argv[2] === 'status') {
-    const { run } = await import('./tinstar/status.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  // Remote reach — the opt-in surface, and the only writer of the preference
-  // the server re-establishes from on every start.
-  if (process.argv[2] === 'reach') {
-    const { run } = await import('./tinstar/commands/reach.js')
-    return run(process.argv.slice(3)).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  // Service management — drives the systemd user unit
-  const SERVICE_SUBCOMMANDS = new Set([
-    'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
-  ])
-  if (SERVICE_SUBCOMMANDS.has(process.argv[2])) {
-    const { run } = await import('./tinstar/commands/service.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  if (process.argv[2] === 'workspaces') {
-    const { run } = await import('./tinstar/commands/workspaces.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-  if (process.argv[2] === 'projects') {
-    const { run } = await import('./tinstar/commands/projects.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-  if (process.argv[2] === 'sessions') {
-    const { run } = await import('./tinstar/commands/sessions.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-  if (process.argv[2] === 'tasks') {
-    const { run } = await import('./tinstar/commands/tasks.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-  if (process.argv[2] === 'templates') {
-    const { run } = await import('./tinstar/commands/templates.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-  if (process.argv[2] === 'surfaces') {
-    const { run } = await import('./tinstar/commands/surfaces.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  if (process.argv[2] === 'help' && process.argv[3] === 'api') {
-    const { run } = await import('./tinstar/commands/help-api.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  if (process.argv[2] === 'help' && process.argv[3] !== 'api') {
-    const { run } = await import('./tinstar/help.js')
-    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
-  }
-
-  // Reject typos. Starting the server takes only flags (e.g. `tinstar --port 5273`)
-  // or no args at all — never a positional. So a bare token in the command slot
-  // that matched no subcommand above is a mistake, not a request to start.
   const command = process.argv[2]
-  if (command !== undefined && !command.startsWith('-')) {
-    console.error(`\n${RED}✗${RESET} Unknown command: ${BOLD}${command}${RESET}`)
-    const guess = suggestCommand(command)
-    if (guess) {
-      console.error(`  ${DIM}Did you mean${RESET} ${BOLD}tinstar ${guess}${RESET}${DIM}?${RESET}`)
+  if (command && !command.startsWith('-')) {
+    if (!commands.has(command)) {
+      console.error(`Unknown command: ${command}`)
+      process.exitCode = 1
+      return
     }
-    console.error(`\n  ${DIM}Run${RESET} tinstar help ${DIM}for available commands, or${RESET} tinstar ${DIM}(no args) to start the server.${RESET}\n`)
-    process.exit(1)
-  }
-
-  console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
-
-  // Pre-flight checks
-  let allPassed = true
-
-  allPassed &= check('Claude Code installed', () => {
-    const version = execSync('claude --version', { encoding: 'utf-8' }).trim()
-    return `v${version}`
-  })
-
-  allPassed &= check('Claude authenticated', () => {
-    const raw = execSync('claude auth status', { encoding: 'utf-8' }).trim()
-    const status = JSON.parse(raw)
-    if (!status.loggedIn) throw new Error('Run: claude auth login')
-    return status.email
-  })
-
-  allPassed &= check('tmux installed', () => {
-    execSync('which tmux', { encoding: 'utf-8' })
-    return null
-  })
-
-  allPassed &= check('ttyd installed', () => {
-    execSync('which ttyd', { encoding: 'utf-8' })
-    return null
-  })
-
-  allPassed &= check('lsof installed', () => {
-    execSync('which lsof', { encoding: 'utf-8' })
-    return null
-  })
-
-  // bun — runtime for the per-session NATS channel MCP server. NATS is opt-in
-  // per session, so a miss is a warning rather than a hard stop: everything
-  // except agent-to-agent messaging still works. Probed by the absolute
-  // configured path, which is how nats-mcp.json actually spawns it.
-  const bun = probeBun()
-  if (bun.ok) {
-    check('bun installed', () => `${bun.version} — NATS channels`)
-  } else {
-    warn(`bun ${bun.reason} at ${bun.path}`, describeMissingBun(bun), BUN_INSTALL_HINT)
-  }
-
-  if (!allPassed) {
-    console.log(`\n${DIM}Fix the issues above and re-run: npx tinstar${RESET}\n`)
-    process.exit(1)
-  }
-
-  console.log()
-
-  // Project detection — skip the prompt under --no-setup or when stdin isn't a TTY
-  // (CI, pipes, here-strings). Non-TTY callers get the same effect as answering "n".
-  const skipSetup = process.argv.includes('--no-setup') || !process.stdin.isTTY
-
-  // Claude Code statusline hook — the only channel that reports per-session
-  // context-window utilization. Unregistered, every context meter reads "--"
-  // and nothing tells you why, so onboarding asks for it up front.
-  await setupStatusline(skipSetup)
-
-  try {
-    const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: process.cwd() }).trim()
-    const projectName = basename(gitRoot)
-    const projectsFile = join(getConfigRoot(), 'projects.json')
-
-    let projects = {}
-    try { projects = JSON.parse(readFileSync(projectsFile, 'utf-8')) } catch {}
-
-    if (!Object.values(projects).includes(gitRoot) && !skipSetup) {
-      const answer = await ask(`📁 Detected project: ${BOLD}${projectName}${RESET} (${gitRoot})\n   Add as a Tinstar project? [Y/n] `)
-      if (answer !== 'n' && answer !== 'no') {
-        mkdirSync(getConfigRoot(), { recursive: true })
-        projects[projectName] = gitRoot
-        writeFileSync(projectsFile, JSON.stringify(projects, null, 2))
-        console.log(`${GREEN}✓${RESET} Added ${projectName}\n`)
-      } else {
-        console.log()
-      }
+    if (command === 'help') {
+      console.log('Usage: tinstar [--port PORT] [--host ADDRESS] [--no-open] [--no-reach]')
+      console.log('Commands: doctor, install-statusline, status, reach, install-service, uninstall-service, start, stop, restart, logs')
+      return
     }
-  } catch {
-    // Not a git repo — skip silently
+    if (command === 'doctor') return (await import('./doctor.js')).doctor()
+    if (command === 'install-statusline') return (await import('./install-statusline.js')).installStatusline(process.argv.slice(3))
+    if (command === 'status') return (await import('./tinstar/status.js')).run(process.argv)
+    if (command === 'reach') return (await import('./tinstar/commands/reach.js')).run(process.argv.slice(3))
+    return (await import('./tinstar/commands/service.js')).run(process.argv)
   }
 
-  // Start server
-  const noOpen = process.argv.includes('--no-open')
-  const portIdx = process.argv.indexOf('--port')
-  const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
-  // Collect repeated --host flags and/or a comma-separated list. Deliberately
-  // no default: an empty list reaches startServer, which is the single place
-  // the bind default lives. Adding one here would give the two entry points
-  // independent defaults that drift.
+  const args = process.argv.slice(2)
+  const portIdx = args.indexOf('--port')
+  const port = portIdx === -1 ? 5273 : Number(args[portIdx + 1])
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid --port')
   const hosts = []
-  for (let i = 0; i < process.argv.length; i++) {
-    if (process.argv[i] === '--host' && process.argv[i + 1]) {
-      hosts.push(...process.argv[i + 1].split(',').map(s => s.trim()).filter(Boolean))
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--host' && args[i + 1]) {
+      hosts.push(...args[i + 1].split(',').map(s => s.trim()).filter(Boolean))
       i++
     }
   }
-  if (hosts.length === 0 && process.env.TINSTAR_HOST) {
-    hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
-  }
+  if (!hosts.length && process.env.TINSTAR_HOST) hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen, force: process.argv.includes('--force') })
+  startServer({
+    port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'),
+    open: !args.includes('--no-open'), force: args.includes('--force'),
+  })
 }
 
-main().catch(err => {
-  console.error(err)
-  process.exit(1)
-})
+main().catch(error => { console.error(error); process.exitCode = 1 })
