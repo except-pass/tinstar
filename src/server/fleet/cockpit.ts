@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
+import { readBody } from '../api/readBody'
 import { getConfigRoot } from '../configRoot'
 import { loadConfig, firstmatePortWindow } from '../sessions/config'
 import { LedgerWatcher } from '../firstmate/ledger-watcher'
@@ -12,6 +13,7 @@ import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
+import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 
 const execFileAsync = promisify(execFile)
 
@@ -68,6 +70,7 @@ export class CockpitFleet {
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
   private reviewing = new Set<string>()
   private ready = false
+  private outbox = new FleetOutbox()
 
   constructor() {
     const config = loadConfig({ _rootDir: getConfigRoot() })
@@ -98,6 +101,52 @@ export class CockpitFleet {
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
+
+  messages() {
+    return this.outbox.list(this.homes, message => this.attention.some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
+  }
+
+  private sameCall(card: AttentionCard, message: OutboxMessage): boolean {
+    return this.homes[card.homeIndex] === message.home &&
+      ((message.holdId !== null && card.holdId === message.holdId) ||
+        (card.type === message.cardType && card.taskId === message.taskId && card.decisionKey === message.decisionKey))
+  }
+
+  private describe(message: OutboxMessage, card = this.attention.find(item => this.sameCall(item, message))): string {
+    const worker = this.workers.find(item => item.home === message.home && item.id === message.taskId)
+    const target = [message.taskId ? `task ${message.taskId}` : 'First Mate backlog',
+      message.decisionKey ? `decision ${message.decisionKey}` : message.cardType && `${message.cardType} card`,
+      message.holdId && message.holdId !== message.decisionKey && `hold ${message.holdId}`].filter(Boolean).join(', ')
+    return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
+  }
+
+  async submit(input: unknown): Promise<SubmitResult | null> {
+    if (!input || typeof input !== 'object') return null
+    const value = input as Record<string, unknown>
+    const { requestId, anchorKey, kind, text } = value
+    if (typeof requestId !== 'string' || !/^tinstar-[a-f0-9-]{36}$/.test(requestId) ||
+      typeof text !== 'string' || !text.trim() || text.length > 10_000 ||
+      (kind !== 'answer' && kind !== 'message')) return null
+    const previous = await this.outbox.get(requestId)
+    if (previous) {
+      if (previous.kind !== kind || previous.text !== text.trim() || !this.homes.includes(previous.home)) return null
+      return this.outbox.submit(previous, this.describe(previous))
+    }
+    if (typeof anchorKey !== 'string') return null
+    const card = this.attention.find(item => item.key === anchorKey)
+    const worker = this.workers.find(item => item.key === anchorKey)
+    if (kind === 'answer' && card?.type !== 'decision') return null
+    const home = card ? this.homes[card.homeIndex] : worker?.home
+    if (!home || !this.homes.includes(home)) return null
+    const message: OutboxMessage = {
+      requestId, home, kind, text: text.trim(),
+      taskId: card ? card.taskId : worker!.id,
+      decisionKey: card?.decisionKey ?? null,
+      holdId: card?.holdId ?? null,
+      cardType: card?.type ?? null,
+    }
+    return this.outbox.submit(message, this.describe(message, card))
+  }
 
   async terminal(key: string) {
     const ref = this.targets.get(key)
@@ -248,14 +297,30 @@ export class CockpitFleet {
 export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0]
   const match = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
-  if (path !== '/api/fleet' && !match) return false
-  const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: currentOriginAllowlist() }) as Record<string, string>
+  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && !match) return false
+  const allowedOrigins = currentOriginAllowlist()
+  const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: allowedOrigins }) as Record<string, string>
   if (req.method === 'OPTIONS') {
     res.writeHead(204, headers)
     res.end()
     return true
   }
   if (path === '/api/fleet' && req.method === 'GET') return ok(res, fleet.list(), { headers })
+  if (path === '/api/fleet/messages' && req.method === 'GET') {
+    try { return ok(res, await fleet.messages(), { headers }) }
+    catch { return fail(res, 'BACKEND_UNAVAILABLE', 'Messages unavailable', { headers }) }
+  }
+  if (path === '/api/fleet/messages' && req.method === 'POST') {
+    // An unrelated page must not queue a note through the operator's local server.
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    if (!req.headers['content-type']?.startsWith('application/json')) return fail(res, 'BAD_REQUEST', 'Expected JSON', { headers })
+    let input: unknown
+    try { input = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'Invalid message', { headers }) }
+    try {
+      const result = await fleet.submit(input)
+      return result ? ok(res, result, { headers }) : fail(res, 'BAD_REQUEST', 'Message target is unavailable', { headers })
+    } catch (error) { return fail(res, 'CONFLICT', (error as Error).message, { headers }) }
+  }
   if (match && req.method === 'GET') {
     const result = await fleet.terminal(decodeURIComponent(match[1]!))
     return result ? ok(res, result, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })

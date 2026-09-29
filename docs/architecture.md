@@ -164,7 +164,7 @@ Runs on startup and every 30 seconds:
 
 `index.html` → `main.tsx` → `App.tsx`
 
-`App.tsx` renders the V6 worker cockpit (rail with the Needs You queue, Overview, worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array; opening a card only shows its detail and never answers or resolves anything. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
+`App.tsx` renders the V6 worker cockpit (rail with the Needs You queue, Overview, worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array. A Decision card has an answer box, and cards and worker views have "Tell First Mate about this"; both post to `/api/fleet/messages`, and the rail's message list polls it for First Mate's receipts and replies ([details](./features/firstmate-observer.md)). Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
 ### Domain layer (`src/domain/`)
 
@@ -204,6 +204,7 @@ Full design + author guides under [`docs/plugins/`](plugins/):
 ├── docstore.json            # Persisted document store (entities + runs)
 ├── plugins.json             # Plugin enable/disable + external entries (V5+)
 ├── caddy.json               # Caddy reverse proxy config
+├── fleet-outbox.json        # Cockpit messages to First Mate not yet finished
 ├── server.log               # Structured log output
 ├── .secrets/                # Environment secrets (injected into sessions)
 │   └── {KEY}                # One file per secret, filename = env var name
@@ -270,6 +271,6 @@ Custom CSS includes thin cyan scrollbars, neon text/border utilities, and panel 
 
 ## Testing
 
-The cockpit regression lives in `e2e/cockpit-regression.spec.ts` and runs with `npx playwright test`. It starts an isolated server, a private tmux socket and a private First Mate test home.
+Browser regression: see [docs/testing.md](./testing.md#browser-regression-playwright).
 
 Type checking and unit-test invocation: see [docs/testing.md](./testing.md#type-checking).
