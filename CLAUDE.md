@@ -13,6 +13,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - **Frontend**: React + Tailwind, served by Vite
 - **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read, message and terminal routes at `src/server/fleet/cockpit.ts`
 - **Workers**: First Mate owns worker creation, dispatch, supervision and lifecycle; Tin Star only reads its fleet snapshot and opens terminal views that link, never own, worker windows (`src/server/firstmate/views.ts`). Config lives under `getConfigRoot()` (default `~/.config/tinstar/`)
+- **Second mate display**: a persistent second mate is shown working or idle from the live snapshot, never done because a child outcome said done (`src/server/fleet/workerState.ts`).
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 - **Shared vocabulary**: `CONCEPTS.md` (repo root) — current cockpit terms and pointers to their code.
 

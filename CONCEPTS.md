@@ -8,7 +8,7 @@ A configured First Mate installation in `firstmate.homes`. Each home supplies a 
 
 ## Worker
 
-A task in First Mate's fleet snapshot. Its id is the stable identity used for the rail, face and color. The worker's state and detail come from the snapshot, while the objective comes from the brief's captain intent and falls back to the backlog title. Unknown values remain visible. See [cockpit fleet](src/server/fleet/cockpit.ts).
+A task in First Mate's fleet snapshot. Its id is the stable identity used for the rail, face and color. The worker's state and detail come from the snapshot, while the objective comes from the brief's captain intent and falls back to the backlog title. A persistent second mate is not shown done when its latest status line is a child outcome: it shows working while that snapshot reports active child work and idle while the mate is waiting, and the child outcome stays in the detail. Ship and scout workers keep the snapshot state unchanged. Unknown values remain visible. See [worker state](src/server/fleet/workerState.ts).
 
 ## Worker view
 
