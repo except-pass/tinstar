@@ -34,18 +34,34 @@ interface Receipt {
   reply?: { body?: string } | null
 }
 
-function inbox(home: string, args: string[], input?: string): Promise<{ code: number; stdout: string; stderr: string }> {
+/** Runs one script from a First Mate home's bin with FM_HOME set to that home. */
+export function runHomeScript(home: string, script: string, args: string[], input?: string, timeoutMs = 15_000): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(join(home, 'bin', 'fm-inbox.sh'), args, { stdio: ['pipe', 'pipe', 'pipe'] })
-    let stdout = '', stderr = ''
-    const timer = setTimeout(() => child.kill(), 15_000)
+    const child = spawn(join(home, 'bin', script), args, { env: { ...process.env, FM_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] })
+    let stdout = '', stderr = '', settled = false, timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill() }, timeoutMs)
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
-    child.on('error', error => { clearTimeout(timer); reject(error) })
-    child.on('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }) })
+    child.on('error', error => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', code => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (timedOut && !stderr.trim()) stderr = 'The First Mate script timed out.'
+      resolve({ code: code ?? 1, stdout, stderr })
+    })
     child.stdin.on('error', () => { /* child failure is reported by close */ })
     child.stdin.end(input)
   })
+}
+
+function inbox(home: string, args: string[], input?: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return runHomeScript(home, 'fm-inbox.sh', args, input)
 }
 
 async function readiness(home: string): Promise<boolean | 'unknown'> {
