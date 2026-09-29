@@ -19,7 +19,6 @@ export async function doctor() {
   const ttyd = version('ttyd', ['--version'])
   const ttydCheck = checkExternalVersion('ttyd', ttyd?.match(/\d+\.\d+\.\d+/)?.[0] ?? null, TTYD_MIN_VERSION)
   check('ttyd', ttydCheck.status === 'pass', ttydCheck.detail)
-  check('python3', !!version('python3', ['--version']))
   const root = getConfigRoot()
   let homes = []
   try {
