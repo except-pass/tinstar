@@ -55,9 +55,24 @@ async function startCockpit(request: APIRequestContext, names: string[], kind: D
     }))
   }
   const stop = () => {
-    server?.kill('SIGTERM')
+    if (server && server.exitCode === null) {
+      server.kill('SIGTERM')
+      const deadline = Date.now() + 2_000
+      while (server.exitCode === null && Date.now() < deadline) execFileSync('sleep', ['0.05'])
+      if (server.exitCode === null) server.kill('SIGKILL')
+    }
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server']) } catch { /* private server absent */ }
-    rmSync(root, { recursive: true, force: true })
+    // macOS rmSync throws ENOTEMPTY while the signaled server still has this temp home open.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        rmSync(root, { recursive: true, force: true })
+        return
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if ((code !== 'ENOTEMPTY' && code !== 'EBUSY') || attempt >= 4) throw error
+        execFileSync('sleep', ['0.05'])
+      }
+    }
   }
   try {
     for (const path of [config, bin]) mkdirSync(path, { recursive: true })
