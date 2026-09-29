@@ -179,3 +179,27 @@ test('a dismiss note only holds the card from its own First Mate home', async ({
     stop()
   }
 })
+
+test('a failing First Mate home does not stop a card from being dismissed again', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const { base, homes, notes, stop } = await startCockpit(request, ['first', 'second'])
+  try {
+    writeFileSync(join(homes[1]!, 'bin', 'fm-fleet-snapshot.sh'), '#!/bin/sh\nexit 1\n')
+    appendFileSync(join(homes[1]!, 'state', 'fleet-ledger.jsonl'), '{}\n')
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await page.goto(base)
+    await expect(page.getByRole('alert').filter({ hasText: 'Needs You unavailable' })).toBeVisible({ timeout: 30_000 })
+    const card = page.locator('.cockpit-attention-card').nth(0)
+    const slider = card.getByRole('slider', { name: 'Slide to dismiss' })
+    await slide(page, slider, 1)
+    await expect(card.getByRole('status')).toHaveText('dismissing…', { timeout: 15_000 })
+    await expect.poll(() => notes(homes[0]).length, { timeout: 10_000 }).toBe(1)
+    const first = join(homes[0]!, 'state', notes(homes[0])[0]!)
+    writeFileSync(first, JSON.stringify({ ...JSON.parse(readFileSync(first, 'utf8')), reply: { body: 'Keeping this decision open.' } }))
+    await expect(slider).toBeVisible({ timeout: 15_000 })
+    await slide(page, slider, 1)
+    await expect.poll(() => notes(homes[0]).length, { timeout: 10_000 }).toBe(2)
+  } finally {
+    stop()
+  }
+})

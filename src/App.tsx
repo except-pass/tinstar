@@ -279,8 +279,8 @@ export default function App() {
       return next
     })
     void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
-      if (result.saved) { delete dismissIds.current[card.key]; return }
       dismissBusy.current.delete(card.key)
+      if (result.saved) { delete dismissIds.current[card.key]; return }
       setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
     }).catch(error => {
       dismissBusy.current.delete(card.key)
@@ -305,7 +305,6 @@ export default function App() {
     if (!fleet.ready || fleet.errors.length > 0) return
     const openKeys = new Set(attention.map(card => card.key))
     const held = new Set(attention.filter(dismissHeld).map(card => card.key))
-    for (const key of [...dismissBusy.current]) if (!openKeys.has(key) || held.has(key)) dismissBusy.current.delete(key)
     for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key)) delete dismissIds.current[key]
     setDismissErrors(previous => {
       const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !held.has(key)))
