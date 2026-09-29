@@ -2,7 +2,7 @@
 
 ## Browser regression (Playwright)
 
-Run `npx playwright test`. Each cockpit spec starts an isolated Tin Star server, a private tmux socket, and a private First Mate test home. `e2e/cockpit-regression.spec.ts` checks the fleet rail, provider quota meters, terminal input, worker cycling (including rapid cycling and reduced-motion switch transitions), and terminal window survival. `e2e/cockpit-inbox.spec.ts` uses a fake `fm-inbox.sh` to check that messages survive reload and follow First Mate receipts and call resolution. The same specs can be selected with `--config playwright.cockpit.config.ts`.
+Run `npx playwright test`. Each cockpit spec starts an isolated Tin Star server, a private tmux socket, and a private First Mate test home. `e2e/cockpit-regression.spec.ts` checks the fleet rail, provider quota meters, terminal input, worker cycling (including rapid cycling and reduced-motion switch transitions), and terminal window survival. `e2e/cockpit-inbox.spec.ts` uses a fake `fm-inbox.sh` to check that messages survive reload and follow First Mate receipts and call resolution. `e2e/cockpit-filter-link.spec.ts` checks the overview filter, the filter in the page URL, and a worker detail link addressed by task id. The same specs can be selected with `--config playwright.cockpit.config.ts`.
 
 The test home and socket are created in a temporary directory and removed after the run. Do not point this regression at a live First Mate home.
 

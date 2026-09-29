@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
+import { filterWorkers, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
 import { QuotaRail } from './cockpit/QuotaRail'
 import type { AttentionCard } from './server/fleet/attention'
 import './cockpit.css'
@@ -118,7 +119,7 @@ function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; retry: (m
 export default function App() {
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
   const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
@@ -127,6 +128,29 @@ export default function App() {
   const [messageError, setMessageError] = useState<string | null>(null)
   const focusTerminal = useRef(false)
   const messagesInFlight = useRef(false)
+  const overviewRef = useRef(overviewLocation)
+  overviewRef.current = overviewLocation
+  const attentionOpenRef = useRef(selectedAttention)
+  attentionOpenRef.current = selectedAttention
+
+  const applyOverviewLocation = useCallback((next: OverviewLocation, mode: 'push' | 'replace') => {
+    const search = writeOverviewSearch(window.location.search, next)
+    const url = `${window.location.pathname}${search}${window.location.hash}`
+    const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (mode === 'push' && url !== here) history.pushState(null, '', url)
+    else history.replaceState(null, '', url)
+    setOverviewLocation(next)
+  }, [])
+
+  const openWorker = useCallback((id: string) => {
+    setSelectedAttention(null)
+    applyOverviewLocation({ worker: id, q: overviewRef.current.q }, 'push')
+  }, [applyOverviewLocation])
+
+  const openOverview = useCallback(() => {
+    setSelectedAttention(null)
+    applyOverviewLocation({ worker: null, q: overviewRef.current.q }, 'push')
+  }, [applyOverviewLocation])
 
   const refresh = useCallback(async () => {
     try {
@@ -178,18 +202,23 @@ export default function App() {
   const waiting = loading || !fleet.ready
   const attention = fleet.attention ?? []
   const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
-  const current = workers.find(w => w.key === selected) ?? null
+  const current = overviewLocation.worker
+    ? workers.find(worker => worker.id === overviewLocation.worker) ?? null
+    : null
   const order = useMemo(() => workers.map(w => w.key), [workers])
   const cycle = useCallback((direction: number, fromTerminal = false) => {
     if (!order.length) return
     setSelectedAttention(null)
     focusTerminal.current = fromTerminal && order.length > 1
-    setSelected(previous => {
-      const index = previous ? order.indexOf(previous) : -1
-      if (index < 0) return order[direction > 0 ? 0 : order.length - 1]!
-      return order[(index + direction + order.length) % order.length]!
-    })
-  }, [order])
+    const currentId = overviewRef.current.worker
+    const currentKey = currentId ? workers.find(worker => worker.id === currentId)?.key ?? null : null
+    const index = currentKey ? order.indexOf(currentKey) : -1
+    const nextKey = index < 0
+      ? order[direction > 0 ? 0 : order.length - 1]!
+      : order[(index + direction + order.length) % order.length]!
+    const next = workers.find(worker => worker.key === nextKey)
+    if (next) applyOverviewLocation({ worker: next.id, q: overviewRef.current.q }, 'push')
+  }, [order, workers, applyOverviewLocation])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -199,6 +228,25 @@ export default function App() {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [cycle])
+
+  useEffect(() => {
+    const onPop = () => setOverviewLocation(readOverviewSearch(window.location.search))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.altKey || event.metaKey || event.ctrlKey) return
+      if (!overviewRef.current.q || overviewRef.current.worker || attentionOpenRef.current) return
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('textarea, select, .cockpit-jump, .cockpit-composer')) return
+      event.preventDefault()
+      applyOverviewLocation({ worker: null, q: '' }, 'replace')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [applyOverviewLocation])
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
@@ -256,21 +304,24 @@ export default function App() {
     frame.contentWindow?.postMessage({ type: 'terminal-reveal-prompt', sessionName: currentKey }, origin)
   }, [currentKey])
 
+  // Filter before grouping so a later two-level group still sees only matches.
+  const visibleWorkers = useMemo(() => filterWorkers(workers, overviewLocation.q), [workers, overviewLocation.q])
   const states = useMemo(() => {
     const groups = new Map<string, Worker[]>()
-    for (const worker of workers) groups.set(worker.state, [...(groups.get(worker.state) ?? []), worker])
+    for (const worker of visibleWorkers) groups.set(worker.state, [...(groups.get(worker.state) ?? []), worker])
     return [...groups]
-  }, [workers])
+  }, [visibleWorkers])
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
     <aside className="cockpit-rail">
       <div className="cockpit-brand"><span className="cockpit-brand-mark">✦</span><div><strong>TIN STAR</strong><small>WORKER COCKPIT</small></div></div>
-      <button className={`cockpit-overview-button ${!current ? 'active' : ''}`} onClick={() => { setSelected(null); setSelectedAttention(null) }}><span className="material-symbols-outlined">dashboard</span>Overview</button>
+      <button className={`cockpit-overview-button ${!overviewLocation.worker ? 'active' : ''}`} onClick={openOverview}><span className="material-symbols-outlined">dashboard</span>Overview</button>
       <input className="cockpit-jump" aria-label="Jump to worker" placeholder="Jump to worker ↵" value={jumpText} onChange={e => setJumpText(e.target.value)} onKeyDown={e => {
         if (e.key !== 'Enter') return
-        const match = workers.find(w => w.id.toLowerCase().includes(jumpText.trim().toLowerCase()))
-        if (match && jumpText.trim()) { setSelected(match.key); setSelectedAttention(null); setJumpText('') }
+        const needle = jumpText.trim().toLowerCase()
+        const match = workers.find(w => w.id.toLowerCase().includes(needle))
+        if (match && needle) { openWorker(match.id); setJumpText('') }
       }} />
       <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
       <div className="cockpit-attention-list" aria-label="Needs You">
@@ -283,7 +334,7 @@ export default function App() {
       <div className="cockpit-rail-messages"><MessageFeed messages={messages} retry={retry} /></div>
       <div className="cockpit-rail-heading"><span>WORKERS</span><span>{workers.length}</span></div>
       <div className="cockpit-worker-list">
-        {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${selected === worker.key ? 'active' : ''}`} onClick={() => { setSelected(worker.key); setSelectedAttention(null) }} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
+        {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${current?.key === worker.key ? 'active' : ''}`} onClick={() => openWorker(worker.id)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
           <Face worker={worker} size={35} /><span className="cockpit-worker-label"><strong>{worker.id}</strong><small>{worker.project}</small></span><StateChip state={worker.state} />
         </button>)}
       </div>
@@ -291,15 +342,7 @@ export default function App() {
       <div className="cockpit-rail-footer">CTRL + [ &nbsp; / &nbsp; CTRL + ]<span>Switch workers</span></div>
     </aside>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {!current ? <>
-        <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p></header>
-        {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
-        {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
-          {states.map(([state, entries]) => <section key={state} className="cockpit-group"><div className="cockpit-group-heading"><StateChip state={state} /><span>{entries.length} {entries.length === 1 ? 'worker' : 'workers'}</span></div><div className="cockpit-card-grid">
-            {entries.map(worker => <button key={worker.key} className="cockpit-card" onClick={() => setSelected(worker.key)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}><div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div><p>{worker.objective}</p><small>{worker.detail}</small></button>)}
-          </div></section>)}
-        </div>}
-      </> : <>
+      {current ? <>
         <header className="cockpit-worker-header" style={{ '--worker-color': identityColor(current.id) } as React.CSSProperties}>
           <div className="cockpit-worker-identity"><Face worker={current} size={68} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><StateChip state={current.state} /></div></div>
           <span key={`flash:${current.key}`} className="cockpit-switch-flash" aria-hidden="true" />
@@ -321,6 +364,22 @@ export default function App() {
             {terminals[current.key]?.state === 'unavailable' && <p className="cockpit-terminal-placeholder">{(terminals[current.key] as Extract<Terminal, { state: 'unavailable' }>).reason}</p>}
           </div></section>
         </div>
+      </> : overviewLocation.worker ? (
+        fleet.ready
+          ? <header className="cockpit-main-header"><h1>No such worker</h1></header>
+          : fleet.errors.length
+            ? <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>
+            : <p className="cockpit-empty">Loading workers…</p>
+      ) : <>
+        <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p>
+          <input className="cockpit-filter" type="search" aria-label="Filter workers" placeholder="Filter by name or objective" value={overviewLocation.q} onChange={event => applyOverviewLocation({ worker: overviewLocation.worker, q: event.target.value }, 'replace')} />
+        </header>
+        {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
+        {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : visibleWorkers.length === 0 ? <p className="cockpit-empty">No workers match.</p> : <div className="cockpit-groups">
+          {states.map(([state, entries]) => <section key={state} className="cockpit-group"><div className="cockpit-group-heading"><StateChip state={state} /><span>{entries.length} {entries.length === 1 ? 'worker' : 'workers'}</span></div><div className="cockpit-card-grid">
+            {entries.map(worker => <button key={worker.key} className="cockpit-card" onClick={() => openWorker(worker.id)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}><div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div><p>{worker.objective}</p><small>{worker.detail}</small></button>)}
+          </div></section>)}
+        </div>}
       </>}
     </main>
     {activeAttention && <div className="cockpit-attention-scrim" onClick={() => setSelectedAttention(null)}>
@@ -329,7 +388,7 @@ export default function App() {
         <h2>{activeAttention.headline}</h2>{activeAttention.detail && <p>{activeAttention.detail}</p>}
         <div className="cockpit-attention-detail-facts"><span>Origin</span><strong>{activeAttention.workerId ?? 'First Mate backlog'}</strong><span>Age</span><strong>{activeAttention.ageDays === null ? 'unknown' : `${activeAttention.ageDays} days`}</strong></div>
         <Composer key={`${activeAttention.key}:message`} anchorKey={activeAttention.key} kind="message" submit={submit} />
-        {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => { setSelected(activeAttention.workerKey); setSelectedAttention(null) }}>View worker →</button>}
+        {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => { const worker = workers.find(item => item.key === activeAttention.workerKey); if (worker) openWorker(worker.id) }}>View worker →</button>}
       </section>
     </div>}
   </div>

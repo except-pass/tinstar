@@ -6,7 +6,19 @@
 
 Tinstar shows the workers First Mate is already running, the calls that need your attention, and provider quota in one view. First Mate remains responsible for dispatch, supervision, and worker lifecycle.
 
-The left rail lists workers and **Needs You** cards for decisions, blocked or failed work, and pull requests ready to review. The main pane shows an overview grouped by state or one worker's objective, project, worktree, branch, pull request, and live terminal. Choose a worker in the rail or use **Ctrl+[** and **Ctrl+]** to cycle through them, including while the terminal has focus. Each worker keeps the same face and color across reloads.
+The left rail lists workers and **Needs You** cards for decisions, blocked or failed work, and pull requests ready to review. The main pane shows an overview grouped by state or one worker's objective, project, worktree, branch, pull request, and live terminal. A filter at the top of the overview matches each worker's name and objective as you type; Escape clears it. Choose a worker in the rail or use **Ctrl+[** and **Ctrl+]** to cycle through them, including while the terminal has focus. Each worker keeps the same face and color across reloads.
+
+## Worker links
+
+The open worker and the overview filter are part of the page URL, so a view can be opened directly or shared.
+
+| URL | Opens |
+| --- | --- |
+| `/?q=text` | The overview, limited to workers whose name or objective fuzzy-matches `text`. |
+| `/?worker=TASK_ID` | That worker's detail, including on a fresh load. `TASK_ID` is the First Mate task id. |
+| `/?worker=TASK_ID&q=text` | That worker's detail. The filter is still applied when you return to the overview. |
+
+An id that is not in the fleet shows **No such worker**.
 
 Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
