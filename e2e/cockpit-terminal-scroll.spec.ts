@@ -42,12 +42,18 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
         paths: { worktree: { path: '/private/worktrees/scroll' } },
         current_state: { state: 'working', detail: 'printing history', observed_at: '2026-09-28T12:00:00Z', freshness: 'fresh' },
         endpoint: { target: 'firstmate:fm-scroll' }, pr: { url: null },
+      }, {
+        id: 'other', kind: 'worker', project: '/private/projects/other', branch: 'fm/other',
+        paths: { worktree: { path: '/private/worktrees/other' } },
+        current_state: { state: 'working', detail: 'idle', observed_at: '2026-09-28T12:00:00Z', freshness: 'fresh' },
+        endpoint: { target: 'firstmate:fm-other' }, pr: { url: null },
       }],
-      backlog: { records: [{ id: 'scroll', title: 'scroll objective' }] },
+      backlog: { records: [{ id: 'scroll', title: 'scroll objective' }, { id: 'other', title: 'other objective' }] },
     }))
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '80', '-y', '24', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-scroll',
       'python3 -c \'print("SCROLL-EARLY"); print("\\n".join(f"FILL-{i:03d}" for i in range(1,150))); print("SCROLL-LATE")\'; exec cat')
+    tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-other', 'exec cat')
 
     const env: NodeJS.ProcessEnv = {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
@@ -62,7 +68,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     for (let i = 0; i < 100; i++) {
       try {
         const body = await fetch(`${base}/api/fleet`).then(response => response.json()) as { data?: { workers: unknown[] } }
-        if (body.data?.workers.length === 1) break
+        if (body.data?.workers.length === 2) break
       } catch { /* starting */ }
       await delay(200)
     }
@@ -111,6 +117,19 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       const term = (window as unknown as { term?: { getSelection?: () => string } }).term
       return (term?.getSelection?.() || '').trim().length
     }), { timeout: 3_000 }).toBeGreaterThan(0)
+
+    // Switching workers hides this view without detaching it. The pane it
+    // scrolled must not stay in copy mode behind it.
+    const inMode = () => tmux('display', '-p', '-t', 'firstmate:fm-scroll', '#{pane_in_mode}')
+    await page.mouse.move(live!.x + live!.width / 2, y)
+    for (let i = 0; i < 20 && inMode() !== '1'; i++) {
+      await page.mouse.wheel(0, -120)
+      await delay(40)
+    }
+    expect(inMode()).toBe('1')
+    await page.getByRole('button', { name: /other .*WORKING/i }).click()
+    await expect.poll(inMode, { timeout: 8_000 }).toBe('0')
+    expect(tmux('list-sessions', '-F', '#{session_name}').split('\n').filter(name => name.startsWith('tsview-scroll-'))).toHaveLength(1)
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }

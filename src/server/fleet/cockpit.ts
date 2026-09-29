@@ -201,6 +201,12 @@ export class CockpitFleet {
     return { key, ...result, pid: this.views.pidOf(key) }
   }
 
+  async leaveTerminal(key: string): Promise<boolean> {
+    if (!this.targets.has(key)) return false
+    await this.views.leave(key)
+    return true
+  }
+
   refresh(): Promise<void> {
     if (this.polling) { this.again = true; return this.polling }
     this.polling = (async () => {
@@ -345,8 +351,9 @@ export class CockpitFleet {
 export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0]
   const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
+  const leaveMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal\/leave$/)
   const directMatch = path?.match(/^\/api\/fleet\/([^/]+)\/direct$/)
-  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && path !== '/api/fleet/dismiss' && !terminalMatch && !directMatch) return false
+  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && path !== '/api/fleet/dismiss' && !terminalMatch && !leaveMatch && !directMatch) return false
   const allowedOrigins = currentOriginAllowlist()
   const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: allowedOrigins }) as Record<string, string>
   if (req.method === 'OPTIONS') {
@@ -398,6 +405,11 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
   if (terminalMatch && req.method === 'GET') {
     const result = await fleet.terminal(decodeURIComponent(terminalMatch[1]!))
     return result ? ok(res, result, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })
+  }
+  if (leaveMatch && req.method === 'POST') {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    const left = await fleet.leaveTerminal(decodeURIComponent(leaveMatch[1]!))
+    return left ? ok(res, { left: true }, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })
   }
   return false
 }

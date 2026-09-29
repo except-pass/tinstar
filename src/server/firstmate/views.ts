@@ -9,7 +9,10 @@
 // enforces the second by only ever running these tmux verbs:
 //   - list-windows            read-only, to resolve the window id from meta `window=`
 //   - list-sessions           read-only, to find stale view sessions
+//   - list-panes -a           read-only, to find a view of a worker the cockpit left
 //   - kill-session -t =tsview-…   the sweep of ABANDONED view sessions (and only those)
+//   - send-keys -X -t =tsview-… cancel   when the cockpit leaves a worker whose pane is
+//                             in a mode (a view scrolled it), so the pane is live again
 // View sessions are named `tsview-…`, never `tinstar-*` and never starting with the
 // first mate's own session name (its bare `has-session -t firstmate` prefix-matches).
 // views.test.ts asserts the verb allowlist against the recorded tmux calls.
@@ -147,6 +150,7 @@ export function defaultViewsDeps(): ViewsDeps {
 interface LiveView {
   runId: string
   key: string
+  windowId: string
   port: number
   child: ChildProcess
 }
@@ -203,6 +207,23 @@ export class FirstmateViews {
     const p = this.doEnsure(runId, task, windowTarget).finally(() => this.inflight.delete(runId))
     this.inflight.set(runId, p)
     return p
+  }
+
+  /** The cockpit left this worker: if a view scrolled its pane into a mode, cancel it
+   *  through that view session. The hidden view stays attached, so no hook sees this. */
+  async leave(runId: string): Promise<void> {
+    const view = this.live.get(runId)
+    if (!view) return
+    let out: string
+    try {
+      out = await this.deps.tmux(['list-panes', '-a', '-F', '#{session_name}\t#{window_id}\t#{pane_in_mode}'])
+    } catch { return }
+    for (const line of out.split('\n')) {
+      const [session, windowId, inMode] = line.split('\t')
+      if (!session?.startsWith(VIEW_SESSION_PREFIX) || windowId !== view.windowId || inMode !== '1') continue
+      try { await this.deps.tmux(['send-keys', '-X', '-t', `=${session}:`, 'cancel']) } catch { /* left the mode on its own */ }
+      return
+    }
   }
 
   /** Stop the run's ttyd (card removed / worker cleaned up). Ends views only. */
@@ -262,7 +283,7 @@ export class FirstmateViews {
       this.deps.releasePort(port)
       return { state: 'unavailable', reason: `could not start ttyd: ${(err as Error).message}` }
     }
-    const view: LiveView = { runId, key, port, child }
+    const view: LiveView = { runId, key, windowId, port, child }
     this.live.set(runId, view)
     child.on('error', err => {
       log.warn('firstmate', `ttyd for ${runId} failed: ${err.message}`)

@@ -165,20 +165,49 @@ describe('FirstmateViews.ensure', () => {
     expect(h.exits).toEqual([])
   })
 
-  it('only ever runs read-only tmux verbs against workers; kill-session only names tsview- sessions', async () => {
+  it('only ever runs read-only tmux verbs against workers; kill-session and send-keys only name tsview- sessions', async () => {
     const h = harness({ tmux: async args => {
       h.tmuxCalls.push(args)
       if (args[0] === 'list-sessions') return `firstmate\t1\t900000\ntsview-a-1\t0\t100\ntsview-b-2\t1\t100\ntsview-c-3\t0\t999990\n`
+      if (args[0] === 'list-panes') return 'firstmate\t@4\t1\ntsview-fix-login-9\t@4\t1\n'
       return '@4 fm-fix-login\n'
     } })
     await h.views.ensure('fm--fix-login', 'fix-login', 'firstmate:fm-fix-login')
     await h.views.start()
+    await h.views.leave('fm--fix-login')
     h.views.release('fm--fix-login')
     const verbs = new Set(h.tmuxCalls.map(c => c[0]))
-    expect([...verbs].sort()).toEqual(['kill-session', 'list-sessions', 'list-windows'])
+    expect([...verbs].sort()).toEqual(['kill-session', 'list-panes', 'list-sessions', 'list-windows', 'send-keys'])
     const kills = h.tmuxCalls.filter(c => c[0] === 'kill-session')
     expect(kills).toEqual([['kill-session', '-t', '=tsview-a-1']])   // unattached + old; not b (attached), not c (fresh)
-    for (const c of h.tmuxCalls) expect(c.join(' ')).not.toMatch(/kill-window|kill-pane|send-keys|respawn|kill-server| -g\b/)
+    expect(h.tmuxCalls.filter(c => c[0] === 'send-keys')).toEqual([['send-keys', '-X', '-t', '=tsview-fix-login-9:', 'cancel']])
+    for (const c of h.tmuxCalls) expect(c.join(' ')).not.toMatch(/kill-window|kill-pane|respawn|kill-server| -g\b/)
+  })
+})
+
+describe('FirstmateViews.leave', () => {
+  it('cancels the mode through a view of the left worker only when its pane is in one', async () => {
+    for (const [rows, expected] of [
+      ['tsview-other-1\t@5\t1\ntsview-fix-login-2\t@4\t1\n', [['send-keys', '-X', '-t', '=tsview-fix-login-2:', 'cancel']]],
+      ['tsview-fix-login-2\t@4\t0\nfirstmate\t@4\t0\n', []],
+      ['firstmate\t@4\t1\n', []],
+    ] as [string, string[][]][]) {
+      const sent: string[][] = []
+      const h = harness({ tmux: async args => {
+        if (args[0] === 'send-keys') sent.push(args)
+        if (args[0] === 'list-panes') return rows
+        return args[0] === 'list-windows' ? '@4 fm-fix-login\n@5 fm-other\n' : ''
+      } })
+      await h.views.ensure('fm--fix-login', 'fix-login', 'firstmate:fm-fix-login')
+      await h.views.leave('fm--fix-login')
+      expect(sent).toEqual(expected)
+    }
+  })
+
+  it('does nothing for a worker without a live view', async () => {
+    const h = harness()
+    await h.views.leave('fm--fix-login')
+    expect(h.tmuxCalls).toEqual([])
   })
 })
 

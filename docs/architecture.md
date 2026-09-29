@@ -48,7 +48,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 | Module | File(s) | Purpose |
 |--------|---------|---------|
-| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages`, `POST /api/fleet/dismiss`, `POST /api/fleet/:key/direct` and `GET /api/fleet/:key/terminal` ([details](./features/firstmate-observer.md)). |
+| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages`, `POST /api/fleet/dismiss`, `POST /api/fleet/:key/direct`, `GET /api/fleet/:key/terminal` and `POST /api/fleet/:key/terminal/leave` ([details](./features/firstmate-observer.md)). |
 | Decision dismiss | `src/server/fleet/dismiss.ts` | Closes a classified decision by running that home's `fm-captain-hold.sh` or `fm-send.sh`. An unclassified decision still uses the inbox note. |
 | Needs You cards | `src/server/fleet/attention.ts` | Derives decision, blocked, failure and review-ready cards from each snapshot. |
 | First Mate inbox | `src/server/fleet/inbox.ts` | Sends answers and messages through `fm-inbox.sh`; keeps unfinished ones in `fleet-outbox.json`. |
