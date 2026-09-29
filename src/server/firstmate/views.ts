@@ -1,9 +1,7 @@
 // The first mate terminal view (M2). One ttyd per observed worker; each browser
 // connection gets its OWN private tmux "view session" that holds nothing but a
 // link to the worker's window (bin/tinstar-fm-view). The ttyd is reached through
-// Tinstar's existing /s/<runId>/ proxy — the observed Run's `port` is its port —
-// so no new endpoint shape goes near src/server/sessions/backends/tmux.ts, which
-// is only used for its pure port/bind/health helpers.
+// Tinstar's /s/<key>/ proxy; port, bind and health helpers come from ../fleet/ports.
 //
 // HARD INVARIANT: a view can never kill a worker, and nothing here ever addresses
 // a worker's window destructively. tmux itself enforces the first half (killing a

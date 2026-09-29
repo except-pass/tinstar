@@ -1,9 +1,8 @@
 // Application API envelope. See docs/adrs/0001-response-envelope.md.
 //
 // All application API endpoints return ApiResponse<T> — Ok<T> or Err.
-// Wire-protocol endpoints (OpenAPI spec, OTLP/Prom exports, /api/state SSE
-// snapshot, cc-quota snapshot) are documented exceptions and return raw
-// JSON; they're listed in the ADR.
+// Wire-protocol endpoints (cc-quota, provider observations, the /api/events SSE
+// stream) are documented exceptions and return raw JSON.
 
 /** Machine-readable error categories. Closed union — adding a new code
  *  requires an ADR amendment so the taxonomy doesn't drift. */

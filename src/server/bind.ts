@@ -8,7 +8,7 @@ import type { Server } from 'node:http'
  * `-i`. Two independent literals would be two independent defaults, and a
  * later edit to one of them would silently widen the other's blast radius.
  * Deliberately import-light so a test can read it without dragging in the
- * sessions/NATS chain.
+ * server's startup chain.
  */
 export const LOOPBACK_BIND_ADDRESS = '127.0.0.1'
 

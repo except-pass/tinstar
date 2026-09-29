@@ -127,7 +127,7 @@ If `activate()` registers a widget type not in the manifest, the host logs a war
 
 ### Anchor points
 
-Anchor points are the named snap-attachment sites on a widget. When a user drags one snappable widget near another the host aligns the closest pair of anchor points; the `attach` spawn parameter (see [`Spawning with attach`](../agent-api.md#spawning-with-attach) in the agent API) lets agents name the exact pair to use.
+Anchor points are the named snap-attachment sites on a widget. When a user drags one snappable widget near another the host aligns the closest pair of anchor points; the V5 agent spawn API's `attach` parameter let agents name the exact pair to use.
 
 **Default anchors (used when `anchors` is omitted):**
 

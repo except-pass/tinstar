@@ -162,8 +162,8 @@ export interface SessionRequestDeps {
 
 /**
  * The HTTP half of the session proxy, extracted for the same reason the
- * upgrade half was: importing `standalone.ts` from a test hangs on its
- * sessions/NATS import chain, so anything only reachable there is untestable.
+ * upgrade half was: importing `standalone.ts` from a test hung on its
+ * former sessions/NATS import chain, so anything only reachable there is untestable.
  *
  * Returns false when the URL is not a session path, leaving the caller's other
  * routes untouched.

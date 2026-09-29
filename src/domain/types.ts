@@ -151,10 +151,8 @@ export interface RunData {
   /** Persistent state for a plugin session-view (its api.widget.useData blob).
    *  Unused by the default run-workspace view. */
   viewData?: unknown
-  /** When false, the client must NOT pan/zoom the viewport to this run when it
-   *  first appears (passive spawn). Set from `focus:false` on POST /api/sessions
-   *  so background/supervisor callers can create a session without yanking the
-   *  user's camera. Absent/true ⇒ the canvas auto-focuses the new run as usual. */
+  /** V5: when false, the canvas did not pan/zoom to this run when it first
+   *  appeared. Nothing sets it since the session spawn API was removed. */
   focusOnCreate?: boolean
   /** The run's Slate surfaces (see The Slate). A server-authoritative projection
    *  populated by the Slate watcher from `.tinstar/slate/*`. Adding this field is
@@ -165,9 +163,9 @@ export interface RunData {
 
 
 /**
- * A retired session's durable record in the Graveyard. Written when a session
- * is deleted (see DELETE /api/sessions/:name) and survives removal of the
- * per-session dir and worktree, because it lives in the config-root docstore.
+ * V5: a retired session's durable record in the Graveyard. It was written when a
+ * Tin Star-owned session was deleted; nothing writes it since that lifecycle was
+ * removed.
  * Keyed by `convId` — the Claude Code `conversation.id` — which is the
  * ground-truth handle used to necro (revive) the session later. Resolve the
  * transcript by this id, never by newest-mtime.
@@ -363,8 +361,8 @@ export interface BrowserNoteTarget {
   within?: { x: number; y: number }    // normalized 0..1 position inside the element
 }
 
-/** A positioned annotation on a page shown in a browser widget. Submitted to the
- *  attached session via POST /api/sessions/:name/enter-prompt; sentAt marks delivery. */
+/** A positioned annotation on a page shown in a browser widget. sentAt marks
+ *  delivery to the attached session (V5; the delivery route was removed). */
 export interface BrowserNote {
   id: string
   url: string                          // page URL the note was placed on

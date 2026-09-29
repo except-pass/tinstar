@@ -151,11 +151,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Kill ONLY the main node process on stop/restart, not the whole control group.
-# Tinstar spawns long-lived children (the tmux server, per-session ttyd, the NATS
-# server, observability) and re-adopts them on boot (ttyd incumbent detection,
-# pid-persisted supervisors, tmux reattach-by-name). The default control-group mode
-# SIGTERMs the entire cgroup on restart, destroying the tmux server and every
-# session. process mode lets them survive a restart so sessions are preserved.
+# Tinstar spawns long-lived children (worker-view ttyds, observability) and
+# handles them on boot (orphaned view ttyds are swept, pid-persisted supervisors
+# re-adopted). The default control-group mode SIGTERMs the entire cgroup on
+# restart; process mode leaves those children to that boot handling.
 KillMode=process
 WorkingDirectory=${repoRoot}
 Environment=NODE_ENV=production
