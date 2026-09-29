@@ -1,5 +1,7 @@
 # Plugin System
 
+> Historical V5 reference. The plugin host was removed in 6.0.0, and the files named below no longer exist; see the [6.0.0 release notes](../release-notes-v6-0.md).
+
 Tinstar's V5 plugin system lets sibling projects (and you) extend the canvas with new widgets, panes, and commands without forking core. Built-in widgets ship as bundled plugins through the same API external plugins use — there's no first/second class tier.
 
 This doc is the canonical reference. Author guides:

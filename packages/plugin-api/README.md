@@ -2,6 +2,8 @@
 
 Public API types for building Tinstar plugins.
 
+> Tinstar 6.0.0 removed the plugin host, so no current Tinstar release loads plugins built against this package. The notes below describe Tinstar 5.x.
+
 ## What is a Tinstar plugin?
 
 A plugin is an npm package (or a local folder) that contributes widgets,
