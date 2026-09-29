@@ -87,3 +87,16 @@
 .cockpit-switch-flash{position:absolute;inset:0;pointer-events:none;clip-path:inset(0);background:linear-gradient(90deg,transparent,rgba(0,240,255,.16),transparent);animation:cockpit-switch-flash 140ms ease-out both}
 @keyframes cockpit-switch-flash{from{opacity:.65;transform:translateX(-14px)}to{opacity:0;transform:translateX(14px)}}
 @media(prefers-reduced-motion:reduce){.cockpit-switch-flash{animation:none;opacity:0}}
+
+.cockpit-group-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin-top:16px}
+.cockpit-group-controls label{display:flex;align-items:center;gap:8px;color:#8ea4ae;font:11px 'JetBrains Mono',monospace}
+.cockpit-group-controls select{padding:6px 8px;border:1px solid #29404a;border-radius:4px;background:#101b21;color:#d8e6ec;font:inherit}
+.cockpit-group-controls select:focus{outline:1px solid #00a5b0}
+.cockpit-group,.cockpit-subgroup{min-width:0}
+.cockpit-group-heading{min-width:0}
+.cockpit-group-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d5e3ea}
+.cockpit-group>.cockpit-group-heading .cockpit-group-label{color:#eaf1f5;font-size:13px}
+.cockpit-group-count{flex:none}
+.cockpit-subgroup{margin:4px 0 16px}
+.cockpit-subgroup .cockpit-group-heading{margin-bottom:8px}
+@media(max-width:850px){.cockpit-group-controls{gap:8px 12px}.cockpit-group-controls label{flex-wrap:wrap}.cockpit-card-grid{grid-template-columns:minmax(0,1fr)}}

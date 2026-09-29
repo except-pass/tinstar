@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
+import {
+  applyGroupChoice, browserGroupStorage, groupDimensionLabels, groupDimensions, groupWorkers,
+  readGroupChoice, writeGroupChoice, type GroupDimension,
+} from './cockpit/groupWorkers'
 import { QuotaRail } from './cockpit/QuotaRail'
 import type { AttentionCard } from './server/fleet/attention'
 import './cockpit.css'
@@ -39,6 +43,20 @@ function Face({ worker, size = 40 }: { worker: Worker; size?: number }) {
 
 function StateChip({ state }: { state: string }) {
   return <span className={`cockpit-state cockpit-state-${state.toLowerCase().replace(/[^a-z0-9-]/g, '')}`}>{state}</span>
+}
+
+function GroupHeading({ dimension, value, count }: { dimension: GroupDimension; value: string; count: number }) {
+  return <div className="cockpit-group-heading">
+    {dimension === 'status' ? <StateChip state={value} /> : <span className="cockpit-group-label" title={value}>{value}</span>}
+    <span className="cockpit-group-count">{count} {count === 1 ? 'worker' : 'workers'}</span>
+  </div>
+}
+
+function WorkerCard({ worker, onOpen }: { worker: Worker; onOpen: () => void }) {
+  return <button className="cockpit-card" onClick={onOpen} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
+    <div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div>
+    <p>{worker.objective}</p><small>{worker.detail}</small>
+  </button>
 }
 
 function displayTime(value: string | null): string {
@@ -126,6 +144,7 @@ export default function App() {
   const [opening, setOpening] = useState<Record<string, boolean>>({})
   const [messages, setMessages] = useState<OutboxMessage[]>([])
   const [messageError, setMessageError] = useState<string | null>(null)
+  const [groupBy, setGroupBy] = useState(() => readGroupChoice(browserGroupStorage()))
   const focusTerminal = useRef(false)
   const messagesInFlight = useRef(false)
 
@@ -257,11 +276,13 @@ export default function App() {
     frame.contentWindow?.postMessage({ type: 'terminal-reveal-prompt', sessionName: currentKey }, origin)
   }, [currentKey])
 
-  const states = useMemo(() => {
-    const groups = new Map<string, Worker[]>()
-    for (const worker of workers) groups.set(worker.state, [...(groups.get(worker.state) ?? []), worker])
-    return [...groups]
-  }, [workers])
+  const grouped = useMemo(() => groupWorkers(workers, groupBy.primary, groupBy.secondary), [workers, groupBy])
+  useEffect(() => { writeGroupChoice(browserGroupStorage(), groupBy) }, [groupBy])
+  const chooseGroup = (which: 'primary' | 'secondary', value: string) => {
+    const dimension = groupDimensions.find(item => item === value)
+    if (!dimension) return
+    setGroupBy(current => applyGroupChoice(current, which, dimension))
+  }
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
@@ -293,12 +314,22 @@ export default function App() {
     </aside>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {!current ? <>
-        <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p></header>
+        <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p>
+          <div className="cockpit-group-controls">
+            <label>Group by <select value={groupBy.primary} onChange={event => chooseGroup('primary', event.target.value)}>{groupDimensions.map(dimension => <option key={dimension} value={dimension}>{groupDimensionLabels[dimension]}</option>)}</select></label>
+            <label>then by <select value={groupBy.secondary} onChange={event => chooseGroup('secondary', event.target.value)}>{groupDimensions.map(dimension => <option key={dimension} value={dimension}>{groupDimensionLabels[dimension]}</option>)}</select></label>
+          </div>
+        </header>
         {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
         {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
-          {states.map(([state, entries]) => <section key={state} className="cockpit-group"><div className="cockpit-group-heading"><StateChip state={state} /><span>{entries.length} {entries.length === 1 ? 'worker' : 'workers'}</span></div><div className="cockpit-card-grid">
-            {entries.map(worker => <button key={worker.key} className="cockpit-card" onClick={() => setSelected(worker.key)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}><div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div><p>{worker.objective}</p><small>{worker.detail}</small></button>)}
-          </div></section>)}
+          {grouped.map(group => <section key={group.value} className="cockpit-group">
+            <GroupHeading dimension={groupBy.primary} value={group.value} count={group.workers.length} />
+            {group.groups.length === 0 ? <div className="cockpit-card-grid">{group.workers.map(worker => <WorkerCard key={worker.key} worker={worker} onOpen={() => setSelected(worker.key)} />)}</div>
+              : group.groups.map(inner => <section key={inner.value} className="cockpit-subgroup">
+                <GroupHeading dimension={groupBy.secondary} value={inner.value} count={inner.workers.length} />
+                <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} onOpen={() => setSelected(worker.key)} />)}</div>
+              </section>)}
+          </section>)}
         </div>}
       </> : <>
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
