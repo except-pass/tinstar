@@ -12,6 +12,13 @@ interface Worker {
 }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
+interface OutboxMessage {
+  requestId: string; anchorKey: string; taskId: string | null; cardKey: string | null
+  kind: 'answer' | 'message'; text: string
+  state: 'sending' | 'saved' | 'acknowledged' | 'done'
+  reply: string | null; canReceive: boolean | 'unknown'
+}
+type Draft = { requestId: string; anchorKey: string; kind: 'answer' | 'message'; text: string }
 
 function identityColor(id: string): string {
   let hash = 2166136261
@@ -42,7 +49,9 @@ function displayTime(value: string | null): string {
 const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Failure', review: 'Review Ready' } as const
 const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
 
-function AttentionCardView({ card, worker, open }: { card: AttentionCard; worker: Worker | null; open: () => void }) {
+type SubmitResult = { saved: boolean; error: string | null; canReceive?: boolean | 'unknown' }
+
+function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult> }) {
   const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
     : <span className="cockpit-attention-origin cockpit-attention-origin-empty"><span className="material-symbols-outlined">account_tree</span>First Mate backlog</span>
   return <article className={`cockpit-attention-card cockpit-attention-${card.type}`}>
@@ -52,14 +61,54 @@ function AttentionCardView({ card, worker, open }: { card: AttentionCard; worker
       <p title={card.headline}>{card.headline}</p>
       <div className="cockpit-attention-review-meta"><span>CI {card.ci}</span>{card.reviewStatus === 'unknown' && <span>PR status unknown</span>}</div>
       <div className="cockpit-attention-bottom">{origin}<a className="cockpit-attention-action" href={card.prUrl!} target="_blank" rel="noopener noreferrer">Open GitHub ↗</a></div>
+      <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
     </> : <>
       <p title={card.headline}>{card.headline}</p>
       {card.type === 'decision' && <small className="cockpit-attention-age">Age {card.ageDays === null ? 'unknown' : `${card.ageDays}d`}</small>}
       {card.type === 'blocked' && card.detail && <small className="cockpit-attention-needed">NEEDED · {card.detail}</small>}
       {card.type === 'failure' && card.detail && <small className="cockpit-attention-failure-detail">{card.detail}</small>}
       <div className="cockpit-attention-bottom">{origin}<button className="cockpit-attention-action" onClick={open}>Open →</button></div>
+      {card.type === 'decision' && <details className="cockpit-card-composer"><summary>Answer</summary><Composer anchorKey={card.key} kind="answer" submit={submit} /></details>}
+      <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
     </>}
   </article>
+}
+
+function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answer' | 'message'; submit: (draft: Draft) => Promise<SubmitResult> }) {
+  const draftKey = `tinstar-draft:${kind}:${anchorKey}`
+  const [text, setText] = useState(() => sessionStorage.getItem(draftKey) ?? '')
+  const [requestId, setRequestId] = useState<string | null>(() => sessionStorage.getItem(`${draftKey}:request`))
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const inFlight = useRef(false)
+  const label = kind === 'answer' ? 'Answer this decision' : 'Tell First Mate about this'
+  return <form className="cockpit-composer" onSubmit={event => {
+    event.preventDefault()
+    if (inFlight.current || !text.trim()) return
+    inFlight.current = true; setBusy(true); setNotice(null)
+    const id = requestId ?? `tinstar-${crypto.randomUUID()}`
+    setRequestId(id)
+    sessionStorage.setItem(`${draftKey}:request`, id)
+    void submit({ requestId: id, anchorKey, kind, text: text.trim() }).then(result => {
+      if (result.saved) { setText(''); setRequestId(null); sessionStorage.removeItem(draftKey); sessionStorage.removeItem(`${draftKey}:request`); setNotice(result.error ?? (result.canReceive === false ? 'Saved, not yet read. First Mate will read it when it wakes.' : 'Saved. First Mate will receive it at the next check.')) }
+      else setNotice(result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.')
+    }).catch(error => setNotice((error as Error).message)).finally(() => { inFlight.current = false; setBusy(false) })
+  }}>
+    <label>{label}<textarea value={text} onChange={event => { setText(event.target.value); sessionStorage.setItem(draftKey, event.target.value); if (requestId) { setRequestId(null); sessionStorage.removeItem(`${draftKey}:request`) } }} rows={3} maxLength={10000} placeholder={kind === 'answer' ? 'Write your answer…' : 'Write your message…'} /></label>
+    <button type="submit" disabled={busy || !text.trim()}>{busy ? 'Sending…' : requestId ? 'Retry' : 'Send to First Mate'}</button>
+    {notice && <p role="status">{notice}</p>}
+  </form>
+}
+
+function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; retry: (message: OutboxMessage) => void }) {
+  if (!messages.length) return null
+  return <div className="cockpit-messages">{messages.map(message => <article key={message.requestId}>
+    <div className="cockpit-message-top"><strong>{message.kind === 'answer' ? 'Answer' : 'Message'} · {message.taskId ?? 'First Mate backlog'}</strong><span>{message.state === 'acknowledged' ? 'First Mate has it' : message.state}</span></div>
+    <p>{message.text}</p>
+    {message.state === 'saved' && message.canReceive === false && <small role="status">Saved, not yet read. First Mate will read it when it wakes.</small>}
+    {message.state === 'sending' && <button onClick={() => retry(message)}>Retry sending</button>}
+    {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
+  </article>)}</div>
 }
 
 export default function App() {
@@ -70,6 +119,8 @@ export default function App() {
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
   const [opening, setOpening] = useState<Record<string, boolean>>({})
+  const [messages, setMessages] = useState<OutboxMessage[]>([])
+  const [messageError, setMessageError] = useState<string | null>(null)
   const focusTerminal = useRef(false)
 
   const refresh = useCallback(async () => {
@@ -87,11 +138,35 @@ export default function App() {
     } finally { setLoading(false) }
   }, [])
 
+  const refreshMessages = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/fleet/messages')
+      const body = await response.json() as { ok: boolean; data?: OutboxMessage[] }
+      if (!body.ok || !body.data) throw new Error('Messages unavailable')
+      setMessages(body.data); setMessageError(null)
+      return body.data
+    } catch (error) { setMessageError((error as Error).message); return null }
+  }, [])
+
+  const submit = useCallback(async (draft: Draft) => {
+    const response = await apiFetch('/api/fleet/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) })
+    const body = await response.json() as { ok: boolean; data?: { saved: boolean; error: string | null }; error?: { message: string } }
+    if (!body.ok || !body.data) throw new Error(body.error?.message ?? 'Message unavailable')
+    const latest = await refreshMessages()
+    return { ...body.data, canReceive: latest?.find(message => message.requestId === draft.requestId)?.canReceive }
+  }, [refreshMessages])
+
+  const retry = useCallback((message: OutboxMessage) => {
+    void submit({ requestId: message.requestId, anchorKey: message.anchorKey, kind: message.kind, text: message.text })
+      .catch(error => setMessageError((error as Error).message))
+  }, [submit])
+
   useEffect(() => {
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 5_000)
+    void refreshMessages()
+    const timer = window.setInterval(() => { void refresh(); void refreshMessages() }, 5_000)
     return () => window.clearInterval(timer)
-  }, [refresh])
+  }, [refresh, refreshMessages])
 
   const workers = fleet.workers
   const waiting = loading || !fleet.ready
@@ -194,9 +269,12 @@ export default function App() {
       <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
       <div className="cockpit-attention-list" aria-label="Needs You">
         {fleet.errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {fleet.errors.join('; ')}</p>}
-        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} />)
+        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} />)
           : fleet.errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
       </div>
+      <div className="cockpit-rail-heading"><span>MESSAGES</span><span>{messages.length}</span></div>
+      {messageError && <p className="cockpit-attention-empty" role="alert">{messageError}</p>}
+      <div className="cockpit-rail-messages"><MessageFeed messages={messages} retry={retry} /></div>
       <div className="cockpit-rail-heading"><span>WORKERS</span><span>{workers.length}</span></div>
       <div className="cockpit-worker-list">
         {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${selected === worker.key ? 'active' : ''}`} onClick={() => { setSelected(worker.key); setSelectedAttention(null) }} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
@@ -220,6 +298,7 @@ export default function App() {
           <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
         </header>
         <div className="cockpit-worker-content"><section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
+          <details className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /></details>
           <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
           <div className="cockpit-status-detail"><StateChip state={current.state} /><span title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
           <section className="cockpit-terminal"><div className="cockpit-terminal-heading"><span><span className="material-symbols-outlined">terminal</span> LIVE TERMINAL</span><small>Direct terminal input</small></div><div className="cockpit-terminal-stage">
@@ -241,6 +320,7 @@ export default function App() {
         <div className="cockpit-attention-detail-top"><span className="material-symbols-outlined">{attentionIcons[activeAttention.type]}</span><strong>{attentionLabels[activeAttention.type]}</strong><button aria-label="Close details" onClick={() => setSelectedAttention(null)}>×</button></div>
         <h2>{activeAttention.headline}</h2>{activeAttention.detail && <p>{activeAttention.detail}</p>}
         <div className="cockpit-attention-detail-facts"><span>Origin</span><strong>{activeAttention.workerId ?? 'First Mate backlog'}</strong><span>Age</span><strong>{activeAttention.ageDays === null ? 'unknown' : `${activeAttention.ageDays} days`}</strong></div>
+        <Composer key={`${activeAttention.key}:message`} anchorKey={activeAttention.key} kind="message" submit={submit} />
         {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => { setSelected(activeAttention.workerKey); setSelectedAttention(null) }}>View worker →</button>}
       </section>
     </div>}
