@@ -32,6 +32,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     for (const path of [home, config, bin, join(home, 'bin'), join(home, 'state')]) mkdirSync(path, { recursive: true })
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
+    writeFileSync(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home] } }))
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)

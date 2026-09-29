@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
-import { CcQuotaService } from './cc-quota/service'
+import { QuotaAxiPoller } from './quota/poller'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
 import { ProviderObservationIngestor } from './providers/observation-ingestor'
 import { OtlpExporter } from './stores/otlp-exporter'
@@ -69,7 +69,8 @@ export function startServer(opts: ServerOptions) {
   const otlpExporter = new OtlpExporter()
   otlpExporter.start()
   const observations = new ProviderCurrentObservationStores()
-  const quota = new CcQuotaService({ observationStores: observations, sink: otlpExporter })
+  const quota = new QuotaAxiPoller({ onError: message => log.warn('quota', message) })
+  quota.start()
   const codexOtel = new CodexOtelReceiver({
     ingestor: new ProviderObservationIngestor({ stores: observations, sink: otlpExporter }),
     metricSink: otlpExporter,
@@ -89,6 +90,7 @@ export function startServer(opts: ServerOptions) {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
   const shutdown = async () => {
+    quota.stop()
     telemetry.stopPolling()
     try { await observability.stop() } catch (err) { log.debug('shutdown', `observability: ${(err as Error).message}`) }
     try { await codexOtel.stop() } catch (err) { log.debug('shutdown', `codexOtel: ${(err as Error).message}`) }

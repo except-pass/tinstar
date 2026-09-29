@@ -1,0 +1,145 @@
+{
+  "generatedAt": "2026-09-29T12:00:00.000Z",
+  "schemaVersion": 5,
+  "providers": [
+    {
+      "provider": "claude",
+      "accountKeys": ["default"],
+      "plan": "pro",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentRemaining": 82,
+          "resetsAt": "2026-09-29T16:00:00.000Z"
+        },
+        {
+          "id": "seven_day",
+          "label": "week",
+          "kind": "weekly",
+          "percentRemaining": 64,
+          "resetsAt": "2026-10-04T17:00:00.000Z"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-09-29T11:58:00.000Z"
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 64,
+            "boundedBy": ["five_hour", "seven_day"],
+            "limitingWindowIds": ["seven_day"],
+            "runway": {
+              "status": "projected_exhaustion",
+              "usableRunwaySeconds": 298906,
+              "projectedExhaustedAt": "2026-10-02T03:00:00.000Z",
+              "limitingWindowId": "seven_day",
+              "projectionConfidence": "established"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "codex",
+      "accountKeys": ["default"],
+      "plan": "plus",
+      "windows": [
+        {
+          "id": "weekly",
+          "label": "week",
+          "kind": "weekly",
+          "percentRemaining": 18,
+          "resetsAt": "2026-10-03T09:00:00.000Z"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-09-29T11:59:00.000Z"
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 18,
+            "boundedBy": ["weekly"],
+            "limitingWindowIds": ["weekly"],
+            "runway": {
+              "status": "through_reset",
+              "limitingWindowId": "weekly",
+              "projectionConfidence": "established"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "grok",
+      "accountKeys": ["default"],
+      "plan": "supergrok",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "usage endpoint rejected the session",
+        "refreshedAt": "2026-09-29T11:50:00.000Z"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": []
+      }
+    },
+    {
+      "provider": "cursor",
+      "windows": [],
+      "notSetUp": true,
+      "state": { "status": "fresh", "stale": false }
+    },
+    {
+      "provider": "kimi",
+      "plan": "member",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentRemaining": 3,
+          "resetsAt": "2026-09-29T14:00:00.000Z"
+        }
+      ],
+      "state": {
+        "status": "stale",
+        "stale": true,
+        "refreshedAt": "2026-09-29T10:00:00.000Z"
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 3,
+            "boundedBy": ["five_hour"],
+            "limitingWindowIds": ["five_hour"],
+            "runway": {
+              "status": "exhausted_now",
+              "usableRunwaySeconds": 0,
+              "projectedExhaustedAt": "2026-09-29T12:00:00.000Z",
+              "limitingWindowId": "five_hour"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

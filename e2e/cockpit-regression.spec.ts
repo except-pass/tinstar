@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -196,6 +196,8 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', "seq 1 200; printf 'PROMPT_BOTTOM> '; exec cat")
     const before = windows()
     const sizesBefore = windowSizes()
+    writeFileSync(join(bin, 'quota-axi'), `#!/bin/sh\ncat <<'END_QUOTA'\n${readFileSync(join(repo, 'src/server/quota/__tests__/recorded-quota-axi.json'), 'utf8')}\nEND_QUOTA\n`)
+    chmodSync(join(bin, 'quota-axi'), 0o755)
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
@@ -208,21 +210,10 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       try { if ((await fetch(`${base}/api/fleet`).then(r => r.json()) as { data?: { workers: unknown[] } }).data?.workers.length === 2) break } catch { /* starting */ }
       await delay(200)
     }
-    const nowSeconds = Math.floor(Date.now() / 1000)
-    const quotaResponse = await fetch(`${base}/api/cc-quota/ingest`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate_limits: {
-        five_hour: { used_percentage: 24, resets_at: nowSeconds + 2 * 60 * 60 },
-        seven_day: { used_percentage: 61, resets_at: nowSeconds + 3 * 24 * 60 * 60 },
-      } }),
-    })
-    expect(quotaResponse.ok).toBe(true)
     const page = await browser.newPage()
     await page.goto(base)
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(2)
-    await expect(page.getByText('5H · 76% left')).toBeVisible()
-    await expect(page.getByText('7D · 39% left')).toBeVisible()
-    await expect(page.locator('.cockpit-quota-claude')).toContainText('fresh')
+    await expect(page.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('private-quota-populated-1280x720.png') })
     const firstFace = page.locator('.cockpit-worker-button').first().locator('.cockpit-face')
     await expect(firstFace.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml/)

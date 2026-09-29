@@ -1,7 +1,7 @@
 // Application API envelope. See docs/adrs/0001-response-envelope.md.
 //
 // All application API endpoints return ApiResponse<T> — Ok<T> or Err.
-// Wire-protocol endpoints (cc-quota, provider observations, the /api/events SSE
+// Wire-protocol endpoints (/api/quota, provider observations, the /api/events SSE
 // stream) are documented exceptions and return raw JSON.
 
 /** Machine-readable error categories. Closed union — adding a new code
