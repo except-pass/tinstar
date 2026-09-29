@@ -43,7 +43,7 @@ Verify the install any time with `npx tinstar doctor`, which reports anything on
 
 ### The statusline hook
 
-Claude Code reports its context-window utilization exactly one way: it pipes its session state to whatever command you register under `statusLine`. Tinstar ships a shim that forwards that to the server, and **it is what makes the per-session context meter and the quota HUD work.** Without it those read `--` forever, with nothing in the UI explaining why.
+Claude Code reports its context-window utilization exactly one way: it pipes its session state to whatever command you register under `statusLine`. Tinstar ships a shim that forwards that to the server, and **it is what makes the per-session context meter and the Claude provider quota in the cockpit rail work.** Without it the context meter reads `--` forever and the Claude quota shows "unavailable · no statusline reading".
 
 `npx tinstar` offers to install it during onboarding. To do it yourself, or on a machine that already onboarded:
 
@@ -144,7 +144,7 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **lsof** — verifies that each web terminal serves the intended session (`brew install lsof` / `apt install lsof`)
 - **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
 - **bun** — *only for multi-agent NATS channels* — runs the per-session channel MCP server (`curl -fsSL https://bun.sh/install | bash`). Sessions launch it by absolute path from `nats.bunPath` (default `~/.bun/bin/bun`), so a bun elsewhere on `$PATH` is not enough. Without it, NATS itself looks healthy but every agent's channel MCP dies at spawn.
-- **jq** and **curl** — used by the [statusline hook](#the-statusline-hook) that feeds the context meter and quota HUD (`brew install jq` / `apt install jq`; curl is usually preinstalled)
+- **jq** and **curl** — used by the [statusline hook](#the-statusline-hook) that feeds the context meter and Claude provider quota (`brew install jq` / `apt install jq`; curl is usually preinstalled)
 
 ## Ports
 
