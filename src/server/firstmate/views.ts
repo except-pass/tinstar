@@ -59,6 +59,9 @@ export function viewTtydArgv(opts: {
     '-p', String(opts.port),
     '-t', `titleFixed=${opts.task}`,
     '-t', 'fontSize=14',
+    // xterm on macOS ignores Shift while mouse reporting is on, and Option
+    // selects only when this is set. Shift still selects on other platforms.
+    '-t', 'macOptionClickForcesSelection=true',
     '-t', 'theme={"background":"#000000"}',
     opts.script, opts.session, opts.windowId, opts.windowName,
   ]

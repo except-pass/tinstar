@@ -13,12 +13,22 @@
 # leaves the view too and the view dies with it.
 #
 # Everything this script does to tmux targets the view session it just made,
-# except read-only lookups and the `link-window` source. It never changes the
-# worker window's options; attaching makes this client one the window may size
-# to, under the user's own tmux `window-size`. It NEVER sends
-# kill-window / kill-pane / respawn-* / send-keys / kill-session to anything
-# outside the `tsview-` namespace (src/server/firstmate/views.tmux.test.ts records
-# every tmux call the script makes and asserts it).
+# except read-only lookups, the `link-window` source, and key bindings in the
+# `tsview-passthrough` and `tsview-scroll` tables (no other session uses them).
+# It never changes the worker window's options or global options; attaching
+# makes this client one the window may size to, under the user's own tmux
+# `window-size`. It NEVER sends kill-window / kill-pane / respawn-* / send-keys
+# / kill-session to anything outside the `tsview-` namespace
+# (src/server/firstmate/views.tmux.test.ts records every tmux call the script
+# makes and asserts it).
+#
+# Mouse is a session option on this view only. The wheel enters copy mode on
+# the linked pane, because that is where the history is. While scrolled, the
+# client uses the tsview-scroll table: a key or Escape cancels copy mode and
+# returns to the live prompt. The character that leaves copy mode is not
+# typed. The emulator's selection drag still selects text (Shift, or Option
+# on macOS). The pane is shared with the worker session, so a key from
+# another client hits that copy mode until this view returns to the prompt.
 #
 # View names must never start with the first mate session name: the first mate
 # runs a bare `tmux has-session -t firstmate`, which prefix-matches.
@@ -65,13 +75,21 @@ placeholder="tsview-placeholder-$nonce"
 # any client attached), so a hangup before the attach below must clean up itself.
 trap 'tmux kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
 
+# WheelUp on the passthrough table enters copy mode. tsview-scroll then owns
+# the wheel and the key that leaves it, so the empty passthrough table can
+# keep forwarding ordinary keys. These tables are not the root table.
 tmux new-session -d -s "$view" -x "$worker_cols" -y "$worker_rows" -n "$placeholder" \; \
   set-option -t "=$view:" prefix None \; \
   set-option -t "=$view:" prefix2 None \; \
   set-option -t "=$view:" key-table tsview-passthrough \; \
   set-option -t "=$view:" status off \; \
-  set-option -t "=$view:" mouse off \; \
+  set-option -t "=$view:" mouse on \; \
   set-option -t "=$view:" detach-on-destroy on \; \
+  bind-key -T tsview-passthrough WheelUpPane if-shell -F '#{||:#{alternate_on},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -e; send-keys -X -N 5 scroll-up; switch-client -T tsview-scroll' \; \
+  bind-key -T tsview-scroll WheelUpPane if-shell -F '1' 'send-keys -X -N 5 scroll-up; switch-client -T tsview-scroll' \; \
+  bind-key -T tsview-scroll WheelDownPane if-shell -F '1' 'send-keys -X -N 5 scroll-down; if-shell -F "#{pane_in_mode}" "switch-client -T tsview-scroll" "switch-client -T tsview-passthrough"' \; \
+  bind-key -T tsview-scroll Escape if-shell -F '1' 'send-keys -X cancel; switch-client -T tsview-passthrough' \; \
+  bind-key -T tsview-scroll Any if-shell -F '1' 'send-keys -X cancel; switch-client -T tsview-passthrough' \; \
   link-window -d -s "$window_id" -t "=$view:" \; \
   kill-window -t "=$view:=$placeholder" \
   || die "could not create the view session"
