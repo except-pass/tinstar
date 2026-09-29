@@ -30,7 +30,7 @@ describe('useCcQuota', () => {
     expect((states.at(-1) as { snapshot: typeof body }).snapshot).toEqual(body)
   })
 
-  it('re-polls every 5 minutes', async () => {
+  it('re-polls every minute, well inside the rail stale window', async () => {
     const calls: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       calls.push(url)
@@ -39,7 +39,7 @@ describe('useCcQuota', () => {
 
     render(<Probe onSnap={() => {}} />)
     await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1))
-    await act(async () => { vi.advanceTimersByTime(5 * 60 * 1000) })
+    await act(async () => { vi.advanceTimersByTime(60 * 1000) })
     await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2))
   })
 })
