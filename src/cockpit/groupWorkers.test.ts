@@ -10,10 +10,10 @@ import {
 } from './groupWorkers'
 
 const workers: Array<GroupableWorker & { id: string }> = [
-  { id: 'helm', state: 'working', project: 'tinstar' },
-  { id: 'keel', state: 'working', project: 'firstmate' },
-  { id: 'spar', state: 'blocked', project: 'tinstar' },
-  { id: 'tiller', state: 'blocked', project: 'stretchplan' },
+  { id: 'helm', state: 'working', project: 'tinstar', direct: false },
+  { id: 'keel', state: 'working', project: 'firstmate', direct: false },
+  { id: 'spar', state: 'blocked', project: 'tinstar', direct: false },
+  { id: 'tiller', state: 'blocked', project: 'stretchplan', direct: false },
 ]
 
 const ids = (group: { workers: Array<{ id: string }> }) => group.workers.map(worker => worker.id)
@@ -36,6 +36,19 @@ describe('worker overview grouping', () => {
     expect(groups[0]!.groups.map(group => [group.value, ids(group)])).toEqual([
       ['working', ['helm']],
       ['blocked', ['spar']],
+    ])
+  })
+
+  it('nests direct and managed work in first-seen order', () => {
+    const marked = workers.map(worker => ({ ...worker, direct: worker.id === 'helm' }))
+    const groups = groupWorkers(marked, 'direct', 'status')
+    expect(groups.map(group => [group.value, ids(group)])).toEqual([
+      ['Direct', ['helm']],
+      ['Managed', ['keel', 'spar', 'tiller']],
+    ])
+    expect(groupWorkers(marked, 'status', 'direct')[0]!.groups.map(group => [group.value, ids(group)])).toEqual([
+      ['Direct', ['helm']],
+      ['Managed', ['keel']],
     ])
   })
 
@@ -67,6 +80,10 @@ describe('worker overview grouping', () => {
     writeGroupChoice(storage, { primary: 'project', secondary: 'status' })
     expect(stored.get(groupChoiceKey)).toBe('{"primary":"project","secondary":"status"}')
     expect(readGroupChoice(storage)).toEqual({ primary: 'project', secondary: 'status' })
+    writeGroupChoice(storage, { primary: 'direct', secondary: 'status' })
+    expect(readGroupChoice(storage)).toEqual({ primary: 'direct', secondary: 'status' })
+    stored.set(groupChoiceKey, '{"primary":"initiative","secondary":"status"}')
+    expect(readGroupChoice(storage)).toEqual(defaultGroupChoice)
     stored.set(groupChoiceKey, '{"primary":"status","secondary":"status"}')
     expect(readGroupChoice(storage)).toEqual(defaultGroupChoice)
     stored.set(groupChoiceKey, 'not-json')

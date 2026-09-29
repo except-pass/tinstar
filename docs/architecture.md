@@ -103,6 +103,7 @@ The directory comes from `getConfigRoot()` (override: `TINSTAR_CONFIG_HOME`).
 ~/.config/tinstar/
 ├── config.json              # firstmate.homes and firstmate.ports
 ├── fleet-outbox.json        # Cockpit messages to First Mate not yet finished
+├── worker-marks.json        # Direct workers, keyed by home and worker id
 ├── server.log               # Structured log output
 ├── server.lock              # Backend singleton lock
 ├── server.port / .host / .pid  # Written while the server is listening
@@ -112,7 +113,7 @@ The directory comes from `getConfigRoot()` (override: `TINSTAR_CONFIG_HOME`).
 
 ### Frontend
 
-The cockpit persists nothing in the browser. It reads the fleet from `GET /api/fleet`; a page refresh fetches a fresh copy.
+The browser remembers the overview grouping choice. Direct and managed marks live in `worker-marks.json` and come back with `GET /api/fleet`, so a refresh shows the same mark to every viewer.
 
 ---
 

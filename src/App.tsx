@@ -3,7 +3,7 @@ import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
 import {
-  applyGroupChoice, browserGroupStorage, groupDimensionLabels, groupDimensions, groupWorkers,
+  applyGroupChoice, browserGroupStorage, directLabel, groupDimensionLabels, groupDimensions, groupWorkers,
   readGroupChoice, writeGroupChoice, type GroupDimension,
 } from './cockpit/groupWorkers'
 import { QuotaRail } from './cockpit/QuotaRail'
@@ -12,7 +12,7 @@ import './cockpit.css'
 
 interface Worker {
   key: string; id: string; home: string; kind: string; state: string; detail: string
-  observedAt: string | null; freshness: string; objective: string; project: string
+  observedAt: string | null; freshness: string; objective: string; project: string; direct: boolean
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
 }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
@@ -45,6 +45,18 @@ function StateChip({ state }: { state: string }) {
   return <span className={`cockpit-state cockpit-state-${state.toLowerCase().replace(/[^a-z0-9-]/g, '')}`}>{state}</span>
 }
 
+function DirectControl({ worker, disabled, onChange }: { worker: Worker; disabled: boolean; onChange: (direct: boolean) => void }) {
+  const label = directLabel(worker.direct)
+  return <button
+    type="button"
+    className={`cockpit-direct${worker.direct ? ' cockpit-direct-on' : ''}`}
+    aria-pressed={worker.direct}
+    aria-label={`${worker.id} ${label}`}
+    disabled={disabled}
+    onClick={() => onChange(!worker.direct)}
+  >{label}</button>
+}
+
 function GroupHeading({ dimension, value, count }: { dimension: GroupDimension; value: string; count: number }) {
   return <div className="cockpit-group-heading">
     {dimension === 'status' ? <StateChip state={value} /> : <span className="cockpit-group-label" title={value}>{value}</span>}
@@ -52,11 +64,15 @@ function GroupHeading({ dimension, value, count }: { dimension: GroupDimension; 
   </div>
 }
 
-function WorkerCard({ worker, onOpen }: { worker: Worker; onOpen: () => void }) {
-  return <button className="cockpit-card" onClick={onOpen} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
-    <div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div>
-    <p>{worker.objective}</p><small>{worker.detail}</small>
-  </button>
+function WorkerCard({ worker, busy, onOpen, onDirect }: { worker: Worker; busy: boolean; onOpen: () => void; onDirect: (direct: boolean) => void }) {
+  return <article className="cockpit-card" style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
+    <div className="cockpit-card-top">
+      <button type="button" className="cockpit-card-id" onClick={onOpen}><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div></button>
+      <DirectControl worker={worker} disabled={busy} onChange={onDirect} />
+      <button type="button" className="cockpit-card-arrow" aria-label={`Open ${worker.id}`} onClick={onOpen}><span className="material-symbols-outlined">arrow_forward</span></button>
+    </div>
+    <button type="button" className="cockpit-card-body" onClick={onOpen}><p>{worker.objective}</p><small>{worker.detail}</small></button>
+  </article>
 }
 
 function displayTime(value: string | null): string {
@@ -145,6 +161,8 @@ export default function App() {
   const [messages, setMessages] = useState<OutboxMessage[]>([])
   const [messageError, setMessageError] = useState<string | null>(null)
   const [groupBy, setGroupBy] = useState(() => readGroupChoice(browserGroupStorage()))
+  const [directBusy, setDirectBusy] = useState<Record<string, boolean>>({})
+  const pendingDirect = useRef(new Map<string, boolean>())
   const focusTerminal = useRef(false)
   const messagesInFlight = useRef(false)
 
@@ -156,7 +174,15 @@ export default function App() {
       if (!raw) throw new Error('Fleet service returned an empty response')
       let body: { ok: boolean; data?: FleetData }
       try { body = JSON.parse(raw) as typeof body } catch { throw new Error('Fleet service response was incomplete') }
-      if (body.ok && body.data) setFleet(body.data)
+      if (body.ok && body.data) {
+        const workers = body.data.workers.map(worker => {
+          const pending = pendingDirect.current.get(worker.key)
+          if (pending === undefined) return worker
+          if (worker.direct === pending) pendingDirect.current.delete(worker.key)
+          return { ...worker, direct: pending }
+        })
+        setFleet({ ...body.data, workers })
+      }
       else throw new Error('Fleet service did not return workers')
     } catch (err) {
       setFleet(previous => ({ ...previous, errors: [(err as Error).message] }))
@@ -186,6 +212,33 @@ export default function App() {
     void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
       .catch(error => setMessageError((error as Error).message))
   }, [submit])
+
+  const directLocks = useRef(new Set<string>())
+  const setDirect = useCallback(async (worker: Worker, direct: boolean) => {
+    if (directLocks.current.has(worker.key)) return
+    directLocks.current.add(worker.key)
+    setDirectBusy(previous => ({ ...previous, [worker.key]: true }))
+    pendingDirect.current.set(worker.key, direct)
+    setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct } : item) }))
+    try {
+      const response = await apiFetch(`/api/fleet/${encodeURIComponent(worker.key)}/direct`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direct }),
+      })
+      const body = await response.json() as { ok: boolean; data?: { direct: boolean; note: SubmitResult | null }; error?: { message: string } }
+      const applied = body.data
+      if (!response.ok || !body.ok || !applied) throw new Error(body.error?.message ?? 'Could not update the mark')
+      pendingDirect.current.set(worker.key, applied.direct)
+      setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: applied.direct } : item) }))
+      if (applied.note && !applied.note.saved) setMessageError(applied.note.error ?? 'The mark was saved. First Mate did not get the note.')
+    } catch (error) {
+      pendingDirect.current.delete(worker.key)
+      setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: worker.direct } : item) }))
+      setMessageError((error as Error).message)
+    } finally {
+      directLocks.current.delete(worker.key)
+      setDirectBusy(previous => ({ ...previous, [worker.key]: false }))
+    }
+  }, [])
 
   useEffect(() => {
     void refresh()
@@ -324,10 +377,10 @@ export default function App() {
         {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
           {grouped.map(group => <section key={group.value} className="cockpit-group">
             <GroupHeading dimension={groupBy.primary} value={group.value} count={group.workers.length} />
-            {group.groups.length === 0 ? <div className="cockpit-card-grid">{group.workers.map(worker => <WorkerCard key={worker.key} worker={worker} onOpen={() => setSelected(worker.key)} />)}</div>
+            {group.groups.length === 0 ? <div className="cockpit-card-grid">{group.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => setSelected(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
               : group.groups.map(inner => <section key={inner.value} className="cockpit-subgroup">
                 <GroupHeading dimension={groupBy.secondary} value={inner.value} count={inner.workers.length} />
-                <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} onOpen={() => setSelected(worker.key)} />)}</div>
+                <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => setSelected(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
               </section>)}
           </section>)}
         </div>}
@@ -347,7 +400,7 @@ export default function App() {
           <button type="button" className="cockpit-detail-summary" aria-expanded={detailOpen} onClick={() => setDetailOpen(open => !open)}>{detailOpen ? 'Close' : 'Details'}</button>
           <div className="cockpit-detail-body">
             <header className="cockpit-worker-header" style={{ '--worker-color': identityColor(current.id) } as React.CSSProperties}>
-              <div className="cockpit-worker-identity"><Face worker={current} size={44} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><StateChip state={current.state} /></div></div>
+              <div className="cockpit-worker-identity"><Face worker={current} size={44} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><span className="cockpit-worker-marks"><StateChip state={current.state} /><DirectControl worker={current} disabled={!!directBusy[current.key]} onChange={direct => void setDirect(current, direct)} /></span></div></div>
               <span key={`flash:${current.key}`} className="cockpit-switch-flash" aria-hidden="true" />
               <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
             </header>

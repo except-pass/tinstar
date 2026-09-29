@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -31,6 +31,33 @@ test('overview groups a private fleet by status and project and remembers the ch
     chmodSync(join(bin, 'tmux'), 0o755)
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
+    const notes = join(home, 'state', 'notes.log')
+    writeFileSync(join(home, 'bin', 'fm-inbox.sh'), `#!/usr/bin/env python3
+import json, sys, pathlib
+command = sys.argv[1]
+notes = pathlib.Path(${JSON.stringify(notes)})
+def load():
+    if not notes.exists():
+        return []
+    return [json.loads(line) for line in notes.read_text().splitlines() if line.strip()]
+if command == 'note':
+    request_id = sys.argv[sys.argv.index('--request-id') + 1]
+    body = sys.stdin.read()
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    rows = load()
+    if not any(row.get('request_id') == request_id for row in rows):
+        rows.append({'request_id': request_id, 'body': body, 'acknowledged': False, 'announced': True, 'reply': None})
+        notes.write_text(''.join(json.dumps(row) + '\\n' for row in rows))
+    print(json.dumps({'saved': True}))
+elif command == 'receipts':
+    print(json.dumps({'pending': load(), 'handled': []}))
+elif command == 'ready':
+    print(json.dumps({'can_receive': True}))
+else:
+    sys.stderr.write('unsupported')
+    sys.exit(1)
+`)
+    chmodSync(join(home, 'bin', 'fm-inbox.sh'), 0o755)
     writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
       schema: 'fm-fleet-snapshot.v1',
       tasks: crew.map(([id, state, project]) => ({
@@ -89,6 +116,19 @@ test('overview groups a private fleet by status and project and remembers the ch
     expect(await page.evaluate(() => localStorage.getItem('tinstar-cockpit-group-by'))).toBe('{"primary":"project","secondary":"status"}')
     await page.screenshot({ path: test.info().outputPath('group-by-project-status-1440x900.png'), fullPage: true })
 
+    await page.getByRole('button', { name: 'helm Managed' }).click()
+    await expect(page.getByRole('button', { name: 'helm Direct' })).toBeVisible()
+    await expect(page.locator('.cockpit-card').filter({ hasText: 'keel' }).getByRole('button', { name: 'keel Managed' })).toBeVisible()
+    await expect.poll(() => {
+      try { return readFileSync(notes, 'utf8') } catch { return '' }
+    }).toContain('marked direct')
+    expect(readFileSync(notes, 'utf8')).toContain('task helm')
+    await page.locator('.cockpit-card').filter({ hasText: 'helm' }).locator('strong').click()
+    await expect(page.getByRole('heading', { name: 'helm' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'helm Direct' })).toBeVisible()
+    await page.getByRole('button', { name: 'Overview' }).click()
+    await expect(page.getByRole('combobox', { name: 'Group by' })).toHaveValue('project')
+
     await page.setViewportSize({ width: 760, height: 900 })
     await expect(primary.nth(0).locator('.cockpit-card strong')).toHaveText(['helm', 'spar'])
     await page.screenshot({ path: test.info().outputPath('group-by-project-status-760x900.png'), fullPage: true })
@@ -97,6 +137,20 @@ test('overview groups a private fleet by status and project and remembers the ch
     await expect(page.getByRole('combobox', { name: 'Group by' })).toHaveValue('project')
     await expect(page.getByRole('combobox', { name: 'Then by' })).toHaveValue('status')
     await expect(page.locator('.cockpit-group')).toHaveCount(3)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await expect(page.getByRole('button', { name: 'helm Direct' })).toBeVisible()
+    await page.getByRole('combobox', { name: 'Group by' }).selectOption('direct')
+    await expect(page.getByRole('combobox', { name: 'Group by' })).toHaveValue('direct')
+    await expect(page.getByRole('combobox', { name: 'Then by' })).toHaveValue('status')
+    await expect(page.locator('.cockpit-group')).toHaveCount(2)
+    await expect(page.locator('.cockpit-group').nth(0).locator('.cockpit-group-label').first()).toHaveText('Direct')
+    await expect(page.locator('.cockpit-group').nth(0).locator('.cockpit-card strong')).toHaveText(['helm'])
+    await expect(page.locator('.cockpit-group').nth(1).locator('.cockpit-group-label').first()).toHaveText('Managed')
+    await expect(page.locator('.cockpit-group').nth(1).locator('.cockpit-card strong')).toHaveText(['keel', 'spar', 'tiller'])
+    await page.screenshot({ path: test.info().outputPath('group-by-direct-1440x900.png'), fullPage: true })
+    await page.setViewportSize({ width: 760, height: 900 })
+    await expect(page.locator('.cockpit-group').nth(0).locator('.cockpit-card strong')).toHaveText(['helm'])
+    await page.screenshot({ path: test.info().outputPath('group-by-direct-760x900.png'), fullPage: true })
     expect(tmux('display-message', '-p', '-t', 'firstmate', '#S')).toBe('firstmate')
     await page.close()
   } finally {

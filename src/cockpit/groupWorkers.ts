@@ -1,9 +1,14 @@
 /** Overview grouping the browser can apply from fields already on each worker. */
-export const groupDimensions = ['status', 'project'] as const
+export const groupDimensions = ['status', 'project', 'direct'] as const
 export type GroupDimension = (typeof groupDimensions)[number]
 export const groupDimensionLabels: Record<GroupDimension, string> = {
   status: 'Status',
   project: 'Project',
+  direct: 'Direct / managed',
+}
+
+export function directLabel(direct: boolean): 'Direct' | 'Managed' {
+  return direct ? 'Direct' : 'Managed'
 }
 
 export interface GroupChoice {
@@ -14,6 +19,7 @@ export interface GroupChoice {
 export interface GroupableWorker {
   state: string
   project: string
+  direct: boolean
 }
 
 export interface WorkerGroup<T> {
@@ -60,7 +66,11 @@ export function writeGroupChoice(storage: Pick<Storage, 'setItem'> | null, choic
 }
 
 function valueOf(worker: GroupableWorker, dimension: GroupDimension): string {
-  return dimension === 'status' ? worker.state : worker.project
+  switch (dimension) {
+    case 'status': return worker.state
+    case 'project': return worker.project
+    case 'direct': return directLabel(worker.direct)
+  }
 }
 
 /** Groups in first-seen order. A repeated dimension stays one level. */
