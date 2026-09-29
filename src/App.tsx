@@ -266,6 +266,7 @@ export default function App() {
     const url = `${window.location.pathname}${search}${window.location.hash}`
     const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
     if (url !== here) {
+      // WebKit and Firefox throw after bursts of history calls; the view must still follow.
       try {
         if (mode === 'push') history.pushState(null, '', url)
         else history.replaceState(null, '', url)
