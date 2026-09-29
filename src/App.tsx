@@ -265,8 +265,12 @@ export default function App() {
     const search = writeOverviewSearch(window.location.search, linkLocation(workers, next))
     const url = `${window.location.pathname}${search}${window.location.hash}`
     const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    if (mode === 'push' && url !== here) history.pushState(null, '', url)
-    else history.replaceState(null, '', url)
+    if (url !== here) {
+      try {
+        if (mode === 'push') history.pushState(null, '', url)
+        else history.replaceState(null, '', url)
+      } catch {}
+    }
     overviewRef.current = next
     setOverviewLocation(next)
   }, [workers])
