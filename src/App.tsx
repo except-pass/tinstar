@@ -7,7 +7,7 @@ import {
   readGroupChoice, writeGroupChoice, type GroupDimension,
 } from './cockpit/groupWorkers'
 import { QuotaRail } from './cockpit/QuotaRail'
-import type { AttentionCard } from './server/fleet/attention'
+import type { AttentionCard as FleetAttentionCard } from './server/fleet/attention'
 import './cockpit.css'
 
 interface Worker {
@@ -15,10 +15,11 @@ interface Worker {
   observedAt: string | null; freshness: string; objective: string; project: string; direct: boolean
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
 }
+type AttentionCard = FleetAttentionCard & { home: string | null }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
 interface OutboxMessage {
-  requestId: string; taskId: string | null
+  requestId: string; home: string; taskId: string | null; decisionKey: string | null
   kind: 'answer' | 'message'; text: string
   state: 'unknown' | 'sending' | 'saved' | 'acknowledged' | 'done'
   announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
@@ -86,7 +87,100 @@ const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'erro
 
 type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
 
-function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult> }) {
+function dismissNote(card: AttentionCard): string {
+  const key = card.decisionKey ?? ''
+  return card.taskId ? `Dismiss decision ${key} on task ${card.taskId}.` : `Dismiss decision ${key}.`
+}
+
+function sameDismiss(card: AttentionCard, message: OutboxMessage): boolean {
+  return message.kind === 'answer' && message.home === card.home && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
+}
+
+function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
+  const track = useRef<HTMLDivElement>(null)
+  const knob = useRef<HTMLSpanElement>(null)
+  const pos = useRef(0)
+  const dragging = useRef(false)
+  const [x, setX] = useState(0)
+  const [travel, setTravel] = useState(1)
+
+  const limit = () => {
+    const width = track.current?.clientWidth ?? 0
+    const knobWidth = knob.current?.offsetWidth ?? 0
+    return width > 0 ? Math.max(0, width - knobWidth - 4) : 0
+  }
+  const moveTo = (next: number) => {
+    const max = limit()
+    const clamped = Math.min(max, Math.max(0, next))
+    pos.current = clamped
+    setTravel(max || 1)
+    setX(clamped)
+    return { clamped, max }
+  }
+  const reset = () => { pos.current = 0; setX(0) }
+  const release = () => {
+    const { clamped, max } = { clamped: pos.current, max: limit() }
+    if (max > 0 && clamped >= max - 4) onConfirm()
+    else reset()
+  }
+
+  return <div
+    className="cockpit-slide"
+    ref={track}
+    role="slider"
+    tabIndex={0}
+    aria-label="Slide to dismiss"
+    aria-valuemin={0}
+    aria-valuemax={100}
+    aria-valuenow={Math.min(100, Math.round((x / travel) * 100))}
+    onKeyDown={event => {
+      const max = limit()
+      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const { clamped } = moveTo(pos.current + max / 6)
+        if (max > 0 && clamped >= max - 4) onConfirm()
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'Escape') {
+        event.preventDefault()
+        reset()
+      } else if (event.key === ' ' || event.key === 'Enter') event.preventDefault()
+    }}
+    onBlur={() => { if (!dragging.current) reset() }}
+  >
+    <span className="cockpit-slide-label">Slide to dismiss</span>
+    <span
+      ref={knob}
+      className={`cockpit-slide-knob${dragging.current ? ' dragging' : ''}`}
+      style={{ transform: `translateX(${x}px)` }}
+      onPointerDown={event => {
+        if (event.button !== 0) return
+        dragging.current = true
+        event.currentTarget.setPointerCapture(event.pointerId)
+        event.preventDefault()
+      }}
+      onPointerMove={event => {
+        if (!dragging.current || !track.current) return
+        const rect = track.current.getBoundingClientRect()
+        moveTo(event.clientX - rect.left - 2 - (knob.current?.offsetWidth ?? 0) / 2)
+      }}
+      onPointerUp={() => { if (!dragging.current) return; dragging.current = false; release() }}
+      onPointerCancel={() => { dragging.current = false; reset() }}
+    />
+  </div>
+}
+
+function DismissControl({ card, held, error, onDismiss }: { card: AttentionCard; held: boolean; error: string | null; onDismiss: (card: AttentionCard) => void }) {
+  if (card.type !== 'decision' || !card.decisionKey) return null
+  if (held) return <p className="cockpit-dismissing" role="status">dismissing…</p>
+  return <>
+    <SlideToDismiss onConfirm={() => onDismiss(card)} />
+    {error && <p className="cockpit-dismiss-error" role="alert">{error}</p>}
+  </>
+}
+
+function AttentionCardView({ card, worker, open, submit, dismissing, dismissError, onDismiss }: {
+  card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult>
+  dismissing: boolean; dismissError: string | null; onDismiss: (card: AttentionCard) => void
+}) {
   const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
     : <span className="cockpit-attention-origin cockpit-attention-origin-empty"><span className="material-symbols-outlined">account_tree</span>First Mate backlog</span>
   return <article className={`cockpit-attention-card cockpit-attention-${card.type}`}>
@@ -104,6 +198,7 @@ function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard
       {card.type === 'failure' && card.detail && <small className="cockpit-attention-failure-detail">{card.detail}</small>}
       <div className="cockpit-attention-bottom">{origin}<button className="cockpit-attention-action" onClick={open}>Open →</button></div>
       {card.type === 'decision' && <details className="cockpit-card-composer"><summary>Answer</summary><Composer anchorKey={card.key} kind="answer" submit={submit} /></details>}
+      <DismissControl card={card} held={dismissing} error={dismissError} onDismiss={onDismiss} />
       <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
     </>}
   </article>
@@ -166,6 +261,9 @@ export default function App() {
   const fleetRequests = useRef(0)
   const focusTerminal = useRef(false)
   const messagesInFlight = useRef(false)
+  const dismissIds = useRef<Record<string, string>>({})
+  const dismissBusy = useRef(new Set<string>())
+  const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     const started = ++fleetRequests.current
@@ -218,6 +316,32 @@ export default function App() {
       .catch(error => setMessageError((error as Error).message))
   }, [submit])
 
+  const dismiss = useCallback((card: AttentionCard) => {
+    if (dismissBusy.current.has(card.key)) return
+    const text = dismissNote(card)
+    const existing = messages.find(message => sameDismiss(card, message) && message.state === 'sending')
+    const requestId = dismissIds.current[card.key] ?? existing?.requestId ?? mintRequestId()
+    dismissIds.current[card.key] = requestId
+    dismissBusy.current.add(card.key)
+    setDismissErrors(previous => {
+      if (!previous[card.key]) return previous
+      const next = { ...previous }
+      delete next[card.key]
+      return next
+    })
+    void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
+      dismissBusy.current.delete(card.key)
+      if (result.saved) return
+      setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
+    }).catch(error => {
+      dismissBusy.current.delete(card.key)
+      setDismissErrors(previous => ({ ...previous, [card.key]: (error as Error).message }))
+    })
+  }, [messages, submit])
+
+  const dismissHeld = useCallback((card: AttentionCard) =>
+    messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && message.state !== 'done'), [messages])
+
   const directLocks = useRef(new Set<string>())
   const setDirect = useCallback(async (worker: Worker, direct: boolean) => {
     if (directLocks.current.has(worker.key)) return
@@ -255,6 +379,17 @@ export default function App() {
   const workers = fleet.workers
   const waiting = loading || !fleet.ready
   const attention = fleet.attention ?? []
+  useEffect(() => {
+    if (!fleet.ready) return
+    const openKeys = new Set(attention.map(card => card.key))
+    const held = new Set(attention.filter(dismissHeld).map(card => card.key))
+    for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key) || held.has(key)) delete dismissIds.current[key]
+    if (fleet.errors.length > 0) return
+    setDismissErrors(previous => {
+      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !held.has(key)))
+      return Object.keys(next).length === Object.keys(previous).length ? previous : next
+    })
+  }, [fleet.ready, attention, dismissHeld])
   const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = workers.find(w => w.key === selected) ?? null
   const order = useMemo(() => workers.map(w => w.key), [workers])
@@ -355,7 +490,7 @@ export default function App() {
       <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
       <div className="cockpit-attention-list" aria-label="Needs You">
         {fleet.errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {fleet.errors.join('; ')}</p>}
-        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} />)
+        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissHeld(card)} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} />)
           : fleet.errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
       </div>
       <div className="cockpit-rail-heading"><span>MESSAGES</span><span>{messages.length}</span></div>
