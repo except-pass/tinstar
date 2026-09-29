@@ -68,10 +68,9 @@ const promptProblems = async (page: Page, id: string) => {
   })
   const host = await page.locator('.cockpit-terminal-frame').first().boundingBox()
   const viewport = page.viewportSize()
-  const screenTop = host && screen ? host.y + screen.top : null
   const screenBottom = host && screen ? host.y + screen.bottom : null
-  if (screenTop === null || screenBottom === null || !viewport || screenTop < -1 || screenBottom > viewport.height + 1) {
-    problems.push(`terminal screen is outside the viewport (${screenTop}..${screenBottom} of ${viewport?.height})`)
+  if (!screen || screenBottom === null || !viewport || screen.top < -1 || screenBottom > viewport.height + 1) {
+    problems.push(`terminal screen is outside the stage and viewport (stage top ${screen?.top}, bottom ${screenBottom} of ${viewport?.height})`)
   }
   const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term

@@ -256,7 +256,7 @@
     function placePinnedFrame(term, screen) {
       var viewport = term.element.querySelector('.xterm-viewport')
       var bar = viewport ? Math.max(0, viewport.offsetWidth - viewport.clientWidth) : 0
-      termEl.style.width = Math.ceil(screen.offsetWidth + bar) + 'px'
+      termEl.style.width = Math.ceil(screen.offsetWidth + bar + 10) + 'px'
       termEl.style.height = '100%'
       termEl.style.maxHeight = '100%'
     }
