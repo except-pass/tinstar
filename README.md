@@ -10,7 +10,7 @@ The left rail lists workers and **Needs You** cards for decisions, blocked or fa
 
 ## Worker links
 
-The open worker and the overview filter are part of the page URL, so a view can be opened directly or shared.
+The open worker and the overview filter are part of the page URL, so a view can be opened directly or shared. Opening a worker or returning to the overview adds a browser history entry; typing in the filter and cycling with **Ctrl+[** / **Ctrl+]** update the current entry instead.
 
 | URL | Opens |
 | --- | --- |
