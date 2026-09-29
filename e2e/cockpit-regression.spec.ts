@@ -26,9 +26,26 @@ const promptProblems = async (page: Page, id: string) => {
     const found: string[] = []
     const stage = document.querySelector('.cockpit-terminal-stage')!.getBoundingClientRect()
     const main = document.querySelector('.cockpit-main')!
-    if (stage.bottom > innerHeight || stage.right > innerWidth) found.push(`stage ends at ${stage.right}x${stage.bottom} in ${innerWidth}x${innerHeight}`)
-    if (document.documentElement.scrollHeight > innerHeight) found.push('page scrolls')
-    if (main.scrollHeight > main.clientHeight) found.push('worker pane scrolls')
+    const rail = document.querySelector('.cockpit-detail-rail')
+    if (stage.bottom > innerHeight + 1 || stage.right > innerWidth + 1) found.push(`stage ends at ${stage.right}x${stage.bottom} in ${innerWidth}x${innerHeight}`)
+    if (!rail) found.push('detail rail missing')
+    else {
+      const box = rail.getBoundingClientRect()
+      const wide = innerWidth > 1200
+      const top = wide ? 0 : box.bottom
+      if (Math.abs(stage.top - top) > 2 || stage.bottom < innerHeight - 2) found.push(`terminal does not fill the height below ${Math.round(top)} (${Math.round(stage.top)}..${Math.round(stage.bottom)} of ${innerHeight})`)
+      if (wide && (Math.abs(box.left - stage.right) > 2 || box.width < 200)) found.push(`detail rail is not beside the terminal (${Math.round(box.left)} vs stage ${Math.round(stage.right)})`)
+      if (!wide) {
+        if (box.height > 64 || box.width < stage.width - 2) found.push(`narrow detail rail is not a slim header above the terminal (${Math.round(box.width)}x${Math.round(box.height)})`)
+        for (const selector of ['h1', '[aria-label="Previous worker"]', '[aria-label="Next worker"]', '.cockpit-detail-summary']) {
+          const r = rail.querySelector(selector)?.getBoundingClientRect()
+          if (!r || !r.width || r.bottom > stage.top + 1) found.push(`${selector} is not visible above the terminal`)
+        }
+        if (!rail.classList.contains('is-open') && rail.querySelector('.cockpit-worker-content')!.getClientRects().length) found.push('narrow detail rail is not collapsed')
+      }
+    }
+    if (document.documentElement.scrollHeight > innerHeight + 1) found.push('page scrolls')
+    if (main.scrollHeight > main.clientHeight + 1) found.push('worker pane scrolls')
     return found
   })
   const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
@@ -148,11 +165,18 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
     expect(alphaSize()).toBe('220x60')
     await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
-    for (const viewport of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]) {
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1000, height: 768 }, { width: 720, height: 900 }]) {
       await page.setViewportSize(viewport)
       await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
     }
+    await page.setViewportSize({ width: 720, height: 900 })
+    await page.locator('.cockpit-detail-summary').click()
+    await expect(page.locator('.cockpit-objective')).toBeVisible()
+    await expect(page.locator('.cockpit-status-detail')).toBeVisible()
+    await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+    await page.screenshot({ path: test.info().outputPath('private-prompt-720x900-details-open.png') })
+    await page.locator('.cockpit-detail-summary').click()
     await page.setViewportSize({ width: 1280, height: 720 })
     await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     await page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').locator('.xterm-screen').click()
