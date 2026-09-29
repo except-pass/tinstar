@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
-import { filterWorkers, findLinkedWorker, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
+import { filterWorkers, findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
 import { QuotaRail } from './cockpit/QuotaRail'
 import type { AttentionCard } from './server/fleet/attention'
 import './cockpit.css'
@@ -197,12 +197,12 @@ export default function App() {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
-    applyOverviewLocation({ worker: worker.id, home: worker.home, q: overviewRef.current.q }, 'push')
+    applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, 'push')
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
     setSelectedAttention(null)
-    applyOverviewLocation({ worker: null, home: null, q: overviewRef.current.q }, 'push')
+    applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
 
   const order = useMemo(() => workers.map(w => w.key), [workers])

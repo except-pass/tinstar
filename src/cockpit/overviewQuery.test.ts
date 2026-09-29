@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterWorkers, findLinkedWorker, linkLocation, readOverviewSearch, writeOverviewSearch, type FilterableWorker } from './overviewQuery'
+import { filterWorkers, findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type FilterableWorker } from './overviewQuery'
 
 const workers: FilterableWorker[] = [
   { id: 'alpha', objective: 'Chart the harbor lights' },
@@ -27,49 +27,56 @@ describe('filterWorkers', () => {
 })
 
 describe('overview search params', () => {
-  it('reads a worker task id and a filter', () => {
-    expect(readOverviewSearch('?worker=alpha&q=harbor')).toEqual({ worker: 'alpha', home: null, q: 'harbor' })
-    expect(readOverviewSearch('?worker=alpha&home=%2Fhomes%2Fb')).toEqual({ worker: 'alpha', home: '/homes/b', q: '' })
-    expect(readOverviewSearch('')).toEqual({ worker: null, home: null, q: '' })
-    expect(readOverviewSearch('?worker=&home=%2Fhomes%2Fb')).toEqual({ worker: null, home: null, q: '' })
+  it('reads a worker task id, home name and filter', () => {
+    expect(readOverviewSearch('?worker=alpha&q=harbor')).toEqual({ worker: 'alpha', home: null, key: null, q: 'harbor' })
+    expect(readOverviewSearch('?worker=alpha&home=b')).toEqual({ worker: 'alpha', home: 'b', key: null, q: '' })
+    expect(readOverviewSearch('')).toEqual({ worker: null, home: null, key: null, q: '' })
+    expect(readOverviewSearch('?worker=&home=b')).toEqual({ worker: null, home: null, key: null, q: '' })
   })
 
   it('writes the worker and filter without dropping other params', () => {
-    expect(writeOverviewSearch('?v6=1', { worker: 'alpha', home: null, q: 'harbor' })).toBe('?v6=1&worker=alpha&q=harbor')
-    expect(writeOverviewSearch('?worker=alpha&home=%2Fhomes%2Fb&q=harbor&v6=1', { worker: null, home: null, q: '' })).toBe('?v6=1')
+    expect(writeOverviewSearch('?v6=1', { worker: 'alpha', home: null, key: 'cockpit-0-alpha', q: 'harbor' })).toBe('?v6=1&worker=alpha&q=harbor')
+    expect(writeOverviewSearch('?worker=alpha&home=b&q=harbor&v6=1', { worker: null, home: null, key: null, q: '' })).toBe('?v6=1')
   })
 
   it('round-trips a task id and home that need encoding', () => {
-    const search = writeOverviewSearch('', { worker: 'a/b c', home: '/homes/b', q: 'north window' })
-    expect(readOverviewSearch(search)).toEqual({ worker: 'a/b c', home: '/homes/b', q: 'north window' })
+    const search = writeOverviewSearch('', { worker: 'a/b c', home: 'home b', key: null, q: 'north window' })
+    expect(readOverviewSearch(search)).toEqual({ worker: 'a/b c', home: 'home b', key: null, q: 'north window' })
   })
 })
 
 describe('worker links across First Mate homes', () => {
   const fleet = [
-    { key: 'cockpit-0-shared', id: 'shared', home: '/homes/a' },
-    { key: 'cockpit-1-shared', id: 'shared', home: '/homes/b' },
-    { key: 'cockpit-1-solo', id: 'solo', home: '/homes/b' },
+    { key: 'cockpit-0-shared', id: 'shared', home: '/Users/me/homes/a' },
+    { key: 'cockpit-1-shared', id: 'shared', home: '/Users/me/homes/b/' },
+    { key: 'cockpit-1-solo', id: 'solo', home: '/Users/me/homes/b/' },
+    { key: 'cockpit-2-shared', id: 'shared', home: '/Users/other/homes/a' },
   ]
+  const select = (worker: typeof fleet[number], q = '') => ({ worker: worker.id, home: homeName(worker.home), key: worker.key, q })
 
-  it('names the home in the URL only when the task id is in more than one home', () => {
-    expect(linkLocation(fleet, { worker: 'shared', home: '/homes/b', q: '' })).toEqual({ worker: 'shared', home: '/homes/b', q: '' })
-    expect(linkLocation(fleet, { worker: 'solo', home: '/homes/b', q: 'x' })).toEqual({ worker: 'solo', home: null, q: 'x' })
-    expect(linkLocation(fleet, { worker: null, home: '/homes/b', q: '' })).toEqual({ worker: null, home: null, q: '' })
+  it('names a home by its folder name', () => {
+    expect(homeName('/Users/me/homes/a')).toBe('a')
+    expect(homeName('/Users/me/homes/b/')).toBe('b')
   })
 
-  it('opens the worker in the named home, or the only match when no home is named', () => {
-    expect(findLinkedWorker(fleet, { worker: 'shared', home: '/homes/b', q: '' })?.key).toBe('cockpit-1-shared')
-    expect(findLinkedWorker(fleet, { worker: 'shared', home: '/homes/a', q: '' })?.key).toBe('cockpit-0-shared')
-    expect(findLinkedWorker(fleet, { worker: 'solo', home: null, q: '' })?.key).toBe('cockpit-1-solo')
-    expect(findLinkedWorker(fleet, { worker: 'solo', home: '/homes/a', q: '' })).toBeNull()
-    expect(findLinkedWorker(fleet, { worker: 'shared', home: null, q: '' })).toBeNull()
+  it('puts the home folder name in the URL only when the task id is in more than one home', () => {
+    const shared = writeOverviewSearch('', linkLocation(fleet, select(fleet[1]!)))
+    expect(shared).toBe('?worker=shared&home=b')
+    expect(shared).not.toContain('Users')
+    expect(writeOverviewSearch('', linkLocation(fleet, select(fleet[2]!, 'x')))).toBe('?worker=solo&q=x')
+    expect(writeOverviewSearch('', linkLocation(fleet, { worker: null, home: 'b', key: null, q: '' }))).toBe('')
   })
 
-  it('keeps each home reachable when a selection round-trips through its URL', () => {
-    for (const worker of fleet) {
-      const search = writeOverviewSearch('', linkLocation(fleet, { worker: worker.id, home: worker.home, q: '' }))
-      expect(findLinkedWorker(fleet, readOverviewSearch(search))?.key).toBe(worker.key)
-    }
+  it('keeps the selected worker by key in memory', () => {
+    for (const worker of fleet) expect(findLinkedWorker(fleet, select(worker))?.key).toBe(worker.key)
+  })
+
+  it('opens a link in the named home, the first home with that name, or the only match when no home is named', () => {
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=shared&home=b'))?.key).toBe('cockpit-1-shared')
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=shared&home=a'))?.key).toBe('cockpit-0-shared')
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=solo'))?.key).toBe('cockpit-1-solo')
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=solo&home=a'))).toBeNull()
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=shared'))).toBeNull()
+    expect(findLinkedWorker(fleet, readOverviewSearch('?worker=shared&home=%2FUsers%2Fme%2Fhomes%2Fb'))).toBeNull()
   })
 })

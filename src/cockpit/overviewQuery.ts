@@ -9,15 +9,24 @@ export interface FilterableWorker {
 export interface OverviewLocation {
   /** First Mate task id, or null when the overview is showing. */
   worker: string | null
-  /** First Mate home of the worker, or null to take the only worker with that task id. */
+  /** Folder name of the worker's First Mate home, or null to take the only worker with that task id. */
   home: string | null
+  /** Per-home worker key chosen in the cockpit. Never written to the URL. */
+  key: string | null
   /** Overview filter text. Empty means every worker. */
   q: string
 }
 
 export interface LinkableWorker {
+  key: string
   id: string
+  /** Absolute First Mate home path. */
   home: string
+}
+
+/** The name a link uses for a First Mate home: its last folder name, never the full path. */
+export function homeName(home: string): string {
+  return home.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || home
 }
 
 /**
@@ -36,17 +45,22 @@ export function filterWorkers<T extends FilterableWorker>(workers: T[], query: s
   return workers.filter(worker => hits.has(worker))
 }
 
-/** The worker a location names: its task id in its home, or the task id's only match when no home is given. */
+/**
+ * The worker a location names: the selected key when there is one, else the task id's first match in the
+ * named home, or its only match when no home is named.
+ */
 export function findLinkedWorker<T extends LinkableWorker>(workers: T[], location: OverviewLocation): T | null {
   if (!location.worker) return null
-  const matches = workers.filter(worker => worker.id === location.worker && (location.home === null || worker.home === location.home))
-  return matches.length === 1 ? matches[0]! : null
+  if (location.key) return workers.find(worker => worker.key === location.key) ?? null
+  const matches = workers.filter(worker => worker.id === location.worker)
+  if (location.home === null) return matches.length === 1 ? matches[0]! : null
+  return matches.find(worker => homeName(worker.home) === location.home) ?? null
 }
 
 /** The location to put in the URL: the home is kept only when its task id is in more than one home. */
 export function linkLocation(workers: LinkableWorker[], location: OverviewLocation): OverviewLocation {
-  const shared = workers.some(worker => worker.id === location.worker && worker.home !== location.home)
-  return { ...location, home: location.worker && shared ? location.home : null }
+  const shared = workers.filter(worker => worker.id === location.worker).length > 1
+  return { ...location, home: shared ? location.home : null }
 }
 
 export function readOverviewSearch(search: string): OverviewLocation {
@@ -54,8 +68,8 @@ export function readOverviewSearch(search: string): OverviewLocation {
   const worker = params.get('worker')
   const home = params.get('home')
   return worker && worker.trim()
-    ? { worker, home: home || null, q: params.get('q') ?? '' }
-    : { worker: null, home: null, q: params.get('q') ?? '' }
+    ? { worker, home: home || null, key: null, q: params.get('q') ?? '' }
+    : { worker: null, home: null, key: null, q: params.get('q') ?? '' }
 }
 
 /** Merge the overview params into the current query string, preserving anything else. */
