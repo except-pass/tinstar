@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
 import { readBody } from '../api/readBody'
 import { getConfigRoot } from '../configRoot'
-import { loadConfig, firstmatePortWindow } from '../sessions/config'
+import { loadFleetConfig, firstmatePortWindow } from './config'
 import { LedgerWatcher } from '../firstmate/ledger-watcher'
 import { FirstmateViews, parseWindowRef } from '../firstmate/views'
 import { log } from '../logger'
@@ -73,7 +73,7 @@ export class CockpitFleet {
   private outbox = new FleetOutbox()
 
   constructor() {
-    const config = loadConfig({ _rootDir: getConfigRoot() })
+    const config = loadFleetConfig(getConfigRoot())
     this.homes = config.firstmate.homes
     this.views = new FirstmateViews({ window: firstmatePortWindow(config) })
   }

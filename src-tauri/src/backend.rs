@@ -24,7 +24,7 @@ impl Drop for ManagedBackend {
 
 #[tauri::command]
 pub fn probe_backend(url: String) -> bool {
-    let target = format!("{}/api/state", url.trim_end_matches('/'));
+    let target = format!("{}/api/fleet", url.trim_end_matches('/'));
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()

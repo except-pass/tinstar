@@ -18,12 +18,13 @@ function makeFakeSSE() {
 
 function makeFakeQuery(result: HudSnapshot | (() => HudSnapshot) | Error) {
   return {
-    todayHud: vi.fn(async (_opts: unknown) => {
+    unifiedTodayHud: vi.fn(async (_opts: unknown) => {
       if (result instanceof Error) throw result
       if (typeof result === 'function') return result()
       return result
     }),
-    burningSessions: async () => [],
+    unifiedFleetSeries: vi.fn(),
+    providerSessionSeries: vi.fn(),
   }
 }
 
@@ -67,19 +68,17 @@ type FakeRes = ReturnType<typeof makeRes>
 
 function makeDeps(
   state: ObservabilityState,
-  query: TelemetryApiDeps['query'],
+  providerQuery: unknown,
   sse: ReturnType<typeof makeFakeSSE>,
 ): TelemetryApiDeps {
   return {
     sse: sse as unknown as TelemetryApiDeps['sse'],
-    query,
+    providerQuery: providerQuery as TelemetryApiDeps['providerQuery'],
     getState: () => state,
     getProgress: () => undefined,
     getLastError: () => null,
     restart: vi.fn(async () => {}),
     getDefaultUserEmail: () => 'test@example.com',
-    getSessionConversationId: () => null,
-    getRunIdsForConversationIds: () => [],
   }
 }
 
@@ -90,7 +89,7 @@ describe('GET /api/telemetry/hud — state: ready', () => {
     const sse = makeFakeSSE()
     const snap = makeReadySnapshot()
     const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const deps = makeDeps('ready', query, sse)
     const routes = createTelemetryRoutes(deps)
 
     const req = makeReq('GET', '/api/telemetry/hud')
@@ -106,6 +105,7 @@ describe('GET /api/telemetry/hud — state: ready', () => {
     expect(body.cost.total).toBe(1.23)
     expect(body.tokens.total).toBe(100000)
     expect(body.cacheHitPct).toBe(0.65)
+    expect(query.unifiedTodayHud).toHaveBeenCalledWith(expect.objectContaining({ userEmail: 'test@example.com' }))
   })
 })
 
@@ -137,7 +137,6 @@ describe('GET /api/telemetry/hud — state: downloading', () => {
 
 describe('GET /api/telemetry/hud/series', () => {
   it('returns provider-neutral fleet history when telemetry is ready', async () => {
-    const deps = makeDeps('ready', null, makeFakeSSE())
     const fakeSeries = {
       startedAt: '2026-08-04T19:00:00.000Z',
       endedAt: '2026-08-04T19:05:00.000Z',
@@ -149,10 +148,9 @@ describe('GET /api/telemetry/hud/series', () => {
         duty: [[100, 0.6]] as [number, number][],
       },
     }
-    deps.providerQuery = {
-      providerSessionSeries: vi.fn(),
-      unifiedFleetSeries: vi.fn(async () => fakeSeries),
-    }
+    const query = makeFakeQuery(makeReadySnapshot())
+    query.unifiedFleetSeries.mockResolvedValue(fakeSeries)
+    const deps = makeDeps('ready', query, makeFakeSSE())
     const routes = createTelemetryRoutes(deps)
     const pathname = '/api/telemetry/hud/series'
     const res = makeRes()
@@ -165,11 +163,25 @@ describe('GET /api/telemetry/hud/series', () => {
 
     expect(handled).toBe(true)
     expect((res as unknown as FakeRes).parsedBody).toEqual(fakeSeries)
-    expect(deps.providerQuery.unifiedFleetSeries).toHaveBeenCalledWith(expect.objectContaining({
+    expect(query.unifiedFleetSeries).toHaveBeenCalledWith(expect.objectContaining({
       userEmail: 'test@example.com',
       windowSec: 300,
       stepSec: 5,
     }))
+  })
+
+  it('returns an empty series while the stack is not ready', async () => {
+    const deps = makeDeps('starting', null, makeFakeSSE())
+    const routes = createTelemetryRoutes(deps)
+    const pathname = '/api/telemetry/hud/series'
+    const res = makeRes()
+
+    await routes.handle(makeReq('GET', pathname), res as unknown as ServerResponse, pathname)
+
+    expect((res as unknown as FakeRes).parsedBody).toMatchObject({
+      stepSec: 5,
+      series: { cost: [], tokens: [], cache: [], duty: [] },
+    })
   })
 })
 
@@ -177,7 +189,7 @@ describe('GET /api/telemetry/hud — query throws', () => {
   it('responds 200 with state=degraded and error field', async () => {
     const sse = makeFakeSSE()
     const query = makeFakeQuery(new Error('prometheus unavailable'))
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const deps = makeDeps('ready', query, sse)
     const routes = createTelemetryRoutes(deps)
 
     const req = makeReq('GET', '/api/telemetry/hud')
@@ -195,137 +207,9 @@ describe('GET /api/telemetry/hud — query throws', () => {
   })
 })
 
-describe('GET /api/telemetry/session/:name', () => {
-  it('resolves session name to conversation ID and passes to query', async () => {
-    const sse = makeFakeSSE()
-    const snap = makeReadySnapshot()
-    const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    deps.getSessionConversationId = () => 'conv-uuid-123'
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/session/my-session')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/my-session')
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    expect(query.todayHud).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'conv-uuid-123' })
-    )
-  })
-})
-
-describe('GET /api/telemetry/sessions (batch)', () => {
-  it('returns 400 when names query param is missing', async () => {
-    const sse = makeFakeSSE()
-    const deps = makeDeps('ready', null, sse)
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/sessions')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(400)
-    expect((res as unknown as FakeRes).parsedBody).toMatchObject({ error: expect.any(String) })
-  })
-
-  it('returns empty object for names=""', async () => {
-    const sse = makeFakeSSE()
-    const snap = makeReadySnapshot()
-    const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/sessions?names=')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    expect((res as unknown as FakeRes).parsedBody).toEqual({})
-  })
-
-  it('returns a map keyed by session name for comma-separated list', async () => {
-    const sse = makeFakeSSE()
-    const snap = makeReadySnapshot()
-    const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/sessions?names=foo,bar,baz')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
-    expect(Object.keys(body).sort()).toEqual(['bar', 'baz', 'foo'])
-    expect(body.foo?.state).toBe('ready')
-    expect(body.bar?.state).toBe('ready')
-    expect(body.baz?.state).toBe('ready')
-  })
-
-  it('URL-decodes session names', async () => {
-    const sse = makeFakeSSE()
-    const snap = makeReadySnapshot()
-    const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/sessions?names=foo%2Fbar,baz%20qux')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
-
-    expect(handled).toBe(true)
-    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
-    expect(Object.keys(body).sort()).toEqual(['baz qux', 'foo/bar'])
-  })
-
-  it('returns null for the name when buildSnapshot would otherwise fail', async () => {
-    // Force buildSnapshot into the degraded path: state=ready but query throws.
-    // Note buildSnapshot catches and returns a degraded snapshot, so result is non-null
-    // (which is the documented contract). This test pins that behavior so the
-    // batch endpoint never throws on a per-name failure.
-    const sse = makeFakeSSE()
-    const query = makeFakeQuery(new Error('prom down'))
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/sessions?names=alpha,beta')
-    const res = makeRes()
-
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
-    expect(body.alpha?.state).toBe('degraded')
-    expect(body.beta?.state).toBe('degraded')
-  })
-})
-
 describe('POST /api/telemetry/restart', () => {
   it('calls deps.restart() and responds {ok: true}', async () => {
-    const sse = makeFakeSSE()
-    const restart = vi.fn(async () => {})
-    const deps: TelemetryApiDeps = {
-      sse: sse as unknown as TelemetryApiDeps['sse'],
-      query: null,
-      getState: () => 'idle',
-      getProgress: () => undefined,
-      getLastError: () => null,
-      restart,
-      getDefaultUserEmail: () => 'test@example.com',
-      getSessionConversationId: () => null,
-      getRunIdsForConversationIds: () => [],
-    }
+    const deps = makeDeps('idle', null, makeFakeSSE())
     const routes = createTelemetryRoutes(deps)
 
     const req = makeReq('POST', '/api/telemetry/restart')
@@ -334,7 +218,7 @@ describe('POST /api/telemetry/restart', () => {
     const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/restart')
 
     expect(handled).toBe(true)
-    expect(restart).toHaveBeenCalledOnce()
+    expect(deps.restart).toHaveBeenCalledOnce()
     expect((res as unknown as FakeRes).statusCode).toBe(200)
     expect((res as unknown as FakeRes).parsedBody).toEqual({ ok: true })
   })
@@ -354,96 +238,17 @@ describe('unmatched routes', () => {
   })
 })
 
-describe('GET /api/telemetry/session/:name/series', () => {
-  it('returns the HudSeries from query.sessionSeries when ready and session resolves', async () => {
-    const sse = makeFakeSSE()
-    const fakeSeries = {
-      startedAt: '2026-05-13T18:00:00.000Z',
-      endedAt: '2026-05-13T18:05:00.000Z',
-      stepSec: 5,
-      series: { cost: [[1, 0.1]], tokens: [[1, 1000]], cache: [[1, 0.6]], duty: [[1, 0.4]] },
-    }
-    const query = {
-      todayHud: vi.fn(),
-      burningSessions: async () => [],
-      sessionSeries: vi.fn(async (_opts: { sessionId: string; windowSec: number; stepSec: number }) => fakeSeries),
-    }
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    deps.getSessionConversationId = () => 'conv-uuid-123'
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/session/my-sess/series')
-    const res = makeRes()
-    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/my-sess/series')
-    routes.stopPolling()
-
-    expect(handled).toBe(true)
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    expect((res as unknown as FakeRes).parsedBody).toEqual(fakeSeries)
-    expect(query.sessionSeries).toHaveBeenCalledOnce()
-    const args = query.sessionSeries.mock.calls[0]![0]
-    expect(args.sessionId).toBe('conv-uuid-123')
-    expect(args.windowSec).toBe(300)
-    expect(args.stepSec).toBe(5)
-  })
-
-  it('returns empty series when session has no Claude conversation id yet', async () => {
-    const sse = makeFakeSSE()
-    const query = { todayHud: vi.fn(), burningSessions: async () => [], sessionSeries: vi.fn() }
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    deps.getSessionConversationId = () => null
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/session/nope/series')
-    const res = makeRes()
-    await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/nope/series')
-    routes.stopPolling()
-
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    const body = (res as unknown as FakeRes).parsedBody as { series: Record<string, unknown[]> }
-    expect(body.series.cost).toEqual([])
-    expect(body.series.tokens).toEqual([])
-    expect(body.series.cache).toEqual([])
-    expect(body.series.duty).toEqual([])
-    expect(query.sessionSeries).not.toHaveBeenCalled()
-  })
-
-  it('returns empty series + state=degraded fields when query throws', async () => {
-    const sse = makeFakeSSE()
-    const query = {
-      todayHud: vi.fn(),
-      burningSessions: async () => [],
-      sessionSeries: vi.fn(async () => { throw new Error('prom down') }),
-    }
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
-    deps.getSessionConversationId = () => 'conv-1'
-    const routes = createTelemetryRoutes(deps)
-
-    const req = makeReq('GET', '/api/telemetry/session/a/series')
-    const res = makeRes()
-    await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/a/series')
-    routes.stopPolling()
-
-    expect((res as unknown as FakeRes).statusCode).toBe(200)
-    const body = (res as unknown as FakeRes).parsedBody as { series: Record<string, unknown[]>; error?: string }
-    expect(body.series.cost).toEqual([])
-    expect(body.error).toBe('prom down')
-  })
-})
-
 describe('GET /api/telemetry/provider/:provider/session/:session/series', () => {
   it('returns normalized native provider history with identity and freshness', async () => {
-    const sse = makeFakeSSE()
-    const deps = makeDeps('ready', null, sse)
-    deps.providerQuery = {
-      providerSessionSeries: vi.fn(async () => ({
-        series: [{
-          metric: 'tokens',
-          unit: 'tokens',
-          points: [{ at: '2026-08-01T11:59:55.000Z', value: 1_200 }],
-        }],
-      })),
-    }
+    const query = makeFakeQuery(makeReadySnapshot())
+    query.providerSessionSeries.mockResolvedValue({
+      series: [{
+        metric: 'tokens',
+        unit: 'tokens',
+        points: [{ at: '2026-08-01T11:59:55.000Z', value: 1_200 }],
+      }],
+    })
+    const deps = makeDeps('ready', query, makeFakeSSE())
     const routes = createTelemetryRoutes(deps)
     const pathname = '/api/telemetry/provider/codex/session/run-1/series'
     const res = makeRes()
@@ -467,7 +272,7 @@ describe('GET /api/telemetry/provider/:provider/session/:session/series', () => 
         value: { series: [{ metric: 'tokens' }] },
       },
     })
-    expect(deps.providerQuery.providerSessionSeries).toHaveBeenCalledWith(expect.objectContaining({
+    expect(query.providerSessionSeries).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'codex',
       sessionId: 'run-1',
       windowSec: 300,
@@ -493,12 +298,11 @@ describe('GET /api/telemetry/provider/:provider/session/:session/series', () => 
   })
 
   it('reports an all-empty provider series as not observed with unknown freshness', async () => {
-    const deps = makeDeps('ready', null, makeFakeSSE())
-    deps.providerQuery = {
-      providerSessionSeries: vi.fn(async () => ({
-        series: [{ metric: 'tokens', unit: 'tokens', points: [] }],
-      })),
-    }
+    const query = makeFakeQuery(makeReadySnapshot())
+    query.providerSessionSeries.mockResolvedValue({
+      series: [{ metric: 'tokens', unit: 'tokens', points: [] }],
+    })
+    const deps = makeDeps('ready', query, makeFakeSSE())
     const routes = createTelemetryRoutes(deps)
     const pathname = '/api/telemetry/provider/codex/session/new-run/series'
     const res = makeRes()
@@ -524,11 +328,8 @@ describe('startPolling — change detection', () => {
       makeReadySnapshot({ cost: { total: 1.0, byModel: {} } }),  // same — should NOT broadcast
       makeReadySnapshot({ cost: { total: 2.0, byModel: {} } }),  // different — should broadcast
     ]
-    const query = {
-      todayHud: vi.fn(async () => snapshots[Math.min(callCount++, snapshots.length - 1)]),
-      burningSessions: async () => [],
-    }
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const query = makeFakeQuery(() => snapshots[Math.min(callCount++, snapshots.length - 1)]!)
+    const deps = makeDeps('ready', query, sse)
     const routes = createTelemetryRoutes(deps)
 
     routes.startPolling()
@@ -552,9 +353,8 @@ describe('startPolling — change detection', () => {
 
   it('startPolling triggered by first GET /api/telemetry/hud', async () => {
     const sse = makeFakeSSE()
-    const snap = makeReadySnapshot()
-    const query = makeFakeQuery(snap)
-    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const query = makeFakeQuery(makeReadySnapshot())
+    const deps = makeDeps('ready', query, sse)
     const routes = createTelemetryRoutes(deps)
 
     const req = makeReq('GET', '/api/telemetry/hud')
@@ -567,76 +367,5 @@ describe('startPolling — change detection', () => {
     expect(sse.events[0]!.type).toBe('telemetry:hud')
 
     routes.stopPolling()
-  })
-})
-
-import {
-  observeFromRecapEntries,
-  _resetForTests as _resetTL,
-} from '../../observability/turn-length'
-
-function seedTurn(sessionName: string, seconds: number, ccConvId = 'conv-X') {
-  const t0 = `2026-05-18T12:00:00.000Z`
-  const t1 = new Date(Date.parse(t0) + seconds * 1000).toISOString()
-  const t2 = new Date(Date.parse(t0) + 60_000).toISOString()
-  observeFromRecapEntries(sessionName, [
-    { id: 'u1', type: 'user',  content: '', timestamp: t0 },
-    { id: 'a1', type: 'agent', content: '', timestamp: t1 },
-    { id: 'u2', type: 'user',  content: '', timestamp: t2 },
-  ], {
-    name: sessionName, backend: 'tmux', state: 'running', project: null,
-    workspace: { path: null, branch: null } as never,
-    conversation: { id: ccConvId },
-    profile: null, oneshot: false, skipPermissions: false,
-    cliTemplate: null, adapter: 'claude', nats: null,
-    port: null, ttydPid: null, natsControlOrphanedAt: null,
-    created: '2026-05-18T00:00:00.000Z', lastActive: '2026-05-18T00:00:00.000Z',
-  } as never)
-}
-
-async function callTelemetry(path: string): Promise<{ status: number; body: any }> {
-  const sse = makeFakeSSE()
-  const deps = makeDeps('ready', null, sse)
-  const routes = createTelemetryRoutes(deps)
-  const pathname = path.split('?')[0] ?? path
-  const req = makeReq('GET', path)
-  const res = makeRes()
-  await routes.handle(req, res as unknown as ServerResponse, pathname)
-  routes.stopPolling()
-  const fr = res as unknown as FakeRes
-  return { status: fr.statusCode, body: fr.parsedBody }
-}
-
-describe('GET /api/telemetry/turn-length', () => {
-  beforeEach(() => _resetTL())
-
-  it('returns observations for all sessions when no filter', async () => {
-    seedTurn('a', 5)
-    seedTurn('b', 12)
-    const resp = await callTelemetry('/api/telemetry/turn-length')
-    expect(resp.status).toBe(200)
-    expect(resp.body.observations).toHaveLength(2)
-    expect(resp.body.observations.map((o: { session: string }) => o.session).sort()).toEqual(['a', 'b'])
-  })
-
-  it('filters by session', async () => {
-    seedTurn('a', 5)
-    seedTurn('b', 12)
-    const resp = await callTelemetry('/api/telemetry/turn-length?session=a')
-    expect(resp.body.observations).toHaveLength(1)
-    expect(resp.body.observations[0].session).toBe('a')
-  })
-
-  it('rejects non-integer windowSec with 400', async () => {
-    const resp = await callTelemetry('/api/telemetry/turn-length?windowSec=abc')
-    expect(resp.status).toBe(400)
-    expect(resp.body.error).toBe('invalid windowSec')
-  })
-
-  it('clamps out-of-range windowSec without rejecting', async () => {
-    seedTurn('a', 5)
-    const resp = await callTelemetry('/api/telemetry/turn-length?windowSec=999999')
-    expect(resp.status).toBe(200)
-    expect(resp.body.observations).toHaveLength(1)
   })
 })

@@ -72,10 +72,10 @@ TINSTAR_CORS_ORIGINS="${ALLOWED_ORIGIN}" \
 
 # Wait for backend to answer before serving the frontend.
 for _ in {1..20}; do
-  if curl -sf "http://localhost:${BACKEND_PORT}/api/state" >/dev/null; then break; fi
+  if curl -sf "http://localhost:${BACKEND_PORT}/api/fleet" >/dev/null; then break; fi
   sleep 0.5
 done
-if ! curl -sf "http://localhost:${BACKEND_PORT}/api/state" >/dev/null; then
+if ! curl -sf "http://localhost:${BACKEND_PORT}/api/fleet" >/dev/null; then
   echo "backend did not come up on :${BACKEND_PORT}" >&2
   exit 1
 fi

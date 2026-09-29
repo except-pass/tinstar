@@ -1,9 +1,7 @@
 // The first mate terminal view (M2). One ttyd per observed worker; each browser
 // connection gets its OWN private tmux "view session" that holds nothing but a
 // link to the worker's window (bin/tinstar-fm-view). The ttyd is reached through
-// Tinstar's existing /s/<runId>/ proxy — the observed Run's `port` is its port —
-// so no new endpoint shape goes near src/server/sessions/backends/tmux.ts, which
-// is only used for its pure port/bind/health helpers.
+// Tinstar's /s/<key>/ proxy; port, bind and health helpers come from ../fleet/ports.
 //
 // HARD INVARIANT: a view can never kill a worker, and nothing here ever addresses
 // a worker's window destructively. tmux itself enforces the first half (killing a
@@ -21,11 +19,13 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import type { PortWindow } from '../sessions/config'
+import type { PortWindow } from '../fleet/config'
 import { log } from '../logger'
 import { TERMINAL_AUTH_HEADER } from '../sessionProxy'
-import { findPort, healthCheck, releasePort, terminalBindAddress, ttydVersionRefusalNow } from '../sessions/backends/tmux'
-import { isSafeTaskId } from './reducer'
+import { findPort, healthCheck, releasePort, terminalBindAddress, ttydVersionRefusalNow } from '../fleet/ports'
+
+const isSafeTaskId = (task: unknown): task is string =>
+  typeof task === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(task) && !task.includes('..')
 
 const execFileAsync = promisify(execFile)
 

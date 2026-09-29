@@ -37,9 +37,9 @@ Paste this into Claude Code:
 npx tinstar
 ```
 
-The CLI checks for dependencies (Claude Code, tmux, ttyd, lsof), **offers to install the Claude Code statusline hook** (say yes — see below), offers to register your current directory as a project, and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
+The CLI **offers to install the Claude Code statusline hook** (say yes — see below) and starts the server. Open **http://localhost:5273** — that's the only port you need. See [Prerequisites](#prerequisites) if the dependency check flags anything.
 
-Verify the install any time with `npx tinstar doctor`, which reports anything onboarding skipped.
+Verify the install any time with `npx tinstar doctor`, which checks tmux, ttyd, python3 and each configured First Mate home.
 
 ### The statusline hook
 
@@ -84,7 +84,6 @@ The hierarchy isn't bureaucracy — it's the backbone that keeps a growing fleet
 
 - **The canvas and sidebar stay navigable.** You move by structure instead of hunting through a flat list of twenty sessions.
 - **Placement is cheap.** Drag a hierarchy entry onto a Project or Worktree to assign its scope. The hierarchy updates immediately without moving the canvas widget.
-- **Agents inherit context.** Multi-agent NATS channels follow the same hierarchy (`tinstar.<space>.<project>.<worktree>.<agent>`), so worktree peers share a broadcast channel.
 - **Layout stays intentional.** One explicit **Organize** action projects current scope into Project/Worktree containers using the existing reset-layout packing behavior. Unscoped widgets remain standalone peers.
 
 Use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty scope targets off with `H` to cut clutter.
@@ -92,12 +91,6 @@ Use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce
 ## The inbox
 
 The same sidebar flips from the hierarchy tree to an **inbox**: a flat, triaged list of every session in the space, sorted so the ones needing you float to the top. Each row is an avatar, a name, a breadcrumb back up the hierarchy, a color-coded status dot, and how long ago it last moved. Filter by urgency, hide what you've read, click a row to fly the canvas to it. Instead of scanning four walls of output to reconstruct *where was I*, you read a list that already did the reconstruction for you.
-
-## The saloon
-
-Agents talk to each other over NATS pub/sub, and the **Saloon** widget puts that conversation on screen. Snap it to a session to watch that session's subscribed subjects and live inbound/outbound traffic; leave it floating for the whole `tinstar.>` firehose. Each row is a timestamped from/subject/payload you can click open.
-
-This is where orchestration stops being a black box. When a coordinator fans work out to a team of agents and they report back, that chatter is normally invisible — you infer it from results. The Saloon makes the message-passing *legible*: you watch which agent pinged which, and catch a stalled handoff in the traffic instead of in the silence afterward.
 
 ## Everything Is a Plugin
 
@@ -140,10 +133,9 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **Claude Code** — installed and authenticated (`claude auth login`)
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
-  - Debian/Ubuntu's `apt install ttyd` also enables a standalone `ttyd.service` at boot, which serves a login shell on a fixed port. Tinstar does not use it — it spawns its own ttyd per session — so disable it: `sudo systemctl disable --now ttyd.service`. `tinstar doctor` warns when it finds it enabled.
-- **lsof** — verifies that each web terminal serves the intended session (`brew install lsof` / `apt install lsof`)
-- **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
-- **bun** — *only for multi-agent NATS channels* — runs the per-session channel MCP server (`curl -fsSL https://bun.sh/install | bash`). Sessions launch it by absolute path from `nats.bunPath` (default `~/.bun/bin/bun`), so a bun elsewhere on `$PATH` is not enough. Without it, NATS itself looks healthy but every agent's channel MCP dies at spawn.
+  - Debian/Ubuntu's `apt install ttyd` also enables a standalone `ttyd.service` at boot, which serves a login shell on a fixed port. Tinstar does not use it — it spawns its own ttyd per worker view — so disable it: `sudo systemctl disable --now ttyd.service`.
+- **python3** — keeps a worker's terminal view at the worker's own size (`bin/tinstar-fm-fixed-pty`)
+- **lsof** — identifies which process owns a port for the embedded telemetry stack (`brew install lsof` / `apt install lsof`)
 - **jq** and **curl** — used by the [statusline hook](#the-statusline-hook) that feeds the context meter and Claude provider quota (`brew install jq` / `apt install jq`; curl is usually preinstalled)
 
 ## Ports
@@ -151,25 +143,12 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 | Port | Service |
 |------|---------|
 | 5273 | Tinstar (UI + API + session proxy) — **the only port you need** |
-| 8681+ | ttyd instances (dynamic, proxied through 5273) |
-
-## Session Status
-
-| Status | Meaning |
-|--------|---------|
-| `creating` | Session being initialized |
-| `running` | Claude actively executing |
-| `idle` | Waiting for user input |
-| `needs_attention` | No activity for 2+ minutes |
-| `stopped` | User stopped the session |
-| `terminated` | Process crashed or disappeared |
+| 8781–8830 | Worker terminal view ttyds (`firstmate.ports`, loopback only, proxied through 5273) |
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TINSTAR_FAST_SIM` | unset | Set to `1` to auto-start mock data simulator |
-| `TINSTAR_NO_SESSIONS` | unset | Set to `1` to skip session management (CI) |
 | `TINSTAR_TELEMETRY` | unset | Set to `0` to disable the embedded Prometheus + Alloy stack |
 
 ## License

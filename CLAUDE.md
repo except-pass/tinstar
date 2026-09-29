@@ -12,47 +12,24 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 
 - **Frontend**: React + Tailwind, served by Vite
 - **Backend**: standalone HTTP server at `src/server/standalone.ts`; cockpit fleet read, message and terminal routes at `src/server/fleet/cockpit.ts`
-- **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
+- **Workers**: First Mate owns worker creation, dispatch, supervision and lifecycle; Tin Star only reads its fleet snapshot and opens terminal views that link, never own, worker windows (`src/server/firstmate/views.ts`). Config lives under `getConfigRoot()` (default `~/.config/tinstar/`)
 - **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 - **Shared vocabulary**: `CONCEPTS.md` (repo root) — domain terms (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
 
 ## Key Commands
 
-- `npm run dev` — start dev server (clean UI, no mock data)
+- `npm run dev` — start dev server
 - Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
 - Cockpit regression runs with `npx playwright test --config playwright.cockpit.config.ts`; it starts its own private tmux server and First Mate test home.
 
-## Multi-Agent / NATS
-
-Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<project>.<worktree>[.<session>]`
-
-- Worktree-scoped agents subscribe to their Worktree broadcast and direct session subject; Project-only and Unscoped agents receive direct messages only.
-- Use `reply` MCP tool to publish messages
-- See **[docs/nats-agent-channels.md](docs/nats-agent-channels.md)** for full details
-
-## Agent skills (`tinstar`, `tinstar-hand`, `tinstar-tmux`, `tinstar-wrangler`)
-
-The skills that teach agents how to spawn, steer, and coordinate Tinstar hands live under `agent-skills/` in this repo (skills only — no separate slash commands). They're symlinked into any harness dir with `skills/` + `commands/` subdirectories (Claude Code's `~/.claude`, project-local `.claude`, `.agents`, etc.):
-
-```bash
-tinstar install-skills                     # default: ~/.claude
-tinstar install-skills --dest ./.claude    # project-local
-tinstar install-skills --force             # replace existing (moves to .bak)
-tinstar install-skills --copy              # copy instead of symlink
-```
-
-Edits to files under `agent-skills/` go live immediately for any machine that installed via symlink — edit in-repo, commit, done.
-
 ## Conventions
 
-Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, layering, etc.). It's short and grouped by area.
+Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, response envelopes, frontend HTTP, layering, etc.). It's short and grouped by area.
 
 The two highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
 
 - Server-side config paths go through `getConfigRoot()` — not `homedir()`. Honors `TINSTAR_CONFIG_HOME` so a second backend doesn't stomp the primary.
 - Frontend HTTP goes through `apiFetch` / `apiUrl` from `src/apiClient.ts` — bare `fetch` 404s in Tauri.
-
-Session state changes emit to the event bus as `managed_session.*` events (see [docs/conventions.md](docs/conventions.md) for the "adding a BusEvent" recipe).
 
 ## Releasing
 

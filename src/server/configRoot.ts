@@ -7,7 +7,7 @@ import { join } from 'node:path'
  * Honors `TINSTAR_CONFIG_HOME` when set to a non-empty string, otherwise
  * falls back to `~/.config/tinstar`. The override lets a second backend
  * (rehearsal harness, Tauri local-mode helper, CI) run on the same machine
- * without trampling the primary instance's sessions, projects, or NATS state.
+ * without trampling the primary instance's fleet outbox or terminal views.
  *
  * Read at use-site (not module-load time) so tests and child processes can
  * vary the env var without restarting the host.

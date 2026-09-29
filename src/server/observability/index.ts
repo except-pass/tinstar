@@ -62,13 +62,6 @@ export class ObservabilityStack {
       return
     }
 
-    if (process.env.TINSTAR_FAST_SIM === '1') {
-      this.state = 'ready'
-      this.query = null // fast-sim uses the fake path in telemetry.ts
-      log.info('observability', 'fast-sim mode: synthesizing HUD snapshots, skipping real stack')
-      return
-    }
-
     // Clear any previous error before a fresh start attempt
     this.lastError = null
     log.info('observability', 'starting embedded telemetry stack', { binRoot: this.binRoot, obsRoot: this.obsRoot })
