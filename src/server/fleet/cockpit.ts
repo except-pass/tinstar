@@ -71,7 +71,6 @@ export class CockpitFleet {
   private homes: string[]
   private errors: string[] = []
   private marksUnreadable = false
-  private python: Promise<boolean> | null = null
   private sizes = new Map<string, { cols: number; rows: number }>()
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
   private reviewing = new Set<string>()
@@ -198,8 +197,6 @@ export class CockpitFleet {
   async terminal(key: string) {
     const ref = this.targets.get(key)
     if (!ref) return null
-    this.python ??= execFileAsync('python3', ['-c', '']).then(() => true, () => false)
-    if (!await this.python) return { key, state: 'unavailable' as const, reason: 'python3 is required for a size-safe terminal view' }
     const result = await this.views.ensure(key, ref.id, ref.target)
     if (result.state !== 'live') return { key, ...result }
     const size = await this.windowSize(ref.target) ?? this.sizes.get(key)

@@ -60,6 +60,7 @@ describe('viewTtydArgv', () => {
     const argv = viewTtydArgv({ port: 8790, bind: '127.0.0.1', authHeader: 'X-Tinstar-Proxy', task: 'fix-login', script: SCRIPT, session: 'firstmate', windowId: '@4', windowName: 'fm-fix-login' })
     expect(argv).toEqual(expect.arrayContaining(['-W', '-i', '127.0.0.1', '-H', 'X-Tinstar-Proxy', '-p', '8790']))
     expect(argv.slice(-4)).toEqual([SCRIPT, 'firstmate', '@4', 'fm-fix-login'])
+    expect(argv).toContain('fontSize=14')
     expect(argv).not.toContain('bash')
     expect(argv).not.toContain('--once')
   })

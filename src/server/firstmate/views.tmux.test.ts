@@ -37,6 +37,7 @@ const PTY_HELPER = `
 import os, pty, select, sys, signal, struct, fcntl, termios
 pid, fd = pty.fork()
 if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
     os.execvp(sys.argv[1], sys.argv[1:])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
 def bye(*_):
@@ -177,7 +178,7 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(windowIds('=firstmate')).toContain(wid)
   })
 
-  it('a view preserves a worker window whose size differs from the fleet session', async () => {
+  it('a view reflows the worker window to the client size and leaves that size after disconnect', async () => {
     const { wid } = fleet()
     tm('resize-window', '-t', wid, '-x', '190', '-y', '82')
     tm('set-option', '-uw', '-t', wid, 'window-size')
@@ -185,11 +186,12 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(size()).toBe('190x82')
     const c = attachViaScript('firstmate', wid, 'fm-demo')
     expect(await until(armed)).toBe(true)
-    await sleep(750)
-    expect(size()).toBe('190x82')
+    // The helper PTY is 80x24 and the view session has no status line.
+    expect(await until(() => size() === '80x24', 4000)).toBe(true)
     killClient(c)
     expect(await until(() => viewSessions().length === 0)).toBe(true)
-    expect(size()).toBe('190x82')
+    expect(size()).toBe('80x24')
+    expect(windowIds('=firstmate')).toContain(wid)
   })
 
   it('killing the origin window destroys the view', async () => {

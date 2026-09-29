@@ -7,14 +7,6 @@ import { tmpdir } from 'node:os'
 const repo = resolve(import.meta.dirname, '..')
 const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-const xtermSize = async (page: Page, id: string) => {
-  const frame = page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))
-  if (!frame) return 'missing'
-  return frame.evaluate(() => {
-    const term = (window as unknown as { term?: { cols: number; rows: number } }).term
-    return term ? `${term.cols}x${term.rows}` : 'missing'
-  }).catch(() => 'missing')
-}
 const leakedSequences = (page: Page, id: string) => page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))!.evaluate(() => {
   const term = (window as unknown as { term: { buffer: { active: { length: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
   const lines: string[] = []
@@ -48,7 +40,7 @@ const promptProblems = async (page: Page, id: string) => {
     if (main.scrollHeight > main.clientHeight + 1) found.push('worker pane scrolls')
     return found
   })
-  const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}&`))
+  const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}`))
   const anchor = await wrapper?.evaluate(() => {
     const term = document.getElementById('term')!
     const r = term.getBoundingClientRect()
@@ -76,7 +68,87 @@ const promptProblems = async (page: Page, id: string) => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
     return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
   }).catch(() => '')
-  if (!bottom?.includes('PROMPT_BOTTOM>')) problems.push(`bottom row is "${bottom}"`)
+  if (!bottom?.includes('PROMPT_BOTTOM>')) {
+    const visible = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
+      const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
+      const lines: string[] = []
+      for (let i = 0; i < term.rows; i++) lines.push(term.buffer.active.getLine(term.buffer.active.viewportY + i)?.translateToString(true) ?? '')
+      return lines.some(line => line.includes('PROMPT_BOTTOM>'))
+    }).catch(() => false)
+    if (!visible) problems.push(`prompt is not on screen (bottom row is "${bottom}")`)
+  }
+  return problems
+}
+
+/** Font stays 14px, the xterm grid fills the ttyd frame, and tmux matches that grid. */
+const fitProblems = async (page: Page, id: string, tmuxSize: string) => {
+  const problems: string[] = []
+  const wrapper = page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes(`session=cockpit-0-${id}`))
+  const clipped = await wrapper?.evaluate(() => {
+    const pageBox = document.scrollingElement || document.documentElement
+    const frame = document.getElementById('term')!.getBoundingClientRect()
+    return {
+      scrollX: pageBox.scrollWidth - pageBox.clientWidth,
+      scrollY: pageBox.scrollHeight - pageBox.clientHeight,
+      frameRight: frame.right,
+      frameBottom: frame.bottom,
+      width: pageBox.clientWidth,
+      height: pageBox.clientHeight,
+    }
+  })
+  if (!clipped || clipped.scrollX > 1 || clipped.scrollY > 1 || clipped.frameRight > clipped.width + 1 || clipped.frameBottom > clipped.height + 1 || clipped.frameRight < clipped.width - 2 || clipped.frameBottom < clipped.height - 2) {
+    problems.push(`wrapper does not fill its stage without scrolling: ${JSON.stringify(clipped)}`)
+  }
+  const grid = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
+    const term = (window as unknown as { term?: { cols: number; rows: number; options: { fontSize: number | string } } }).term
+    const screen = document.querySelector('.xterm-screen')
+    const widget = document.querySelector('.xterm')
+    const viewport = document.querySelector('.xterm-viewport')
+    if (!term || !screen || !widget) return null
+    const box = screen.getBoundingClientRect()
+    const widgetBox = widget.getBoundingClientRect()
+    const style = getComputedStyle(widget)
+    const pad = (edge: string) => parseFloat(style.getPropertyValue(edge)) || 0
+    return {
+      fontSize: Number(term.options.fontSize),
+      cols: term.cols,
+      rows: term.rows,
+      left: box.left,
+      top: box.top,
+      rightGap: window.innerWidth - box.right,
+      bottomGap: window.innerHeight - box.bottom,
+      widgetLeft: widgetBox.left,
+      widgetTop: widgetBox.top,
+      widgetRightGap: window.innerWidth - widgetBox.right,
+      widgetBottomGap: window.innerHeight - widgetBox.bottom,
+      padL: pad('padding-left'),
+      padR: pad('padding-right'),
+      padT: pad('padding-top'),
+      padB: pad('padding-bottom'),
+      bar: viewport ? Math.max(0, viewport.offsetWidth - viewport.clientWidth) : 0,
+      cellW: box.width / term.cols,
+      cellH: box.height / term.rows,
+    }
+  }).catch(() => null)
+  if (!grid) problems.push('xterm grid missing')
+  else {
+    if (grid.fontSize !== 14) problems.push(`font is ${grid.fontSize}px`)
+    const edge = 2
+    if (grid.widgetLeft > edge || grid.widgetTop > edge || grid.widgetRightGap > edge || grid.widgetBottomGap > edge || grid.widgetLeft < -1 || grid.widgetTop < -1) {
+      problems.push(`terminal widget does not fill the frame (${grid.widgetLeft},${grid.widgetTop} gap ${grid.widgetRightGap.toFixed(1)}x${grid.widgetBottomGap.toFixed(1)})`)
+    }
+    if (grid.left < -1 || grid.left > grid.padL + edge || grid.top < -1 || grid.top > grid.padT + edge) problems.push(`grid starts at ${grid.left},${grid.top}`)
+    // ttyd pads the widget. xterm also reserves a scrollback gutter; on overlay
+    // scrollbars that gutter is not in clientWidth, so allow a normal bar width.
+    const slack = 4
+    const gutter = Math.max(grid.bar, 16)
+    const rightBudget = grid.padR + gutter + grid.cellW + slack
+    const bottomBudget = grid.padB + grid.cellH + slack
+    if (grid.rightGap < -1 || grid.rightGap > rightBudget) problems.push(`horizontal gap ${grid.rightGap.toFixed(1)}px (budget ${rightBudget.toFixed(1)} pad ${grid.padL}+${grid.padR} bar ${grid.bar} cell ${grid.cellW.toFixed(2)} left ${grid.left.toFixed(1)} widgetRight ${grid.widgetRightGap.toFixed(1)})`)
+    if (grid.bottomGap < -1 || grid.bottomGap > bottomBudget) problems.push(`vertical gap ${grid.bottomGap.toFixed(1)}px (budget ${bottomBudget.toFixed(1)} pad ${grid.padT}+${grid.padB} cell ${grid.cellH.toFixed(2)} top ${grid.top.toFixed(1)} widgetBottom ${grid.widgetBottomGap.toFixed(1)})`)
+    const seen = `${grid.cols}x${grid.rows}`
+    if (seen !== tmuxSize) problems.push(`tmux ${tmuxSize} xterm ${seen}`)
+  }
   return problems
 }
 
@@ -87,7 +159,6 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
   const config = join(root, 'config')
   const bin = join(root, 'bin')
   const socket = `cockpit-${process.pid}-${Date.now()}`
-  const operatorSocket = `${socket}-operator`
   const port = 39000 + Math.floor(Math.random() * 10000)
   const portStart = 49000 + Math.floor(Math.random() * 10000)
   let server: ChildProcess | null = null
@@ -95,7 +166,6 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
   const windows = () => tmux('list-windows', '-t', 'firstmate', '-F', '#{window_id}:#{window_name}')
   const windowSizes = () => tmux('list-windows', '-t', 'firstmate', '-F', '#{window_id}:#{window_width}x#{window_height}')
   const alphaSize = () => tmux('display-message', '-p', '-t', 'firstmate:fm-alpha', '#{window_width}x#{window_height}')
-  const operator = (...args: string[]) => execFileSync(realTmux, ['-L', operatorSocket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   const task = (id: string) => ({
     id, kind: 'worker', project: `/private/projects/${id}-service-with-a-realistically-long-name`, branch: `fm/${id}-feature-branch-with-a-long-descriptive-name`,
     paths: { worktree: { path: `/private/worktrees/${id}/nested/checkouts/${id}-service-with-a-realistically-long-name` } },
@@ -177,14 +247,13 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     const terminalInput = page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').getByRole('textbox', { name: 'Terminal input' })
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
-    expect(alphaSize()).toBe('220x60')
-    await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
     for (const viewport of [
       { width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1440, height: 700 }, { width: 1920, height: 1080 },
       { width: 1000, height: 1080 }, { width: 1000, height: 900 }, { width: 1000, height: 768 }, { width: 1000, height: 720 }, { width: 1000, height: 700 }, { width: 720, height: 900 },
     ]) {
       await page.setViewportSize(viewport)
       await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+      await expect.poll(() => fitProblems(page, 'alpha', alphaSize())).toEqual([])
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
     }
     await page.setViewportSize({ width: 720, height: 900 })
@@ -192,10 +261,15 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(page.locator('.cockpit-objective')).toBeVisible()
     await expect(page.locator('.cockpit-status-detail')).toBeVisible()
     await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+    await expect.poll(() => fitProblems(page, 'alpha', alphaSize())).toEqual([])
     await page.screenshot({ path: test.info().outputPath('private-prompt-720x900-details-open.png') })
     await page.locator('.cockpit-detail-summary').click()
     await page.setViewportSize({ width: 1280, height: 720 })
     await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+    await expect.poll(() => fitProblems(page, 'alpha', alphaSize())).toEqual([])
+    expect(await leakedSequences(page, 'alpha')).toEqual([])
+    const fittedSizes = windowSizes()
+    console.log(`private worker window sizes before=${sizesBefore} fitted=${fittedSizes}`)
     await page.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').locator('.xterm-screen').click()
     await page.keyboard.type('COCKPIT_PRIVATE_INPUT')
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-alpha')).toContain('COCKPIT_PRIVATE_INPUT')
@@ -214,8 +288,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-bravo')).toContain('COCKPIT_CYCLED_INPUT')
     expect(tmux('capture-pane', '-p', '-t', 'firstmate:fm-alpha')).not.toContain('COCKPIT_CYCLED_INPUT')
     await delay(1200)
-    console.log(`private worker window sizes before=${sizesBefore} after attach=${windowSizes()}`)
-    expect(windowSizes()).toBe(sizesBefore)
+    expect(windowSizes()).toBe(fittedSizes)
     const frameSizes = await page.locator('.cockpit-terminal-frame').evaluateAll(frames => frames.map(f => {
       const r = f.getBoundingClientRect(); return `${r.width}x${r.height}`
     }))
@@ -258,16 +331,12 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     const ttydPidsAfter = terminalPorts.map(ttydPid)
     expect(frameSizesAfter).toEqual(frameSizes)
     expect(ttydPidsAfter).toEqual(ttydPids)
-    expect(windowSizes()).toBe(sizesBefore)
-    await page.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes('session=cockpit-0-alpha&'))!
-      .evaluate(() => { const el = document.scrollingElement || document.documentElement; el.scrollTop = 0 })
-    await page.getByRole('button', { name: /alpha .*WORKING/i }).click()
-    await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
+    expect(windowSizes()).toBe(fittedSizes)
+    const sizeAt1280 = alphaSize()
     await page.setViewportSize({ width: 1100, height: 900 })
-    await delay(1000)
-    expect(windowSizes()).toBe(sizesBefore)
+    await expect.poll(() => alphaSize()).not.toBe(sizeAt1280)
+    await expect.poll(() => fitProblems(page, 'alpha', alphaSize())).toEqual([])
     console.log(`private worker window sizes after viewport resize=${windowSizes()}`)
-    expect(await xtermSize(page, 'alpha')).toBe('220x60')
     await page.screenshot({ path: test.info().outputPath('private-prompt-1100x900-after-cycle.png') })
     await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
     console.log(`private ttyd PIDs before=${ttydPids.join(',')} after=${ttydPidsAfter.join(',')}`)
@@ -283,7 +352,6 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     expect(await secondFace.evaluate(el => getComputedStyle(el).borderColor)).toBe(firstFaceColor)
     await page.close()
     expect(windows()).toBe(before)
-    expect(windowSizes()).toBe(sizesBefore)
     snapshot(['alpha'])
     appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
     await expect(second.locator('.cockpit-worker-button')).toHaveCount(1, { timeout: 30_000 })
@@ -303,67 +371,12 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect.poll(alphaTtyd, { timeout: 15_000 }).not.toBeNull()
     await expect(second.locator('iframe[title="alpha terminal"]')).not.toHaveAttribute('data-mounted', 'before-crash', { timeout: 15_000 })
     await expect.poll(() => promptProblems(second, 'alpha'), { timeout: 15_000 }).toEqual([])
+    await expect.poll(() => fitProblems(second, 'alpha', alphaSize()), { timeout: 15_000 }).toEqual([])
     console.log(`private alpha ttyd recovered in place: ${crashedTtyd} -> ${await alphaTtyd()}`)
-
-    // An operator client resizes the worker, then detaches while the cockpit view
-    // is the only client left on the window: the view must not impose its size.
-    await expect.poll(() => xtermSize(second, 'alpha')).toBe('220x60')
-    await second.locator('iframe[title="alpha terminal"]').evaluate(frame => { frame.dataset.mounted = 'before-operator' })
-    tmux('select-window', '-t', 'firstmate:fm-alpha')
-    operator('new-session', '-d', '-s', 'operator', '-x', '200', '-y', '50',
-      `env -u TMUX '${realTmux}' -L '${socket}' attach-session -t firstmate`)
-    await expect.poll(alphaSize).not.toBe('220x60')
-    const operatorSize = alphaSize()
-    console.log(`private worker alpha size with operator attached=${operatorSize}`)
-    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 3_000 }).toBe(operatorSize)
-    await expect(second.locator('iframe[title="alpha terminal"]')).toHaveAttribute('data-mounted', 'before-operator')
-    await second.getByRole('button', { name: 'Overview' }).click()
-    await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
-    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 5_000 }).toBe(operatorSize)
-    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
-    await delay(5500)
-    expect(await leakedSequences(second, 'alpha')).toEqual([])
-    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
-    await delay(1500)
-    operator('kill-server')
-    await expect.poll(() => tmux('list-clients', '-F', '#{session_name}').split('\n')).not.toContain('firstmate')
-    await delay(1500)
-    console.log(`private worker alpha size after operator detach=${alphaSize()}`)
-    expect(alphaSize()).toBe(operatorSize)
-    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 15_000 }).toBe(operatorSize)
-    await second.reload()
-    await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
-    await expect.poll(() => xtermSize(second, 'alpha'), { timeout: 15_000 }).toBe(operatorSize)
-    await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
-    console.log(`private worker alpha size after reconnect=${alphaSize()}`)
-    expect(alphaSize()).toBe(operatorSize)
-
-    // Below the 6px floor the stage scrolls from the top; the wheel must scroll
-    // it to the prompt instead of reaching the worker as arrow keys.
-    tmux('resize-window', '-t', 'firstmate:fm-charlie', '-x', '220', '-y', '150')
-    await second.setViewportSize({ width: 1280, height: 600 })
-    await second.getByRole('button', { name: 'Overview' }).click()
-    await second.getByRole('button', { name: /charlie .*WORKING/i }).click()
-    await expect.poll(() => xtermSize(second, 'charlie'), { timeout: 15_000 }).toBe('220x150')
-    const charlieWrapper = () => second.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes('session=cockpit-0-charlie&'))!
-    const stageScroll = () => charlieWrapper().evaluate(() => {
-      const el = document.scrollingElement || document.documentElement
-      return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
-    })
-    await expect.poll(async () => (await stageScroll()).max, { timeout: 15_000 }).toBeGreaterThan(100)
-    expect((await stageScroll()).top).toBe(0)
-    const charlieBox = (await second.locator('iframe[title="charlie terminal"]').boundingBox())!
-    await second.mouse.move(charlieBox.x + charlieBox.width / 2, charlieBox.y + charlieBox.height / 2)
-    for (let i = 0; i < 10; i++) await second.mouse.wheel(0, 200)
-    await expect.poll(async () => { const s = await stageScroll(); return s.top >= s.max - 1 }).toBe(true)
-    await delay(500)
-    expect(tmux('capture-pane', '-p', '-t', 'firstmate:fm-charlie')).not.toContain('^[')
-    expect(await second.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
     await second.close()
   } finally {
     server?.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* private server already gone */ }
-    try { operator('kill-server') } catch { /* operator server already gone */ }
     rmSync(root, { recursive: true, force: true })
   }
 })

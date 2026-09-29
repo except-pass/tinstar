@@ -611,7 +611,7 @@ export default function App() {
             const terminal = terminals[worker.key]
             if (terminal?.state !== 'live') return []
             const active = current.key === worker.key
-            return [<iframe key={`${worker.key}:${terminal.port}:${terminal.pid}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}&cols=${terminal.cols}&rows=${terminal.rows}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
+            return [<iframe key={`${worker.key}:${terminal.port}:${terminal.pid}`} ref={frame => { if (frame) frame.inert = !active }} className="cockpit-terminal-frame" data-session={worker.key} src={apiUrl(`/terminal-wrapper.html?session=${encodeURIComponent(worker.key)}`)} title={`${worker.id} terminal`} style={{ opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', zIndex: active ? 1 : 0 }} />]
           })}
           {opening[current.key] && !terminals[current.key] && <p className="cockpit-terminal-placeholder">Connecting to terminal…</p>}
           {!current.terminalAvailable && <p className="cockpit-terminal-placeholder">Terminal endpoint unavailable</p>}
