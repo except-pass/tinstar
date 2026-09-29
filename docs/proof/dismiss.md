@@ -8,7 +8,7 @@ The same control stays on the card when the rail is narrow.
 
 ![Decision card on a narrow rail](dismiss-narrow-private.png)
 
-Sliding the control to the end sends one inbox note naming task alpha and decision choice. The card reads dismissing, and the note is saved under Messages. Opening the decision shows the same control; closing it does not send a note.
+Sliding the control to the end sends one inbox note naming task alpha and decision choice. The card reads dismissing, and the note is saved under Messages.
 
 ![Decision card dismissing](dismiss-pending-private.png)
 

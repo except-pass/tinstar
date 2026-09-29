@@ -224,7 +224,6 @@ export default function App() {
   const dismissIds = useRef<Record<string, string>>({})
   const dismissBusy = useRef(new Set<string>())
   const dismissSettled = useRef(new Set<string>())
-  const [dismissingKeys, setDismissingKeys] = useState<Record<string, true>>({})
   const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
@@ -279,34 +278,20 @@ export default function App() {
       delete next[card.key]
       return next
     })
-    setDismissingKeys(previous => ({ ...previous, [card.key]: true }))
     void submit({ requestId, anchorKey: card.key, kind: 'message', text }).then(result => {
-      dismissBusy.current.delete(card.key)
       if (result.saved) { delete dismissIds.current[card.key]; return }
-      setDismissingKeys(previous => {
-        const next = { ...previous }
-        delete next[card.key]
-        return next
-      })
+      dismissBusy.current.delete(card.key)
       setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
     }).catch(error => {
       dismissBusy.current.delete(card.key)
-      setDismissingKeys(previous => {
-        const next = { ...previous }
-        delete next[card.key]
-        return next
-      })
       setDismissErrors(previous => ({ ...previous, [card.key]: (error as Error).message }))
     })
   }, [messages, submit])
 
-  const dismissInOutbox = useCallback((card: AttentionCard) =>
-    messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && !dismissSettled.current.has(message.requestId)), [messages])
-
   const dismissHeld = useCallback((card: AttentionCard) => {
     if (dismissErrors[card.key]) return false
-    return Boolean(dismissingKeys[card.key]) || dismissInOutbox(card)
-  }, [dismissErrors, dismissingKeys, dismissInOutbox])
+    return messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && !dismissSettled.current.has(message.requestId))
+  }, [dismissErrors, messages])
 
   useEffect(() => {
     void refresh()
@@ -325,18 +310,14 @@ export default function App() {
       if (!message.text.startsWith('Dismiss decision ')) continue
       if (!attention.some(card => sameDismiss(card, message))) dismissSettled.current.add(message.requestId)
     }
-    for (const key of [...dismissBusy.current]) if (!openKeys.has(key)) dismissBusy.current.delete(key)
+    const held = new Set(attention.filter(dismissHeld).map(card => card.key))
+    for (const key of [...dismissBusy.current]) if (!openKeys.has(key) || held.has(key)) dismissBusy.current.delete(key)
     for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key)) delete dismissIds.current[key]
-    const inOutbox = new Set(attention.filter(dismissInOutbox).map(card => card.key))
-    setDismissingKeys(previous => {
-      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !inOutbox.has(key)))
-      return Object.keys(next).length === Object.keys(previous).length ? previous : next
-    })
     setDismissErrors(previous => {
       const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key)))
       return Object.keys(next).length === Object.keys(previous).length ? previous : next
     })
-  }, [fleet.ready, attention, messages, dismissInOutbox])
+  }, [fleet.ready, attention, messages, dismissHeld])
   const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = workers.find(w => w.key === selected) ?? null
   const order = useMemo(() => workers.map(w => w.key), [workers])
@@ -488,7 +469,6 @@ export default function App() {
         <div className="cockpit-attention-detail-top"><span className="material-symbols-outlined">{attentionIcons[activeAttention.type]}</span><strong>{attentionLabels[activeAttention.type]}</strong><button aria-label="Close details" onClick={() => setSelectedAttention(null)}>×</button></div>
         <h2>{activeAttention.headline}</h2>{activeAttention.detail && <p>{activeAttention.detail}</p>}
         <div className="cockpit-attention-detail-facts"><span>Origin</span><strong>{activeAttention.workerId ?? 'First Mate backlog'}</strong><span>Age</span><strong>{activeAttention.ageDays === null ? 'unknown' : `${activeAttention.ageDays} days`}</strong></div>
-        <DismissControl card={activeAttention} held={dismissHeld(activeAttention)} error={dismissErrors[activeAttention.key] ?? null} onDismiss={dismiss} />
         <Composer key={`${activeAttention.key}:message`} anchorKey={activeAttention.key} kind="message" submit={submit} />
         {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => { setSelected(activeAttention.workerKey); setSelectedAttention(null) }}>View worker →</button>}
       </section>
