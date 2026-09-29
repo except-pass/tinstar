@@ -215,39 +215,38 @@
         var win = termEl.contentWindow
         var term = win && win.term
         if (!term || !term.options || !term.rows) return
-        termEl.style.height = '100%'
-        termEl.style.maxHeight = '100%'
         // Width first, so a horizontal scrollbar is already inside clientHeight.
-        var preliminary = screenBox(win, term)
-        if (preliminary) placePinnedFrame(term, preliminary.screen)
+        var box = screenBox(win, term)
+        if (!box) return
+        placePinnedFrame(term, box.screen)
         var avail = document.documentElement.clientHeight
         if (avail < 40) return
         if (!term.__tinstarBaseFont) term.__tinstarBaseFont = term.options.fontSize || 13
-        var sig = avail + 'x' + term.rows
-        if (term.__tinstarFitSig === sig && term.options.fontSize === term.__tinstarFitFont) {
-          var same = screenBox(win, term)
-          if (same && same.bottom <= avail + 1) {
-            placePinnedFrame(term, same.screen)
-            return
+        var settled = term.__tinstarFitSig === avail + 'x' + term.rows &&
+          term.options.fontSize === term.__tinstarFitFont &&
+          (box.bottom <= avail + 1 || term.options.fontSize <= 6)
+        if (!settled) {
+          var font = term.__tinstarBaseFont
+          for (;;) {
+            if (term.options.fontSize !== font) {
+              term.options.fontSize = font
+              term.resize(fixedCols, fixedRows)
+            }
+            box = screenBox(win, term)
+            if (!box) return
+            placePinnedFrame(term, box.screen)
+            avail = document.documentElement.clientHeight
+            if (box.bottom <= avail + 1 || font <= 6) break
+            font -= 1
           }
+          term.__tinstarFitSig = avail + 'x' + term.rows
+          term.__tinstarFitFont = font
+          revealPrompt()
         }
-        var font = term.__tinstarBaseFont
-        var chosen = font
-        var fitted = null
-        for (var step = 0; step < 40; step++) {
-          if (term.options.fontSize !== font) {
-            term.options.fontSize = font
-            term.resize(fixedCols, fixedRows)
-          }
-          fitted = screenBox(win, term)
-          if (!fitted) return
-          if (fitted.bottom <= avail + 1 || font <= 6) { chosen = font; break }
-          font -= 1
+        if (box.bottom > avail + 1) {
+          termEl.style.maxHeight = 'none'
+          termEl.style.height = Math.ceil(box.bottom) + 'px'
         }
-        term.__tinstarFitSig = sig
-        term.__tinstarFitFont = chosen
-        placePinnedFrame(term, fitted.screen)
-        revealPrompt()
       } catch (_) {
       } finally {
         fitPinnedFrame.running = false
