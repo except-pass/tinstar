@@ -148,7 +148,7 @@
     function revealPrompt() {
       var page = document.scrollingElement || document.documentElement
       page.scrollLeft = 0
-      page.scrollTop = page.scrollHeight
+      page.scrollTop = 0
     }
 
     // Start loading
@@ -198,21 +198,67 @@
       notifyCycle(e)
     })
 
+    function screenBox(win, term) {
+      var screen = term.element && term.element.querySelector('.xterm-screen')
+      if (!screen || !screen.offsetHeight) return null
+      var top = screen.getBoundingClientRect().top + (win.scrollY || 0)
+      return { screen: screen, top: top, bottom: top + screen.offsetHeight }
+    }
+
+    // The worker grid stays at its own cols x rows. When that grid is taller
+    // than the stage, lower the font until the first row and the prompt both
+    // fit. Growing the iframe and scrolling to the prompt pushes the top off.
     function fitPinnedFrame() {
-      if (!fixedCols || !fixedRows) return
+      if (!fixedCols || !fixedRows || fitPinnedFrame.running) return
+      fitPinnedFrame.running = true
       try {
-        var term = termEl.contentWindow && termEl.contentWindow.term
-        var screen = term && term.element && term.element.querySelector('.xterm-screen')
-        var viewport = term && term.element && term.element.querySelector('.xterm-viewport')
-        if (!screen || !screen.offsetWidth) return
-        var bar = viewport ? viewport.offsetWidth - viewport.clientWidth : 0
-        // Keep xterm at its readable font size; the pinned grid can be larger
-        // than the stage, so the wrapper document scrolls and is anchored to
-        // the bottom where the prompt lives.
-        termEl.style.width = Math.ceil(screen.offsetWidth + bar + 10) + 'px'
-        termEl.style.height = Math.ceil(screen.offsetHeight + 10) + 'px'
-        requestAnimationFrame(revealPrompt)
-      } catch (_) {}
+        var win = termEl.contentWindow
+        var term = win && win.term
+        if (!term || !term.options || !term.rows) return
+        // Width first, so a horizontal scrollbar is already inside clientHeight.
+        var box = screenBox(win, term)
+        if (!box) return
+        placePinnedFrame(term, box.screen)
+        var avail = document.documentElement.clientHeight
+        if (avail < 40) return
+        if (!term.__tinstarBaseFont) term.__tinstarBaseFont = term.options.fontSize || 13
+        var settled = term.__tinstarFitSig === avail + 'x' + term.rows &&
+          term.options.fontSize === term.__tinstarFitFont &&
+          (box.bottom <= avail + 1 || term.options.fontSize <= 6)
+        if (!settled) {
+          var font = term.__tinstarBaseFont
+          for (;;) {
+            if (term.options.fontSize !== font) {
+              term.options.fontSize = font
+              term.resize(fixedCols, fixedRows)
+            }
+            box = screenBox(win, term)
+            if (!box) return
+            placePinnedFrame(term, box.screen)
+            avail = document.documentElement.clientHeight
+            if (box.bottom <= avail + 1 || font <= 6) break
+            font -= 1
+          }
+          term.__tinstarFitSig = avail + 'x' + term.rows
+          term.__tinstarFitFont = font
+          revealPrompt()
+        }
+        if (box.bottom > avail + 1) {
+          termEl.style.maxHeight = 'none'
+          termEl.style.height = Math.ceil(box.bottom) + 'px'
+        }
+      } catch (_) {
+      } finally {
+        fitPinnedFrame.running = false
+      }
+    }
+
+    function placePinnedFrame(term, screen) {
+      var viewport = term.element.querySelector('.xterm-viewport')
+      var bar = viewport ? Math.max(0, viewport.offsetWidth - viewport.clientWidth) : 0
+      termEl.style.width = Math.ceil(screen.offsetWidth + bar + 10) + 'px'
+      termEl.style.height = '100%'
+      termEl.style.maxHeight = '100%'
     }
 
     function pinTerminalSize(win) {
@@ -238,6 +284,15 @@
           return true
         })
       }
+      // Below the 6px floor the stage scrolls, but xterm would turn the wheel
+      // into arrow keys for the worker. The wheel scrolls the stage instead.
+      win.addEventListener('wheel', function(e) {
+        var page = document.scrollingElement || document.documentElement
+        if (page.scrollHeight <= page.clientHeight + 1) return
+        e.preventDefault()
+        e.stopPropagation()
+        page.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+      }, { capture: true, passive: false })
       if (win.ResizeObserver && term.element) {
         var screen = term.element.querySelector('.xterm-screen')
         if (screen) new win.ResizeObserver(fitPinnedFrame).observe(screen)

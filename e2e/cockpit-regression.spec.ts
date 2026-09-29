@@ -58,6 +58,20 @@ const promptProblems = async (page: Page, id: string) => {
   if (!anchor || anchor.transformed || anchor.left < -1 || anchor.bottom > anchor.view + 1 || anchor.bottom < Math.min(anchor.height, anchor.view) - 1) {
     problems.push(`terminal not full size and anchored to its bottom row: ${JSON.stringify(anchor)}`)
   }
+  const screen = await wrapper?.evaluate(() => {
+    const term = document.getElementById('term') as HTMLIFrameElement | null
+    const grid = term?.contentDocument?.querySelector('.xterm-screen')
+    if (!term || !grid) return null
+    const frame = term.getBoundingClientRect()
+    const gridBox = grid.getBoundingClientRect()
+    return { top: frame.top + gridBox.top, bottom: frame.top + gridBox.bottom }
+  })
+  const host = await page.locator('.cockpit-terminal-frame').first().boundingBox()
+  const viewport = page.viewportSize()
+  const screenBottom = host && screen ? host.y + screen.bottom : null
+  if (!screen || screenBottom === null || !viewport || screen.top < -1 || screenBottom > viewport.height + 1) {
+    problems.push(`terminal screen is outside the stage and viewport (stage top ${screen?.top}, bottom ${screenBottom} of ${viewport?.height})`)
+  }
   const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
     return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
@@ -165,7 +179,10 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
     expect(alphaSize()).toBe('220x60')
     await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
-    for (const viewport of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1000, height: 768 }, { width: 720, height: 900 }]) {
+    for (const viewport of [
+      { width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1440, height: 700 }, { width: 1920, height: 1080 },
+      { width: 1000, height: 1080 }, { width: 1000, height: 900 }, { width: 1000, height: 768 }, { width: 1000, height: 720 }, { width: 1000, height: 700 }, { width: 720, height: 900 },
+    ]) {
       await page.setViewportSize(viewport)
       await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
@@ -320,6 +337,28 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
     console.log(`private worker alpha size after reconnect=${alphaSize()}`)
     expect(alphaSize()).toBe(operatorSize)
+
+    // Below the 6px floor the stage scrolls from the top; the wheel must scroll
+    // it to the prompt instead of reaching the worker as arrow keys.
+    tmux('resize-window', '-t', 'firstmate:fm-charlie', '-x', '220', '-y', '150')
+    await second.setViewportSize({ width: 1280, height: 600 })
+    await second.getByRole('button', { name: 'Overview' }).click()
+    await second.getByRole('button', { name: /charlie .*WORKING/i }).click()
+    await expect.poll(() => xtermSize(second, 'charlie'), { timeout: 15_000 }).toBe('220x150')
+    const charlieWrapper = () => second.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes('session=cockpit-0-charlie&'))!
+    const stageScroll = () => charlieWrapper().evaluate(() => {
+      const el = document.scrollingElement || document.documentElement
+      return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
+    })
+    await expect.poll(async () => (await stageScroll()).max, { timeout: 15_000 }).toBeGreaterThan(100)
+    expect((await stageScroll()).top).toBe(0)
+    const charlieBox = (await second.locator('iframe[title="charlie terminal"]').boundingBox())!
+    await second.mouse.move(charlieBox.x + charlieBox.width / 2, charlieBox.y + charlieBox.height / 2)
+    for (let i = 0; i < 10; i++) await second.mouse.wheel(0, 200)
+    await expect.poll(async () => { const s = await stageScroll(); return s.top >= s.max - 1 }).toBe(true)
+    await delay(500)
+    expect(tmux('capture-pane', '-p', '-t', 'firstmate:fm-charlie')).not.toContain('^[')
+    expect(await second.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
     await second.close()
   } finally {
     server?.kill('SIGTERM')
