@@ -55,9 +55,9 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 | Fleet config and ports | `src/server/fleet/config.ts`, `src/server/fleet/ports.ts` | Reads `firstmate.homes` and `firstmate.ports` from `config.json`; allocates loopback ttyd ports in that window. |
 | Terminal views | `src/server/firstmate/views.ts`, `src/server/firstmate/ledger-watcher.ts` | One ttyd per viewed worker, running `bin/tinstar-fm-view`; ledger changes trigger a snapshot re-read. |
 | Terminal proxy | `src/server/sessionProxy.ts` | Proxies `/s/<key>/` HTTP and WebSocket traffic to the worker's view ttyd, with an origin check on upgrades. |
-| Core API | `src/server/api/coreRoutes.ts` | `/api/cc-quota`, `/api/provider-observations`, `/api/provider-observation-view`, `/api/reach`, `/api/events` and the telemetry routes. |
+| Core API | `src/server/api/coreRoutes.ts` | `/api/quota`, `/api/provider-observations`, `/api/provider-observation-view`, `/api/reach`, `/api/events` and the telemetry routes. |
 | SSE Broadcaster | `src/server/api/sse.ts` | Named server-sent events to connected clients, with a 15 s heartbeat. |
-| Quota and observations | `src/server/cc-quota/`, `src/server/providers/`, `src/server/observability/codex-otel.ts` | Claude statusline quota ingest and provider observation stores. |
+| Quota and observations | `src/server/quota/`, `src/server/providers/`, `src/server/observability/codex-otel.ts` | `quota-axi` poll for the rail, plus provider observation stores. |
 | Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to connected clients. Disabled with `TINSTAR_TELEMETRY=0`. |
 | Bind and reach | `src/server/bind.ts`, `src/server/reach/` | Loopback-only bind plus any `--host` addresses; opt-in tailnet reach. |
 | Logger | `src/server/logger.ts` | Structured logging to console + `~/.config/tinstar/server.log`. Format: `[ISO] [LEVEL] [TAG] message {json}`. |
@@ -71,7 +71,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 ### HTTP API
 
-**Response envelope:** `{ ok: true, data, warnings? }` on success, `{ ok: false, error: { code, message, details? } }` on failure. Use the `ok()` and `fail()` helpers in `src/server/api/envelope.ts`. Wire-protocol endpoints (`/api/cc-quota`, provider observations, the `/api/events` SSE stream) are documented exceptions and return raw JSON. See [ADR 0001](./adrs/0001-response-envelope.md). Any other `/api/*` path returns 404.
+**Response envelope:** `{ ok: true, data, warnings? }` on success, `{ ok: false, error: { code, message, details? } }` on failure. Use the `ok()` and `fail()` helpers in `src/server/api/envelope.ts`. Wire-protocol endpoints (`/api/quota`, provider observations, the `/api/events` SSE stream) are documented exceptions and return raw JSON. See [ADR 0001](./adrs/0001-response-envelope.md). Any other `/api/*` path returns 404.
 
 ---
 

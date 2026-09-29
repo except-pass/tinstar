@@ -202,9 +202,8 @@ export function providerSessionTokenTotal(
 
 interface ProviderSessionContextFields {
   /**
-   * Shared normalized names intentionally differ from the Claude-specific
-   * `SessionContextSnapshot` fields in `src/server/cc-quota/types.ts`.
-   * The Claude adapter maps `usedPercentage` and `windowSize` explicitly.
+   * Shared normalized names. A context reading carries tokens, a window size,
+   * or a used percent — at least one of them.
    */
   usedTokens?: number
   windowTokens?: number

@@ -1,73 +1,109 @@
 import { useEffect, useState } from 'react'
-import { Cc7dBar } from '../components/CanvasHud/Cc7dBar'
-import { CcQuotaClock } from '../components/CanvasHud/CcQuotaClock'
-import { ProviderQuotaCards } from '../components/CanvasHud/ProviderQuotaCards'
-import { useProviderQuotaObservations } from '../hooks/providerObservationsStore'
-import { useCcQuota, type UsageBucket } from '../hooks/useCcQuota'
+import { useQuotaMeters } from '../hooks/useQuotaMeters'
+import type { QuotaMeterProvider, QuotaMeterSnapshot } from '../server/quota/parse'
 
-const CLAUDE_STALE_MS = 5 * 60_000
+const DAY_MS = 24 * 60 * 60_000
 
-function ageLabel(timestamp: number, now: number): string {
-  const minutes = Math.max(0, Math.floor((now - timestamp) / 60_000))
+function providerName(id: string): string {
+  if (id === 'claude') return 'Claude'
+  if (id === 'codex') return 'Codex'
+  if (id === 'grok') return 'Grok'
+  return id.slice(0, 1).toUpperCase() + id.slice(1)
+}
+
+function formatWhen(iso: string | null, now: number): string {
+  if (!iso) return 'unknown'
+  const time = Date.parse(iso)
+  if (!Number.isFinite(time)) return 'unknown'
+  const date = new Date(time)
+  const clock = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return Math.abs(time - now) > DAY_MS
+    ? `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${clock}`
+    : clock
+}
+
+function ageLabel(iso: string | null, now: number): string {
+  if (!iso) return 'unknown'
+  const time = Date.parse(iso)
+  if (!Number.isFinite(time)) return 'unknown'
+  const minutes = Math.max(0, Math.floor((now - time) / 60_000))
   if (minutes < 1) return 'just now'
   if (minutes < 60) return `${minutes}m ago`
   const hours = Math.floor(minutes / 60)
   return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
 }
 
-function resetLabel(bucket: UsageBucket, now: number): string {
-  const reset = Date.parse(bucket.resets_at)
-  if (!Number.isFinite(reset)) return 'reset unknown'
-  const date = new Date(reset)
-  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return reset - now > 24 * 60 * 60_000
-    ? `resets ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
-    : `resets ${time}`
+function runOutLabel(provider: QuotaMeterProvider, now: number): string {
+  if (provider.projectedRunOutAt) return formatWhen(provider.projectedRunOutAt, now)
+  if (provider.runway === 'through_reset') return 'Through reset'
+  return 'Not projected'
 }
 
-function ClaudeWindow({ bucket, label, now }: { bucket: UsageBucket | null; label: '5H' | '7D'; now: number }) {
-  const valid = bucket && Number.isFinite(bucket.utilization) && bucket.utilization >= 0 && bucket.utilization <= 100
-  return <div className="cockpit-quota-row">
-    <div className="cockpit-quota-visual">{label === '5H'
-      ? <CcQuotaClock bucket={valid ? bucket : null} nowMs={now} />
-      : <Cc7dBar bucket={valid ? bucket : null} nowMs={now} />}</div>
-    <div className="cockpit-quota-copy"><strong>{label} · {valid ? `${Math.round(100 - bucket.utilization)}% left` : 'unavailable'}</strong>
-      <small>{valid ? resetLabel(bucket, now) : 'No statusline reading'}</small></div>
-  </div>
+function Glyph({ id }: { id: string }) {
+  if (id === 'claude') {
+    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4 9.3 6.1 14 8 9.3 9.9 8 14.6 6.7 9.9 2 8 6.7 6.1Z" fill="currentColor" /></svg>
+  }
+  if (id === 'codex') {
+    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M2.5 8h11M2.5 11.5h7" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" /></svg>
+  }
+  if (id === 'grok') {
+    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M5.2 10.8 10.8 5.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+  }
+  return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><text x="8" y="12" textAnchor="middle" fontSize="11" fill="currentColor">{id.slice(0, 1).toUpperCase()}</text></svg>
+}
+
+function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number }) {
+  const name = providerName(provider.id)
+  const remaining = provider.remainingPercent
+  const label = `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+  const fill = remaining == null ? 0 : Math.max(0, Math.min(100, remaining))
+  return <button type="button" className={`cockpit-quota-meter is-${provider.level}`} aria-label={label}>
+    <Glyph id={provider.id} />
+    <span className="cockpit-quota-bar" aria-hidden="true"><span style={{ width: `${fill}%` }} /></span>
+    <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
+    <span className="cockpit-quota-popover" role="tooltip">
+      <strong>{name}</strong>
+      <dl>
+        <dt>Remaining</dt><dd>{remaining == null ? '—' : `${remaining}%`}</dd>
+        <dt>Limiting window</dt><dd>{provider.limitingWindow?.label ?? '—'}</dd>
+        <dt>Resets</dt><dd><time dateTime={provider.limitingWindow?.resetsAt ?? undefined}>{formatWhen(provider.limitingWindow?.resetsAt ?? null, now)}</time></dd>
+        <dt>Runs out</dt><dd>{provider.projectedRunOutAt
+          ? <time dateTime={provider.projectedRunOutAt}>{runOutLabel(provider, now)}</time>
+          : runOutLabel(provider, now)}</dd>
+        <dt>Plan</dt><dd>{provider.plan ?? '—'}</dd>
+        <dt>Refreshed</dt><dd>{ageLabel(provider.refreshedAt, now)}</dd>
+        {provider.account && <><dt>Account</dt><dd>{provider.account}</dd></>}
+      </dl>
+      {provider.error && <p>{provider.error}</p>}
+    </span>
+  </button>
+}
+
+export function QuotaMeters({ snapshot, now }: { snapshot: QuotaMeterSnapshot; now: number }) {
+  const showRefresh = snapshot.commandError != null && snapshot.providers.length > 0
+  const showOnlyError = snapshot.commandError != null && snapshot.providers.length === 0
+  return <section className="cockpit-quotas" aria-label="Provider quota">
+    <div className="cockpit-quota-meters">
+      {snapshot.providers.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
+      {(showRefresh || showOnlyError) && <button type="button" className="cockpit-quota-meter is-error" aria-label="Quota refresh, no reading">
+        <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 14.2 13H1.8Z" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M8 6.2v3.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /><circle cx="8" cy="11.2" r="0.7" fill="currentColor" /></svg>
+        <span className="cockpit-quota-bar" aria-hidden="true"><span style={{ width: '0%' }} /></span>
+        <span className="cockpit-quota-pct">–</span>
+        <span className="cockpit-quota-popover" role="tooltip">
+          <strong>Quota refresh</strong>
+          <p>{snapshot.commandError}</p>
+        </span>
+      </button>}
+    </div>
+  </section>
 }
 
 export function QuotaRail() {
-  const { snapshot } = useCcQuota()
-  const { observations, error, loaded } = useProviderQuotaObservations()
+  const snapshot = useQuotaMeters()
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-
-  const fetchedAt = snapshot ? Date.parse(snapshot.fetchedAt) : NaN
-  const current = Number.isFinite(fetchedAt) && now - fetchedAt < CLAUDE_STALE_MS && !snapshot?.error
-  const claudeData = current ? snapshot?.data : null
-  const claudeFreshness = !snapshot ? 'waiting for statusline'
-    : snapshot.error ? `unavailable · ${snapshot.error.message}`
-    : !Number.isFinite(fetchedAt) || !snapshot.data ? 'unavailable · no statusline reading'
-    : !current ? `stale · ${ageLabel(fetchedAt, now)}`
-    : `fresh · ${ageLabel(fetchedAt, now)}`
-  const others = observations.filter(observation => observation.providerId !== 'claude')
-  const observedProviders = new Set(others.map(observation => observation.providerId))
-
-  return <section className="cockpit-quotas" aria-label="Provider quota">
-    <div className="cockpit-quota-heading">PROVIDER QUOTA <span className="material-symbols-outlined" aria-hidden="true">speed</span></div>
-    <div className="cockpit-quota-scroll">
-      <section className="cockpit-quota-claude" aria-label="Claude provider quota">
-        <div className="cockpit-quota-provider"><strong>Claude</strong><small>{claudeFreshness}</small></div>
-        <ClaudeWindow bucket={claudeData?.five_hour ?? null} label="5H" now={now} />
-        <ClaudeWindow bucket={claudeData?.seven_day ?? null} label="7D" now={now} />
-      </section>
-      <ProviderQuotaCards observations={others} error={error} nowMs={now} />
-      {!observedProviders.has('codex') && <p className="cockpit-quota-missing"><strong>Codex</strong><span>Unavailable · no quota observation received</span></p>}
-      {!observedProviders.has('grok') && <p className="cockpit-quota-missing"><strong>Grok</strong><span>Unavailable · no quota source connected</span></p>}
-      {!loaded && <p className="cockpit-quota-missing">Loading provider observations…</p>}
-    </div>
-  </section>
+  return <QuotaMeters snapshot={snapshot} now={now} />
 }

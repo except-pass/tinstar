@@ -81,8 +81,8 @@ export function resolveBindTargets(host?: string | string[]): ResolvedBind {
   }
 
   const targets: BindTarget[] = explicit.map(h => ({ host: h, required: true }))
-  // Keep localhost-pointing hooks (project .claude/settings.json, the cc-quota
-  // statusline, bin/apiBase.js) working when the server is exposed on a
+  // Keep localhost-pointing local callers (project .claude/settings.json,
+  // bin/apiBase.js) working when the server is exposed on a
   // specific external interface. Keyed on the IPv4 literal on purpose: an
   // explicit `::1` must still gain 127.0.0.1, or the host file has no
   // unbracketable address to record.

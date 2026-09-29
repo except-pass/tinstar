@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { ProviderCurrentObservationsWire } from '../../../domain/provider-observation-wire'
-import { CcQuotaService } from '../../cc-quota/service'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ProviderObservationIngestor } from '../../providers/observation-ingestor'
+import { QuotaAxiPoller } from '../../quota/poller'
 import { ProviderCurrentObservationStores } from '../../providers/observation-stores'
 import { getReachCoordinator, resetReachCoordinatorForTests, unconfiguredReachProvider } from '../../reach'
 import { handleCoreApi, type CoreApiDeps } from '../coreRoutes'
@@ -33,7 +34,10 @@ beforeEach(async () => {
   const observations = new ProviderCurrentObservationStores({ now: () => NOW })
   sse = new SSEBroadcaster()
   deps = {
-    quota: new CcQuotaService({ now: () => NOW, observationStores: observations }),
+    quota: new QuotaAxiPoller({
+      run: async () => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../quota/__tests__/recorded-quota-axi.json'), 'utf8'),
+      now: () => NOW,
+    }),
     observations,
     sse,
     telemetry: createTelemetryRoutes({
@@ -69,14 +73,6 @@ async function postReach(body: string, headers: Record<string, string>) {
   const resp = await fetch(`${baseUrl}/api/reach`, { method: 'POST', headers, body })
   const parsed = await resp.json().catch(() => null) as { error?: { message?: string } } | null
   return { status: resp.status, body: parsed }
-}
-
-const statusline = {
-  session_id: 'abc',
-  rate_limits: {
-    five_hour: { used_percentage: 33, resets_at: 1776981600 },
-    seven_day: { used_percentage: 77, resets_at: 1777168800 },
-  },
 }
 
 describe('POST /api/reach — who may flip remote exposure', () => {
@@ -115,34 +111,30 @@ describe('POST /api/reach — who may flip remote exposure', () => {
   })
 })
 
-describe('cc-quota routes', () => {
-  it('GET returns the empty snapshot before anything is ingested', async () => {
-    const resp = await fetch(`${baseUrl}/api/cc-quota`)
+describe('GET /api/quota', () => {
+  it('returns the cached quota-axi providers', async () => {
+    await deps.quota.refresh()
+    const resp = await fetch(`${baseUrl}/api/quota`)
     expect(resp.status).toBe(200)
-    expect(await resp.json()).toMatchObject({ data: null, error: null })
+    const body = await resp.json() as { commandError: string | null; providers: Array<{ id: string; remainingPercent: number | null }> }
+    expect(body.commandError).toBeNull()
+    expect(body.providers.map(provider => [provider.id, provider.remainingPercent])).toEqual([
+      ['claude', 64],
+      ['codex', 18],
+      ['grok', null],
+      ['kimi', 3],
+    ])
   })
 
-  it('POST ingests a statusline payload and GET returns it', async () => {
-    const post = await fetch(`${baseUrl}/api/cc-quota/ingest`, { method: 'POST', headers: JSON_CT, body: JSON.stringify(statusline) })
-    expect(post.status).toBe(200)
-    const posted = await post.json() as { data: { five_hour: { utilization: number }; seven_day: { utilization: number } }; error: null }
-    expect(posted.data.five_hour.utilization).toBe(33)
-    expect(posted.data.seven_day.utilization).toBe(77)
-    expect(posted.error).toBeNull()
-    const got = await (await fetch(`${baseUrl}/api/cc-quota`)).json() as typeof posted
-    expect(got.data.five_hour.utilization).toBe(33)
-  })
-
-  it('POST returns 400 on malformed JSON', async () => {
-    const resp = await fetch(`${baseUrl}/api/cc-quota/ingest`, { method: 'POST', headers: JSON_CT, body: 'not json' })
-    expect(resp.status).toBe(400)
-    expect(await resp.json()).toEqual({ ok: false, error: { code: 'BAD_REQUEST', message: 'malformed_json' } })
+  it('returns an empty cache before the first read', async () => {
+    const resp = await fetch(`${baseUrl}/api/quota`)
+    expect(resp.status).toBe(200)
+    expect(await resp.json()).toMatchObject({ providers: [], commandError: null, fetchedAt: null })
   })
 })
 
 describe('GET /api/provider-observations', () => {
-  it('returns Codex OTel and Claude statusline data from the same store', async () => {
-    deps.quota.ingest({ session_id: 'claude-session', rate_limits: { five_hour: { used_percentage: 40, resets_at: 1_785_588_800 } } })
+  it('returns Codex OTel session usage from the observation store', async () => {
     new ProviderObservationIngestor({ stores: deps.observations, now: () => NOW }).ingest({
       providerId: 'codex',
       sessionId: 'codex-session',
@@ -166,13 +158,6 @@ describe('GET /api/provider-observations', () => {
         providerId: 'codex',
         scope: { kind: 'session', sessionId: 'codex-session' },
         availability: expect.objectContaining({ value: expect.objectContaining({ model: 'gpt-5.4' }) }),
-      }),
-    ]))
-    expect(body.providerQuota).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        providerId: 'claude',
-        scope: { kind: 'provider', accountRef: 'default' },
-        availability: expect.objectContaining({ state: 'available' }),
       }),
     ]))
   })
