@@ -17,8 +17,9 @@ The open worker and the overview filter are part of the page URL, so a view can 
 | `/?q=text` | The overview, limited to workers whose name or objective fuzzy-matches `text`. |
 | `/?worker=TASK_ID` | That worker's detail, including on a fresh load. `TASK_ID` is the First Mate task id. |
 | `/?worker=TASK_ID&q=text` | That worker's detail. The filter is still applied when you return to the overview. |
+| `/?worker=TASK_ID&home=HOME` | The worker with that task id in First Mate home `HOME`. The cockpit adds `home` only when the task id is in more than one configured home. |
 
-An id that is not in the fleet shows **No such worker**.
+An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**.
 
 Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
