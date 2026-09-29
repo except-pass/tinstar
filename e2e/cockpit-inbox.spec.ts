@@ -86,7 +86,7 @@ elif command == 'ready':
     const noteFiles = readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))
     expect(noteFiles).toHaveLength(1)
     const note = JSON.parse(readFileSync(join(home, 'state', noteFiles[0]!), 'utf8')) as { request_id: string; body: string }
-    expect(note.body).toContain('task alpha, decision choice (Choose the rollout order):')
+    expect(note.body).toContain('Answer for task alpha, decision choice, hold alpha-decision-choice (Choose the rollout order):')
     expect(note.body).toContain('Start with the smaller group.')
     await request.post(`${base}/api/fleet/messages`, { data: { requestId: note.request_id, anchorKey: 'attention-0:alpha:decision:choice', kind: 'answer', text: 'Start with the smaller group.' } })
     expect(readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))).toHaveLength(1)
@@ -100,7 +100,7 @@ elif command == 'ready':
     snapshot(false)
     appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
     await expect(card).toHaveCount(0, { timeout: 30_000 })
-    await expect(page.locator('.cockpit-message-top')).toContainText('done')
+    await expect(page.locator('.cockpit-messages article')).toHaveCount(0, { timeout: 15_000 })
     await page.screenshot({ path: test.info().outputPath('private-call-done.png') })
     expect(errors).toEqual([])
   } finally {

@@ -74,6 +74,11 @@ function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard
   </article>
 }
 
+function mintRequestId(): string {
+  const hex = [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('')
+  return `tinstar-${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answer' | 'message'; submit: (draft: Draft) => Promise<SubmitResult> }) {
   const [text, setText] = useState('')
   const [requestId, setRequestId] = useState<string | null>(null)
@@ -84,8 +89,8 @@ function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answe
   return <form className="cockpit-composer" onSubmit={event => {
     event.preventDefault()
     if (inFlight.current || !text.trim()) return
+    const id = requestId ?? mintRequestId()
     inFlight.current = true; setBusy(true); setNotice(null)
-    const id = requestId ?? `tinstar-${crypto.randomUUID()}`
     setRequestId(id)
     void submit({ requestId: id, anchorKey, kind, text: text.trim() }).then(result => {
       if (result.saved) { setText(''); setRequestId(null); setNotice(result.error ?? (result.canReceive === false ? 'Saved, not yet read. First Mate will read it when it wakes.' : 'Saved. First Mate will receive it at the next check.')) }

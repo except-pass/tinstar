@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getConfigRoot } from '../configRoot'
 import { log } from '../logger'
+import type { AttentionType } from './attention'
 
 export interface OutboxMessage {
   requestId: string
@@ -12,6 +13,7 @@ export interface OutboxMessage {
   taskId: string | null
   decisionKey: string | null
   holdId: string | null
+  cardType: AttentionType | null
   text: string
 }
 
@@ -64,7 +66,6 @@ async function observe(home: string): Promise<{ receipts: Receipt[]; canReceive:
 export class FleetOutbox {
   private readonly path = join(getConfigRoot(), 'fleet-outbox.json')
   private messages: OutboxMessage[] | null = null
-  private finished = new Set<string>()
   private writing: Promise<unknown> = Promise.resolve()
 
   private async load(): Promise<OutboxMessage[]> {
@@ -82,7 +83,7 @@ export class FleetOutbox {
   private async write(messages: OutboxMessage[]): Promise<void> {
     await mkdir(getConfigRoot(), { recursive: true })
     const temp = `${this.path}.${randomUUID()}.tmp`
-    await writeFile(temp, JSON.stringify(messages.filter(message => !this.finished.has(message.requestId))), { mode: 0o600 })
+    await writeFile(temp, JSON.stringify(messages), { mode: 0o600 })
     await rename(temp, this.path)
   }
 
@@ -101,7 +102,7 @@ export class FleetOutbox {
     if (!messages.length) return []
     const wanted = [...new Set(messages.map(message => message.home))].filter(home => homes.includes(home))
     const observations = new Map(await Promise.all(wanted.map(async home => [home, await observe(home)] as const)))
-    let finishedMore = false
+    const finished = new Set<string>()
     const listed = messages.map((message): ListedMessage => {
       const observation = observations.get(message.home) ?? null
       const receipt = observation?.receipts.find(item => item.request_id === message.requestId)
@@ -109,13 +110,16 @@ export class FleetOutbox {
         : !receipt ? 'sending'
         : snapshotReady && message.kind === 'answer' && !callOpen(message) ? 'done'
         : receipt.acknowledged ? 'acknowledged' : 'saved'
-      if ((state === 'done' || state === 'acknowledged') && !this.finished.has(message.requestId)) {
-        this.finished.add(message.requestId)
-        finishedMore = true
-      }
+      if (state === 'done' || state === 'acknowledged') finished.add(message.requestId)
       return { ...message, state, announced: receipt?.announced ?? null, reply: receipt?.reply?.body ?? null, canReceive: observation?.canReceive ?? 'unknown' }
     })
-    if (finishedMore) void this.queue(() => this.write(this.messages ?? [])).catch(error => log.warn('fleet', `outbox prune failed: ${(error as Error).message}`))
+    if (finished.size) {
+      void this.queue(async () => {
+        const next = (this.messages ?? []).filter(message => !finished.has(message.requestId))
+        await this.write(next)
+        this.messages = next
+      }).catch(error => log.warn('fleet', `outbox prune failed: ${(error as Error).message}`))
+    }
     return listed
   }
 

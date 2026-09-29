@@ -12,7 +12,7 @@ afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true })
 })
 
-it('keeps one unfinished request across retry and reload, follows receipts and call resolution, and reports unreadable homes', async () => {
+it('keeps one request across retry and reload, drops finished messages, and reports unreadable homes', async () => {
   root = mkdtempSync(join(tmpdir(), 'tinstar-outbox-'))
   process.env.TINSTAR_CONFIG_HOME = join(root, 'config')
   const home = join(root, 'firstmate')
@@ -49,7 +49,11 @@ elif command == 'ready':
   chmodSync(script, 0o755)
   const message: OutboxMessage = {
     requestId: 'tinstar-00000000-0000-4000-8000-000000000001', home, kind: 'answer',
-    taskId: 'alpha', decisionKey: 'choice', holdId: 'alpha-decision-choice', text: 'Use option A.',
+    taskId: 'alpha', decisionKey: 'choice', holdId: 'alpha-decision-choice', cardType: 'decision', text: 'Use option A.',
+  }
+  const context: OutboxMessage = {
+    requestId: 'tinstar-00000000-0000-4000-8000-000000000002', home, kind: 'message',
+    taskId: 'alpha', decisionKey: null, holdId: null, cardType: 'failure', text: 'Check the deploy log.',
   }
   const target = 'Answer for task alpha, decision choice (Choose a rollout order)'
   const outboxFile = join(root, 'config', 'fleet-outbox.json')
@@ -63,16 +67,21 @@ elif command == 'ready':
   const reloaded = new FleetOutbox()
   expect(await reloaded.list([home], () => true))
     .toMatchObject([{ requestId: message.requestId, state: 'saved', announced: false, canReceive: false }])
+  expect(await reloaded.list([home], () => false, false)).toMatchObject([{ state: 'saved' }])
+  expect((await reloaded.submit(context, 'Message about task alpha, failure card (Deploy failed)')).saved).toBe(true)
+  expect(await reloaded.list([home], () => false))
+    .toMatchObject([{ requestId: message.requestId, state: 'done' }, { requestId: context.requestId, state: 'saved' }])
+  await expect.poll(() => reloaded.list([home], () => false)).toMatchObject([{ requestId: context.requestId, state: 'saved' }])
+  expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([context])
   writeFileSync(join(home, 'state', 'acked'), '')
-  writeFileSync(join(home, 'state', 'reply'), 'Option A recorded.')
-  expect(await reloaded.list([home], () => true))
-    .toMatchObject([{ state: 'acknowledged', reply: 'Option A recorded.' }])
-  await expect.poll(() => JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
-  expect(await reloaded.list([home], () => false, false)).toMatchObject([{ state: 'acknowledged' }])
-  expect(await reloaded.list([home], () => false)).toMatchObject([{ state: 'done' }])
+  writeFileSync(join(home, 'state', 'reply'), 'Deploy log checked.')
+  expect(await reloaded.list([home], () => false))
+    .toMatchObject([{ requestId: context.requestId, state: 'acknowledged', reply: 'Deploy log checked.' }])
+  await expect.poll(() => reloaded.list([home], () => false)).toEqual([])
+  expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
   expect(await new FleetOutbox().list([home], () => false)).toEqual([])
   writeFileSync(join(home, 'state', 'broken'), '')
-  expect(await reloaded.list([home], () => true)).toMatchObject([{ state: 'unknown', canReceive: 'unknown' }])
-  expect(await new FleetOutbox().submit({ ...message, requestId: 'tinstar-00000000-0000-4000-8000-000000000002' }, target))
-    .toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
+  const unread = { ...message, requestId: 'tinstar-00000000-0000-4000-8000-000000000003' }
+  expect(await reloaded.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
+  expect(await reloaded.list([home], () => true)).toMatchObject([{ requestId: unread.requestId, state: 'unknown', canReceive: 'unknown' }])
 })

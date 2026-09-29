@@ -109,12 +109,14 @@ export class CockpitFleet {
   private sameCall(card: AttentionCard, message: OutboxMessage): boolean {
     return this.homes[card.homeIndex] === message.home &&
       ((message.holdId !== null && card.holdId === message.holdId) ||
-        (message.decisionKey !== null && card.taskId === message.taskId && card.decisionKey === message.decisionKey))
+        (card.type === message.cardType && card.taskId === message.taskId && card.decisionKey === message.decisionKey))
   }
 
   private describe(message: OutboxMessage, card = this.attention.find(item => this.sameCall(item, message))): string {
     const worker = this.workers.find(item => item.home === message.home && item.id === message.taskId)
-    const target = `${message.taskId ? `task ${message.taskId}` : 'First Mate backlog'}${message.decisionKey ? `, decision ${message.decisionKey}` : card ? `, ${card.type} card` : ''}`
+    const target = [message.taskId ? `task ${message.taskId}` : 'First Mate backlog',
+      message.decisionKey ? `decision ${message.decisionKey}` : message.cardType && `${message.cardType} card`,
+      message.holdId && message.holdId !== message.decisionKey && `hold ${message.holdId}`].filter(Boolean).join(', ')
     return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
   }
 
@@ -141,6 +143,7 @@ export class CockpitFleet {
       taskId: card ? card.taskId : worker!.id,
       decisionKey: card?.decisionKey ?? null,
       holdId: card?.holdId ?? null,
+      cardType: card?.type ?? null,
     }
     return this.outbox.submit(message, this.describe(message, card))
   }
