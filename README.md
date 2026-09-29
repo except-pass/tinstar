@@ -21,7 +21,7 @@ The open worker and the overview filter are part of the page URL, so a view can 
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-Decision answers, slide-to-dismiss, and “Tell First Mate about this” messages go through First Mate's inbox. Dismissing a decision sends an answer asking First Mate to close that task and decision key. Like any answer, it is done once the decision leaves the fleet. The card reads dismissing while that answer is open in the outbox. The slider comes back if First Mate replies, if the answer expires while the decision is still open, or if the same decision returns later. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
+Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. Sliding a classified decision to dismiss closes it in the Tin Star server: a captain-held backlog task is answered with that home's `fm-captain-hold.sh`, and a keyed needs-decision or blocked line is closed with `fm-send.sh --resolve-key`, which also tells the waiting worker. The card reads dismissed when the script exits 0, and shows the script's error, with the slider still there, when it does not. A decision the snapshot cannot classify still sends one inbox answer and reads dismissing while that answer is open. The slider comes back if First Mate replies to that note, if the answer expires while the decision is still open, or if the same decision returns later. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
 ## Quick start
 
@@ -43,7 +43,7 @@ Configure the home in `~/.config/tinstar/config.json`:
 }
 ```
 
-The home must contain First Mate's `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`. Tinstar reads the fleet snapshot and opens private terminal views linked to worker windows. It does not create or stop workers. See [the integration reference](docs/features/firstmate-observer.md) for the current boundary.
+The home must contain First Mate's `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`. Direct dismiss also runs `bin/fm-captain-hold.sh` or `bin/fm-send.sh` from that same directory. Tinstar reads the fleet snapshot and opens private terminal views linked to worker windows. It does not create or stop workers. See [the integration reference](docs/features/firstmate-observer.md) for the current boundary.
 
 ## Access and configuration
 

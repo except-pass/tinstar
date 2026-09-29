@@ -16,7 +16,7 @@ The main pane for one worker: identity, state, objective, project, worktree, bra
 
 ## Needs You
 
-The rail's attention list. Decision, Blocked, Failure and Review Ready are derived from the snapshot; opening a card never resolves it. A decision card can slide to dismiss, which sends one inbox answer asking First Mate to dismiss that task and decision key; the [README](README.md) describes when the card reads dismissing. A decision is done when First Mate's state no longer reports it. See [attention derivation](src/server/fleet/attention.ts).
+The rail's attention list. Decision, Blocked, Failure and Review Ready are derived from the snapshot; opening a card never resolves it. A decision card, including a blocked line that carries a key, can slide to dismiss. A captain-held backlog task is answered with `fm-captain-hold.sh`, and a keyed needs-decision or blocked line is closed with `fm-send.sh --resolve-key`. The card reads dismissed when that script exits 0. A decision the snapshot cannot classify still sends one inbox answer; the [README](README.md) describes when that card reads dismissing. A decision is done when First Mate's state no longer reports it. See [attention derivation](src/server/fleet/attention.ts) and [direct dismiss](src/server/fleet/dismiss.ts).
 
 ## Message
 

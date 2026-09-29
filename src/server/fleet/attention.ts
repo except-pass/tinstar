@@ -1,5 +1,7 @@
 export type AttentionType = 'decision' | 'blocked' | 'failure' | 'review'
 export type ReviewStatus = 'open' | 'merged' | 'closed' | 'unknown'
+/** `null` keeps today's inbox note. The other two close in the Tin Star server. */
+export type AttentionDismissal = 'captain-hold' | 'resolve-key' | null
 
 export interface AttentionCard {
   key: string
@@ -7,6 +9,7 @@ export interface AttentionCard {
   taskId: string | null
   decisionKey: string | null
   holdId: string | null
+  dismissal: AttentionDismissal
   type: AttentionType
   headline: string
   detail: string
@@ -99,16 +102,20 @@ export function buildAttentionCards(
     let hasBlockedCall = false
     for (const entry of decisions) {
       if (entry.verb !== 'needs-decision' && entry.verb !== 'blocked') continue
-      const key = word(entry.key, 'default')
+      const rawKey = typeof entry.key === 'string' && entry.key.trim() ? entry.key.trim() : null
+      const key = rawKey ?? 'default'
       const type = entry.verb === 'blocked' ? 'blocked' : 'decision'
       if (type === 'blocked') hasBlockedCall = true
       const hold = resolveHold(holds, id, key) ?? holds.find(row => !matchedHolds.has(String(row.id)) &&
         (row.id === id || holdOrigin(row) === id) && sameCallText(word(entry.summary, ''), row.hold_reason))
       if (hold) matchedHolds.add(String(hold.id))
       const summary = word(entry.summary, word(hold?.hold_reason, worker.detail))
+      // A status key closes through fm-send, which also answers a captain hold that key names.
+      // A hold with no status key is the held task, answered through fm-captain-hold.
+      const dismissal = rawKey ? 'resolve-key' : hold ? 'captain-hold' : null
       cards.push({
-        key: `${homeKey}:${id}:${type}:${key}`, type,
-        homeIndex, taskId: id, decisionKey: type === 'decision' ? key : null, holdId: hold ? String(hold.id) : null,
+        key: `${homeKey}:${id}:${type}:${key}`, type, dismissal,
+        homeIndex, taskId: id, decisionKey: rawKey ?? (type === 'decision' ? key : null), holdId: hold ? String(hold.id) : null,
         headline: summary, detail: distinct(word(hold?.title, ''), summary), workerKey: worker.key, workerId: id,
         ageDays: typeof hold?.hold_age_days === 'number' ? hold.hold_age_days : null,
         prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
@@ -117,7 +124,7 @@ export function buildAttentionCards(
     if (worker.state === 'blocked' && !hasBlockedCall) {
       const headline = word(worker.detail, `${id} is blocked`)
       cards.push({
-        key: `${homeKey}:${id}:blocked:state`, type: 'blocked', headline,
+        key: `${homeKey}:${id}:blocked:state`, type: 'blocked', dismissal: null, headline,
         homeIndex, taskId: id, decisionKey: null, holdId: null,
         detail: distinct(word(worker.detail, 'unknown'), headline), workerKey: worker.key, workerId: id,
         ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
@@ -126,7 +133,7 @@ export function buildAttentionCards(
     if (worker.state === 'failed') {
       const headline = word(worker.detail, `${id} failed`)
       cards.push({
-        key: `${homeKey}:${id}:failure`, type: 'failure', headline,
+        key: `${homeKey}:${id}:failure`, type: 'failure', dismissal: null, headline,
         homeIndex, taskId: id, decisionKey: null, holdId: null,
         detail: distinct(word(worker.detail, 'Failure detail unknown'), headline), workerKey: worker.key, workerId: id,
         ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
@@ -141,7 +148,7 @@ export function buildAttentionCards(
     const worker = workerById.get(id) ?? (origin ? workerById.get(origin) : undefined)
     const headline = word(hold.hold_reason, word(hold.title, 'Captain decision needed'))
     cards.push({
-      key: `${homeKey}:hold:${id}`, type: 'decision', headline, detail: distinct(word(hold.title, ''), headline),
+      key: `${homeKey}:hold:${id}`, type: 'decision', dismissal: 'captain-hold', headline, detail: distinct(word(hold.title, ''), headline),
       homeIndex, taskId: worker?.id ?? null, decisionKey: id, holdId: id,
       workerKey: worker?.key ?? null, workerId: worker?.id ?? null,
       ageDays: typeof hold.hold_age_days === 'number' ? hold.hold_age_days : null,
@@ -160,7 +167,7 @@ export function buildAttentionCards(
     const reviewStatus = reviewStatuses.get(worker.prUrl) ?? 'unknown'
     if (reviewStatus === 'merged' || reviewStatus === 'closed') continue
     cards.push({
-      key: `${homeKey}:pr:${worker.prUrl}`, type: 'review', headline: worker.objective,
+      key: `${homeKey}:pr:${worker.prUrl}`, type: 'review', dismissal: null, headline: worker.objective,
       homeIndex, taskId: worker.id, decisionKey: null, holdId: null,
       detail: reviewStatus === 'unknown' ? 'Pull request status unavailable' : 'Ready for review',
       workerKey: worker.key, workerId: worker.id, ageDays: null,
