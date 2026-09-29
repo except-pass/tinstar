@@ -122,7 +122,7 @@ esbuild src/tinstar-plugin.tsx --bundle --format=esm --platform=browser \
 
 ## Constellations & capabilities
 
-A constellation is a cluster of widgets that move together, share a slot key (1–9), and can discover and invoke each other via capability-based RPC. See the full guide: [`docs/plugins/constellations-and-capabilities.md`](../../docs/plugins/constellations-and-capabilities.md).
+A constellation is a cluster of widgets that move together, share a slot key (1–9), and can discover and invoke each other via capability-based RPC.
 
 ## Migrating from V4
 

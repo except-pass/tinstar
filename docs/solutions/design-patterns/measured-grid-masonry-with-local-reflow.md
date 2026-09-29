@@ -85,6 +85,5 @@ The browser proof in `e2e/slate-masonry-reflow.spec.ts` creates durable file-aut
 ## Related
 
 - [ADR 0003: Measured masonry inside the Slate](../../adrs/0003-slate-masonry-reflow.md)
-- [Slate-first live authoring](../../features/slate-first-live-authoring.md)
 - [Slate Surface authoring contract](../documentation-gaps/slate-surface-authoring-contract.md)
 - PR #203 (pending at the time this learning was captured)

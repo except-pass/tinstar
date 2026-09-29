@@ -14,6 +14,6 @@ Tinstar now opens on a worker cockpit backed by First Mate's fleet snapshot. The
 
 The V5 canvas, widgets, frontend plugin host, Tin Star-owned sessions, spawn and send APIs, NATS channels and simulator are removed. First Mate now owns worker lifecycle. Configure `firstmate.homes` to point at an installation with `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`; see the [README](../README.md) for startup. Existing First Mate worker windows are observed and linked, not replaced.
 
-`@tinstar/plugin-api` has no runtime host in this release. Deprecating the separately published npm package is a separate publish decision. Plugin author guides under [`docs/plugins/`](plugins/) describe the retired V5 system.
+`@tinstar/plugin-api` has no runtime host in this release. Deprecating the separately published npm package is a separate publish decision. The V5 plugin, canvas and Slate guides are removed from `docs/`; git history keeps them.
 
 The first release does not include portfolio planning, worker launch, rich decision options, Context Threads, schedule drift, or objective editing. Those remain in the [V6 requirements](brainstorms/2026-09-24-tinstar-v6-requirements.md) for later work.

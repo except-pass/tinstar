@@ -56,7 +56,7 @@ The hook copies a shim under the Tinstar config root and updates `~/.claude/sett
 
 ## About plugins
 
-The V5 plugin host was removed in 6.0.0. The separately published `@tinstar/plugin-api` package has no runtime host in this release. The [V5 plugin documentation](docs/plugins/) is retained as historical reference.
+The V5 plugin host was removed in 6.0.0. The separately published `@tinstar/plugin-api` package has no runtime host in this release.
 
 ## License
 

@@ -89,7 +89,7 @@ The cockpit's fleet response is defined at the server boundary in `src/server/fl
 
 ## Plugin System
 
-The V5 plugin host has been removed. The separately published `@tinstar/plugin-api` package has no runtime host in 6.0.0. [ADR 0002](./adrs/0002-plugin-api-boundary.md) and [`docs/plugins/`](plugins/) describe the historical design; they are not instructions for extending this cockpit.
+The V5 plugin host has been removed. The separately published `@tinstar/plugin-api` package has no runtime host in 6.0.0. [ADR 0002](./adrs/0002-plugin-api-boundary.md) describes the historical design; it is not an instruction for extending this cockpit.
 
 ---
 

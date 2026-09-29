@@ -17,7 +17,7 @@ tags: [plugin-api, plugin-boundary, api-design, server-routes, generic-endpoints
 
 ## Context
 
-V5 tinstar plugins are **frontend-only by design** (`docs/plugins/README.md` → "Widgets,
+V5 tinstar plugins are **frontend-only by design** (the V5 plugin README → "Widgets,
 panes, commands only — no server-side plugin code"). When a plugin needs something the
 browser can't do — read host state, run a command in a worktree, probe a service — the
 tempting shortcut is to add a plugin-named core route like `GET /api/roborev/fleet`.
@@ -107,6 +107,5 @@ not a plugin?" — not "does my plugin need it right now?"
 
 ## Related
 
-- `docs/plugins/README.md` — "Widgets, panes, commands only — no server-side plugin code" (the design decision this convention enforces)
 - `src/plugins/roborev/src/FleetView.tsx` — the standalone fleet widget that composes generic endpoints
 - `POST /api/sessions/:name/exec` in `src/server/api/routes.ts` — the generic in-worktree exec primitive

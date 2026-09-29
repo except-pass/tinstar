@@ -24,7 +24,7 @@ export const colors = {
     green: '#00ff88',
     amber: '#ffaa00',
   },
-  // Slate Surface Design Language (docs/slate-design-language.md).
+  // Slate Surface Design Language.
   // Ink: three contrast steps for text; controls sit one step below low.
   ink: {
     high: '#eaf1f5', // headlines
