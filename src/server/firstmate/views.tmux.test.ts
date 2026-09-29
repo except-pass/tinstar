@@ -76,10 +76,10 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
   }
   const sessions = () => (tmTry('list-sessions', '-F', '#{session_name}').out || '').split('\n').filter(Boolean)
   const windowIds = (target: string) => tmTry('list-windows', '-t', target, '-F', '#{window_id}').out.split('\n').filter(Boolean)
-  /** The view is armed once a client is attached AND destroy-unattached is on (the script sets both after the session exists). */
+  /** The view is armed once a client is attached; its client-detached hook then removes it when that client leaves. */
   const armed = () => {
     const v = viewSessions()
-    return v.length === 1 && tmTry('list-clients', '-t', `=${v[0]}`).out !== '' && tmTry('show-options', '-t', `=${v[0]}:`, 'destroy-unattached').out.includes('on')
+    return v.length === 1 && tmTry('list-clients', '-t', `=${v[0]}`).out !== ''
   }
   const viewSessions = () => sessions().filter(s => s.startsWith('tsview-'))
 
@@ -285,6 +285,14 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(tmTry('show-options', '-t', '=firstmate:', 'mouse').out).not.toMatch(/mouse on/)
     expect(rootWheel()).toBe(beforeRoot)
     expect(windowIds('=firstmate')).toContain(wid)
+
+    // Leaving the terminal while scrolled must not leave the shared pane in copy mode.
+    c.stdin!.write('\x1b[<64;40;12M')
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '1')).toBe(true)
+    killClient(c)
+    expect(await until(() => viewSessions().length === 0)).toBe(true)
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '0')).toBe(true)
+    expect(windowIds('=firstmate')).toContain(wid)
   })
 
   if (!HAS_FM) console.warn(`SKIPPED M2 gate "${FM_GATE}": set FIRSTMATE_HOME to a first mate checkout (needs bin/backends/tmux.sh) to run it.`)
@@ -362,7 +370,8 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
       expect(t, cmd.join(' ')).toBeGreaterThan(0)
       expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
     }
-    for (const cmd of commands.filter(cmd => cmd[0] === 'set-option')) {
+    expect(commands.some(cmd => cmd[0] === 'set-hook')).toBe(true)
+    for (const cmd of commands.filter(cmd => cmd[0] === 'set-option' || cmd[0] === 'set-hook')) {
       const t = cmd.indexOf('-t')
       expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
     }

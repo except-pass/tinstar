@@ -12,7 +12,7 @@ A task in First Mate's fleet snapshot. Its id is the stable identity used for th
 
 ## Worker view
 
-The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. The mouse wheel on that view scrolls the pane's tmux history, and a key or Escape returns to the live prompt. A worker link opens it by task id; the [README](README.md#worker-links) lists the URL shapes. See [terminal views](src/server/firstmate/views.ts).
+The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. The mouse wheel on that view scrolls the pane's tmux history. A key or Escape returns to the live prompt, and so does closing the view. A worker link opens it by task id; the [README](README.md#worker-links) lists the URL shapes. See [terminal views](src/server/firstmate/views.ts).
 
 ## Needs You
 

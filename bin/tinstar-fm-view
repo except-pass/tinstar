@@ -8,9 +8,9 @@
 # the worker's window (never a session group), then attaches to it. tmux itself
 # guarantees the worker survives the view: killing a session closes "any windows
 # linked to it and no other sessions", and the window is still linked into the
-# first mate's session. When the browser goes away the client detaches and
-# `destroy-unattached` removes the view; when the worker's window is closed it
-# leaves the view too and the view dies with it.
+# first mate's session. When the browser goes away the client detaches and the
+# view's `client-detached` hook removes the view; when the worker's window is
+# closed it leaves the view too and the view dies with it.
 #
 # Everything this script does to tmux targets the view session it just made,
 # except read-only lookups, the `link-window` source, and key bindings in the
@@ -24,11 +24,14 @@
 #
 # Mouse is a session option on this view only. The wheel enters copy mode on
 # the linked pane, because that is where the history is. While scrolled, the
-# client uses the tsview-scroll table: a key or Escape cancels copy mode and
-# returns to the live prompt. The character that leaves copy mode is not
-# typed. The emulator's selection drag still selects text (Shift, or Option
-# on macOS). The pane is shared with the worker session, so a key from
-# another client hits that copy mode until this view returns to the prompt.
+# client uses the tsview-scroll table: any key, Escape included, cancels copy
+# mode and returns to the live prompt. The character that leaves copy mode is
+# not typed. The emulator's selection drag still selects text (Shift, or
+# Option on macOS). The pane is shared with the worker session, so a key from
+# another client hits that copy mode until the view returns to the prompt.
+# The `client-detached` hook cancels the pane's mode before it kills the view,
+# so a scrolled view that goes away leaves the pane live. (`destroy-unattached`
+# would reap the view before any hook on it could run.)
 #
 # View names must never start with the first mate session name: the first mate
 # runs a bare `tmux has-session -t firstmate`, which prefix-matches.
@@ -71,8 +74,8 @@ nonce="$$-$(date +%s)-$RANDOM"
 view="tsview-$task-$nonce"
 placeholder="tsview-placeholder-$nonce"
 
-# destroy-unattached cannot be set at creation (tmux would reap the session before
-# any client attached), so a hangup before the attach below must clean up itself.
+# The client-detached hook only runs once a client has attached, so a hangup
+# before the attach below must clean up itself.
 trap 'tmux kill-session -t "=$view" 2>/dev/null; exit 1' HUP INT TERM
 
 # WheelUp on the passthrough table enters copy mode. tsview-scroll then owns
@@ -88,16 +91,15 @@ tmux new-session -d -s "$view" -x "$worker_cols" -y "$worker_rows" -n "$placehol
   bind-key -T tsview-passthrough WheelUpPane if-shell -F '#{||:#{alternate_on},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -e; send-keys -X -N 5 scroll-up; switch-client -T tsview-scroll' \; \
   bind-key -T tsview-scroll WheelUpPane if-shell -F '1' 'send-keys -X -N 5 scroll-up; switch-client -T tsview-scroll' \; \
   bind-key -T tsview-scroll WheelDownPane if-shell -F '1' 'send-keys -X -N 5 scroll-down; if-shell -F "#{pane_in_mode}" "switch-client -T tsview-scroll" "switch-client -T tsview-passthrough"' \; \
-  bind-key -T tsview-scroll Escape if-shell -F '1' 'send-keys -X cancel; switch-client -T tsview-passthrough' \; \
   bind-key -T tsview-scroll Any if-shell -F '1' 'send-keys -X cancel; switch-client -T tsview-passthrough' \; \
+  set-hook -t "=$view:" client-detached "if-shell -F -t '=$view:' '#{pane_in_mode}' 'send-keys -X -t =$view: cancel' ; kill-session -t '=$view'" \; \
   link-window -d -s "$window_id" -t "=$view:" \; \
   kill-window -t "=$view:=$placeholder" \
   || die "could not create the view session"
 
-# destroy-unattached goes on as part of the attach, so the session cannot be
-# reaped before a client exists. status stays off, so the window rows match the
-# client instead of losing one to a status line. Another attached client can
-# change the size until this one is used again; the window keeps the last size
-# after detach, and the worker session is untouched.
+# status stays off, so the window rows match the client instead of losing one
+# to a status line. Another attached client can change the size until this one
+# is used again; the window keeps the last size after detach, and the worker
+# session is untouched.
 trap - HUP INT TERM
-exec env -u TMUX tmux attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on
+exec env -u TMUX tmux attach-session -t "=$view"
