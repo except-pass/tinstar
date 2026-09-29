@@ -107,9 +107,22 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       try { if ((await fetch(`${base}/api/fleet`).then(r => r.json()) as { data?: { workers: unknown[] } }).data?.workers.length === 2) break } catch { /* starting */ }
       await delay(200)
     }
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    const quotaResponse = await fetch(`${base}/api/cc-quota/ingest`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rate_limits: {
+        five_hour: { used_percentage: 24, resets_at: nowSeconds + 2 * 60 * 60 },
+        seven_day: { used_percentage: 61, resets_at: nowSeconds + 3 * 24 * 60 * 60 },
+      } }),
+    })
+    expect(quotaResponse.ok).toBe(true)
     const page = await browser.newPage()
     await page.goto(base)
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(2)
+    await expect(page.getByText('5H · 76% left')).toBeVisible()
+    await expect(page.getByText('7D · 39% left')).toBeVisible()
+    await expect(page.locator('.cockpit-quota-claude')).toContainText('fresh')
+    await page.screenshot({ path: test.info().outputPath('private-quota-populated-1280x720.png') })
     const firstFace = page.locator('.cockpit-worker-button').first().locator('.cockpit-face')
     await expect(firstFace.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml/)
     const firstFaceSrc = await firstFace.locator('img').getAttribute('src')
@@ -120,6 +133,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await page.locator('.cockpit-objective').click()
     await page.keyboard.press('Control+]')
     await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
+    await expect(page.locator('.cockpit-objective')).toHaveCount(1)
     await expect.poll(() => promptProblems(page, 'bravo')).toEqual([])
     await page.screenshot({ path: test.info().outputPath('private-idle-static-prompt-1280x720.png') })
     await page.keyboard.press('Control+[')
@@ -170,7 +184,32 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     }))
     const ttydPid = (p: number) => execFileSync('lsof', ['-nP', '-t', `-iTCP:${p}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).trim()
     const ttydPids = terminalPorts.map(ttydPid)
-    for (let i = 0; i < 10; i++) await page.keyboard.press(i % 2 ? 'Control+[' : 'Control+]')
+    for (let i = 0; i < 20; i++) await page.keyboard.press(i % 2 ? 'Control+[' : 'Control+]')
+    await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
+    expect(await page.locator('.cockpit-switch-flash').evaluate(el => el.getAnimations().length)).toBeLessThanOrEqual(1)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.keyboard.press('Control+]')
+    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
+    expect(await page.locator('.cockpit-switch-flash').evaluate(el => getComputedStyle(el).animationName)).toBe('none')
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await page.keyboard.press('Control+[')
+    await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
+    const videoDir = test.info().outputPath('motion-video')
+    mkdirSync(videoDir, { recursive: true })
+    const motionContext = await browser.newContext({ viewport: { width: 1280, height: 720 }, recordVideo: { dir: videoDir } })
+    try {
+      const motionPage = await motionContext.newPage()
+      const video = motionPage.video()
+      await motionPage.goto(base)
+      await motionPage.getByRole('button', { name: /alpha .*WORKING/i }).click()
+      await expect(motionPage.getByRole('heading', { name: 'alpha' })).toBeVisible()
+      for (let i = 0; i < 20; i++) await motionPage.keyboard.press(i % 2 ? 'Control+[' : 'Control+]')
+      await expect(motionPage.getByRole('heading', { name: 'alpha' })).toBeVisible()
+      await motionPage.close()
+      await video?.saveAs(test.info().outputPath('private-20-switches.webm'))
+    } finally {
+      await motionContext.close()
+    }
     await delay(1200)
     const frameSizesAfter = await page.locator('.cockpit-terminal-frame').evaluateAll(frames => frames.map(f => {
       const r = f.getBoundingClientRect(); return `${r.width}x${r.height}`

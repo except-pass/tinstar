@@ -201,34 +201,7 @@
 .quadrant-cell-tool     .quadrant-cell-label { color: #d97706; }
 .quadrant-cell-idle     .quadrant-cell-label { color: #94a3b8; }
 
-/* cc-quota card */
-.cc-quota-card {
-  background: rgba(8,14,22,0.55);
-  border: 1px solid rgba(34,211,238,0.12);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-top: 8px;
-}
-.cc-quota-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 9px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.3);
-  margin-bottom: 6px;
-}
-.cc-quota-title { color: rgba(255,255,255,0.55); }
-
-.cc-quota-row { display: flex; align-items: center; gap: 10px; }
-.cc-quota-row + .cc-quota-row { margin-top: 8px; }
-.cc-quota-text { font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.25; flex: 1; }
-.cc-quota-big  { font-size: 11px; font-weight: 700; color: #f1f5f9; }
-.cc-quota-sub  { color: rgba(255,255,255,0.5); font-size: 8.5px; }
-
-/* Provider-neutral quota cards. The old cc-quota classes remain during the
- * compatibility window for plugin surfaces that still render CcQuotaCard. */
+/* Provider-neutral quota cards. */
 .provider-quota-list { display: grid; gap: 8px; }
 .provider-quota-card {
   margin-top: 8px;

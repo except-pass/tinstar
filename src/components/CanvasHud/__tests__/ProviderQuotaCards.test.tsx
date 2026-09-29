@@ -185,6 +185,8 @@ describe('<ProviderQuotaCards>', () => {
 
     expect(view.getByText('stale · 2h ago')).toBeTruthy()
     expect(view.getByText('codex native quota')).toBeTruthy()
+    expect(view.getByText('Stale · waiting for a new reading')).toBeTruthy()
+    expect(view.queryByText('60% left')).toBeNull()
   })
 
   it('uses one rounded utilization so displayed percentages remain complementary', () => {
@@ -208,7 +210,7 @@ describe('<ProviderQuotaCards>', () => {
     expect(view.queryByText('33% left')).toBeNull()
   })
 
-  it('retains cached quota while marking its freshness as refresh failed', () => {
+  it('hides cached quota when refresh failed', () => {
     const observation = quota('codex', 'default', [{
       id: 'primary',
       label: 'Primary',
@@ -225,7 +227,8 @@ describe('<ProviderQuotaCards>', () => {
     )
 
     expect(view.getByRole('status').textContent).toContain('Tinstar is unreachable')
-    expect(view.getByText('60% left')).toBeTruthy()
+    expect(view.queryByText('60% left')).toBeNull()
+    expect(view.getByText('Unavailable · refresh failed')).toBeTruthy()
     expect(view.getByText('refresh failed')).toBeTruthy()
     expect(view.queryByText(/fresh ·/)).toBeNull()
     expect(view.getByText('codex native quota')).toBeTruthy()

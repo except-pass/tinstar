@@ -17,7 +17,7 @@ export interface UseCcQuota {
   snapshot: CcQuotaSnapshot | null
 }
 
-const POLL_MS = 5 * 60 * 1000
+const POLL_MS = 60 * 1000
 
 // -------- module-scoped singleton so the whole app shares one timer/fetch --------
 interface SingletonState {
