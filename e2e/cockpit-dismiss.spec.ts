@@ -203,3 +203,21 @@ test('a failing First Mate home does not stop a card from being dismissed again'
     stop()
   }
 })
+
+test('confirming again before the note is listed sends no second note', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const { base, notes, stop } = await startCockpit(request, ['firstmate'])
+  try {
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await page.goto(base)
+    const card = page.locator('.cockpit-attention-card')
+    const slider = card.getByRole('slider', { name: 'Slide to dismiss' })
+    await slide(page, slider, 1)
+    while (await slider.count()) await slider.press('ArrowRight', { timeout: 500 }).catch(() => undefined)
+    await expect(card.getByRole('status')).toHaveText('dismissing…')
+    await page.waitForTimeout(1000)
+    expect(notes()).toHaveLength(1)
+  } finally {
+    stop()
+  }
+})
