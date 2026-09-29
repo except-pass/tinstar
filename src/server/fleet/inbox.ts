@@ -15,6 +15,7 @@ export interface OutboxMessage {
   holdId: string | null
   cardType: AttentionType | null
   text: string
+  sentAt?: number
 }
 
 export type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
@@ -110,8 +111,9 @@ export class FleetOutbox {
         : !receipt ? 'sending'
         : snapshotReady && message.kind === 'answer' && !callOpen(message) ? 'done'
         : receipt.acknowledged ? 'acknowledged' : 'saved'
-      if (state === 'done' || state === 'acknowledged') finished.add(message.requestId)
-      return { ...message, state, announced: receipt?.announced ?? null, reply: receipt?.reply?.body ?? null, canReceive: observation?.canReceive ?? 'unknown' }
+      const reply = receipt?.reply?.body ?? null
+      if (state === 'done' || reply !== null || Date.now() - (message.sentAt ?? 0) > 86_400_000) finished.add(message.requestId)
+      return { ...message, state, announced: receipt?.announced ?? null, reply, canReceive: observation?.canReceive ?? 'unknown' }
     })
     if (finished.size) {
       void this.queue(async () => {
@@ -127,9 +129,9 @@ export class FleetOutbox {
     return this.queue(async () => {
       const messages = await this.load()
       const old = messages.find(item => item.requestId === message.requestId)
-      if (old && JSON.stringify(old) !== JSON.stringify(message)) throw new Error('Request ID belongs to a different message')
+      if (old && JSON.stringify({ ...old, sentAt: undefined }) !== JSON.stringify({ ...message, sentAt: undefined })) throw new Error('Request ID belongs to a different message')
       if (!old) {
-        const next = [...messages, message]
+        const next = [...messages, { ...message, sentAt: Date.now() }]
         await this.write(next)
         this.messages = next
       }
