@@ -60,6 +60,13 @@ describe('displayed worker state', () => {
     }), null)).toEqual({ state: 'unknown', detail: 'child kd-widget done: report and visual review complete' })
   })
 
+  it('never shows a second mate with a dead endpoint idle, even when its home is waiting', () => {
+    const detail = 'child kd-widget done: report and visual review complete'
+    expect(displayedWorkerState(childDone({ endpoint: { exists: true, agent_alive: 'dead', status: 'alive' } }), waiting)).toEqual({ state: 'unknown', detail })
+    expect(displayedWorkerState(childDone({ endpoint: { exists: false } }), waiting)).toEqual({ state: 'unknown', detail })
+    expect(displayedWorkerState(childDone({ endpoint: { exists: false, agent_alive: 'dead' } }), busy)).toEqual({ state: 'unknown', detail })
+  })
+
   it('shows a second mate working or idle when its last line is a child failed, keeping the child failure as detail', () => {
     const detail = 'child kd-widget failed: build broke on main'
     const failed = childDone({

@@ -29,11 +29,11 @@ function isChildOutcome(task: MateSnapshot): boolean {
 }
 
 function presence(task: MateSnapshot, home: MateHomeActivity | null): 'working' | 'idle' | 'unknown' {
+  const alive = text(task.endpoint?.agent_alive)
+  if (task.endpoint?.exists === false || alive === 'dead') return 'unknown'
   if (home && home.activeChildren > 0) return 'working'
   if (home && WAITING.has(home.state)) return 'idle'
-  const alive = text(task.endpoint?.agent_alive)
-  const status = text(task.endpoint?.status)
-  if (alive === 'alive' || status === 'alive') return 'idle'
+  if (alive === 'alive' || text(task.endpoint?.status) === 'alive') return 'idle'
   return 'unknown'
 }
 
