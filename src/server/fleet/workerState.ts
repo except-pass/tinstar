@@ -41,7 +41,8 @@ function presence(task: MateSnapshot, home: MateHomeActivity | null): 'working' 
  * Displayed worker state for the overview, detail, and grouping.
  * Ship and scout workers keep `current_state`. A persistent second mate whose
  * latest status line is a child `done` or `failed` shows working while child work
- * is active and idle while it is waiting; that child outcome stays in the detail.
+ * is active and idle while it is waiting, or unknown once its endpoint is dead;
+ * that child outcome stays in the detail.
  */
 export function displayedWorkerState(task: MateSnapshot, home: MateHomeActivity | null = null): { state: string; detail: string } {
   const state = text(task.current_state?.state) || 'unknown'
