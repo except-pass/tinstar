@@ -229,7 +229,7 @@ export default function App() {
       if (!response.ok || !body.ok || !applied) throw new Error(body.error?.message ?? 'Could not update the mark')
       pendingDirect.current.set(worker.key, applied.direct)
       setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: applied.direct } : item) }))
-      if (applied.note && !applied.note.saved) setMessageError(applied.note.error ?? 'The mark was saved. First Mate did not get the note.')
+      if (applied.note && !applied.note.saved) setMessageError(`The mark was saved. First Mate did not get the note${applied.note.error ? `: ${applied.note.error}` : '.'}`)
     } catch (error) {
       pendingDirect.current.delete(worker.key)
       setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: worker.direct } : item) }))
