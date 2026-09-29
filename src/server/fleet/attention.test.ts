@@ -12,7 +12,10 @@ describe('First Mate attention projection', () => {
     const tasks = [{ id: 'alpha', hints: { open_decisions: [{ key: 'captain-hold-alpha-editor-call-1', verb: 'needs-decision', summary: 'Choose rollout timing' }] } }]
     const open = buildAttentionCards(0, tasks, [hold], [worker()], new Map())
     expect(open).toHaveLength(1)
-    expect(open[0]).toMatchObject({ type: 'decision', workerId: 'alpha', ageDays: 3 })
+    expect(open[0]).toMatchObject({
+      type: 'decision', workerId: 'alpha', ageDays: 3, dismissal: 'resolve-key',
+      decisionKey: 'captain-hold-alpha-editor-call-1', holdId: 'alpha-editor-call',
+    })
     expect(buildAttentionCards(0, [{ id: 'alpha', hints: { open_decisions: [] } }], [{ ...hold, state: 'done' }], [worker()], new Map())).toEqual([])
   })
 
@@ -22,7 +25,7 @@ describe('First Mate attention projection', () => {
     const workers = [worker({ state: 'blocked', detail: 'Need repository access', prUrl: url }), worker({ id: 'bravo', key: 'cockpit-0-bravo', state: 'failed', detail: 'Build failed' })]
     const cards = buildAttentionCards(0, tasks, [], workers, new Map([[url, 'open']]))
     expect(cards.map(card => card.type)).toEqual(['blocked', 'failure', 'review'])
-    expect(cards[0]).toMatchObject({ headline: 'Need repository access', detail: '' })
+    expect(cards[0]).toMatchObject({ headline: 'Need repository access', detail: '', dismissal: null, decisionKey: null })
     expect(cards[1]).toMatchObject({ headline: 'Build failed', detail: '' })
     expect(cards[2]).toMatchObject({ repository: 'acme/editor', prNumber: 42, prUrl: url, ci: 'unknown' })
     expect(buildAttentionCards(0, tasks, [], workers, new Map([[url, 'merged']])).map(card => card.type)).toEqual(['blocked', 'failure'])
@@ -32,7 +35,7 @@ describe('First Mate attention projection', () => {
     const url = 'https://github.com/acme/editor/pull/43'
     const cards = buildAttentionCards(1, [], [{ id: 'queued-call', title: 'Pick an approach', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose an approach' }], [worker({ prUrl: url })], new Map())
     expect(cards).toMatchObject([
-      { key: 'attention-1:hold:queued-call', type: 'decision', workerKey: null, ageDays: null },
+      { key: 'attention-1:hold:queued-call', type: 'decision', dismissal: 'captain-hold', holdId: 'queued-call', workerKey: null, ageDays: null },
       { type: 'review', reviewStatus: 'unknown', detail: 'Pull request status unavailable' },
     ])
   })
@@ -42,7 +45,26 @@ describe('First Mate attention projection', () => {
       [{ id: 'alpha', hints: { open_decisions: [{ key: 'default', verb: 'needs-decision', summary: 'Choose the release channel' }] } }],
       [{ id: 'alpha-release', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the release channel', body_lines: ['Origin: alpha'] }],
       [worker()], new Map())
-    expect(cards).toHaveLength(1)
+    expect(cards).toMatchObject([{ dismissal: 'resolve-key', decisionKey: 'default', holdId: 'alpha-release' }])
+  })
+
+  it('answers a hold directly when the status line has no key, and leaves a keyless decision on the inbox path', () => {
+    const held = buildAttentionCards(0,
+      [{ id: 'alpha', hints: { open_decisions: [{ verb: 'needs-decision', summary: 'Choose the release channel' }] } }],
+      [{ id: 'alpha-release', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the release channel', body_lines: ['Origin: alpha'] }],
+      [worker()], new Map())
+    expect(held).toMatchObject([{ dismissal: 'captain-hold', holdId: 'alpha-release', decisionKey: 'default' }])
+    const open = buildAttentionCards(0,
+      [{ id: 'alpha', hints: { open_decisions: [{ verb: 'needs-decision', summary: 'Choose the release channel' }] } }],
+      [], [worker()], new Map())
+    expect(open).toMatchObject([{ type: 'decision', dismissal: null, decisionKey: 'default', holdId: null }])
+  })
+
+  it('names the live worker on a hold of that worker\'s own task, so its dismiss releases the work', () => {
+    const cards = buildAttentionCards(0, [{ id: 'alpha', hints: { open_decisions: [] } }],
+      [{ id: 'alpha', title: 'Ship the editor', state: 'in_flight', hold_kind: 'captain', hold_reason: 'Hold until the captain says go' }],
+      [worker()], new Map())
+    expect(cards).toMatchObject([{ type: 'decision', dismissal: 'captain-hold', holdId: 'alpha', workerId: 'alpha' }])
   })
 
   it('resolves a call to its legacy decision hold even when the texts differ', () => {

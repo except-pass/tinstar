@@ -92,6 +92,7 @@ const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Fa
 const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
 
 type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
+type DismissResult = { dismissed: boolean; fallback?: boolean; error?: string | null }
 
 function dismissNote(card: AttentionCard): string {
   const key = card.decisionKey ?? ''
@@ -125,9 +126,10 @@ function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
   }
   const reset = () => { pos.current = 0; setX(0) }
   const release = () => {
-    const { clamped, max } = { clamped: pos.current, max: limit() }
-    if (max > 0 && clamped >= max - 4) onConfirm()
-    else reset()
+    const max = limit()
+    const confirmed = max > 0 && pos.current >= max - 4
+    reset()
+    if (confirmed) onConfirm()
   }
 
   return <div
@@ -143,8 +145,8 @@ function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
       const max = limit()
       if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
         event.preventDefault()
-        const { clamped } = moveTo(pos.current + max / 6)
-        if (max > 0 && clamped >= max - 4) onConfirm()
+        const { clamped, max: travelMax } = moveTo(pos.current + max / 6)
+        if (travelMax > 0 && clamped >= travelMax - 4) { reset(); onConfirm() }
       } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'Escape') {
         event.preventDefault()
         reset()
@@ -174,8 +176,9 @@ function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
   </div>
 }
 
-function DismissControl({ card, held, error, onDismiss }: { card: AttentionCard; held: boolean; error: string | null; onDismiss: (card: AttentionCard) => void }) {
+function DismissControl({ card, held, dismissed, error, onDismiss }: { card: AttentionCard; held: boolean; dismissed: boolean; error: string | null; onDismiss: (card: AttentionCard) => void }) {
   if (card.type !== 'decision' || !card.decisionKey) return null
+  if (dismissed) return <p className="cockpit-dismissed" role="status">dismissed</p>
   if (held) return <p className="cockpit-dismissing" role="status">dismissing…</p>
   return <>
     <SlideToDismiss onConfirm={() => onDismiss(card)} />
@@ -183,9 +186,9 @@ function DismissControl({ card, held, error, onDismiss }: { card: AttentionCard;
   </>
 }
 
-function AttentionCardView({ card, worker, open, submit, dismissing, dismissError, onDismiss }: {
+function AttentionCardView({ card, worker, open, submit, dismissing, dismissed, dismissError, onDismiss }: {
   card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult>
-  dismissing: boolean; dismissError: string | null; onDismiss: (card: AttentionCard) => void
+  dismissing: boolean; dismissed: boolean; dismissError: string | null; onDismiss: (card: AttentionCard) => void
 }) {
   const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
     : <span className="cockpit-attention-origin cockpit-attention-origin-empty"><span className="material-symbols-outlined">account_tree</span>First Mate backlog</span>
@@ -204,7 +207,7 @@ function AttentionCardView({ card, worker, open, submit, dismissing, dismissErro
       {card.type === 'failure' && card.detail && <small className="cockpit-attention-failure-detail">{card.detail}</small>}
       <div className="cockpit-attention-bottom">{origin}<button className="cockpit-attention-action" onClick={open}>Open →</button></div>
       {card.type === 'decision' && <details className="cockpit-card-composer"><summary>Answer</summary><Composer anchorKey={card.key} kind="answer" submit={submit} /></details>}
-      <DismissControl card={card} held={dismissing} error={dismissError} onDismiss={onDismiss} />
+      <DismissControl card={card} held={dismissing} dismissed={dismissed} error={dismissError} onDismiss={onDismiss} />
       <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
     </>}
   </article>
@@ -271,7 +274,10 @@ export default function App() {
   overviewRef.current = overviewLocation
   const dismissIds = useRef<Record<string, string>>({})
   const dismissBusy = useRef(new Set<string>())
+  const dismissedNow = useRef(new Set<string>())
   const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({})
+  const [dismissed, setDismissed] = useState<Record<string, true>>({})
+  const [dismissInFlight, setDismissInFlight] = useState<Record<string, true>>({})
 
   const refresh = useCallback(async () => {
     const started = ++fleetRequests.current
@@ -325,27 +331,62 @@ export default function App() {
   }, [submit])
 
   const dismiss = useCallback((card: AttentionCard) => {
-    if (dismissBusy.current.has(card.key)) return
+    if (dismissBusy.current.has(card.key) || dismissedNow.current.has(card.key)) return
     const text = dismissNote(card)
     const existing = messages.find(message => sameDismiss(card, message) && message.state === 'sending')
     const requestId = dismissIds.current[card.key] ?? existing?.requestId ?? mintRequestId()
     dismissIds.current[card.key] = requestId
     dismissBusy.current.add(card.key)
+    setDismissInFlight(previous => ({ ...previous, [card.key]: true }))
+    const settle = () => {
+      dismissBusy.current.delete(card.key)
+      setDismissInFlight(previous => {
+        const next = { ...previous }
+        delete next[card.key]
+        return next
+      })
+    }
     setDismissErrors(previous => {
       if (!previous[card.key]) return previous
       const next = { ...previous }
       delete next[card.key]
       return next
     })
-    void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
-      dismissBusy.current.delete(card.key)
-      if (result.saved) return
-      setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
-    }).catch(error => {
-      dismissBusy.current.delete(card.key)
-      setDismissErrors(previous => ({ ...previous, [card.key]: (error as Error).message }))
-    })
-  }, [messages, submit])
+    const showError = (message: string) => {
+      settle()
+      setDismissErrors(previous => ({ ...previous, [card.key]: message }))
+    }
+    const sendNote = () => {
+      void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
+        if (result.saved) { dismissBusy.current.delete(card.key); return }
+        settle()
+        setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
+      }).catch(error => showError((error as Error).message))
+    }
+    if (card.dismissal !== 'captain-hold' && card.dismissal !== 'resolve-key') {
+      sendNote()
+      return
+    }
+    void apiFetch('/api/fleet/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: card.key }) })
+      .then(async response => {
+        const body = await response.json() as { ok: boolean; data?: DismissResult; error?: { message: string } }
+        if (!body.ok || !body.data) throw new Error(body.error?.message ?? 'Could not dismiss the decision')
+        return body.data
+      })
+      .then(result => {
+        if (result.fallback) { sendNote(); return }
+        if (result.dismissed) {
+          dismissedNow.current.add(card.key)
+          settle()
+          setDismissed(previous => ({ ...previous, [card.key]: true }))
+          void refresh()
+          return
+        }
+        settle()
+        setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'The decision was not closed.' }))
+      })
+      .catch(error => showError((error as Error).message))
+  }, [messages, refresh, submit])
 
   const dismissHeld = useCallback((card: AttentionCard) =>
     messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && message.state !== 'done'), [messages])
@@ -392,6 +433,20 @@ export default function App() {
     const openKeys = new Set(attention.map(card => card.key))
     const held = new Set(attention.filter(dismissHeld).map(card => card.key))
     for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key) || held.has(key)) delete dismissIds.current[key]
+    for (const key of dismissedNow.current) if (!openKeys.has(key)) dismissedNow.current.delete(key)
+    setDismissed(previous => {
+      let changed = false
+      const next: Record<string, true> = {}
+      for (const key of Object.keys(previous)) {
+        if (openKeys.has(key)) next[key] = true
+        else changed = true
+      }
+      return changed ? next : previous
+    })
+    setDismissInFlight(previous => {
+      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => dismissBusy.current.has(key) || (openKeys.has(key) && !held.has(key))))
+      return Object.keys(next).length === Object.keys(previous).length ? previous : next
+    })
     if (fleet.errors.length > 0) return
     setDismissErrors(previous => {
       const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !held.has(key)))
@@ -534,7 +589,7 @@ export default function App() {
       <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
       <div className="cockpit-attention-list" aria-label="Needs You">
         {fleet.errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {fleet.errors.join('; ')}</p>}
-        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissHeld(card)} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} />)
+        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} />)
           : fleet.errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
       </div>
       <div className="cockpit-rail-heading"><span>MESSAGES</span><span>{messages.length}</span></div>

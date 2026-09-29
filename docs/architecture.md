@@ -25,12 +25,13 @@ No external state management library (Redux, Zustand, etc.). The cockpit reads `
 
 ```
 Browser (cockpit, App.tsx)
-  │ GET /api/fleet, GET/POST /api/fleet/messages, GET /api/events (SSE)
+  │ GET /api/fleet, GET/POST /api/fleet/messages, POST /api/fleet/dismiss, GET /api/events (SSE)
   │ worker terminal iframes at /s/<key>/ (HTTP + WebSocket)
   ▼
 Standalone backend (src/server/standalone.ts, default :5273)
   ├─ Cockpit fleet (src/server/fleet/) ──► <home>/bin/fm-fleet-snapshot.sh --json
   │                                    ──► <home>/bin/fm-inbox.sh (messages)
+  │                                    ──► <home>/bin/fm-captain-hold.sh, fm-send.sh (dismiss)
   ├─ Terminal views (src/server/firstmate/views.ts) ──► ttyd ──► tmux tsview-* session
   │                                                              (links the worker window)
   ├─ Quota and provider observations, telemetry, reach
@@ -47,7 +48,8 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 | Module | File(s) | Purpose |
 |--------|---------|---------|
-| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages`, `POST /api/fleet/:key/direct` and `GET /api/fleet/:key/terminal` ([details](./features/firstmate-observer.md)). |
+| Cockpit fleet | `src/server/fleet/cockpit.ts` | Reads each configured First Mate home's fleet snapshot and serves `GET /api/fleet`, `GET/POST /api/fleet/messages`, `POST /api/fleet/dismiss`, `POST /api/fleet/:key/direct` and `GET /api/fleet/:key/terminal` ([details](./features/firstmate-observer.md)). |
+| Decision dismiss | `src/server/fleet/dismiss.ts` | Closes a classified decision by running that home's `fm-captain-hold.sh` or `fm-send.sh`. An unclassified decision still uses the inbox note. |
 | Needs You cards | `src/server/fleet/attention.ts` | Derives decision, blocked, failure and review-ready cards from each snapshot. |
 | First Mate inbox | `src/server/fleet/inbox.ts` | Sends answers and messages through `fm-inbox.sh`; keeps unfinished ones in `fleet-outbox.json`. |
 | Fleet config and ports | `src/server/fleet/config.ts`, `src/server/fleet/ports.ts` | Reads `firstmate.homes` and `firstmate.ports` from `config.json`; allocates loopback ttyd ports in that window. |
