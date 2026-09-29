@@ -103,8 +103,8 @@ export class CockpitFleet {
     this.views.stop()
   }
 
-  list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
-    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
+  list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: Array<AttentionCard & { home: string | null }>; errors: string[] } {
+    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }

@@ -21,7 +21,7 @@ The open worker and the overview filter are part of the page URL, so a view can 
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
+Decision answers, slide-to-dismiss, and “Tell First Mate about this” messages go through First Mate's inbox. Dismissing a decision sends an answer asking First Mate to close that task and decision key. Like any answer, it is done once the decision leaves the fleet. The card reads dismissing while that answer is open in the outbox. The slider comes back if First Mate replies, if the answer expires while the decision is still open, or if the same decision returns later. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
 ## Quick start
 
