@@ -13,6 +13,9 @@
 //   - kill-session -t =tsview-…   the sweep of ABANDONED view sessions (and only those)
 //   - send-keys -X -t =tsview-… cancel   when the cockpit leaves a worker whose pane is
 //                             in a mode (a view scrolled it), so the pane is live again
+//   - list-clients -t =tsview-…   read-only, the clients of that worker's views
+//   - switch-client -c <tty of a tsview- client> -T tsview-passthrough   so a view left
+//                             in the scroll table does not swallow the next key
 // View sessions are named `tsview-…`, never `tinstar-*` and never starting with the
 // first mate's own session name (its bare `has-session -t firstmate` prefix-matches).
 // views.test.ts asserts the verb allowlist against the recorded tmux calls.
@@ -218,11 +221,21 @@ export class FirstmateViews {
     try {
       out = await this.deps.tmux(['list-panes', '-a', '-F', '#{session_name}\t#{window_id}\t#{pane_in_mode}'])
     } catch { return }
+    const views = new Map<string, boolean>()
     for (const line of out.split('\n')) {
       const [session, windowId, inMode] = line.split('\t')
-      if (!session?.startsWith(VIEW_SESSION_PREFIX) || windowId !== view.windowId || inMode !== '1') continue
-      try { await this.deps.tmux(['send-keys', '-X', '-t', `=${session}:`, 'cancel']) } catch { /* left the mode on its own */ }
-      return
+      if (session?.startsWith(VIEW_SESSION_PREFIX) && windowId === view.windowId) views.set(session, inMode === '1')
+    }
+    const scrolled = [...views].find(([, inMode]) => inMode)?.[0]
+    if (scrolled) {
+      try { await this.deps.tmux(['send-keys', '-X', '-t', `=${scrolled}:`, 'cancel']) } catch { /* left the mode on its own */ }
+    }
+    for (const session of views.keys()) {
+      let ttys: string
+      try { ttys = await this.deps.tmux(['list-clients', '-t', `=${session}`, '-F', '#{client_tty}']) } catch { continue }
+      for (const tty of ttys.split('\n').filter(Boolean)) {
+        try { await this.deps.tmux(['switch-client', '-c', tty, '-T', 'tsview-passthrough']) } catch { /* detached meanwhile */ }
+      }
     }
   }
 

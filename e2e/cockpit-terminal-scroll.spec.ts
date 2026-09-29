@@ -130,6 +130,12 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     await page.getByRole('button', { name: /other .*WORKING/i }).click()
     await expect.poll(inMode, { timeout: 8_000 }).toBe('0')
     expect(tmux('list-sessions', '-F', '#{session_name}').split('\n').filter(name => name.startsWith('tsview-scroll-'))).toHaveLength(1)
+
+    // Back on the worker, the first key reaches the pane instead of leaving a scroll that is gone.
+    await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
+    await expect(screen).toBeVisible()
+    await input.pressSequentially('AFTER_SWITCH')
+    await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
