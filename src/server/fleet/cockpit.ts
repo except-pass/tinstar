@@ -176,6 +176,7 @@ export class CockpitFleet {
       text: direct ? 'This worker is marked direct.' : 'This worker is marked managed.',
     }
     const note = await this.outbox.submit(message, `Message about task ${worker.id}`)
+      .catch((error: Error): SubmitResult => ({ saved: false, error: error.message, canReceive: 'unknown' }))
     return { direct, note }
   }
 
