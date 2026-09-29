@@ -45,6 +45,13 @@ function streamFile(res: ServerResponse, filePath: string, mime: string) {
 
 export function startServer(opts: ServerOptions) {
   opts.clientDir = resolve(opts.clientDir)
+  process.on('uncaughtException', (err) => {
+    log.error('server', 'uncaught exception (kept alive)', { error: err.message, stack: err.stack })
+  })
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : null
+    log.error('server', 'unhandled rejection (kept alive)', { reason: err?.message ?? String(reason), stack: err?.stack })
+  })
   const configDir = getConfigRoot()
   const lockPath = join(configDir, 'server.lock')
   const lockResult = acquireBackendSingleton(lockPath, { force: opts.force })
