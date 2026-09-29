@@ -73,7 +73,7 @@ function valueOf(worker: GroupableWorker, dimension: GroupDimension): string {
   }
 }
 
-/** Groups in first-seen order. A repeated dimension stays one level. */
+/** Groups in first-seen order. */
 export function groupWorkers<T extends GroupableWorker>(workers: T[], primary: GroupDimension, secondary: GroupDimension): WorkerGroup<T>[] {
   const outer = new Map<string, T[]>()
   for (const worker of workers) {
@@ -83,7 +83,6 @@ export function groupWorkers<T extends GroupableWorker>(workers: T[], primary: G
     else outer.set(value, [worker])
   }
   return [...outer].map(([value, members]) => {
-    if (secondary === primary) return { value, workers: members, groups: [] }
     const inner = new Map<string, T[]>()
     for (const worker of members) {
       const innerValue = valueOf(worker, secondary)

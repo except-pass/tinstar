@@ -377,11 +377,10 @@ export default function App() {
         {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
           {grouped.map(group => <section key={group.value} className="cockpit-group">
             <GroupHeading dimension={groupBy.primary} value={group.value} count={group.workers.length} />
-            {group.groups.length === 0 ? <div className="cockpit-card-grid">{group.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => setSelected(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
-              : group.groups.map(inner => <section key={inner.value} className="cockpit-subgroup">
-                <GroupHeading dimension={groupBy.secondary} value={inner.value} count={inner.workers.length} />
-                <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => setSelected(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
-              </section>)}
+            {group.groups.map(inner => <section key={inner.value} className="cockpit-subgroup">
+              <GroupHeading dimension={groupBy.secondary} value={inner.value} count={inner.workers.length} />
+              <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => setSelected(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
+            </section>)}
           </section>)}
         </div>}
       </> : <>
