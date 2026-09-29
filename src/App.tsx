@@ -58,7 +58,7 @@ function dismissNote(card: AttentionCard): string {
 }
 
 function sameDismiss(card: AttentionCard, message: OutboxMessage): boolean {
-  return message.kind === 'message' && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
+  return message.kind === 'answer' && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
 }
 
 function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
@@ -223,7 +223,6 @@ export default function App() {
   const messagesInFlight = useRef(false)
   const dismissIds = useRef<Record<string, string>>({})
   const dismissBusy = useRef(new Set<string>())
-  const dismissSettled = useRef(new Set<string>())
   const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
@@ -268,7 +267,7 @@ export default function App() {
   const dismiss = useCallback((card: AttentionCard) => {
     if (dismissBusy.current.has(card.key)) return
     const text = dismissNote(card)
-    const existing = messages.find(message => sameDismiss(card, message) && !dismissSettled.current.has(message.requestId))
+    const existing = messages.find(message => sameDismiss(card, message) && message.state === 'sending')
     const requestId = dismissIds.current[card.key] ?? existing?.requestId ?? mintRequestId()
     dismissIds.current[card.key] = requestId
     dismissBusy.current.add(card.key)
@@ -278,7 +277,7 @@ export default function App() {
       delete next[card.key]
       return next
     })
-    void submit({ requestId, anchorKey: card.key, kind: 'message', text }).then(result => {
+    void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
       if (result.saved) { delete dismissIds.current[card.key]; return }
       dismissBusy.current.delete(card.key)
       setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
@@ -288,10 +287,8 @@ export default function App() {
     })
   }, [messages, submit])
 
-  const dismissHeld = useCallback((card: AttentionCard) => {
-    if (dismissErrors[card.key]) return false
-    return messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && !dismissSettled.current.has(message.requestId))
-  }, [dismissErrors, messages])
+  const dismissHeld = useCallback((card: AttentionCard) =>
+    messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && message.state !== 'done'), [messages])
 
   useEffect(() => {
     void refresh()
@@ -306,18 +303,14 @@ export default function App() {
   useEffect(() => {
     if (!fleet.ready || fleet.errors.length > 0) return
     const openKeys = new Set(attention.map(card => card.key))
-    for (const message of messages) {
-      if (!message.text.startsWith('Dismiss decision ')) continue
-      if (!attention.some(card => sameDismiss(card, message))) dismissSettled.current.add(message.requestId)
-    }
     const held = new Set(attention.filter(dismissHeld).map(card => card.key))
     for (const key of [...dismissBusy.current]) if (!openKeys.has(key) || held.has(key)) dismissBusy.current.delete(key)
     for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key)) delete dismissIds.current[key]
     setDismissErrors(previous => {
-      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key)))
+      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !held.has(key)))
       return Object.keys(next).length === Object.keys(previous).length ? previous : next
     })
-  }, [fleet.ready, attention, messages, dismissHeld])
+  }, [fleet.ready, attention, dismissHeld])
   const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = workers.find(w => w.key === selected) ?? null
   const order = useMemo(() => workers.map(w => w.key), [workers])

@@ -125,6 +125,13 @@ elif command == 'ready':
     appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
     await expect(card).toHaveCount(0, { timeout: 30_000 })
     await page.screenshot({ path: test.info().outputPath('private-slide-gone.png') })
+    await expect.poll(async () => ((await request.get(`${base}/api/fleet/messages`).then(response => response.json())) as { data: { text: string }[] })
+      .data.filter(message => message.text === 'Dismiss decision choice on task alpha.').length, { timeout: 30_000 }).toBe(0)
+    snapshot(true)
+    appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
+    await expect(card).toHaveCount(1, { timeout: 30_000 })
+    await expect(slider).toBeVisible({ timeout: 15_000 })
+    await expect(card.getByText('dismissing…')).toHaveCount(0)
     expect(errors).toEqual([])
   } finally {
     server?.kill('SIGTERM')

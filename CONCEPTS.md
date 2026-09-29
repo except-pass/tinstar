@@ -16,7 +16,7 @@ The main pane for one worker: identity, state, objective, project, worktree, bra
 
 ## Needs You
 
-The rail's attention list. Decision, Blocked, Failure and Review Ready are derived from the snapshot; opening a card never resolves it. A decision card can send one inbox note asking First Mate to dismiss that task and decision key. The card shows dismissing while that note is in the outbox; if the note leaves and the decision stays, the slider returns. A decision is done when First Mate's state no longer reports it. See [attention derivation](src/server/fleet/attention.ts).
+The rail's attention list. Decision, Blocked, Failure and Review Ready are derived from the snapshot; opening a card never resolves it. A decision card can send one inbox answer asking First Mate to dismiss that task and decision key. The card shows dismissing while that answer is open in the outbox. It is done when the decision leaves, so a decision that comes back shows the slider again. A decision is done when First Mate's state no longer reports it. See [attention derivation](src/server/fleet/attention.ts).
 
 ## Message
 
