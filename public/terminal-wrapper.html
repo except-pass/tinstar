@@ -50,7 +50,6 @@
   <script>
     var params = new URLSearchParams(location.search)
     var session = params.get('session') || ''
-    var FONT_PX = 14
     var termEl = document.getElementById('term')
     var errorOverlay = document.getElementById('error-overlay')
     var errorMsg = document.getElementById('error-msg')
@@ -151,7 +150,7 @@
       fitTerminal()
     }
 
-    // Readable font, grid follows the stage. ttyd exposes term.fit (FitAddon).
+    // Grid follows the stage at ttyd's font. ttyd exposes term.fit (FitAddon).
     // Do not override term.resize: columns and rows are whatever fits.
     function fitTerminal() {
       if (fitTerminal.running) return
@@ -159,13 +158,12 @@
       try {
         var win = termEl.contentWindow
         var term = win && win.term
-        if (!term || typeof term.fit !== 'function' || !term.options) return
+        if (!term || typeof term.fit !== 'function') return
         var doc = win.document
         if (doc) {
           doc.documentElement.style.overflow = 'hidden'
           if (doc.body) doc.body.style.overflow = 'hidden'
         }
-        if (term.options.fontSize !== FONT_PX) term.options.fontSize = FONT_PX
         term.fit()
       } catch (_) {
       } finally {
