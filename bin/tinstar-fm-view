@@ -13,7 +13,9 @@
 # leaves the view too and the view dies with it.
 #
 # Everything this script does to tmux targets the view session it just made,
-# except read-only lookups and the `link-window` source. It NEVER sends
+# except read-only lookups and the `link-window` source. It never changes the
+# worker window's options; attaching makes this client one the window may size
+# to, under the user's own tmux `window-size`. It NEVER sends
 # kill-window / kill-pane / respawn-* / send-keys / kill-session to anything
 # outside the `tsview-` namespace (src/server/firstmate/views.tmux.test.ts records
 # every tmux call the script makes and asserts it).
@@ -45,7 +47,7 @@ printf '%s\n' "$listing" | grep -qxF -- "$window_id $window_name" \
 # A detached tmux session otherwise starts at its own default size, and linking
 # the worker window would bounce the real pane through that default (80x24).
 # Create the view at the worker's current size first. The attached client then
-# reflows the same window: window-size latest, set after the link, follows the
+# reflows the same window under tmux's default window-size latest, following the
 # ttyd PTY. Closing the view still does not kill the window.
 worker_size=$(tmux display-message -p -t "$window_id" '#{window_width} #{window_height}' 2>/dev/null) \
   || die "worker window size unavailable"
@@ -71,8 +73,7 @@ tmux new-session -d -s "$view" -x "$worker_cols" -y "$worker_rows" -n "$placehol
   set-option -t "=$view:" mouse off \; \
   set-option -t "=$view:" detach-on-destroy on \; \
   link-window -d -s "$window_id" -t "=$view:" \; \
-  kill-window -t "=$view:=$placeholder" \; \
-  set-option -w -t "$window_id" window-size latest \
+  kill-window -t "=$view:=$placeholder" \
   || die "could not create the view session"
 
 # destroy-unattached goes on as part of the attach, so the session cannot be

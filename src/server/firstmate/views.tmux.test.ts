@@ -311,5 +311,9 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
       expect(t, cmd.join(' ')).toBeGreaterThan(0)
       expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
     }
+    for (const cmd of commands.filter(cmd => cmd[0] === 'set-option')) {
+      const t = cmd.indexOf('-t')
+      expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
+    }
   })
 })

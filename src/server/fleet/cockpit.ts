@@ -9,7 +9,7 @@ import { readBody } from '../api/readBody'
 import { getConfigRoot } from '../configRoot'
 import { loadFleetConfig, firstmatePortWindow } from './config'
 import { LedgerWatcher } from '../firstmate/ledger-watcher'
-import { FirstmateViews, parseWindowRef } from '../firstmate/views'
+import { FirstmateViews } from '../firstmate/views'
 import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
@@ -71,7 +71,6 @@ export class CockpitFleet {
   private homes: string[]
   private errors: string[] = []
   private marksUnreadable = false
-  private sizes = new Map<string, { cols: number; rows: number }>()
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
   private reviewing = new Set<string>()
   private ready = false
@@ -199,20 +198,7 @@ export class CockpitFleet {
     if (!ref) return null
     const result = await this.views.ensure(key, ref.id, ref.target)
     if (result.state !== 'live') return { key, ...result }
-    const size = await this.windowSize(ref.target) ?? this.sizes.get(key)
-    if (!size) return { key, state: 'unavailable' as const, reason: 'worker window size unavailable' }
-    this.sizes.set(key, size)
-    return { key, ...result, pid: this.views.pidOf(key), ...size }
-  }
-
-  private async windowSize(target: string | null): Promise<{ cols: number; rows: number } | null> {
-    const ref = parseWindowRef(target)
-    if (!ref) return null
-    try {
-      const { stdout } = await execFileAsync('tmux', ['list-windows', '-t', `=${ref.session}`, '-F', '#{window_name} #{window_width} #{window_height}'], { timeout: 10_000 })
-      const [, cols, rows] = stdout.split('\n').map(line => line.split(' ')).find(([name]) => name === ref.windowName) ?? []
-      return Number(cols) > 0 && Number(rows) > 0 ? { cols: Number(cols), rows: Number(rows) } : null
-    } catch { return null }
+    return { key, ...result, pid: this.views.pidOf(key) }
   }
 
   refresh(): Promise<void> {
@@ -238,7 +224,6 @@ export class CockpitFleet {
         for (const old of this.workers) {
           if (targets.has(old.key)) continue
           this.views.release(old.key)
-          this.sizes.delete(old.key)
         }
         // Stamp inside the marks queue so a toggle cannot publish a stale direct flag.
         let marksUnreadable = false

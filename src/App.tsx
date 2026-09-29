@@ -18,7 +18,7 @@ interface Worker {
 }
 type AttentionCard = FleetAttentionCard & { home: string | null }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
-type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
+type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
 interface OutboxMessage {
   requestId: string; home: string; taskId: string | null; decisionKey: string | null
   kind: 'answer' | 'message'; text: string
