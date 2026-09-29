@@ -30,9 +30,9 @@ Components in `src/components/` are `PascalCase.tsx`. Hooks in `src/hooks/` are 
 
 ### Server may not import from frontend; frontend may not runtime-import from server
 
-The server uses shared domain types and pure utilities. It must not import React or JSX. The frontend can `import type` from server wire schemas, but must not runtime-import server modules.
+The server uses shared wire types and pure utilities. It must not import React or JSX. The frontend can `import type` from server wire schemas, but must not runtime-import server modules.
 
-Shared types live in [`src/domain/types.ts`](../src/domain/types.ts). `src/types.ts` is a re-export shim — new types go in `domain/`, not the shim.
+Put shared types beside the active contract: the fleet response in [`src/server/fleet/cockpit.ts`](../src/server/fleet/cockpit.ts), and provider observations in [`src/domain/provider-observation-wire.ts`](../src/domain/provider-observation-wire.ts). Do not add new cockpit types to the retired V5 domain model.
 
 ---
 

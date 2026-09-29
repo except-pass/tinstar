@@ -17,7 +17,7 @@ Tinstar is the visual cockpit for a [First Mate](https://github.com/kunchenguid/
 | Worker terminals | tmux view sessions | Private `tsview-*` sessions that link First Mate's worker windows |
 | Browser regression | Playwright 1.58 | Cockpit spec with a private tmux socket and test home |
 
-No external state management library (Redux, Zustand, etc.). The cockpit reads `GET /api/fleet` with `fetch` and holds the result in React state.
+No external state management library (Redux, Zustand, etc.). The cockpit reads `GET /api/fleet` through `apiFetch` and holds the result in React state.
 
 ---
 
@@ -28,7 +28,7 @@ Browser (cockpit, App.tsx)
   │ GET /api/fleet, GET/POST /api/fleet/messages, GET /api/events (SSE)
   │ worker terminal iframes at /s/<key>/ (HTTP + WebSocket)
   ▼
-Standalone backend (src/server/standalone.ts, :5273)
+Standalone backend (src/server/standalone.ts, default :5273)
   ├─ Cockpit fleet (src/server/fleet/) ──► <home>/bin/fm-fleet-snapshot.sh --json
   │                                    ──► <home>/bin/fm-inbox.sh (messages)
   ├─ Terminal views (src/server/firstmate/views.ts) ──► ttyd ──► tmux tsview-* session
@@ -41,7 +41,7 @@ Standalone backend (src/server/standalone.ts, :5273)
 
 ## Backend Architecture
 
-The backend is the standalone HTTP server in `src/server/standalone.ts`, started by `tinstar` (`bin/tinstar.js`) or `npm run dev:backend`. In development the Vite dev server serves the frontend separately and proxies `/api` to it.
+The backend is the standalone HTTP server in `src/server/standalone.ts`, started by `tinstar` (`bin/tinstar.js`) or `npm run dev:backend`. It does not run inside Vite. In development Vite serves the frontend separately and proxies `/api` to the standalone server.
 
 ### Core modules
 
@@ -81,17 +81,15 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 `App.tsx` renders the V6 worker cockpit (rail with the Needs You queue, Overview, worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array. A Decision card has an answer box, and cards and worker views have "Tell First Mate about this"; both post to `/api/fleet/messages`, and the rail's message list polls it for First Mate's receipts and replies ([details](./features/firstmate-observer.md)). Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
-### Domain layer (`src/domain/`)
+### Shared data
 
-| File | Purpose |
-|------|---------|
-| `mock-data.ts` | Sample entities and runs for development. |
+The cockpit's fleet response is defined at the server boundary in `src/server/fleet/cockpit.ts`. Provider observation wire types live in `src/domain/provider-observation-wire.ts`. The remaining V5 domain helpers are not part of the cockpit runtime.
 
 ---
 
 ## Plugin System
 
-The V5 plugin host, frontend and server-side, has been removed. The public types remain in `packages/plugin-api/src/index.ts`; [ADR 0002](./adrs/0002-plugin-api-boundary.md) and [`docs/plugins/`](plugins/) describe the V5 design.
+The V5 plugin host has been removed. The separately published `@tinstar/plugin-api` package has no runtime host in 6.0.0. [ADR 0002](./adrs/0002-plugin-api-boundary.md) and [`docs/plugins/`](plugins/) describe the historical design; they are not instructions for extending this cockpit.
 
 ---
 

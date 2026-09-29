@@ -1,114 +1,35 @@
 # Concepts
 
-Shared domain vocabulary for this project — entities, named processes, and status concepts with project-specific meaning. Seeded with core domain vocabulary, then accretes as ce-compound and ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
+Current product terms for the First Mate cockpit. The [requirements](docs/brainstorms/2026-09-24-tinstar-v6-requirements.md) define the broader product contract.
 
-## Agents & sessions
+## First Mate home
 
-### Hidden run
-A run a user has toggled off the canvas via the per-run eyeball — a per-browser view preference on a normal, fully-alive session, not a change to the session itself. The run stays in the hierarchy (dimmed) so it can be re-shown, and is skipped by canvas cycling. Distinct from a Background session: hidden is a client-side, per-browser view choice; background is a server-side flag on the session's nature.
+A configured First Mate installation in `firstmate.homes`. Each home supplies a fleet snapshot and an inbox command. Tinstar does not own its worker records or lifecycle. See [fleet config](src/server/fleet/config.ts).
 
-A hidden run's state is keyed to the run's identity and is dropped when the run is removed, so re-creating a run under a reused name does not inherit a prior hide.
+## Worker
 
-### Organizational scope
-The host-owned Project and optional Worktree membership used to organize any canvas widget. A Worktree belongs to one Project, so Worktree scope always implies its Project ancestry; a widget with neither is Unscoped. Scope determines the live hierarchy and the result of the explicit Organize action, but never filters widget contents or moves a widget merely because its scope changed.
+A task in First Mate's fleet snapshot. Its id is the stable identity used for the rail, face and color. The worker's state and detail come from the snapshot, while the objective comes from the brief's captain intent and falls back to the backlog title. Unknown values remain visible. See [cockpit fleet](src/server/fleet/cockpit.ts).
 
-### Organize
-The one-shot whole-canvas action that projects current organizational scope into visible Project and Worktree containers while arranging Unscoped widgets as standalone peers. It carries forward Reset Layout's packing behavior and preserves snapped constellations. Hierarchy changes accumulate without moving canvas widgets until the user invokes Organize.
+## Worker view
 
-## Backend & events
+The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. See [terminal views](src/server/firstmate/views.ts).
 
-### Standalone backend
-The single-process server that serves the HTTP API, the server-sent-event stream, static assets, and the worker terminal proxy together as one deployment. Distinct from the Vite dev server used during frontend development; the two can run on different ports, and a newly added API route is not live on a running standalone until its bundle is rebuilt and the process restarted.
+## Needs You
 
-### SSE bridge
-The mechanism that re-dispatches named server-sent events from a single shared event stream onto the frontend as window events, so React consumers subscribe by name without each opening its own connection. A new pushed event type becomes available to the UI by being added to the bridge's forwarded-events set and given a typed window-event name.
+The rail's attention list. Decision, Blocked, Failure and Review Ready are derived from the snapshot; opening a card never resolves it. A decision is done when First Mate's state no longer reports it. See [attention derivation](src/server/fleet/attention.ts).
 
-### Reach
-Remote reachability for an operator's own other devices, obtained by putting an external provider in front of the loopback listener rather than by widening what Tinstar binds. Membership of the provider's network *is* the authorization: Tinstar issues no credential of its own and adds no login, so "reachable" and "a member of that network" mean the same thing. Distinct from naming an extra bind address, which genuinely exposes the port to anything that can route to it.
+## Message
 
-Reach is opt-in and the opt-in is durable — it is a stored preference, not a running process, so a restart re-establishes it without asking again. Two things are therefore tracked separately: the operator's preference, and the live mapping the provider currently serves. A clean shutdown takes down the mapping and never the preference; erasing the preference is how reach would silently fail to come back. Because the provider is configured rather than supervised, drift after an unclean stop is repaired by reconciling recorded state against what the provider is actually serving, and only one instance on a host may hold the mapping. Reporting reach as off is a claim to have checked and found nothing of one's own published — an instance with no authority over the mapping refuses instead, because downstream cleanup treats off as confirmation.
+An answer or note sent with First Mate's `fm-inbox.sh note`. A request id is reused on retry. The local outbox remembers unfinished submissions, while First Mate's receipts and the next fleet snapshot determine acknowledged and resolved state. See [inbox integration](src/server/fleet/inbox.ts).
 
-### Stranded
-Reach that an operator asked to end, where the provider may still be publishing the URL. The preference is off and the mapping is still recorded, so the two disagree in the direction that leaves the host reachable. Distinct from off, which asserts the mapping is gone, and from active, which asserts the operator still wants it.
+## Provider quota
 
-Stranded exists as its own state because collapsing it into off is what makes exposure invisible: a caller that reads off as confirmation will go on to release the privilege needed to finish the teardown, removing the means of repair. It does not clear itself — the recorded mapping is what a later retry and the diagnostic command both key on, so it persists across restarts until someone acts on it.
+Observed account quota, separate from a worker's context window. The rail labels stale or unavailable sources rather than displaying an invented zero. See [provider observations](src/hooks/providerObservationsStore.ts).
 
-### Config root
-The directory that scopes one backend's entire persisted state, and the unit of separation between two backends sharing a host. It is not merely where files live: an instance's identity is derived from it, so the config root decides which instance owns a recorded mapping and may take it down.
+## Config root
 
-Two consequences follow. A second backend given its own config root is a genuinely separate instance and cannot disturb the first. A process that resolves the *default* config root when it did not mean to — a test, a rehearsal harness — inherits the primary's identity along with its files, so ownership checks keyed on that identity will wave it through.
+The server's directory for settings, outbox and runtime files. `TINSTAR_CONFIG_HOME` overrides `~/.config/tinstar`; server code uses [`getConfigRoot()`](src/server/configRoot.ts).
 
-## Surfaces
+## Reach
 
-### Focus mode
-A per-browser view of one Run Workspace that temporarily fits the existing workspace to the available canvas viewport at normal visual scale. Focus mode suppresses canvas arrangement and non-run widget interactions without changing the saved canvas layout, so returning to the canvas restores the prior arrangement. Distinct from the `Z` canvas utility and from the separate phone-oriented mobile projection.
-
-While Focus mode is active, mounted built-in Run Workspaces share the same transient viewport geometry and responsive presentation. Cycling changes which prepared workspace is visible rather than resizing terminals; genuine viewport changes may resize them, and leaving Focus restores each saved Canvas layout.
-
-### The Slate
-A region of a run's workspace card where an agent, the user, or any local process maintains small interactive surfaces scoped to that one run — an open-points list, diagram panels, forms, or live progress cards. It is the primary place to understand and interact with a managed session; the transcript is supporting history. Surfaces are described in A2UI and drawn by the shared host renderer. Foreground agents inspect the run's current owners, amend one when it already owns the subject, or reserve a visible card before writing a distinct work object. Threads, lifecycle status, and control answers are HTTP-out and owned by the store. Distinct from the Roundup, which is a cross-session board; the Slate is per-run. See [Slate-first live authoring](docs/features/slate-first-live-authoring.md).
-
-Slate content is **semi-ephemeral**: surfaces are cheap to wipe and re-author, so a change to the authoring contract is resolved by clearing the Slate rather than by migrating it. This is why breaking changes to surface shape are acceptable and why durable value belongs in host-owned machinery rather than in any individual card.
-
-### Addressable point
-The single primitive the Slate is built from: a durable, threaded item authored by an agent, a user, or a process, optionally anchored to a decision or a whole surface, carrying an append-only discussion thread and a soft lifecycle (open, discussing, waiting, resolved, dismissed). A Roundup notice, a canvas pin, and a per-surface discussion are the same object with a different anchor and default author. One id is reserved: a point at `objective` is the run's Objective and may only be written by the user, so a file-authored or HTTP-created point may not claim it.
-
-### The Objective
-A run's standing statement of what the session is for: one piece of user-written prose, pinned above every other surface on that run's Slate and editable in place. When a person launches a session with an explicit prompt, its exact trimmed text becomes both the delivered work prompt and the optimistic then canonical Objective; host-authored persona and introduction text do not. It is a reserved user-owned point rather than a new entity, which is why a run has exactly one and why neither an agent's surface file nor an add-a-point request can overwrite or retract it. Applying a later edit both persists it and nudges the run's agent to re-align; typing alone never does.
-
-### Surface
-A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
-
-A Surface is also the atomic refresh boundary. A refreshable Surface has one recipe, one whole-Surface result, and one freshness record; independently refreshed content belongs on separate Surfaces composed by the Slate. Its last-known result remains real information even when dirty, provided the Surface shows when that result was known and when freshness was last checked.
-
-### Surface-worthiness envelope
-The live-authoring rule that decides when foreground work belongs on the Slate. Obvious items are always in: an explicitly requested Surface, anything awaiting the user, the primary result needed to judge the Objective, and a blocker that needs intervention. Obvious transcript material is always out: turn receipts, raw logs, transient working pulses, microscopic steps, private reasoning, and duplicates of an existing Surface.
-
-The middle is deliberately agent-judged rather than a fixed taxonomy. An evolving plan, progress view, research thread, comparison, explainer, risk, or assumption earns a Surface when it has standalone value: the user can understand or use it without reconstructing the conversation, is likely to return to it, can act on or evaluate it, or would otherwise need the transcript to follow the work. New information about the same work object amends its existing Surface; Surface count never follows turn count.
-
-### Optimistic surface shell
-The visible card Tinstar creates as soon as it accepts an Add surface or foreground-agent reservation, before authoring has produced the body. It reserves the final Surface's identity and position, shows authoring progress, and becomes ready or failed in place. The shell is the creation receipt; dispatching or starting work without creating one is not visible success.
-
-Each attempt writes only to the host-assigned file and local ID and carries a host-issued attempt token. The watcher fills the reserved card only when that token is still current, so a late first attempt cannot overwrite a successful retry. The token correlates work; it is not a credential.
-
-### Refresh recipe
-The single instruction that rebuilds one whole Surface, and the thing that decides who is allowed to run it. A **host** recipe names a machine check from a closed, code-owned list: it is read-only, bounded, cannot invoke a model or create a session, and the host may therefore run it on its own. An **agent** recipe is prose, delivered to the Surface's existing foreground collaborator, and runs only when a person explicitly uses that Surface's refresh control; reading, selecting, and keyboard navigation never authorize it. Prose can never become a host recipe however it is worded — machine authority comes from naming a registered handler, which an author has no way to forge. A recipe the host cannot read is kept and reported rather than dropped, so a mistyped one says so instead of leaving a Surface that quietly never updates.
-
-### Dirty vs refreshing
-Two different things a Surface can be, deliberately kept apart. **Dirty** means an observation has invalidated it: a commit landed, a deadline passed, a claim moved. Marking is cheap and happens freely. **Refreshing** means an executor is actually rebuilding it right now, which for an agent recipe requires a person to have asked. Making the two synonymous is what produced a background agent per matching event; separating them is what makes an open dashboard cost nothing.
-
-### Last known vs last checked
-The two facts a Surface presents about its own freshness. **Last known** dates the content on screen and moves only when that content is replaced. **Last checked** dates the host's most recent completed look and records how it ended — succeeded, failed, unavailable (nothing could look), or superseded (the world moved first). A check that succeeds and finds nothing to change moves only the second, which is the common case: collapsing them into one timestamp reports month-old content as fresh.
-
-### Lookup broker
-The single gate every proactive host check passes through before it leaves the process. It holds a host-wide concurrency budget, a per-provider budget, and an in-flight map keyed by provider plus a stable question identity, so many Surfaces asking the same question share one answer and the second asker consumes no budget at all. Its purpose is that Surface count cannot buy provider load. A request it declines is **deferred**, which is not a failure and is recorded nowhere: nothing looked, so there is nothing to write down.
-
-### Dismissed vs deleted
-Two different endings, deliberately kept apart. **Dismissed** is a discussion outcome on an addressable point: the question was raised and the user decided it needs nothing further. The surface stays exactly where it is and remains visible. **Deleted** is structural: the surface and its descendants move into the recovery store, out of the workspace, and can be restored to their former home. A dismissed surface is still there and settled; a deleted one is gone but recoverable. Only **purge** erases, and only a deleted surface can be purged.
-
-### Container surface
-A surface that holds other surfaces. "Container" describes the surface's current structural role, not a separate entity or interaction model: it keeps the same title, content, prompt thread, presence, freshness, provenance, and minimize/hide/delete behavior as any other surface. A container may also carry its own authored summary or diagram. Each child surface has one home container, so recursive composition forms a tree rather than a multi-parent graph.
-
-### Attention rail
-A collapsible, scoped projection of surfaces that need the user, are actively changing, or changed recently. It helps the user search, filter, and jump to work without reordering the stable surface workspace; an explicit show-only action may temporarily filter the view.
-
-### A2UI
-The bounded, host-rendered UI description language a surface's body is written in: a flat set of components — text, layout rows and columns, lists, cards, links, and interactive controls — referenced by id from one root. Closed vocabulary, open composition: an agent composes from a fixed catalog the host draws in its own theme, rather than shipping arbitrary markup or styles. A body that is not valid A2UI is rejected at the boundary and never renders.
-
-### Claim
-A falsifiable statement a surface makes about the world, declared alongside its body: it names the kind of check that could refute it, what that check needs to run, and where the check is made. A claim never states what is currently true — only what would prove the surface wrong — which is why the declaration belongs to the surface's author while every value later observed for it belongs to the host. Editing a claim is an authoring change; observing one is not.
-
-A surface may declare any number, including none. Declaring an empty list is itself a statement — the author looked and found nothing checkable — and is deliberately kept distinct from never having said. The authoring convention is that a newly authored surface declares at least one. Components in the body may reference a claim by id, which is how a card's own contents can be derived from what the host observed instead of from what its author believed on the day they wrote it.
-
-### Witness
-The host-owned check that can settle one claim, named by kind from a closed set the host implements. A claim naming a kind the host does not have, or supplying the wrong parameters for the kind it names, is refused and reported on the card rather than only logged — and refusing costs that one claim, never the whole surface.
-
-Running a witness produces one of three outcomes, and the third is the load-bearing one: a value a completed lookup returned, "nobody could look", or "this claim is broken and someone must edit it". Only a value can agree with what was stored, so a witness that has been failing since it was written can never keep confirming its own card. A witness runs without waking an agent, which is what makes checking a surface cheap and rebuilding it rare.
-
-### Locus
-Where a claim's truth lives — the repository a run works in, or deployed infrastructure reached over the network. Distinct from what *announced* a change: an announcement says something happened, a locus says where the observation that could falsify a claim is made, and one locus is reachable from several kinds of announcement. Because a locus is declared, it narrows work in both directions: a commit reaches only the surfaces whose claims are about the repository, and a surface whose claims are all about infrastructure is left alone by it while still being checked on its own schedule.
-
-### Unwitnessed
-A surface that declares nothing which could prove it wrong. Distinct from stale, overdue, or unverified — those are all statements about a surface the host *could* check. Unwitnessed means there is nothing to check, and the card says so plainly instead of passing for current. It gates no controls and changes no scheduling: it is an honesty label, not a state anything acts on.
-
-A surface that does declare a claim but has never had one checked is a third thing, and reads differently again — it shows no age at all, because the age a surface displays is the last moment every one of its claims held, not the last time its file was saved.
+Opt-in tailnet access to the local server. Worker terminal ttyd processes stay on loopback and are accessed through the server proxy. See [reach](src/server/reach/).

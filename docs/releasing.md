@@ -4,6 +4,8 @@ How a `tinstar` release is cut. The steps are gated, in order — each one has a
 
 A release is **cut directly from `main`**: a version-bump commit, tagged `vN.N.0`, then published to npm. `main` is the primary development branch — features land continuously as their own squashed PRs (see [contributing.md](contributing.md)), and a release bundles whatever has accumulated on `main` since the last tag. There is no longer a long-lived `V5.x` dev branch.
 
+For 6.0.0, the release PR prepares the version stamps and [release notes](release-notes-v6-0.md). Tagging, GitHub Release, npm publish, and a fresh installed-package check happen only after that PR reaches `main`. A running `~/tinstar-server` installation is upgraded only when its operator chooses.
+
 ---
 
 ## Pre-flight (the real gate)
@@ -92,6 +94,8 @@ npm publish --otp=NNNNNN     # publishConfig.access=public — scoped packages d
 
 The `tinstar` org must already exist on npm (scoped name → "Scope not found" otherwise). Do **not** migrate `tinstar` itself to a scope — it owns the bare name and can't be renamed.
 
+As of 6.0.0 the V5 plugin host is removed. A version stamp in `packages/plugin-api/package.json` does not by itself mean that package should be published: apply the shipped-surface diff gate above. Deprecating `@tinstar/plugin-api` on npm is a separate explicit publish decision.
+
 ---
 
 ## Checklist
@@ -105,6 +109,7 @@ The `tinstar` org must already exist on npm (scoped name → "Scope not found" o
 - [ ] Tag vN.N.0 pushed → desktop CI + GitHub Release
 - [ ] Watched release.yml to green (all 3 OS) + confirmed `gh release view vN.N.0` has 5 binaries
 - [ ] npm publish tinstar@N.N.0 (OTP)
+- [ ] Install the published package fresh in a separate location and confirm that it starts against a configured First Mate home; capture the live fleet from the installed build outside the repository
 - [ ] Gate: git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts
       → non-empty? npm publish @tinstar/plugin-api@N.N.0 (OTP)   empty? skip, note why
 ```
