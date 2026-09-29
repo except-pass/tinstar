@@ -100,6 +100,9 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
     await grok.focus()
     await expect(grok.getByRole('tooltip')).toContainText('usage endpoint rejected the session')
     await page.screenshot({ path: test.info().outputPath('quota-focus-1440x900.png') })
+    await claude.hover()
+    await expect(claudeTip).toBeVisible()
+    await expect(grok.getByRole('tooltip')).toBeHidden()
 
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
