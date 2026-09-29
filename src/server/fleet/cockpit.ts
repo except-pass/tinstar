@@ -14,6 +14,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
+import { displayedWorkerState, secondmateActivityById } from './workerState'
 
 const execFileAsync = promisify(execFile)
 
@@ -23,8 +24,9 @@ interface SnapshotTask extends AttentionTask {
   project?: unknown
   branch?: unknown
   paths?: { worktree?: { path?: unknown } }
-  current_state?: { state?: unknown; detail?: unknown; observed_at?: unknown; freshness?: unknown }
-  endpoint?: { target?: unknown }
+  current_state?: { state?: unknown; source?: unknown; detail?: unknown; observed_at?: unknown; freshness?: unknown }
+  endpoint?: { target?: unknown; exists?: unknown; agent_alive?: unknown; status?: unknown }
+  hints?: AttentionTask['hints'] & { last_event_text?: unknown }
   pr?: { url?: unknown }
   backlog?: { title?: unknown }
 }
@@ -231,10 +233,14 @@ export class CockpitFleet {
       const { stdout } = await execFileAsync(join(home, 'bin', 'fm-fleet-snapshot.sh'), ['--json'], {
         timeout: 18_000, maxBuffer: 16 * 1024 * 1024,
       })
-      const snapshot = JSON.parse(stdout) as { schema?: string; tasks?: SnapshotTask[]; backlog?: { records?: AttentionBacklogRow[] } }
+      const snapshot = JSON.parse(stdout) as {
+        schema?: string; tasks?: SnapshotTask[]; backlog?: { records?: AttentionBacklogRow[] }
+        secondmate_current?: { records?: unknown }
+      }
       if (snapshot.schema !== 'fm-fleet-snapshot.v1' || !Array.isArray(snapshot.tasks)) throw new Error('unexpected snapshot format')
       const backlog = Array.isArray(snapshot.backlog?.records) ? snapshot.backlog.records : []
       const titles = new Map(backlog.map(r => [r.id, r.title]))
+      const mateActivity = secondmateActivityById(snapshot)
       const workers = await Promise.all(snapshot.tasks.map(async task => {
         const id = str(task.id, '')
         if (!id) return null
@@ -248,9 +254,10 @@ export class CockpitFleet {
         } catch { /* backlog title is the documented fallback */ }
         const prUrl = typeof task.pr?.url === 'string' && parsePullUrl(task.pr.url)
           ? task.pr.url : null
+        const displayed = displayedWorkerState(task, mateActivity.get(id) ?? null)
         return {
-          key, id, home, kind: str(task.kind), state: str(task.current_state?.state),
-          detail: str(task.current_state?.detail), observedAt: typeof task.current_state?.observed_at === 'string' ? task.current_state.observed_at : null,
+          key, id, home, kind: str(task.kind), state: displayed.state,
+          detail: displayed.detail, observedAt: typeof task.current_state?.observed_at === 'string' ? task.current_state.observed_at : null,
           freshness: str(task.current_state?.freshness), objective,
           project: str(task.project), worktree: str(task.paths?.worktree?.path),
           branch: str(task.branch), prUrl, terminalAvailable: !!target,
