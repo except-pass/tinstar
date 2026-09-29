@@ -71,7 +71,9 @@ function ProviderQuotaCard({
       </div>
       {source && <div className="provider-quota-source">{source}</div>}
 
-      {availability.state === 'available' && availability.value.windows.length > 0
+      {availability.state === 'available' && (observation.freshness.state === 'stale' || refreshError)
+        ? <QuotaState label={refreshError ? 'Unavailable · refresh failed' : 'Stale · waiting for a new reading'} />
+        : availability.state === 'available' && availability.value.windows.length > 0
         ? availability.value.windows.map(window => {
             const usedPercent = Math.round(window.usedPercent)
             const remainingPercent = 100 - usedPercent

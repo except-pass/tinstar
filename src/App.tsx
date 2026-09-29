@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
+import { QuotaRail } from './cockpit/QuotaRail'
 import type { AttentionCard } from './server/fleet/attention'
 import './cockpit.css'
 
@@ -286,6 +287,7 @@ export default function App() {
           <Face worker={worker} size={35} /><span className="cockpit-worker-label"><strong>{worker.id}</strong><small>{worker.project}</small></span><StateChip state={worker.state} />
         </button>)}
       </div>
+      <QuotaRail />
       <div className="cockpit-rail-footer">CTRL + [ &nbsp; / &nbsp; CTRL + ]<span>Switch workers</span></div>
     </aside>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
@@ -300,6 +302,7 @@ export default function App() {
       </> : <>
         <header className="cockpit-worker-header" style={{ '--worker-color': identityColor(current.id) } as React.CSSProperties}>
           <div className="cockpit-worker-identity"><Face worker={current} size={68} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><StateChip state={current.state} /></div></div>
+          <span key={`flash:${current.key}`} className="cockpit-switch-flash" aria-hidden="true" />
           <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
         </header>
         <div className="cockpit-worker-content"><section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
