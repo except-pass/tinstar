@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
+import type { AttentionCard } from './server/fleet/attention'
 import './cockpit.css'
 
 interface Worker {
@@ -9,7 +10,7 @@ interface Worker {
   observedAt: string | null; freshness: string; objective: string; project: string
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
 }
-interface FleetData { workers: Worker[]; errors: string[] }
+interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
 
 function identityColor(id: string): string {
@@ -38,10 +39,34 @@ function displayTime(value: string | null): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
+const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Failure', review: 'Review Ready' } as const
+const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
+
+function AttentionCardView({ card, worker, open }: { card: AttentionCard; worker: Worker | null; open: () => void }) {
+  const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
+    : <span className="cockpit-attention-origin cockpit-attention-origin-empty"><span className="material-symbols-outlined">account_tree</span>First Mate backlog</span>
+  return <article className={`cockpit-attention-card cockpit-attention-${card.type}`}>
+    <div className="cockpit-attention-type"><span className="material-symbols-outlined" aria-hidden="true">{attentionIcons[card.type]}</span><strong>{attentionLabels[card.type]}</strong></div>
+    {card.type === 'review' ? <>
+      <div className="cockpit-attention-review-ref"><span>{card.repository}</span><strong>#{card.prNumber}</strong></div>
+      <p title={card.headline}>{card.headline}</p>
+      <div className="cockpit-attention-review-meta"><span>CI {card.ci}</span>{card.reviewStatus === 'unknown' && <span>PR status unknown</span>}</div>
+      <div className="cockpit-attention-bottom">{origin}<a className="cockpit-attention-action" href={card.prUrl!} target="_blank" rel="noopener noreferrer">Open GitHub ↗</a></div>
+    </> : <>
+      <p title={card.headline}>{card.headline}</p>
+      {card.type === 'decision' && <small className="cockpit-attention-age">Age {card.ageDays === null ? 'unknown' : `${card.ageDays}d`}</small>}
+      {card.type === 'blocked' && card.detail && <small className="cockpit-attention-needed">NEEDED · {card.detail}</small>}
+      {card.type === 'failure' && card.detail && <small className="cockpit-attention-failure-detail">{card.detail}</small>}
+      <div className="cockpit-attention-bottom">{origin}<button className="cockpit-attention-action" onClick={open}>Open →</button></div>
+    </>}
+  </article>
+}
+
 export default function App() {
-  const [fleet, setFleet] = useState<FleetData>({ workers: [], errors: [] })
+  const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
+  const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
   const [opening, setOpening] = useState<Record<string, boolean>>({})
@@ -69,10 +94,14 @@ export default function App() {
   }, [refresh])
 
   const workers = fleet.workers
+  const waiting = loading || !fleet.ready
+  const attention = fleet.attention ?? []
+  const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = workers.find(w => w.key === selected) ?? null
   const order = useMemo(() => workers.map(w => w.key), [workers])
   const cycle = useCallback((direction: number, fromTerminal = false) => {
     if (!order.length) return
+    setSelectedAttention(null)
     focusTerminal.current = fromTerminal && order.length > 1
     setSelected(previous => {
       const index = previous ? order.indexOf(previous) : -1
@@ -156,15 +185,21 @@ export default function App() {
   return <div className="cockpit-shell">
     <aside className="cockpit-rail">
       <div className="cockpit-brand"><span className="cockpit-brand-mark">✦</span><div><strong>TIN STAR</strong><small>WORKER COCKPIT</small></div></div>
-      <button className={`cockpit-overview-button ${!current ? 'active' : ''}`} onClick={() => setSelected(null)}><span className="material-symbols-outlined">dashboard</span>Overview</button>
+      <button className={`cockpit-overview-button ${!current ? 'active' : ''}`} onClick={() => { setSelected(null); setSelectedAttention(null) }}><span className="material-symbols-outlined">dashboard</span>Overview</button>
       <input className="cockpit-jump" aria-label="Jump to worker" placeholder="Jump to worker ↵" value={jumpText} onChange={e => setJumpText(e.target.value)} onKeyDown={e => {
         if (e.key !== 'Enter') return
         const match = workers.find(w => w.id.toLowerCase().includes(jumpText.trim().toLowerCase()))
-        if (match && jumpText.trim()) { setSelected(match.key); setJumpText('') }
+        if (match && jumpText.trim()) { setSelected(match.key); setSelectedAttention(null); setJumpText('') }
       }} />
+      <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
+      <div className="cockpit-attention-list" aria-label="Needs You">
+        {fleet.errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {fleet.errors.join('; ')}</p>}
+        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} />)
+          : fleet.errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
+      </div>
       <div className="cockpit-rail-heading"><span>WORKERS</span><span>{workers.length}</span></div>
       <div className="cockpit-worker-list">
-        {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${selected === worker.key ? 'active' : ''}`} onClick={() => setSelected(worker.key)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
+        {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${selected === worker.key ? 'active' : ''}`} onClick={() => { setSelected(worker.key); setSelectedAttention(null) }} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
           <Face worker={worker} size={35} /><span className="cockpit-worker-label"><strong>{worker.id}</strong><small>{worker.project}</small></span><StateChip state={worker.state} />
         </button>)}
       </div>
@@ -174,7 +209,7 @@ export default function App() {
       {!current ? <>
         <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p></header>
         {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
-        {loading ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
+        {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : <div className="cockpit-groups">
           {states.map(([state, entries]) => <section key={state} className="cockpit-group"><div className="cockpit-group-heading"><StateChip state={state} /><span>{entries.length} {entries.length === 1 ? 'worker' : 'workers'}</span></div><div className="cockpit-card-grid">
             {entries.map(worker => <button key={worker.key} className="cockpit-card" onClick={() => setSelected(worker.key)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}><div className="cockpit-card-top"><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div><span className="material-symbols-outlined">arrow_forward</span></div><p>{worker.objective}</p><small>{worker.detail}</small></button>)}
           </div></section>)}
@@ -201,5 +236,13 @@ export default function App() {
         </div>
       </>}
     </main>
+    {activeAttention && <div className="cockpit-attention-scrim" onClick={() => setSelectedAttention(null)}>
+      <section className={`cockpit-attention-detail cockpit-attention-${activeAttention.type}`} role="dialog" aria-modal="true" aria-label={attentionLabels[activeAttention.type]} onClick={event => event.stopPropagation()}>
+        <div className="cockpit-attention-detail-top"><span className="material-symbols-outlined">{attentionIcons[activeAttention.type]}</span><strong>{attentionLabels[activeAttention.type]}</strong><button aria-label="Close details" onClick={() => setSelectedAttention(null)}>×</button></div>
+        <h2>{activeAttention.headline}</h2>{activeAttention.detail && <p>{activeAttention.detail}</p>}
+        <div className="cockpit-attention-detail-facts"><span>Origin</span><strong>{activeAttention.workerId ?? 'First Mate backlog'}</strong><span>Age</span><strong>{activeAttention.ageDays === null ? 'unknown' : `${activeAttention.ageDays} days`}</strong></div>
+        {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => { setSelected(activeAttention.workerKey); setSelectedAttention(null) }}>View worker →</button>}
+      </section>
+    </div>}
   </div>
 }
