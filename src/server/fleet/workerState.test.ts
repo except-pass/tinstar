@@ -118,3 +118,66 @@ describe('displayed worker state', () => {
     expect(secondmateActivityById({}).size).toBe(0)
   })
 })
+
+describe('unknown snapshot state', () => {
+  const at = 1_790_000_000
+  const now = (at + 4 * 60) * 1000
+  const unavailable = (line: string, endpoint: MateSnapshot['endpoint'] = { exists: true, agent_alive: 'alive', status: 'alive' }): MateSnapshot => ({
+    kind: 'ship',
+    current_state: { state: 'unknown', source: 'pane', detail: 'harness state unavailable' },
+    endpoint,
+    hints: { last_event_text: line },
+  })
+
+  it('reads each status prefix and marks the report age', () => {
+    for (const state of ['working', 'paused', 'blocked', 'needs-decision', 'done', 'failed']) {
+      expect(displayedWorkerState(unavailable(`${state} [at=${at}]: still on the change`), null, now))
+        .toEqual({ state, detail: `${state} · last report 4m ago` })
+    }
+    expect(displayedWorkerState(unavailable(`needs-decision [at=${at}] [key=gate]: choose a layout`, { exists: true, agent_alive: 'alive' }), null, now))
+      .toEqual({ state: 'needs-decision', detail: 'needs-decision · last report 4m ago' })
+    expect(displayedWorkerState({ ...unavailable(`working [at=${at}]`), kind: 'scout' }, null, now))
+      .toEqual({ state: 'working', detail: 'working · last report 4m ago' })
+    expect(displayedWorkerState({ ...unavailable(`paused [at=${at}]: waiting on review`), kind: 'secondmate' }, null, now))
+      .toEqual({ state: 'paused', detail: 'paused · last report 4m ago' })
+  })
+
+  it('formats a report age as just now, hours, or days', () => {
+    const task = unavailable(`working [at=${at}]`)
+    expect(displayedWorkerState(task, null, at * 1000 + 20_000).detail).toBe('working · last report just now')
+    expect(displayedWorkerState(task, null, (at + 2 * 60 * 60) * 1000).detail).toBe('working · last report 2h ago')
+    expect(displayedWorkerState(task, null, (at + 3 * 24 * 60 * 60) * 1000).detail).toBe('working · last report 3d ago')
+    expect(displayedWorkerState(task, null, (at - 60) * 1000).detail).toBe('working · last report just now')
+  })
+
+  it('keeps a live pane state and leaves an unrecognized line unknown', () => {
+    expect(displayedWorkerState({
+      current_state: { state: 'working', source: 'pane', detail: 'harness busy' },
+      endpoint: { exists: true, agent_alive: 'alive' },
+      hints: { last_event_text: `failed [at=${at}]: build broke` },
+    }, null, now)).toEqual({ state: 'working', detail: 'harness busy' })
+    expect(displayedWorkerState({
+      current_state: { state: 'idle', source: 'pane', detail: 'harness idle' },
+      hints: { last_event_text: `blocked [at=${at}]: need access` },
+    }, null, now)).toEqual({ state: 'idle', detail: 'harness idle' })
+    expect(displayedWorkerState(unavailable(`resolved [at=${at}]: cleared`), null, now))
+      .toEqual({ state: 'unknown', detail: 'harness state unavailable' })
+    expect(displayedWorkerState(unavailable('working: still on the change'), null, now))
+      .toEqual({ state: 'working', detail: 'working · last report' })
+    expect(displayedWorkerState(unavailable('working [at=12:30]: still on the change'), null, now))
+      .toEqual({ state: 'working', detail: 'working · last report' })
+  })
+
+  it('keeps unknown when the endpoint is dead', () => {
+    const line = `working [at=${at}]: still on the change`
+    const detail = 'harness state unavailable'
+    expect(displayedWorkerState(unavailable(line, { exists: false, agent_alive: 'dead', status: 'dead' }), null, now))
+      .toEqual({ state: 'unknown', detail })
+    expect(displayedWorkerState(unavailable(line, { exists: true, agent_alive: 'dead', status: 'alive' }), null, now))
+      .toEqual({ state: 'unknown', detail })
+    expect(displayedWorkerState(unavailable(line, { exists: false }), null, now))
+      .toEqual({ state: 'unknown', detail })
+    expect(displayedWorkerState(unavailable(line, { exists: true, agent_alive: 'alive' }), { state: 'no_active_work', activeChildren: 0 }, now))
+      .toEqual({ state: 'working', detail: 'working · last report 4m ago' })
+  })
+})
