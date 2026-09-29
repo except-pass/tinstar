@@ -61,7 +61,7 @@ elif command == 'receipts':
     for path in state.glob('tinstar-*.json'):
         row = json.loads(path.read_text())
         row['acknowledged'] = False
-        row['reply'] = None
+        row.setdefault('reply', None)
         rows.append(row)
     print(json.dumps({'schema': 'fm-inbox-receipts.v1', 'pending': rows, 'handled': []}))
 elif command == 'ready':
@@ -116,9 +116,16 @@ elif command == 'ready':
     expect(note.body).toContain('Dismiss decision choice on task alpha.')
     await expect(page.getByText('Dismiss decision choice on task alpha.')).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: test.info().outputPath('private-slide-dismissing.png') })
+    const first = join(home, 'state', notes()[0]!)
+    writeFileSync(first, JSON.stringify({ ...note, reply: { body: 'Keeping this decision open.' } }))
+    await expect(slider).toBeVisible({ timeout: 15_000 })
+    await expect(card.getByText('dismissing…')).toHaveCount(0)
+    await slide(page, slider, 1)
+    await expect(card.getByRole('status')).toHaveText('dismissing…')
+    await expect.poll(() => notes().length, { timeout: 10_000 }).toBe(2)
     await page.reload()
     await expect(card.getByRole('status')).toHaveText('dismissing…', { timeout: 15_000 })
-    expect(notes()).toHaveLength(1)
+    expect(notes()).toHaveLength(2)
     snapshot(false)
     appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
     await expect(card).toHaveCount(0, { timeout: 30_000 })

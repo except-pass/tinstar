@@ -281,8 +281,8 @@ export default function App() {
     })
     setDismissingKeys(previous => ({ ...previous, [card.key]: true }))
     void submit({ requestId, anchorKey: card.key, kind: 'message', text }).then(result => {
-      if (result.saved) return
       dismissBusy.current.delete(card.key)
+      if (result.saved) { delete dismissIds.current[card.key]; return }
       setDismissingKeys(previous => {
         const next = { ...previous }
         delete next[card.key]
@@ -300,11 +300,13 @@ export default function App() {
     })
   }, [messages, submit])
 
+  const dismissInOutbox = useCallback((card: AttentionCard) =>
+    messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && !dismissSettled.current.has(message.requestId)), [messages])
+
   const dismissHeld = useCallback((card: AttentionCard) => {
     if (dismissErrors[card.key]) return false
-    if (dismissingKeys[card.key]) return true
-    return messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && !dismissSettled.current.has(message.requestId))
-  }, [dismissErrors, dismissingKeys, messages])
+    return Boolean(dismissingKeys[card.key]) || dismissInOutbox(card)
+  }, [dismissErrors, dismissingKeys, dismissInOutbox])
 
   useEffect(() => {
     void refresh()
@@ -325,15 +327,16 @@ export default function App() {
     }
     for (const key of [...dismissBusy.current]) if (!openKeys.has(key)) dismissBusy.current.delete(key)
     for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key)) delete dismissIds.current[key]
+    const inOutbox = new Set(attention.filter(dismissInOutbox).map(card => card.key))
     setDismissingKeys(previous => {
-      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key)))
+      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !inOutbox.has(key)))
       return Object.keys(next).length === Object.keys(previous).length ? previous : next
     })
     setDismissErrors(previous => {
       const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key)))
       return Object.keys(next).length === Object.keys(previous).length ? previous : next
     })
-  }, [fleet.ready, attention, messages])
+  }, [fleet.ready, attention, messages, dismissInOutbox])
   const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = workers.find(w => w.key === selected) ?? null
   const order = useMemo(() => workers.map(w => w.key), [workers])
