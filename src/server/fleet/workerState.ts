@@ -18,8 +18,9 @@ const text = (value: unknown): string => typeof value === 'string' ? value.trim(
 // and the fallback `<state> [key=inactive-outcome-<mate>-<id>-<state>]: inactive terminal child=<id> fingerprint=<fp>`.
 const CHILD_OUTCOME = /^(done|failed) \[key=(?:child-outcome-[^\]]+\](?: \[[^\]]*\])*: child \S+ \1:|inactive-outcome-[^\]]+\](?: \[[^\]]*\])*: inactive terminal child=\S+)/
 const WAITING = new Set(['no_active_work', 'externally_held', 'captain_decision'])
-const REPORT_VERB = /^(working|paused|blocked|needs-decision|done|failed)(?![A-Za-z0-9-])/
+const REPORT = /^(working|paused|blocked|needs-decision|done|failed)(?![A-Za-z0-9-])((?:\s*\[[^\]]*\])*)\s*:?\s*(.*)$/s
 const REPORT_STAMP = /\[at=(\d+)\]/
+const REPORT_BODY_MAX = 80
 
 function endpointDead(task: MateSnapshot): boolean {
   return task.endpoint?.exists === false || text(task.endpoint?.agent_alive) === 'dead'
@@ -33,24 +34,28 @@ function reportAge(unixSeconds: number, now: number): string {
   return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
 }
 
-/** Latest status verb when the snapshot could not read a live state. The verb stays the state word; the detail carries the report age. */
+/** Latest status verb when the snapshot could not read a live state. The verb stays the state word; the detail is the report body and its age. */
 function lastReport(task: MateSnapshot, now: number): { state: string; detail: string } | null {
-  const line = text(task.hints?.last_event_text)
-  const verb = REPORT_VERB.exec(line)
-  if (!verb) return null
-  const state = verb[1] ?? 'unknown'
-  const stamp = REPORT_STAMP.exec(line)
+  const report = REPORT.exec(text(task.hints?.last_event_text))
+  if (!report) return null
+  const [, state = 'unknown', tags = '', rest = ''] = report
+  const stamp = REPORT_STAMP.exec(tags)
   const marker = stamp ? `last report ${reportAge(Number(stamp[1]), now)}` : 'last report'
-  return { state, detail: `${state} · ${marker}` }
+  const body = rest.replace(/\s+/g, ' ').trim()
+  if (!body) return { state, detail: marker }
+  const short = body.length > REPORT_BODY_MAX ? `${body.slice(0, REPORT_BODY_MAX - 1).trimEnd()}…` : body
+  return { state, detail: `${short} · ${marker}` }
 }
 
 /** A child-outcome line is another task finishing or failing, not the mate's own outcome. */
 function isChildOutcome(task: MateSnapshot): boolean {
   if (text(task.kind) !== 'secondmate') return false
-  const source = text(task.current_state?.source)
-  if (source && source !== 'status-log') return false
   const match = CHILD_OUTCOME.exec(text(task.hints?.last_event_text))
-  return !!match && match[1] === text(task.current_state?.state)
+  if (!match) return false
+  const state = text(task.current_state?.state) || 'unknown'
+  if (state === 'unknown') return true
+  const source = text(task.current_state?.source)
+  return (!source || source === 'status-log') && match[1] === state
 }
 
 function presence(task: MateSnapshot, home: MateHomeActivity | null): 'working' | 'idle' | 'unknown' {
@@ -65,17 +70,17 @@ function presence(task: MateSnapshot, home: MateHomeActivity | null): 'working' 
  * Displayed worker state for the overview, detail, grouping, and attention cards.
  * A live snapshot state is kept as read. An unknown state is taken from the latest
  * status line when that line starts with working, paused, blocked, needs-decision,
- * done, or failed, and the detail marks that report's age. A dead endpoint stays
+ * done, or failed, and the detail is that report's body and age. A dead endpoint stays
  * unknown. A persistent second mate whose latest status line is a child `done` or
- * `failed` shows working while child work is active and idle while it is waiting;
- * that child outcome stays in the detail.
+ * `failed`, whether its snapshot state was read or unknown, shows working while child
+ * work is active and idle while it is waiting; that child outcome stays in the detail.
  */
 export function displayedWorkerState(task: MateSnapshot, home: MateHomeActivity | null = null, now = Date.now()): { state: string; detail: string } {
   const state = text(task.current_state?.state) || 'unknown'
   const detail = text(task.current_state?.detail) || 'unknown'
-  if (isChildOutcome(task)) return { state: presence(task, home), detail }
-  if (state !== 'unknown' || endpointDead(task)) return { state, detail }
-  return lastReport(task, now) ?? { state, detail }
+  const report = state === 'unknown' && !endpointDead(task) ? lastReport(task, now) : null
+  if (isChildOutcome(task)) return { state: presence(task, home), detail: report?.detail ?? detail }
+  return report ?? { state, detail }
 }
 
 export function secondmateActivityById(snapshot: { secondmate_current?: { records?: unknown } | null }): Map<string, MateHomeActivity> {

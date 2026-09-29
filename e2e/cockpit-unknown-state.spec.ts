@@ -56,7 +56,7 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
     const fleet = await request.get(`${base}/api/fleet`).then(response => response.json()) as {
       data: { workers: Array<{ id: string; state: string; detail: string }>; attention: Array<{ type: string; workerId: string | null; headline: string }> }
     }
-    const reported = 'working · last report 2h ago'
+    const reported = 'editing the worker view · last report 2h ago'
     expect(fleet.data.workers.map(worker => [worker.id, worker.state, worker.detail])).toEqual([
       ['reported', 'working', reported],
       ['live', 'working', 'harness busy'],
