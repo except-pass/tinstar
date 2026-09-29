@@ -62,14 +62,28 @@ it('closes a keyed decision with fm-send and a captain hold with fm-captain-hold
     script: 'fm-send.sh', argv: ['alpha', '--resolve-key', 'choice', WORKER_TEXT], fm_home: home, decision: '',
   }])
   expect(await dismissDirect(home, card({
-    dismissal: 'captain-hold', holdId: 'rollout-call', decisionKey: 'rollout-call', taskId: null,
+    dismissal: 'captain-hold', holdId: 'rollout-call', decisionKey: 'rollout-call', taskId: null, workerId: null, workerKey: null,
   }))).toEqual({ dismissed: true })
   const recorded = calls(home)[1]!
   expect(recorded.script).toBe('fm-captain-hold.sh')
   expect(recorded.argv.slice(0, 3)).toEqual(['answer', 'rollout-call', '--decision-file'])
+  expect(recorded.argv).toHaveLength(4)
   expect(recorded.decision).toBe(CAPTAIN_TEXT)
   expect(recorded.fm_home).toBe(home)
   expect(existsSync(recorded.argv[3]!)).toBe(false)
+})
+
+it('releases a hold on a live worker\'s own task instead of closing it', async () => {
+  const home = install()
+  expect(await dismissDirect(home, card({ dismissal: 'captain-hold', holdId: 'alpha', decisionKey: 'alpha' }))).toEqual({ dismissed: true })
+  const recorded = calls(home)[0]!
+  expect(recorded.script).toBe('fm-captain-hold.sh')
+  expect(recorded.argv.slice(0, 3)).toEqual(['answer', 'alpha', '--decision-file'])
+  expect(recorded.argv.slice(4)).toEqual(['--release'])
+  expect(recorded.decision).toBe(CAPTAIN_TEXT)
+  expect(await dismissDirect(home, card({ dismissal: 'captain-hold', holdId: 'alpha-release', decisionKey: 'default' }))).toEqual({ dismissed: true })
+  expect(calls(home)[1]!.argv.slice(0, 2)).toEqual(['answer', 'alpha-release'])
+  expect(calls(home)[1]!.argv).toHaveLength(4)
 })
 
 it('returns the script error and leaves the decision file removed when the close fails', async () => {

@@ -20,7 +20,7 @@ async function slide(page: Page, slider: Locator, fraction: number) {
   await page.mouse.up()
 }
 
-type DismissKind = 'fallback' | 'keyed' | 'blocked' | 'hold'
+type DismissKind = 'fallback' | 'keyed' | 'blocked' | 'hold' | 'held-work'
 
 async function startCockpit(request: APIRequestContext, names: string[], kind: DismissKind = 'fallback') {
   const root = mkdtempSync(join(tmpdir(), 'tinstar-dismiss-'))
@@ -43,8 +43,9 @@ async function startCockpit(request: APIRequestContext, names: string[], kind: D
       : kind === 'keyed' ? [{ key: 'choice', verb: 'needs-decision', summary: 'Choose the rollout order' }]
       : kind === 'fallback' ? [{ verb: 'needs-decision', summary: 'Choose the rollout order' }]
       : []
-    const holds = open && kind === 'hold'
-      ? [{ id: 'rollout-call', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the rollout order', title: 'Rollout order', hold_age_days: 2 }]
+    const holds = !open ? []
+      : kind === 'hold' ? [{ id: 'rollout-call', state: 'queued', hold_kind: 'captain', hold_reason: 'Choose the rollout order', title: 'Rollout order', hold_age_days: 2 }]
+      : kind === 'held-work' ? [{ id: 'alpha', state: 'in_flight', hold_kind: 'captain', hold_reason: 'Hold the rollout until the captain says go', title: 'Rollout', hold_age_days: 1 }]
       : []
     writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
       schema: 'fm-fleet-snapshot.v1',
@@ -108,10 +109,12 @@ elif command == 'ready':
       chmodSync(inbox, 0o755)
       const close = join(home, 'bin', 'fm-send.sh')
       writeFileSync(close, `#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 state = pathlib.Path(__file__).resolve().parent.parent / 'state'
 argv = sys.argv[1:]
 name = pathlib.Path(sys.argv[0]).name
+if (state / 'slow').exists():
+    time.sleep(2)
 decision = ''
 if '--decision-file' in argv:
     decision = pathlib.Path(argv[argv.index('--decision-file') + 1]).read_text()
@@ -182,7 +185,7 @@ test('sliding an unclassified decision still asks First Mate with one inbox note
     expect(note.body).toContain('Dismiss decision default on task alpha.')
     await expect(page.getByText('Dismiss decision default on task alpha.')).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: test.info().outputPath('private-slide-dismissing.png') })
-    await page.screenshot({ path: join(repo, 'docs/proof/dismiss-pending-private.png') })
+    await page.screenshot({ path: test.info().outputPath('dismiss-pending-private.png') })
     const first = join(home, 'state', notes()[0]!)
     writeFileSync(first, JSON.stringify({ ...note, reply: { body: 'Keeping this decision open.' } }))
     await expect(slider).toBeVisible({ timeout: 15_000 })
@@ -289,15 +292,18 @@ test('sliding a keyed decision closes it through fm-send and reads dismissed', a
     await slide(page, slider, 0.35)
     await expect(slider).toHaveAttribute('aria-valuenow', '0')
     expect(calls()).toEqual([])
+    writeFileSync(join(home, 'state', 'slow'), '')
     await slide(page, slider, 1)
-    await expect(card.getByRole('status')).toHaveText('dismissed')
+    await expect(card.getByRole('status')).toHaveText('dismissing…')
+    await expect(slider).toHaveCount(0)
+    await expect(card.getByRole('status')).toHaveText('dismissed', { timeout: 10_000 })
     await expect(card.getByText('dismissing…')).toHaveCount(0)
     await expect(slider).toHaveCount(0)
     expect(notes()).toEqual([])
     expect(calls()).toEqual([{
       script: 'fm-send.sh', argv: ['alpha', '--resolve-key', 'choice', workerText], fm_home: home, decision: '',
     }])
-    await page.screenshot({ path: join(repo, 'docs/proof/dismiss-closed-private.png') })
+    await page.screenshot({ path: test.info().outputPath('dismiss-closed-private.png') })
     await page.setViewportSize({ width: 390, height: 800 })
     await expect(card.getByRole('status')).toHaveText('dismissed')
   } finally {
@@ -305,18 +311,18 @@ test('sliding a keyed decision closes it through fm-send and reads dismissed', a
   }
 })
 
-test('sliding a blocked decision with a key closes it through fm-send', async ({ page, request }) => {
+test('a keyed blocked line has no dismiss slider', async ({ page, request }) => {
   test.setTimeout(120_000)
-  const { base, home, notes, calls, stop } = await startCockpit(request, ['firstmate'], 'blocked')
+  const { base, notes, calls, stop } = await startCockpit(request, ['firstmate'], 'blocked')
   try {
     await page.setViewportSize({ width: 1280, height: 1100 })
     await page.goto(base)
     const card = page.locator('.cockpit-attention-card')
     await expect(card).toContainText('Blocked')
-    await slide(page, card.getByRole('slider', { name: 'Slide to dismiss' }), 1)
-    await expect(card.getByRole('status')).toHaveText('dismissed')
+    await expect(card.getByText('Tell First Mate about this')).toBeVisible()
+    await expect(card.getByRole('slider', { name: 'Slide to dismiss' })).toHaveCount(0)
     expect(notes()).toEqual([])
-    expect(calls()[0]).toMatchObject({ script: 'fm-send.sh', argv: ['alpha', '--resolve-key', 'access', workerText], fm_home: home })
+    expect(calls()).toEqual([])
   } finally {
     stop()
   }
@@ -335,9 +341,30 @@ test('sliding a captain-held decision closes it through fm-captain-hold', async 
     const call = calls()[0]!
     expect(call.script).toBe('fm-captain-hold.sh')
     expect(call.argv.slice(0, 3)).toEqual(['answer', 'rollout-call', '--decision-file'])
+    expect(call.argv).toHaveLength(4)
     expect(call.decision).toBe('Dismissed by the operator from Tin Star.')
     expect(call.fm_home).toBe(home)
     expect(calls().filter(item => item.script === 'fm-send.sh')).toEqual([])
+  } finally {
+    stop()
+  }
+})
+
+test('sliding a hold on a live worker\'s own task releases the held work', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const { base, home, notes, calls, stop } = await startCockpit(request, ['firstmate'], 'held-work')
+  try {
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await page.goto(base)
+    const card = page.locator('.cockpit-attention-card')
+    await slide(page, card.getByRole('slider', { name: 'Slide to dismiss' }), 1)
+    await expect(card.getByRole('status')).toHaveText('dismissed')
+    expect(notes()).toEqual([])
+    const call = calls()[0]!
+    expect(call.script).toBe('fm-captain-hold.sh')
+    expect(call.argv.slice(0, 3)).toEqual(['answer', 'alpha', '--decision-file'])
+    expect(call.argv.slice(4)).toEqual(['--release'])
+    expect(call.fm_home).toBe(home)
   } finally {
     stop()
   }

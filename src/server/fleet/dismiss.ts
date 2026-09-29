@@ -6,8 +6,8 @@ import { runHomeScript } from './inbox'
 
 const CAPTAIN_TEXT = 'Dismissed by the operator from Tin Star.'
 const WORKER_TEXT = 'The operator dismissed this decision from Tin Star; it no longer needs an answer. Carry on without it.'
-// fm-send bounds one remote attempt at 30s. A shorter kill would cut off a close still inside that bound.
-const CLOSE_TIMEOUT_MS = 30_000
+// fm-send takes its lock, then may make two 30s remote attempts before it records the close. The kill must outlast all of that.
+const CLOSE_TIMEOUT_MS = 75_000
 
 export type DirectDismiss = { dismissed: true } | { dismissed: false; error: string }
 
@@ -23,7 +23,9 @@ export async function dismissDirect(home: string, card: AttentionCard): Promise<
       const file = join(dir, 'decision')
       try {
         await writeFile(file, CAPTAIN_TEXT, { mode: 0o600 })
-        const result = await runHomeScript(home, 'fm-captain-hold.sh', ['answer', card.holdId, '--decision-file', file], undefined, CLOSE_TIMEOUT_MS)
+        // A hold on a live worker's own task is held work, so it resumes. Any other hold is a decision and closes.
+        const release = card.holdId === card.workerId ? ['--release'] : []
+        const result = await runHomeScript(home, 'fm-captain-hold.sh', ['answer', card.holdId, '--decision-file', file, ...release], undefined, CLOSE_TIMEOUT_MS)
         return result.code === 0 ? { dismissed: true } : { dismissed: false, error: scriptError(result) }
       } finally {
         await rm(dir, { recursive: true, force: true })

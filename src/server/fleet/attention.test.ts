@@ -25,7 +25,7 @@ describe('First Mate attention projection', () => {
     const workers = [worker({ state: 'blocked', detail: 'Need repository access', prUrl: url }), worker({ id: 'bravo', key: 'cockpit-0-bravo', state: 'failed', detail: 'Build failed' })]
     const cards = buildAttentionCards(0, tasks, [], workers, new Map([[url, 'open']]))
     expect(cards.map(card => card.type)).toEqual(['blocked', 'failure', 'review'])
-    expect(cards[0]).toMatchObject({ headline: 'Need repository access', detail: '', dismissal: 'resolve-key', decisionKey: 'access' })
+    expect(cards[0]).toMatchObject({ headline: 'Need repository access', detail: '', dismissal: null, decisionKey: null })
     expect(cards[1]).toMatchObject({ headline: 'Build failed', detail: '' })
     expect(cards[2]).toMatchObject({ repository: 'acme/editor', prNumber: 42, prUrl: url, ci: 'unknown' })
     expect(buildAttentionCards(0, tasks, [], workers, new Map([[url, 'merged']])).map(card => card.type)).toEqual(['blocked', 'failure'])
@@ -58,6 +58,13 @@ describe('First Mate attention projection', () => {
       [{ id: 'alpha', hints: { open_decisions: [{ verb: 'needs-decision', summary: 'Choose the release channel' }] } }],
       [], [worker()], new Map())
     expect(open).toMatchObject([{ type: 'decision', dismissal: null, decisionKey: 'default', holdId: null }])
+  })
+
+  it('names the live worker on a hold of that worker\'s own task, so its dismiss releases the work', () => {
+    const cards = buildAttentionCards(0, [{ id: 'alpha', hints: { open_decisions: [] } }],
+      [{ id: 'alpha', title: 'Ship the editor', state: 'in_flight', hold_kind: 'captain', hold_reason: 'Hold until the captain says go' }],
+      [worker()], new Map())
+    expect(cards).toMatchObject([{ type: 'decision', dismissal: 'captain-hold', holdId: 'alpha', workerId: 'alpha' }])
   })
 
   it('resolves a call to its legacy decision hold even when the texts differ', () => {

@@ -8,7 +8,7 @@ The same control stays on the card when the rail is narrow.
 
 ![Decision card on a narrow rail](dismiss-narrow-private.png)
 
-Sliding a keyed decision to the end runs that home's `fm-send.sh --resolve-key`. The card reads dismissed as soon as the script exits 0. No inbox note is saved. A captain-held backlog task is answered with `fm-captain-hold.sh` instead, and a keyed blocked line uses the same `fm-send.sh` close. If the script fails, the card shows the script's error and the slider stays for a retry.
+Sliding a keyed decision to the end runs that home's `fm-send.sh --resolve-key`. The card reads dismissed as soon as the script exits 0. No inbox note is saved. A captain-held backlog task is answered with `fm-captain-hold.sh` instead, with `--release` when the hold is on a live worker's own task. A blocked card has no slider. If the script fails, the card shows the script's error and the slider stays for a retry.
 
 ![Decision card dismissed](dismiss-closed-private.png)
 

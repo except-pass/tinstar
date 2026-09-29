@@ -110,12 +110,12 @@ export function buildAttentionCards(
         (row.id === id || holdOrigin(row) === id) && sameCallText(word(entry.summary, ''), row.hold_reason))
       if (hold) matchedHolds.add(String(hold.id))
       const summary = word(entry.summary, word(hold?.hold_reason, worker.detail))
-      // A status key closes through fm-send, which also answers a captain hold that key names.
+      // Only a decision is dismissed. A status key closes through fm-send, which also answers a captain hold that key names.
       // A hold with no status key is the held task, answered through fm-captain-hold.
-      const dismissal = rawKey ? 'resolve-key' : hold ? 'captain-hold' : null
+      const dismissal = type !== 'decision' ? null : rawKey ? 'resolve-key' : hold ? 'captain-hold' : null
       cards.push({
         key: `${homeKey}:${id}:${type}:${key}`, type, dismissal,
-        homeIndex, taskId: id, decisionKey: rawKey ?? (type === 'decision' ? key : null), holdId: hold ? String(hold.id) : null,
+        homeIndex, taskId: id, decisionKey: type === 'decision' ? key : null, holdId: hold ? String(hold.id) : null,
         headline: summary, detail: distinct(word(hold?.title, ''), summary), workerKey: worker.key, workerId: id,
         ageDays: typeof hold?.hold_age_days === 'number' ? hold.hold_age_days : null,
         prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
