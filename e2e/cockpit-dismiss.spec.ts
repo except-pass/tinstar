@@ -1,0 +1,132 @@
+import { test, expect, type Locator, type Page } from '@playwright/test'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+
+const repo = resolve(import.meta.dirname, '..')
+
+async function slide(page: Page, slider: Locator, fraction: number) {
+  await slider.scrollIntoViewIfNeeded()
+  const box = await slider.boundingBox()
+  const knob = slider.locator('.cockpit-slide-knob')
+  const knobBox = await knob.boundingBox()
+  if (!box || !knobBox) throw new Error('slide control has no box')
+  const travel = box.width - knobBox.width - 4
+  const y = knobBox.y + knobBox.height / 2
+  await page.mouse.move(knobBox.x + knobBox.width / 2, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 2 + knobBox.width / 2 + travel * fraction, y, { steps: 15 })
+  await page.mouse.up()
+}
+
+test('sliding a decision card to the end asks First Mate to dismiss it', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const root = mkdtempSync(join(tmpdir(), 'tinstar-dismiss-'))
+  const home = join(root, 'firstmate')
+  const config = join(root, 'config')
+  const bin = join(root, 'bin')
+  const socket = `cockpit-dismiss-${process.pid}-${Date.now()}`
+  const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
+  const port = 39000 + Math.floor(Math.random() * 10000)
+  let server: ChildProcess | null = null
+  const notes = () => readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))
+  const snapshot = (open: boolean) => writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
+    schema: 'fm-fleet-snapshot.v1',
+    tasks: [{ id: 'alpha', kind: 'worker', project: 'private-project', branch: 'fm/alpha',
+      paths: { worktree: { path: '/private/worktrees/alpha' } }, current_state: { state: 'paused', detail: 'Waiting for a decision', freshness: 'fresh' },
+      endpoint: { target: null }, hints: { open_decisions: open ? [{ key: 'choice', verb: 'needs-decision', summary: 'Choose the rollout order' }] : [] } }],
+    backlog: { records: open ? [{ id: 'alpha-decision-choice', state: 'held', hold_kind: 'captain', hold_reason: 'Choose the rollout order', title: 'Rollout order', hold_age_days: 2 }] : [] },
+  }))
+  try {
+    for (const path of [home, config, bin, join(home, 'bin'), join(home, 'state'), join(home, 'data', 'alpha')]) mkdirSync(path, { recursive: true })
+    writeFileSync(join(home, 'data', 'alpha', 'brief.md'), '# Brief\n\n## Captain\'s intent\n\nShip the smaller group first.\n')
+    writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
+    chmodSync(join(bin, 'tmux'), 0o755)
+    writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home] } }))
+    writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
+    chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
+    const inbox = join(home, 'bin', 'fm-inbox.sh')
+    writeFileSync(inbox, `#!/usr/bin/env python3
+import json, pathlib, sys
+state = pathlib.Path(__file__).resolve().parent.parent / 'state'
+command = sys.argv[1]
+if command == 'note':
+    request_id = sys.argv[sys.argv.index('--request-id') + 1]
+    path = state / (request_id + '.json')
+    if not path.exists(): path.write_text(json.dumps({'request_id': request_id, 'body': sys.stdin.read()}))
+    print(json.dumps({'schema': 'fm-inbox-note.v1', 'saved': True, 'id': request_id}))
+elif command == 'receipts':
+    rows = []
+    for path in state.glob('tinstar-*.json'):
+        row = json.loads(path.read_text())
+        row['acknowledged'] = False
+        row['reply'] = None
+        rows.append(row)
+    print(json.dumps({'schema': 'fm-inbox-receipts.v1', 'pending': rows, 'handled': []}))
+elif command == 'ready':
+    print(json.dumps({'can_receive': True}))
+`)
+    chmodSync(inbox, 0o755)
+    snapshot(true)
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
+    delete env.TMUX
+    delete env.TMUX_PANE
+    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
+    const base = `http://127.0.0.1:${port}`
+    await expect.poll(async () => {
+      if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
+      try { return (await request.get(`${base}/api/fleet`, { timeout: 1000 }).then(response => response.json()) as { data?: { attention?: unknown[] } }).data?.attention?.length ?? 0 }
+      catch { return 0 }
+    }, { timeout: 15_000 }).toBe(1)
+    const errors: string[] = []
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await page.goto(base)
+    const card = page.locator('.cockpit-attention-card')
+    await expect(card).toHaveCount(1)
+    const slider = card.getByRole('slider', { name: 'Slide to dismiss' })
+    await expect(slider).toBeVisible()
+    await card.getByRole('button', { name: 'Open →' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Decision' })
+    await expect(dialog.getByRole('slider', { name: 'Slide to dismiss' })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Close details' }).click()
+    await expect(dialog).toHaveCount(0)
+    await page.setViewportSize({ width: 390, height: 800 })
+    await slider.scrollIntoViewIfNeeded()
+    await expect(slider).toBeVisible()
+    await page.screenshot({ path: test.info().outputPath('private-slide-narrow.png') })
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await slider.scrollIntoViewIfNeeded()
+    await expect(card.getByText('dismissing…')).toHaveCount(0)
+    await page.screenshot({ path: test.info().outputPath('private-slide-ready.png') })
+    await slide(page, slider, 0.35)
+    await expect(slider).toBeVisible()
+    await expect(slider).toHaveAttribute('aria-valuenow', '0')
+    await page.waitForTimeout(400)
+    expect(notes()).toEqual([])
+    await slide(page, slider, 1)
+    await expect(card.getByRole('status')).toHaveText('dismissing…')
+    await expect(slider).toHaveCount(0)
+    await expect.poll(() => notes().length, { timeout: 10_000 }).toBe(1)
+    const note = JSON.parse(readFileSync(join(home, 'state', notes()[0]!), 'utf8')) as { request_id: string; body: string }
+    expect(note.body).toContain('task alpha')
+    expect(note.body).toContain('decision choice')
+    expect(note.body).toContain('Dismiss decision choice on task alpha.')
+    await expect(page.getByText('Dismiss decision choice on task alpha.')).toBeVisible({ timeout: 15_000 })
+    await page.screenshot({ path: test.info().outputPath('private-slide-dismissing.png') })
+    await page.reload()
+    await expect(card.getByRole('status')).toHaveText('dismissing…', { timeout: 15_000 })
+    expect(notes()).toHaveLength(1)
+    snapshot(false)
+    appendFileSync(join(home, 'state', 'fleet-ledger.jsonl'), '{}\n')
+    await expect(card).toHaveCount(0, { timeout: 30_000 })
+    await page.screenshot({ path: test.info().outputPath('private-slide-gone.png') })
+    expect(errors).toEqual([])
+  } finally {
+    server?.kill('SIGTERM')
+    try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server']) } catch { /* private server absent */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})

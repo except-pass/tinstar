@@ -52,7 +52,13 @@
 .cockpit-brand-mark{text-shadow:none}
 .cockpit-worker-button,.cockpit-overview-button,.cockpit-card,.cockpit-attention-card{border-radius:4px}
 .cockpit-card p,.cockpit-attention-card p{font-family:system-ui,sans-serif;color:#b4c3cb}
-.cockpit-shell button:focus-visible,.cockpit-shell a:focus-visible,.cockpit-shell summary:focus-visible,.cockpit-shell textarea:focus-visible{outline:1px solid #00f0ff;outline-offset:2px}
+.cockpit-shell button:focus-visible,.cockpit-shell a:focus-visible,.cockpit-shell summary:focus-visible,.cockpit-shell textarea:focus-visible,.cockpit-slide:focus-visible{outline:1px solid #00f0ff;outline-offset:2px}
+.cockpit-slide{position:relative;height:32px;margin-top:10px;border:1px solid #5c4d86;border-radius:16px;background:#16121f;touch-action:none;user-select:none}
+.cockpit-slide-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#c4b8ff;font:10px 'JetBrains Mono',monospace;pointer-events:none}
+.cockpit-slide-knob{position:absolute;top:2px;left:2px;width:36px;height:26px;border-radius:13px;background:#ad9cf3;cursor:grab;touch-action:none}
+.cockpit-slide-knob.dragging{cursor:grabbing}
+.cockpit-dismissing{margin:10px 0 0;color:#c4b8ff;font:10px 'JetBrains Mono',monospace}
+.cockpit-dismiss-error{margin:6px 0 0;color:#ff9caf;font:10px 'JetBrains Mono',monospace}
 
 /* The decorative flash is replaced on every switch; content and input remain still. */
 .cockpit-worker-header{position:relative}

@@ -8,7 +8,7 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 The left rail lists workers and **Needs You** cards for decisions, blocked or failed work, and pull requests ready to review. The main pane shows an overview grouped by state or one worker's objective, project, worktree, branch, pull request, and live terminal. Choose a worker in the rail or use **Ctrl+[** and **Ctrl+]** to cycle through them, including while the terminal has focus. Each worker keeps the same face and color across reloads.
 
-Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
+Decision answers, slide-to-dismiss, and “Tell First Mate about this” messages go through First Mate's inbox. Dismissing a decision asks First Mate to close that task and decision key; the card reads dismissing until the decision leaves the fleet. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
 ## Quick start
 
