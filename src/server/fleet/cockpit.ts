@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -14,6 +15,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
+import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
 import { displayedWorkerState, secondmateActivityById } from './workerState'
 
 const execFileAsync = promisify(execFile)
@@ -46,6 +48,7 @@ export interface CockpitWorker {
   branch: string
   prUrl: string | null
   terminalAvailable: boolean
+  direct: boolean
 }
 
 const str = (value: unknown, fallback = 'unknown'): string => typeof value === 'string' && value.trim() ? value : fallback
@@ -67,12 +70,14 @@ export class CockpitFleet {
   private views: FirstmateViews
   private homes: string[]
   private errors: string[] = []
+  private marksUnreadable = false
   private python: Promise<boolean> | null = null
   private sizes = new Map<string, { cols: number; rows: number }>()
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
   private reviewing = new Set<string>()
   private ready = false
   private outbox = new FleetOutbox()
+  private marks = new WorkerMarks()
 
   constructor() {
     const config = loadFleetConfig(getConfigRoot())
@@ -99,7 +104,7 @@ export class CockpitFleet {
   }
 
   list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
-    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.errors }
+    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -150,6 +155,34 @@ export class CockpitFleet {
     return this.outbox.submit(message, this.describe(message, card))
   }
 
+  /** Persists a direct mark and notes First Mate only when the mark changes. */
+  async setDirect(key: string, direct: boolean): Promise<{ direct: boolean; note: SubmitResult | null } | null> {
+    const worker = this.workers.find(item => item.key === key)
+    if (!worker) return null
+    const changed = await this.marks.queue(async () => {
+      const current = this.workers.find(item => item.home === worker.home && item.id === worker.id)
+      if (!current) return null
+      const changed = await this.marks.change(worker.home, worker.id, direct)
+      this.workers = this.workers.map(item => item.home === worker.home && item.id === worker.id ? { ...item, direct } : item)
+      return changed
+    })
+    if (changed === null) return null
+    if (!changed) return { direct, note: null }
+    const message: OutboxMessage = {
+      requestId: `tinstar-${randomUUID()}`,
+      home: worker.home,
+      kind: 'message',
+      taskId: worker.id,
+      decisionKey: null,
+      holdId: null,
+      cardType: null,
+      text: direct ? 'This worker is marked direct.' : 'This worker is marked managed.',
+    }
+    const note = await this.outbox.submit(message, `Message about task ${worker.id}`)
+      .catch((error: Error): SubmitResult => ({ saved: false, error: error.message, canReceive: 'unknown' }))
+    return { direct, note }
+  }
+
   async terminal(key: string) {
     const ref = this.targets.get(key)
     if (!ref) return null
@@ -198,7 +231,19 @@ export class CockpitFleet {
           this.views.release(old.key)
           this.sizes.delete(old.key)
         }
-        this.workers = workers
+        // Stamp inside the marks queue so a toggle cannot publish a stale direct flag.
+        let marksUnreadable = false
+        await this.marks.queue(async () => {
+          try {
+            const marked = directSet(await this.marks.read())
+            this.workers = workers.map(worker => ({ ...worker, direct: marked.has(directKey(worker.home, worker.id)) }))
+          } catch (error) {
+            if (!(error instanceof WorkerMarksUnreadable)) throw error
+            marksUnreadable = true
+            const previous = new Map(this.workers.map(worker => [directKey(worker.home, worker.id), worker.direct]))
+            this.workers = workers.map(worker => ({ ...worker, direct: previous.get(directKey(worker.home, worker.id)) ?? false }))
+          }
+        })
         const seenPulls = new Set<string>()
         this.attention = attention.filter(card => {
           if (card.type !== 'review' || !card.prUrl) return true
@@ -208,6 +253,7 @@ export class CockpitFleet {
         })
         this.targets = targets
         this.errors = errors
+        this.marksUnreadable = marksUnreadable
         this.ready = true
         const pulls = new Set(workers.map(worker => worker.prUrl))
         for (const url of this.reviews.keys()) if (!pulls.has(url)) this.reviews.delete(url)
@@ -255,13 +301,14 @@ export class CockpitFleet {
         const prUrl = typeof task.pr?.url === 'string' && parsePullUrl(task.pr.url)
           ? task.pr.url : null
         const displayed = displayedWorkerState(task, mateActivity.get(id) ?? null)
-        return {
+        const worker: CockpitWorker = {
           key, id, home, kind: str(task.kind), state: displayed.state,
           detail: displayed.detail, observedAt: typeof task.current_state?.observed_at === 'string' ? task.current_state.observed_at : null,
           freshness: str(task.current_state?.freshness), objective,
           project: str(task.project), worktree: str(task.paths?.worktree?.path),
-          branch: str(task.branch), prUrl, terminalAvailable: !!target,
-        } satisfies CockpitWorker
+          branch: str(task.branch), prUrl, terminalAvailable: !!target, direct: false,
+        }
+        return worker
       }))
       const presentWorkers = workers.filter((w): w is CockpitWorker => w !== null)
       const pullUrls = [...new Set(presentWorkers.map(worker => worker.prUrl).filter((url): url is string => !!url))]
@@ -303,8 +350,9 @@ export class CockpitFleet {
 
 export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0]
-  const match = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
-  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && !match) return false
+  const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
+  const directMatch = path?.match(/^\/api\/fleet\/([^/]+)\/direct$/)
+  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && !terminalMatch && !directMatch) return false
   const allowedOrigins = currentOriginAllowlist()
   const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: allowedOrigins }) as Record<string, string>
   if (req.method === 'OPTIONS') {
@@ -328,8 +376,23 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
       return result ? ok(res, result, { headers }) : fail(res, 'BAD_REQUEST', 'Message target is unavailable', { headers })
     } catch (error) { return fail(res, 'CONFLICT', (error as Error).message, { headers }) }
   }
-  if (match && req.method === 'GET') {
-    const result = await fleet.terminal(decodeURIComponent(match[1]!))
+  if (directMatch && req.method === 'POST') {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    if (!req.headers['content-type']?.startsWith('application/json')) return fail(res, 'BAD_REQUEST', 'Expected JSON', { headers })
+    let input: unknown
+    try { input = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'Invalid mark', { headers }) }
+    const direct = input && typeof input === 'object' ? (input as { direct?: unknown }).direct : undefined
+    if (typeof direct !== 'boolean') return fail(res, 'BAD_REQUEST', 'Expected a direct mark', { headers })
+    try {
+      const result = await fleet.setDirect(decodeURIComponent(directMatch[1]!), direct)
+      return result ? ok(res, result, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })
+    } catch (error) {
+      if (error instanceof WorkerMarksUnreadable) return fail(res, 'CONFIG_UNAVAILABLE', 'Worker marks could not be read', { headers })
+      return fail(res, 'CONFLICT', (error as Error).message, { headers })
+    }
+  }
+  if (terminalMatch && req.method === 'GET') {
+    const result = await fleet.terminal(decodeURIComponent(terminalMatch[1]!))
     return result ? ok(res, result, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })
   }
   return false
