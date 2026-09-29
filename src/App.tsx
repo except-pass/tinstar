@@ -347,13 +347,12 @@ export default function App() {
             {terminals[current.key]?.state === 'unavailable' && <p className="cockpit-terminal-placeholder">{(terminals[current.key] as Extract<Terminal, { state: 'unavailable' }>).reason}</p>}
           </div></section>
         </div>
-      </> : overviewLocation.worker ? (
-        fleet.ready
+      </> : overviewLocation.worker ? <>
+        {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
+        {fleet.ready
           ? <header className="cockpit-main-header"><h1>No such worker</h1></header>
-          : fleet.errors.length
-            ? <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>
-            : <p className="cockpit-empty">Loading workers…</p>
-      ) : <>
+          : !fleet.errors.length && <p className="cockpit-empty">Loading workers…</p>}
+      </> : <>
         <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p>
           <input className="cockpit-filter" type="search" aria-label="Filter workers" placeholder="Filter by name or objective" value={overviewLocation.q} onChange={event => applyOverviewLocation({ ...overviewLocation, q: event.target.value }, 'replace')} onKeyDown={event => {
             if (event.key !== 'Escape' || !overviewLocation.q) return

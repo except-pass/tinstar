@@ -136,6 +136,15 @@ test('overview filter and worker task-id link on a private fleet', async ({ brow
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(page.getByRole('heading', { name: 'No such worker' })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('worker-missing-mobile.png') })
+
+    writeFileSync(join(home, 'snapshot.json'), 'not json')
+    await expect.poll(async () => {
+      const body = await fetch(`${base}/api/fleet`).then(response => response.json()) as { data?: { errors?: string[] } }
+      return body.data?.errors?.length ?? 0
+    }, { timeout: 30_000 }).toBeGreaterThan(0)
+    await page.goto(`${base}/?worker=no-such-worker`)
+    await expect(page.getByRole('alert').filter({ hasText: 'Fleet update delayed' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'No such worker' })).toBeVisible()
     await page.close()
   } finally {
     server?.kill('SIGTERM')
