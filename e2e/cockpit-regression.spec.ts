@@ -103,7 +103,7 @@ const fitProblems = async (page: Page, id: string, tmuxSize: string) => {
     const term = (window as unknown as { term?: { cols: number; rows: number; options: { fontSize: number | string } } }).term
     const screen = document.querySelector('.xterm-screen')
     const widget = document.querySelector('.xterm')
-    const viewport = document.querySelector('.xterm-viewport')
+    const viewport = document.querySelector<HTMLElement>('.xterm-viewport')
     if (!term || !screen || !widget) return null
     const box = screen.getBoundingClientRect()
     const widgetBox = widget.getBoundingClientRect()
