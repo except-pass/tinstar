@@ -15,14 +15,17 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
   const socket = `cockpit-unknown-${process.pid}-${Date.now()}`
   const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
   const port = 39000 + Math.floor(Math.random() * 10000)
-  const stamp = Math.floor(Date.now() / 1000) - 2 * 60 * 60 - 30 * 60
+  const age = 2 * 60 * 60 + 30 * 60
   let server: ChildProcess | null = null
-  const task = (id: string, state: string, detail: string, line: string, endpoint: { exists: boolean; agent_alive: string }) => ({
+  const task = (id: string, state: string, source: string, detail: string, verb: string, note: string, endpoint: { exists: boolean; agent_alive: string }) => ({
     id, kind: 'ship', project: 'tinstar', branch: `fm/${id}`,
-    paths: { worktree: { path: `/private/worktrees/${id}` } },
-    current_state: { state, source: 'pane', detail, observed_at: '2026-09-29T12:00:00Z', freshness: 'fresh' },
+    paths: {
+      worktree: { path: `/private/worktrees/${id}` },
+      status_log: { last_event: { state: verb, note, raw: `${verb} [at=1790000000]: ${note}`, age_seconds: age } },
+    },
+    current_state: { state, source, detail, observed_at: '2026-09-29T12:00:00Z', freshness: 'fresh' },
     endpoint: { target: null, ...endpoint, status: endpoint.agent_alive },
-    hints: { last_event_text: line },
+    hints: { last_event_text: `${verb} [at=1790000000]: ${note}` },
     pr: { url: null },
     backlog: { title: `${id} keeps the current change moving` },
   })
@@ -36,9 +39,10 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
     writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
       schema: 'fm-fleet-snapshot.v1',
       tasks: [
-        task('reported', 'unknown', 'harness state unavailable', `working [at=${stamp}]: editing the worker view`, { exists: true, agent_alive: 'alive' }),
-        task('live', 'working', 'harness busy', `failed [at=${stamp}]: build broke`, { exists: true, agent_alive: 'alive' }),
-        task('gone', 'unknown', 'backend target gone', `working [at=${stamp}]: editing the worker view`, { exists: false, agent_alive: 'dead' }),
+        task('reported', 'unknown', 'pane', 'harness state unavailable', 'working', 'editing the worker view', { exists: true, agent_alive: 'alive' }),
+        task('live', 'working', 'pane', 'harness busy', 'failed', 'build broke', { exists: true, agent_alive: 'alive' }),
+        task('gone', 'unknown', 'pane', 'backend target gone', 'working', 'editing the worker view', { exists: false, agent_alive: 'dead' }),
+        task('shell', 'unknown', 'none', 'backend target gone (agent gone, pane shell remains)', 'blocked', 'need access', { exists: true, agent_alive: 'not_checked' }),
       ],
       backlog: { records: [] },
     }))
@@ -52,7 +56,7 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try { return (await request.get(`${base}/api/fleet`, { timeout: 1000 }).then(response => response.json()) as { data?: { workers?: unknown[] } }).data?.workers?.length ?? 0 }
       catch { return 0 }
-    }, { timeout: 15_000 }).toBe(3)
+    }, { timeout: 15_000 }).toBe(4)
     const fleet = await request.get(`${base}/api/fleet`).then(response => response.json()) as {
       data: { workers: Array<{ id: string; state: string; detail: string }>; attention: Array<{ type: string; workerId: string | null; headline: string }> }
     }
@@ -61,6 +65,7 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
       ['reported', 'working', reported],
       ['live', 'working', 'harness busy'],
       ['gone', 'unknown', 'backend target gone'],
+      ['shell', 'unknown', 'backend target gone (agent gone, pane shell remains)'],
     ])
     expect(fleet.data.attention).toEqual([])
     await page.setViewportSize({ width: 1280, height: 720 })

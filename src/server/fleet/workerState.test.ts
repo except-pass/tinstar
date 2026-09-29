@@ -7,7 +7,7 @@ const childDone = (over: MateSnapshot = {}): MateSnapshot => ({
     state: 'done', source: 'status-log',
     detail: 'child kd-widget done: report and visual review complete',
   },
-  hints: { last_event_text: 'done [key=child-outcome-kd-widget-done-05b032a1] [at=1790000000]: child kd-widget done: report and visual review complete' },
+  paths: { status_log: { last_event: { raw: 'done [key=child-outcome-kd-widget-done-05b032a1] [at=1790000000]: child kd-widget done: report and visual review complete' } } },
   endpoint: { exists: true, agent_alive: 'alive', status: 'alive' },
   ...over,
 })
@@ -33,7 +33,7 @@ describe('displayed worker state', () => {
       .toEqual({ state: 'working', detail: 'reconciling routed items' })
     expect(displayedWorkerState(childDone({
       current_state: { state: 'done', source: 'status-log', detail: 'charter complete' },
-      hints: { last_event_text: 'done [at=1790000000]: charter complete' },
+      paths: { status_log: { last_event: { raw: 'done [at=1790000000]: charter complete' } } },
     }), waiting)).toEqual({ state: 'done', detail: 'charter complete' })
   })
 
@@ -71,7 +71,7 @@ describe('displayed worker state', () => {
     const detail = 'child kd-widget failed: build broke on main'
     const failed = childDone({
       current_state: { state: 'failed', source: 'status-log', detail },
-      hints: { last_event_text: 'failed [key=child-outcome-kd-widget-failed-0a1b2c3d] [at=1790000000]: child kd-widget failed: build broke on main' },
+      paths: { status_log: { last_event: { raw: 'failed [key=child-outcome-kd-widget-failed-0a1b2c3d] [at=1790000000]: child kd-widget failed: build broke on main' } } },
     })
     expect(displayedWorkerState(failed, waiting)).toEqual({ state: 'idle', detail })
     expect(displayedWorkerState(failed, busy)).toEqual({ state: 'working', detail })
@@ -81,7 +81,7 @@ describe('displayed worker state', () => {
     const detail = 'inactive terminal child=kd-widget fingerprint=0a1b2c3d4e5f'
     const fallback = (state: string) => childDone({
       current_state: { state, source: 'status-log', detail },
-      hints: { last_event_text: `${state} [key=inactive-outcome-kd-kd-widget-${state}] [at=1790000000]: ${detail}` },
+      paths: { status_log: { last_event: { raw: `${state} [key=inactive-outcome-kd-kd-widget-${state}] [at=1790000000]: ${detail}` } } },
     })
     expect(displayedWorkerState(fallback('done'), waiting)).toEqual({ state: 'idle', detail })
     expect(displayedWorkerState(fallback('failed'), busy)).toEqual({ state: 'working', detail })
@@ -89,10 +89,10 @@ describe('displayed worker state', () => {
 
   it('reads only the latest status line in the publisher shape', () => {
     expect(displayedWorkerState(childDone({
-      hints: { last_event_text: 'done [key=child-outcome-widget-done-abcdef12] [at=1790000000]: report complete' },
+      paths: { status_log: { last_event: { raw: 'done [key=child-outcome-widget-done-abcdef12] [at=1790000000]: report complete' } } },
     }), waiting)).toEqual({ state: 'done', detail: 'child kd-widget done: report and visual review complete' })
     expect(displayedWorkerState(childDone({
-      hints: { last_event_text: 'done [at=1790000000]: child kd-widget done: report and visual review complete' },
+      paths: { status_log: { last_event: { raw: 'done [at=1790000000]: child kd-widget done: report and visual review complete' } } },
     }), waiting)).toEqual({ state: 'done', detail: 'child kd-widget done: report and visual review complete' })
     expect(displayedWorkerState(childDone({
       current_state: { state: 'failed', source: 'status-log', detail: 'own charter failed' },
@@ -120,91 +120,90 @@ describe('displayed worker state', () => {
 })
 
 describe('unknown snapshot state', () => {
-  const at = 1_790_000_000
-  const now = (at + 4 * 60) * 1000
-  const unavailable = (line: string, endpoint: MateSnapshot['endpoint'] = { exists: true, agent_alive: 'alive', status: 'alive' }): MateSnapshot => ({
+  const alive = { exists: true, agent_alive: 'alive', status: 'alive' }
+  const unavailable = (event: Record<string, unknown>, over: MateSnapshot = {}): MateSnapshot => ({
     kind: 'ship',
     current_state: { state: 'unknown', source: 'pane', detail: 'harness state unavailable' },
-    endpoint,
-    hints: { last_event_text: line },
+    endpoint: alive,
+    paths: { status_log: { last_event: event } },
+    ...over,
   })
+  const report = (state: string, note = 'still on the change', age_seconds: unknown = 240) =>
+    ({ state, note, raw: `${state} [at=1790000000]: ${note}`, age_seconds })
 
-  it('reads each status prefix and marks the report age', () => {
-    for (const state of ['working', 'paused', 'blocked', 'needs-decision', 'done', 'failed']) {
-      expect(displayedWorkerState(unavailable(`${state} [at=${at}]: still on the change`), null, now))
-        .toEqual({ state, detail: 'still on the change · last report 4m ago' })
+  it('reads each status verb and shows the note with the report age', () => {
+    for (const state of ['working', 'paused', 'blocked', 'done', 'failed']) {
+      expect(displayedWorkerState(unavailable(report(state)))).toEqual({ state, detail: 'still on the change · last report 4m ago' })
     }
-    expect(displayedWorkerState(unavailable(`needs-decision [at=${at}] [key=gate]: choose a layout`, { exists: true, agent_alive: 'alive' }), null, now))
-      .toEqual({ state: 'needs-decision', detail: 'choose a layout · last report 4m ago' })
-    expect(displayedWorkerState({ ...unavailable(`working [at=${at}]`), kind: 'scout' }, null, now))
-      .toEqual({ state: 'working', detail: 'last report 4m ago' })
-    expect(displayedWorkerState({ ...unavailable(`paused [at=${at}]: waiting on review`), kind: 'secondmate' }, null, now))
-      .toEqual({ state: 'paused', detail: 'waiting on review · last report 4m ago' })
+    expect(displayedWorkerState(unavailable(report('failed', 'build broke'), { kind: 'scout' })))
+      .toEqual({ state: 'failed', detail: 'build broke · last report 4m ago' })
   })
 
-  it('keeps the report body on one short line', () => {
-    const long = 'x'.repeat(200)
-    const { detail } = displayedWorkerState(unavailable(`failed [at=${at}]: ${long}`), null, now)
-    expect(detail).toBe(`${'x'.repeat(79)}… · last report 4m ago`)
-    expect(displayedWorkerState(unavailable(`blocked [at=${at}]:  need\n  access  `), null, now).detail)
-      .toBe('need access · last report 4m ago')
-    expect(displayedWorkerState(unavailable(`failed [at=${at}]: child x failed: build broke`), null, now).detail)
-      .toBe('child x failed: build broke · last report 4m ago')
+  it('shows needs-decision as parked', () => {
+    expect(displayedWorkerState(unavailable(report('needs-decision', 'choose a layout'))))
+      .toEqual({ state: 'parked', detail: 'choose a layout · last report 4m ago' })
+  })
+
+  it('formats the report age as just now, minutes, hours, or days', () => {
+    const detail = (age: unknown) => displayedWorkerState(unavailable(report('working', '', age))).detail
+    expect(detail(0)).toBe('last report just now')
+    expect(detail(59)).toBe('last report just now')
+    expect(detail(60)).toBe('last report 1m ago')
+    expect(detail(2 * 60 * 60 + 30 * 60)).toBe('last report 2h ago')
+    expect(detail(3 * 24 * 60 * 60)).toBe('last report 3d ago')
+  })
+
+  it('invents no age when First Mate has none', () => {
+    for (const age of [null, -60, '240', Number.NaN]) {
+      expect(displayedWorkerState(unavailable(report('working', 'still on the change', age))).detail).toBe('still on the change · last report')
+    }
+    expect(displayedWorkerState(unavailable({ state: 'working', note: 'still on the change' })).detail).toBe('still on the change · last report')
+    expect(displayedWorkerState(unavailable(report('working', '', null))).detail).toBe('last report')
+  })
+
+  it('keeps a long or multi-line note on one short line', () => {
+    expect(displayedWorkerState(unavailable(report('failed', 'x'.repeat(200)))).detail).toBe(`${'x'.repeat(79)}… · last report 4m ago`)
+    expect(displayedWorkerState(unavailable(report('blocked', '  need\n  access  '))).detail).toBe('need access · last report 4m ago')
+  })
+
+  it('stays unknown when First Mate read no known verb', () => {
+    const unknown = { state: 'unknown', detail: 'harness state unavailable' }
+    expect(displayedWorkerState(unavailable({ raw: 'failed to push, retrying later', note: '', age_seconds: 240 }))).toEqual(unknown)
+    expect(displayedWorkerState(unavailable(report('resolved')))).toEqual(unknown)
+    expect(displayedWorkerState(unavailable(report('')))).toEqual(unknown)
+    expect(displayedWorkerState({ ...unavailable(report('working')), paths: {} })).toEqual(unknown)
+  })
+
+  it('keeps a live pane state as read', () => {
+    expect(displayedWorkerState(unavailable(report('failed', 'build broke'), { current_state: { state: 'working', source: 'pane', detail: 'harness busy' } })))
+      .toEqual({ state: 'working', detail: 'harness busy' })
+    expect(displayedWorkerState(unavailable(report('blocked', 'need access'), { current_state: { state: 'idle', source: 'pane', detail: 'harness idle' } })))
+      .toEqual({ state: 'idle', detail: 'harness idle' })
+  })
+
+  it('keeps unknown when the endpoint is dead or the state was not read from a pane', () => {
+    const event = report('working')
+    for (const endpoint of [{ exists: false, agent_alive: 'dead', status: 'dead' }, { exists: true, agent_alive: 'dead', status: 'alive' }, { exists: false }]) {
+      expect(displayedWorkerState(unavailable(event, { endpoint }))).toEqual({ state: 'unknown', detail: 'harness state unavailable' })
+    }
+    const gone = { state: 'unknown', source: 'none', detail: 'backend target gone: fm:1 (agent gone, pane shell remains)' }
+    expect(displayedWorkerState(unavailable(event, { current_state: gone, endpoint: { exists: true, agent_alive: 'not_checked', status: 'not_checked' } })))
+      .toEqual({ state: 'unknown', detail: gone.detail })
+    expect(displayedWorkerState(unavailable(event, { current_state: { state: 'unknown', detail: 'no source' } })))
+      .toEqual({ state: 'unknown', detail: 'no source' })
   })
 
   it('never shows a second mate with an unknown state as its child outcome', () => {
-    const line = (state: string) => `${state} [key=child-outcome-kd-widget-${state}-0a1b2c3d] [at=${at}]: child kd-widget ${state}: build broke`
-    const mate = (state: string, source: string): MateSnapshot => ({ ...unavailable(line(state)), kind: 'secondmate', current_state: { state: 'unknown', source, detail: 'harness state unavailable' } })
-    for (const source of ['pane', 'status-log', '']) {
-      expect(displayedWorkerState(mate('failed', source), waiting, now)).toEqual({ state: 'idle', detail: 'child kd-widget failed: build broke · last report 4m ago' })
-      expect(displayedWorkerState(mate('done', source), busy, now)).toEqual({ state: 'working', detail: 'child kd-widget done: build broke · last report 4m ago' })
-    }
-    expect(displayedWorkerState({ ...mate('failed', 'pane'), endpoint: { exists: true } }, null, now).state).toBe('unknown')
-    expect(displayedWorkerState({ ...mate('failed', 'pane'), endpoint: { exists: false, agent_alive: 'dead' } }, waiting, now))
-      .toEqual({ state: 'unknown', detail: 'harness state unavailable' })
-    const fallback = `failed [key=inactive-outcome-kd-kd-widget-failed] [at=${at}]: inactive terminal child=kd-widget fingerprint=0a1b`
-    expect(displayedWorkerState({ ...mate('failed', 'pane'), hints: { last_event_text: fallback } }, waiting, now).state).toBe('idle')
-    expect(displayedWorkerState({ ...unavailable(line('failed')) }, null, now).state).toBe('failed')
-  })
-
-  it('formats a report age as just now, hours, or days', () => {
-    const task = unavailable(`working [at=${at}]`)
-    expect(displayedWorkerState(task, null, at * 1000 + 20_000).detail).toBe('last report just now')
-    expect(displayedWorkerState(task, null, (at + 2 * 60 * 60) * 1000).detail).toBe('last report 2h ago')
-    expect(displayedWorkerState(task, null, (at + 3 * 24 * 60 * 60) * 1000).detail).toBe('last report 3d ago')
-    expect(displayedWorkerState(task, null, (at - 60) * 1000).detail).toBe('last report just now')
-  })
-
-  it('keeps a live pane state and leaves an unrecognized line unknown', () => {
-    expect(displayedWorkerState({
-      current_state: { state: 'working', source: 'pane', detail: 'harness busy' },
-      endpoint: { exists: true, agent_alive: 'alive' },
-      hints: { last_event_text: `failed [at=${at}]: build broke` },
-    }, null, now)).toEqual({ state: 'working', detail: 'harness busy' })
-    expect(displayedWorkerState({
-      current_state: { state: 'idle', source: 'pane', detail: 'harness idle' },
-      hints: { last_event_text: `blocked [at=${at}]: need access` },
-    }, null, now)).toEqual({ state: 'idle', detail: 'harness idle' })
-    expect(displayedWorkerState(unavailable(`resolved [at=${at}]: cleared`), null, now))
-      .toEqual({ state: 'unknown', detail: 'harness state unavailable' })
-    expect(displayedWorkerState(unavailable('working: still on the change'), null, now))
-      .toEqual({ state: 'working', detail: 'still on the change · last report' })
-    expect(displayedWorkerState(unavailable('working [at=12:30]: still on the change'), null, now))
-      .toEqual({ state: 'working', detail: 'still on the change · last report' })
-    expect(displayedWorkerState(unavailable(`working: done by [at=${at}]`), null, now))
-      .toEqual({ state: 'working', detail: `done by [at=${at}] · last report` })
-  })
-
-  it('keeps unknown when the endpoint is dead', () => {
-    const line = `working [at=${at}]: still on the change`
-    const detail = 'harness state unavailable'
-    expect(displayedWorkerState(unavailable(line, { exists: false, agent_alive: 'dead', status: 'dead' }), null, now))
-      .toEqual({ state: 'unknown', detail })
-    expect(displayedWorkerState(unavailable(line, { exists: true, agent_alive: 'dead', status: 'alive' }), null, now))
-      .toEqual({ state: 'unknown', detail })
-    expect(displayedWorkerState(unavailable(line, { exists: false }), null, now))
-      .toEqual({ state: 'unknown', detail })
-    expect(displayedWorkerState(unavailable(line, { exists: true, agent_alive: 'alive' }), { state: 'no_active_work', activeChildren: 0 }, now))
-      .toEqual({ state: 'working', detail: 'still on the change · last report 4m ago' })
+    const child = (state: string) => ({
+      state, note: `child kd-widget ${state}: build broke`, age_seconds: 240,
+      raw: `${state} [key=child-outcome-kd-widget-${state}-0a1b2c3d] [at=1790000000]: child kd-widget ${state}: build broke`,
+    })
+    const mate = (event: Record<string, unknown>, over: MateSnapshot = {}) => unavailable(event, { kind: 'secondmate', ...over })
+    expect(displayedWorkerState(mate(child('failed')), waiting)).toEqual({ state: 'idle', detail: 'child kd-widget failed: build broke · last report 4m ago' })
+    expect(displayedWorkerState(mate(child('done')), busy)).toEqual({ state: 'working', detail: 'child kd-widget done: build broke · last report 4m ago' })
+    expect(displayedWorkerState(mate(child('failed'), { endpoint: { exists: true } }), null).state).toBe('unknown')
+    const fallback = { state: 'failed', note: 'inactive terminal child=kd-widget fingerprint=0a1b', age_seconds: 240, raw: 'failed [key=inactive-outcome-kd-kd-widget-failed] [at=1790000000]: inactive terminal child=kd-widget fingerprint=0a1b' }
+    expect(displayedWorkerState(mate(fallback), waiting).state).toBe('idle')
+    expect(displayedWorkerState(unavailable(child('failed')), null).state).toBe('failed')
   })
 })
