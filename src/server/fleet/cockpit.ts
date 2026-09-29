@@ -70,6 +70,7 @@ export class CockpitFleet {
   private views: FirstmateViews
   private homes: string[]
   private errors: string[] = []
+  private marksUnreadable = false
   private python: Promise<boolean> | null = null
   private sizes = new Map<string, { cols: number; rows: number }>()
   private reviews = new Map<string, { status: ReviewStatus; until: number }>()
@@ -103,7 +104,7 @@ export class CockpitFleet {
   }
 
   list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: AttentionCard[]; errors: string[] } {
-    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.errors }
+    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention, errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -243,7 +244,6 @@ export class CockpitFleet {
             this.workers = workers.map(worker => ({ ...worker, direct: previous.get(directKey(worker.home, worker.id)) ?? false }))
           }
         })
-        if (marksUnreadable) errors.push('Worker marks could not be read')
         const seenPulls = new Set<string>()
         this.attention = attention.filter(card => {
           if (card.type !== 'review' || !card.prUrl) return true
@@ -253,6 +253,7 @@ export class CockpitFleet {
         })
         this.targets = targets
         this.errors = errors
+        this.marksUnreadable = marksUnreadable
         this.ready = true
         const pulls = new Set(workers.map(worker => worker.prUrl))
         for (const url of this.reviews.keys()) if (!pulls.has(url)) this.reviews.delete(url)

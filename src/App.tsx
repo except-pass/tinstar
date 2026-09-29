@@ -162,11 +162,13 @@ export default function App() {
   const [messageError, setMessageError] = useState<string | null>(null)
   const [groupBy, setGroupBy] = useState(() => readGroupChoice(browserGroupStorage()))
   const [directBusy, setDirectBusy] = useState<Record<string, boolean>>({})
-  const pendingDirect = useRef(new Map<string, boolean>())
+  const pendingDirect = useRef(new Map<string, { direct: boolean; after: number | null }>())
+  const fleetRequests = useRef(0)
   const focusTerminal = useRef(false)
   const messagesInFlight = useRef(false)
 
   const refresh = useCallback(async () => {
+    const started = ++fleetRequests.current
     try {
       const res = await apiFetch('/api/fleet')
       if (!res.ok) throw new Error(`Fleet service unavailable (HTTP ${res.status})`)
@@ -178,8 +180,11 @@ export default function App() {
         const workers = body.data.workers.map(worker => {
           const pending = pendingDirect.current.get(worker.key)
           if (pending === undefined) return worker
-          if (worker.direct === pending) pendingDirect.current.delete(worker.key)
-          return { ...worker, direct: pending }
+          if (pending.after !== null && started > pending.after) {
+            pendingDirect.current.delete(worker.key)
+            return worker
+          }
+          return { ...worker, direct: pending.direct }
         })
         setFleet({ ...body.data, workers })
       }
@@ -218,7 +223,7 @@ export default function App() {
     if (directLocks.current.has(worker.key)) return
     directLocks.current.add(worker.key)
     setDirectBusy(previous => ({ ...previous, [worker.key]: true }))
-    pendingDirect.current.set(worker.key, direct)
+    pendingDirect.current.set(worker.key, { direct, after: null })
     setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct } : item) }))
     try {
       const response = await apiFetch(`/api/fleet/${encodeURIComponent(worker.key)}/direct`, {
@@ -227,7 +232,7 @@ export default function App() {
       const body = await response.json() as { ok: boolean; data?: { direct: boolean; note: SubmitResult | null }; error?: { message: string } }
       const applied = body.data
       if (!response.ok || !body.ok || !applied) throw new Error(body.error?.message ?? 'Could not update the mark')
-      pendingDirect.current.set(worker.key, applied.direct)
+      pendingDirect.current.set(worker.key, { direct: applied.direct, after: fleetRequests.current })
       setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: applied.direct } : item) }))
       if (applied.note && !applied.note.saved) setMessageError(`The mark was saved. First Mate did not get the note${applied.note.error ? `: ${applied.note.error}` : '.'}`)
     } catch (error) {
