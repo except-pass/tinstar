@@ -47,6 +47,11 @@ function StateChip({ state }: { state: string }) {
   return <span className={`cockpit-state cockpit-state-${state.toLowerCase().replace(/[^a-z0-9-]/g, '')}`}>{state}</span>
 }
 
+function MateBadge({ kind }: { kind: string }) {
+  if (kind !== 'secondmate') return null
+  return <span className="cockpit-mate">Second mate</span>
+}
+
 function DirectControl({ worker, disabled, onChange }: { worker: Worker; disabled: boolean; onChange: (direct: boolean) => void }) {
   const label = directLabel(worker.direct)
   return <button
@@ -69,11 +74,11 @@ function GroupHeading({ dimension, value, count }: { dimension: GroupDimension; 
 function WorkerCard({ worker, busy, onOpen, onDirect }: { worker: Worker; busy: boolean; onOpen: () => void; onDirect: (direct: boolean) => void }) {
   return <article className="cockpit-card" style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
     <div className="cockpit-card-top">
-      <button type="button" className="cockpit-card-id" onClick={onOpen}><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span>{worker.project}</span></div></button>
+      <button type="button" className="cockpit-card-id" onClick={onOpen}><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span className="cockpit-card-project">{worker.project}</span></div></button>
       <DirectControl worker={worker} disabled={busy} onChange={onDirect} />
       <button type="button" className="cockpit-card-arrow" aria-label={`Open ${worker.id}`} onClick={onOpen}><span className="material-symbols-outlined">arrow_forward</span></button>
     </div>
-    <button type="button" className="cockpit-card-body" onClick={onOpen}><p>{worker.objective}</p><small>{worker.detail}</small></button>
+    <button type="button" className="cockpit-card-body" onClick={onOpen}><MateBadge kind={worker.kind} /><p>{worker.objective}</p><small>{worker.detail}</small></button>
   </article>
 }
 
@@ -606,12 +611,12 @@ export default function App() {
           <button type="button" className="cockpit-detail-summary" aria-expanded={detailOpen} onClick={() => setDetailOpen(open => !open)}>{detailOpen ? 'Close' : 'Details'}</button>
           <div className="cockpit-detail-body">
             <header className="cockpit-worker-header" style={{ '--worker-color': identityColor(current.id) } as React.CSSProperties}>
-              <div className="cockpit-worker-identity"><Face worker={current} size={44} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><span className="cockpit-worker-marks"><StateChip state={current.state} /><DirectControl worker={current} disabled={!!directBusy[current.key]} onChange={direct => void setDirect(current, direct)} /></span></div></div>
+              <div className="cockpit-worker-identity"><Face worker={current} size={44} /><div><span className="cockpit-eyebrow">WORKER / {current.kind}</span><h1 title={current.id}>{current.id}</h1><span className="cockpit-worker-marks"><StateChip state={current.state} /><MateBadge kind={current.kind} /><DirectControl worker={current} disabled={!!directBusy[current.key]} onChange={direct => void setDirect(current, direct)} /></span></div></div>
               <span key={`flash:${current.key}`} className="cockpit-switch-flash" aria-hidden="true" />
               <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
             </header>
             <div className="cockpit-worker-content">
-              <div className="cockpit-status-detail"><StateChip state={current.state} /><span title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
+              <div className="cockpit-status-detail"><StateChip state={current.state} /><MateBadge kind={current.kind} /><span className="cockpit-status-text" title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
               <section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
               <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
               <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /></details>
