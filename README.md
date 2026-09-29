@@ -19,7 +19,7 @@ The open worker and the overview filter are part of the page URL, so a view can 
 | `/?worker=TASK_ID&q=text` | That worker's detail. The filter is still applied when you return to the overview. |
 | `/?worker=TASK_ID&home=HOME` | The worker with that task id in the First Mate home whose folder name is `HOME` (for `/path/to/firstmate`, `firstmate`). The cockpit adds `home` only when the task id is in more than one configured home. If two homes share a folder name, the first configured one opens. |
 
-An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**.
+An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
 Decision answers and “Tell First Mate about this” messages go through First Mate's inbox. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 
