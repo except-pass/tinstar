@@ -58,6 +58,21 @@ const promptProblems = async (page: Page, id: string) => {
   if (!anchor || anchor.transformed || anchor.left < -1 || anchor.bottom > anchor.view + 1 || anchor.bottom < Math.min(anchor.height, anchor.view) - 1) {
     problems.push(`terminal not full size and anchored to its bottom row: ${JSON.stringify(anchor)}`)
   }
+  const screen = await wrapper?.evaluate(() => {
+    const term = document.getElementById('term') as HTMLIFrameElement | null
+    const grid = term?.contentDocument?.querySelector('.xterm-screen')
+    if (!term || !grid) return null
+    const frame = term.getBoundingClientRect()
+    const gridBox = grid.getBoundingClientRect()
+    return { top: frame.top + gridBox.top, bottom: frame.top + gridBox.bottom }
+  })
+  const host = await page.locator('.cockpit-terminal-frame').first().boundingBox()
+  const viewport = page.viewportSize()
+  const screenTop = host && screen ? host.y + screen.top : null
+  const screenBottom = host && screen ? host.y + screen.bottom : null
+  if (screenTop === null || screenBottom === null || !viewport || screenTop < -1 || screenBottom > viewport.height + 1) {
+    problems.push(`terminal screen is outside the viewport (${screenTop}..${screenBottom} of ${viewport?.height})`)
+  }
   const bottom = await page.frames().find(f => f.url().includes(`/s/cockpit-0-${id}/`))?.evaluate(() => {
     const term = (window as unknown as { term: { rows: number; buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } } } }).term
     return term.buffer.active.getLine(term.buffer.active.viewportY + term.rows - 1)?.translateToString(true) ?? ''
@@ -165,7 +180,10 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect(terminalInput).toHaveCount(1, { timeout: 15_000 })
     expect(alphaSize()).toBe('220x60')
     await expect.poll(() => xtermSize(page, 'alpha')).toBe('220x60')
-    for (const viewport of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1000, height: 768 }, { width: 720, height: 900 }]) {
+    for (const viewport of [
+      { width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }, { width: 1440, height: 700 }, { width: 1920, height: 1080 },
+      { width: 1000, height: 1080 }, { width: 1000, height: 900 }, { width: 1000, height: 768 }, { width: 1000, height: 720 }, { width: 1000, height: 700 }, { width: 720, height: 900 },
+    ]) {
       await page.setViewportSize(viewport)
       await expect.poll(() => promptProblems(page, 'alpha')).toEqual([])
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
