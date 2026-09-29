@@ -284,6 +284,15 @@
           return true
         })
       }
+      // Below the 6px floor the stage scrolls, but xterm would turn the wheel
+      // into arrow keys for the worker. The wheel scrolls the stage instead.
+      win.addEventListener('wheel', function(e) {
+        var page = document.scrollingElement || document.documentElement
+        if (page.scrollHeight <= page.clientHeight + 1) return
+        e.preventDefault()
+        e.stopPropagation()
+        page.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+      }, { capture: true, passive: false })
       if (win.ResizeObserver && term.element) {
         var screen = term.element.querySelector('.xterm-screen')
         if (screen) new win.ResizeObserver(fitPinnedFrame).observe(screen)

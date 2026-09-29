@@ -337,6 +337,28 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     await expect.poll(() => promptProblems(second, 'alpha')).toEqual([])
     console.log(`private worker alpha size after reconnect=${alphaSize()}`)
     expect(alphaSize()).toBe(operatorSize)
+
+    // Below the 6px floor the stage scrolls from the top; the wheel must scroll
+    // it to the prompt instead of reaching the worker as arrow keys.
+    tmux('resize-window', '-t', 'firstmate:fm-charlie', '-x', '220', '-y', '150')
+    await second.setViewportSize({ width: 1280, height: 600 })
+    await second.getByRole('button', { name: 'Overview' }).click()
+    await second.getByRole('button', { name: /charlie .*WORKING/i }).click()
+    await expect.poll(() => xtermSize(second, 'charlie'), { timeout: 15_000 }).toBe('220x150')
+    const charlieWrapper = () => second.frames().find(f => f.url().includes('terminal-wrapper.html') && f.url().includes('session=cockpit-0-charlie&'))!
+    const stageScroll = () => charlieWrapper().evaluate(() => {
+      const el = document.scrollingElement || document.documentElement
+      return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
+    })
+    await expect.poll(async () => (await stageScroll()).max, { timeout: 15_000 }).toBeGreaterThan(100)
+    expect((await stageScroll()).top).toBe(0)
+    const charlieBox = (await second.locator('iframe[title="charlie terminal"]').boundingBox())!
+    await second.mouse.move(charlieBox.x + charlieBox.width / 2, charlieBox.y + charlieBox.height / 2)
+    for (let i = 0; i < 10; i++) await second.mouse.wheel(0, 200)
+    await expect.poll(async () => { const s = await stageScroll(); return s.top >= s.max - 1 }).toBe(true)
+    await delay(500)
+    expect(tmux('capture-pane', '-p', '-t', 'firstmate:fm-charlie')).not.toContain('^[')
+    expect(await second.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
     await second.close()
   } finally {
     server?.kill('SIGTERM')
