@@ -58,8 +58,8 @@ chmod +x "$HOME/.local/bin/ttyd"
 ttyd --version
 ```
 
-`tmux`, `python3` and `lsof` are also required and ship with most distros
-already (`sudo apt install tmux python3 lsof` if missing).
+`tmux` and `lsof` are also required and ship with most distros
+already (`sudo apt install tmux lsof` if missing).
 
 ---
 
@@ -172,7 +172,7 @@ over `/mnt/c` will not hot-reload.
 |---|---|
 | `spawn tmux ENOENT` / `spawn ttyd ENOENT` | The binary isn't on the **server process's** `$PATH`. Ensure `~/.local/bin` is exported before `npm run dev` (the `tinstar-dev` script does this). |
 | Cockpit shows no workers | No `firstmate.homes` in `config.json`, or the backend is running on native Windows instead of WSL. `node bin/tinstar.js doctor` checks each home. |
-| Workers listed but no terminal | `ttyd` or `python3` missing from the server process's `$PATH`. |
+| Workers listed but no terminal | `ttyd` missing from the server process's `$PATH`. |
 | `localhost:5280` unreachable from Windows | Rare WSL2 localhost-forwarding drop — retry, restart WSL (`wsl --shutdown`), or use the WSL IP from the Vite "Network:" line. |
 | nvm refuses with "WSL 1 is not supported" | nvm misdetects the kernel; use the Node tarball in step 1 instead. |
 | First launch slow / downloading large binaries | The embedded telemetry stack (Grafana/Prometheus/Alloy). Set `TINSTAR_TELEMETRY=0` to skip it. |

@@ -58,6 +58,7 @@ export function viewTtydArgv(opts: {
     '-H', opts.authHeader,
     '-p', String(opts.port),
     '-t', `titleFixed=${opts.task}`,
+    '-t', 'fontSize=14',
     '-t', 'theme={"background":"#000000"}',
     opts.script, opts.session, opts.windowId, opts.windowName,
   ]
