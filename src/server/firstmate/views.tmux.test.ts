@@ -76,10 +76,10 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
   }
   const sessions = () => (tmTry('list-sessions', '-F', '#{session_name}').out || '').split('\n').filter(Boolean)
   const windowIds = (target: string) => tmTry('list-windows', '-t', target, '-F', '#{window_id}').out.split('\n').filter(Boolean)
-  /** The view is armed once a client is attached AND destroy-unattached is on (the script sets both after the session exists). */
+  /** The view is armed once a client is attached; its client-detached hook then removes it when that client leaves. */
   const armed = () => {
     const v = viewSessions()
-    return v.length === 1 && tmTry('list-clients', '-t', `=${v[0]}`).out !== '' && tmTry('show-options', '-t', `=${v[0]}:`, 'destroy-unattached').out.includes('on')
+    return v.length === 1 && tmTry('list-clients', '-t', `=${v[0]}`).out !== ''
   }
   const viewSessions = () => sessions().filter(s => s.startsWith('tsview-'))
 
@@ -236,6 +236,65 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
     expect(viewSessions().length).toBe(1)
   })
 
+  it('the mouse wheel scrolls the view to earlier output and a key returns to the pane', async () => {
+    const rootWheel = () => tm('list-keys', '-T', 'root').split('\n').find(line => line.includes('WheelUpPane')) ?? ''
+    const beforeRoot = rootWheel()
+    const { wid } = fleet(`python3 -c 'print("\\n".join(f"LINE-{i:03d}" for i in range(1,41)))'; exec cat`)
+    expect(await until(() => tmTry('capture-pane', '-p', '-t', wid).out.includes('LINE-040'))).toBe(true)
+    const c = attachViaScript('firstmate', wid, 'fm-demo')
+    expect(await until(armed)).toBe(true)
+    const view = viewSessions()[0]!
+    expect(tm('show-options', '-t', `=${view}:`, 'mouse')).toContain('on')
+    expect(tmTry('show-options', '-t', '=firstmate:', 'mouse').out).not.toMatch(/mouse on/)
+    expect(tm('show-options', '-gv', 'mouse')).toBe('off')
+    expect(tm('show-options', '-t', `=${view}:`, 'key-table')).toContain('tsview-passthrough')
+    expect(rootWheel()).toBe(beforeRoot)
+
+    c.stdin!.write('\x1b[<64;40;12M')
+    const scrolled = await until(() => {
+      const mode = tmTry('display', '-p', '-t', wid, '#{pane_in_mode} #{scroll_position} #{copy_cursor_line}').out
+      return mode.startsWith('1 ') && /LINE-\d+/.test(mode)
+    })
+    expect(scrolled).toBe(true)
+    // A second wheel must stay in the scroll table. tmux drops back to the
+    // session table after a binding, and the wheel binding puts it back.
+    c.stdin!.write('\x1b[<64;40;12M')
+    expect(await until(() => {
+      const pos = Number(tmTry('display', '-p', '-t', wid, '#{scroll_position}').out)
+      return pos >= 10 && tmTry('list-clients', '-t', `=${view}`, '-F', '#{client_key_table}').out === 'tsview-scroll'
+    })).toBe(true)
+    const seen = tm('display', '-p', '-t', wid, '#{copy_cursor_line}').match(/LINE-(\d+)/)
+    expect(Number(seen?.[1] ?? 0)).toBeGreaterThan(0)
+    expect(Number(seen?.[1] ?? 99)).toBeLessThan(40)
+    expect(tm('list-clients', '-t', `=${view}`, '-F', '#{client_key_table}')).toBe('tsview-scroll')
+
+    // The key that leaves copy mode is consumed. The next one reaches the pane.
+    c.stdin!.write('Z')
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '0')).toBe(true)
+    expect(tm('list-clients', '-t', `=${view}`, '-F', '#{client_key_table}')).toBe('tsview-passthrough')
+    c.stdin!.write('Y')
+    expect(await until(() => tmTry('capture-pane', '-p', '-t', wid).out.includes('Y'))).toBe(true)
+    expect(tm('capture-pane', '-p', '-t', wid)).not.toContain('Z')
+
+    c.stdin!.write('\x1b[<64;40;12M')
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '1')).toBe(true)
+    c.stdin!.write('\x1b')
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '0')).toBe(true)
+    expect(tm('list-clients', '-t', `=${view}`, '-F', '#{client_key_table}')).toBe('tsview-passthrough')
+    expect(tm('show-options', '-gv', 'mouse')).toBe('off')
+    expect(tmTry('show-options', '-t', '=firstmate:', 'mouse').out).not.toMatch(/mouse on/)
+    expect(rootWheel()).toBe(beforeRoot)
+    expect(windowIds('=firstmate')).toContain(wid)
+
+    // Leaving the terminal while scrolled must not leave the shared pane in copy mode.
+    c.stdin!.write('\x1b[<64;40;12M')
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '1')).toBe(true)
+    killClient(c)
+    expect(await until(() => viewSessions().length === 0)).toBe(true)
+    expect(await until(() => tmTry('display', '-p', '-t', wid, '#{pane_in_mode}').out === '0')).toBe(true)
+    expect(windowIds('=firstmate')).toContain(wid)
+  })
+
   if (!HAS_FM) console.warn(`SKIPPED M2 gate "${FM_GATE}": set FIRSTMATE_HOME to a first mate checkout (needs bin/backends/tmux.sh) to run it.`)
   const fmLib = HAS_FM ? it : it.skip
   fmLib(HAS_FM ? FM_GATE : `${FM_GATE} [SKIPPED: FIRSTMATE_HOME unset or missing bin/backends/tmux.sh]`, async () => {
@@ -311,9 +370,14 @@ suite('first mate terminal view — tmux semantics (private server)', () => {
       expect(t, cmd.join(' ')).toBeGreaterThan(0)
       expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
     }
-    for (const cmd of commands.filter(cmd => cmd[0] === 'set-option')) {
+    expect(commands.some(cmd => cmd[0] === 'set-hook')).toBe(true)
+    for (const cmd of commands.filter(cmd => cmd[0] === 'set-option' || cmd[0] === 'set-hook')) {
       const t = cmd.indexOf('-t')
       expect(cmd[t + 1], cmd.join(' ')).toMatch(/^=tsview-/)
+    }
+    for (const cmd of commands.filter(cmd => cmd[0] === 'bind-key')) {
+      const table = cmd[cmd.indexOf('-T') + 1]
+      expect(table, cmd.join(' ')).toMatch(/^tsview-/)
     }
   })
 })

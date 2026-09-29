@@ -550,6 +550,12 @@ export default function App() {
   }, [currentKey, currentTerminalAvailable, currentTerminalPid, fleet])
 
   useEffect(() => {
+    if (!currentKey) return
+    const key = currentKey
+    return () => { void apiFetch(`/api/fleet/${encodeURIComponent(key)}/terminal/leave`, { method: 'POST' }).catch(() => {}) }
+  }, [currentKey])
+
+  useEffect(() => {
     const frame = [...document.querySelectorAll<HTMLIFrameElement>('.cockpit-terminal-frame')].find(f => f.dataset.session === currentKey)
     if (!frame) {
       if (focusTerminal.current && document.activeElement instanceof HTMLIFrameElement) document.activeElement.blur()
