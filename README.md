@@ -6,7 +6,20 @@
 
 Tinstar shows the workers First Mate is already running, the calls that need your attention, and provider quota in one view. First Mate remains responsible for dispatch, supervision, and worker lifecycle.
 
-The left rail lists workers and **Needs You** cards for decisions, blocked or failed work, and pull requests ready to review. The main pane shows an overview grouped on two levels, chosen from status, project, and direct or managed, or one worker's live terminal at full height, with its objective, project, worktree, branch, and pull request in a rail beside it (a slim header with a **Details** toggle on windows 1200px wide or narrower). Choose a worker in the rail or use **Ctrl+[** and **Ctrl+]** to cycle through them, including while the terminal has focus. Mark a worker **Direct** from its overview card or detail rail to show you are working with it yourself; First Mate gets an inbox note when the mark changes. Each worker keeps the same face and color across reloads.
+The left rail lists workers and **Needs You** cards for decisions, blocked or failed work, and pull requests ready to review. The main pane shows an overview grouped on two levels, chosen from status, project, and direct or managed, or one worker's live terminal at full height, with its objective, project, worktree, branch, and pull request in a rail beside it (a slim header with a **Details** toggle on windows 1200px wide or narrower). A filter at the top of the overview matches each worker's name and objective as you type; Escape clears it. Choose a worker in the rail or use **Ctrl+[** and **Ctrl+]** to cycle through them, including while the terminal has focus. Mark a worker **Direct** from its overview card or detail rail to show you are working with it yourself; First Mate gets an inbox note when the mark changes. Each worker keeps the same face and color across reloads.
+
+## Worker links
+
+The open worker and the overview filter are part of the page URL, so a view can be opened directly or shared. Opening a worker or returning to the overview adds a browser history entry; typing in the filter and cycling with **Ctrl+[** / **Ctrl+]** update the current entry instead.
+
+| URL | Opens |
+| --- | --- |
+| `/?q=text` | The overview, limited to workers whose name or objective fuzzy-matches `text`. |
+| `/?worker=TASK_ID` | That worker's detail, including on a fresh load. `TASK_ID` is the First Mate task id. |
+| `/?worker=TASK_ID&q=text` | That worker's detail. The filter is still applied when you return to the overview. |
+| `/?worker=TASK_ID&home=HOME` | The worker with that task id in the First Mate home whose folder name is `HOME` (for `/path/to/firstmate`, `firstmate`). The cockpit adds `home` only when the task id is in more than one configured home. If two homes share a folder name, the first configured one opens. |
+
+An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
 Decision answers, slide-to-dismiss, and “Tell First Mate about this” messages go through First Mate's inbox. Dismissing a decision sends an answer asking First Mate to close that task and decision key. Like any answer, it is done once the decision leaves the fleet. The card reads dismissing while that answer is open in the outbox. The slider comes back if First Mate replies, if the answer expires while the decision is still open, or if the same decision returns later. The cockpit shows when a message is saved, acknowledged, and resolved; saving a message does not claim that First Mate has acted on it. Quota meters at the bottom of the rail show observed provider quota and say when a feed is stale or unavailable.
 

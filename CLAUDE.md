@@ -21,6 +21,7 @@ The UI must be snappy and responsive. It should feel like playing a video game â
 - `npm run dev` â€” start dev server
 - Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
 - Cockpit regression runs with `npx playwright test --config playwright.cockpit.config.ts`; it starts its own private tmux server and First Mate test home.
+- Worker links and the overview filter live in the page URL. Shapes are in [README](README.md#worker-links).
 
 ## Conventions
 

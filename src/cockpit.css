@@ -80,7 +80,8 @@
 .cockpit-brand-mark{text-shadow:none}
 .cockpit-worker-button,.cockpit-overview-button,.cockpit-card,.cockpit-attention-card{border-radius:4px}
 .cockpit-card p,.cockpit-attention-card p{font-family:system-ui,sans-serif;color:#b4c3cb}
-.cockpit-shell button:focus-visible,.cockpit-shell a:focus-visible,.cockpit-shell summary:focus-visible,.cockpit-shell textarea:focus-visible,.cockpit-slide:focus-visible{outline:1px solid #00f0ff;outline-offset:2px}
+.cockpit-shell button:focus-visible,.cockpit-shell a:focus-visible,.cockpit-shell summary:focus-visible,.cockpit-shell textarea:focus-visible,.cockpit-filter:focus-visible,.cockpit-slide:focus-visible{outline:1px solid #00f0ff;outline-offset:2px}
+.cockpit-filter{display:block;box-sizing:border-box;width:min(560px,100%);margin-top:16px;padding:11px 14px;border:1px solid #263944;border-radius:4px;background:#080d10;color:#eaf1f5;font:13px 'JetBrains Mono',monospace;-webkit-appearance:none;appearance:none}.cockpit-filter::placeholder{color:#5c717d}.cockpit-filter:focus{outline:1px solid #00a5b0;border-color:#00a5b0}.cockpit-filter::-webkit-search-decoration,.cockpit-filter::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;display:none}
 .cockpit-slide{position:relative;height:32px;margin-top:10px;border:1px solid #5c4d86;border-radius:16px;background:#16121f;touch-action:none;user-select:none}
 .cockpit-slide-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#c4b8ff;font:10px 'JetBrains Mono',monospace;pointer-events:none}
 .cockpit-slide-knob{position:absolute;top:2px;left:2px;width:36px;height:26px;border-radius:13px;background:#ad9cf3;cursor:grab;touch-action:none}

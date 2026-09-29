@@ -8,11 +8,11 @@ A configured First Mate installation in `firstmate.homes`. Each home supplies a 
 
 ## Worker
 
-A task in First Mate's fleet snapshot. Its id is the stable identity used for the rail, face and color. The worker's state and detail come from the snapshot, while the objective comes from the brief's captain intent and falls back to the backlog title. A persistent second mate's child-outcome status line never becomes its own displayed state. Unknown values remain visible. The overview groups that fleet on two levels, chosen from status, project, and direct or managed work, and the browser remembers the choice. A direct mark is stored in `worker-marks.json` under the config root, keyed by the worker's home and id, and First Mate is notified when it changes. See [worker state](src/server/fleet/workerState.ts), [cockpit fleet](src/server/fleet/cockpit.ts), [worker marks](src/server/fleet/marks.ts), and [overview grouping](src/cockpit/groupWorkers.ts).
+A task in First Mate's fleet snapshot. Its id is the stable identity used for the rail, face and color. The worker's state and detail come from the snapshot, while the objective comes from the brief's captain intent and falls back to the backlog title. A persistent second mate's child-outcome status line never becomes its own displayed state. Unknown values remain visible. The overview groups that fleet on two levels, chosen from status, project, and direct or managed work, and the browser remembers the choice. A filter above it fuzzy-matches name and objective. A direct mark is stored in `worker-marks.json` under the config root, keyed by the worker's home and id, and First Mate is notified when it changes. See [worker state](src/server/fleet/workerState.ts), [cockpit fleet](src/server/fleet/cockpit.ts), [worker marks](src/server/fleet/marks.ts), [overview grouping](src/cockpit/groupWorkers.ts), and [overview filter](src/cockpit/overviewQuery.ts).
 
 ## Worker view
 
-The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. See [terminal views](src/server/firstmate/views.ts).
+The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. A worker link opens it by task id; the [README](README.md#worker-links) lists the URL shapes. See [terminal views](src/server/firstmate/views.ts).
 
 ## Needs You
 
