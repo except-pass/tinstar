@@ -13,7 +13,7 @@ import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
-import { FleetOutbox, type OutboxMessage } from './inbox'
+import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 
 const execFileAsync = promisify(execFile)
 
@@ -103,37 +103,46 @@ export class CockpitFleet {
   portOf(key: string): number | null { return this.views.portOf(key) }
 
   messages() {
-    return this.outbox.list(this.homes, new Set(this.attention.map(card => card.key)), this.ready && this.errors.length === 0)
+    return this.outbox.list(this.homes, message => this.attention.some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
   }
 
-  async submit(input: unknown): Promise<{ saved: boolean; error: string | null } | null> {
+  private sameCall(card: AttentionCard, message: OutboxMessage): boolean {
+    return this.homes[card.homeIndex] === message.home &&
+      ((message.holdId !== null && card.holdId === message.holdId) ||
+        (message.decisionKey !== null && card.taskId === message.taskId && card.decisionKey === message.decisionKey))
+  }
+
+  private describe(message: OutboxMessage, card = this.attention.find(item => this.sameCall(item, message))): string {
+    const worker = this.workers.find(item => item.home === message.home && item.id === message.taskId)
+    const target = `${message.taskId ? `task ${message.taskId}` : 'First Mate backlog'}${message.decisionKey ? `, decision ${message.decisionKey}` : card ? `, ${card.type} card` : ''}`
+    return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
+  }
+
+  async submit(input: unknown): Promise<SubmitResult | null> {
     if (!input || typeof input !== 'object') return null
     const value = input as Record<string, unknown>
     const { requestId, anchorKey, kind, text } = value
     if (typeof requestId !== 'string' || !/^tinstar-[a-f0-9-]{36}$/.test(requestId) ||
-      typeof anchorKey !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 10_000 ||
+      typeof text !== 'string' || !text.trim() || text.length > 10_000 ||
       (kind !== 'answer' && kind !== 'message')) return null
     const previous = await this.outbox.get(requestId)
     if (previous) {
-      if (previous.anchorKey !== anchorKey || previous.kind !== kind || previous.text !== text.trim()) return null
-      const home = this.homes[previous.homeIndex]
-      return home ? this.outbox.submit(home, previous) : null
+      if (previous.kind !== kind || previous.text !== text.trim() || !this.homes.includes(previous.home)) return null
+      return this.outbox.submit(previous, this.describe(previous))
     }
+    if (typeof anchorKey !== 'string') return null
     const card = this.attention.find(item => item.key === anchorKey)
     const worker = this.workers.find(item => item.key === anchorKey)
     if (kind === 'answer' && card?.type !== 'decision') return null
-    if (kind === 'message' && !card && !worker) return null
-    const homeIndex = card?.homeIndex ?? this.homes.indexOf(worker!.home)
-    const home = this.homes[homeIndex]
-    if (!home) return null
+    const home = card ? this.homes[card.homeIndex] : worker?.home
+    if (!home || !this.homes.includes(home)) return null
     const message: OutboxMessage = {
-      requestId, anchorKey, homeIndex, kind, text: text.trim(),
-      taskId: card?.taskId ?? worker?.id ?? null,
-      cardKey: card?.key ?? null,
-      decisionKey: kind === 'answer' ? card?.decisionKey ?? null : null,
-      context: card?.headline ?? worker?.objective ?? 'unknown',
+      requestId, home, kind, text: text.trim(),
+      taskId: card ? card.taskId : worker!.id,
+      decisionKey: card?.decisionKey ?? null,
+      holdId: card?.holdId ?? null,
     }
-    return this.outbox.submit(home, message)
+    return this.outbox.submit(message, this.describe(message, card))
   }
 
   async terminal(key: string) {

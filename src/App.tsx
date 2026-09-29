@@ -13,12 +13,12 @@ interface Worker {
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
 interface OutboxMessage {
-  requestId: string; anchorKey: string; taskId: string | null; cardKey: string | null
+  requestId: string; taskId: string | null
   kind: 'answer' | 'message'; text: string
-  state: 'sending' | 'saved' | 'acknowledged' | 'done'
-  reply: string | null; canReceive: boolean | 'unknown'
+  state: 'unknown' | 'sending' | 'saved' | 'acknowledged' | 'done'
+  announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
 }
-type Draft = { requestId: string; anchorKey: string; kind: 'answer' | 'message'; text: string }
+type Draft = { requestId: string; anchorKey?: string; kind: 'answer' | 'message'; text: string }
 
 function identityColor(id: string): string {
   let hash = 2166136261
@@ -49,7 +49,7 @@ function displayTime(value: string | null): string {
 const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Failure', review: 'Review Ready' } as const
 const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
 
-type SubmitResult = { saved: boolean; error: string | null; canReceive?: boolean | 'unknown' }
+type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
 
 function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult> }) {
   const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
@@ -75,9 +75,8 @@ function AttentionCardView({ card, worker, open, submit }: { card: AttentionCard
 }
 
 function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answer' | 'message'; submit: (draft: Draft) => Promise<SubmitResult> }) {
-  const draftKey = `tinstar-draft:${kind}:${anchorKey}`
-  const [text, setText] = useState(() => sessionStorage.getItem(draftKey) ?? '')
-  const [requestId, setRequestId] = useState<string | null>(() => sessionStorage.getItem(`${draftKey}:request`))
+  const [text, setText] = useState('')
+  const [requestId, setRequestId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const inFlight = useRef(false)
@@ -88,13 +87,12 @@ function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answe
     inFlight.current = true; setBusy(true); setNotice(null)
     const id = requestId ?? `tinstar-${crypto.randomUUID()}`
     setRequestId(id)
-    sessionStorage.setItem(`${draftKey}:request`, id)
     void submit({ requestId: id, anchorKey, kind, text: text.trim() }).then(result => {
-      if (result.saved) { setText(''); setRequestId(null); sessionStorage.removeItem(draftKey); sessionStorage.removeItem(`${draftKey}:request`); setNotice(result.error ?? (result.canReceive === false ? 'Saved, not yet read. First Mate will read it when it wakes.' : 'Saved. First Mate will receive it at the next check.')) }
+      if (result.saved) { setText(''); setRequestId(null); setNotice(result.error ?? (result.canReceive === false ? 'Saved, not yet read. First Mate will read it when it wakes.' : 'Saved. First Mate will receive it at the next check.')) }
       else setNotice(result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.')
     }).catch(error => setNotice((error as Error).message)).finally(() => { inFlight.current = false; setBusy(false) })
   }}>
-    <label>{label}<textarea value={text} onChange={event => { setText(event.target.value); sessionStorage.setItem(draftKey, event.target.value); if (requestId) { setRequestId(null); sessionStorage.removeItem(`${draftKey}:request`) } }} rows={3} maxLength={10000} placeholder={kind === 'answer' ? 'Write your answer…' : 'Write your message…'} /></label>
+    <label>{label}<textarea value={text} onChange={event => { setText(event.target.value); setRequestId(null) }} rows={3} maxLength={10000} placeholder={kind === 'answer' ? 'Write your answer…' : 'Write your message…'} /></label>
     <button type="submit" disabled={busy || !text.trim()}>{busy ? 'Sending…' : requestId ? 'Retry' : 'Send to First Mate'}</button>
     {notice && <p role="status">{notice}</p>}
   </form>
@@ -103,10 +101,10 @@ function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answe
 function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; retry: (message: OutboxMessage) => void }) {
   if (!messages.length) return null
   return <div className="cockpit-messages">{messages.map(message => <article key={message.requestId}>
-    <div className="cockpit-message-top"><strong>{message.kind === 'answer' ? 'Answer' : 'Message'} · {message.taskId ?? 'First Mate backlog'}</strong><span>{message.state === 'acknowledged' ? 'First Mate has it' : message.state}</span></div>
+    <div className="cockpit-message-top"><strong>{message.kind === 'answer' ? 'Answer' : 'Message'} · {message.taskId ?? 'First Mate backlog'}</strong><span>{message.state === 'acknowledged' ? 'First Mate has it' : message.state === 'unknown' ? 'status unknown' : message.state}</span></div>
     <p>{message.text}</p>
     {message.state === 'saved' && message.canReceive === false && <small role="status">Saved, not yet read. First Mate will read it when it wakes.</small>}
-    {message.state === 'sending' && <button onClick={() => retry(message)}>Retry sending</button>}
+    {(message.state === 'sending' || (message.state === 'saved' && message.announced === false)) && <button onClick={() => retry(message)}>{message.state === 'sending' ? 'Retry sending' : 'Retry waking First Mate'}</button>}
     {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
   </article>)}</div>
 }
@@ -122,6 +120,7 @@ export default function App() {
   const [messages, setMessages] = useState<OutboxMessage[]>([])
   const [messageError, setMessageError] = useState<string | null>(null)
   const focusTerminal = useRef(false)
+  const messagesInFlight = useRef(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -139,25 +138,26 @@ export default function App() {
   }, [])
 
   const refreshMessages = useCallback(async () => {
+    if (messagesInFlight.current) return
+    messagesInFlight.current = true
     try {
       const response = await apiFetch('/api/fleet/messages')
       const body = await response.json() as { ok: boolean; data?: OutboxMessage[] }
       if (!body.ok || !body.data) throw new Error('Messages unavailable')
       setMessages(body.data); setMessageError(null)
-      return body.data
-    } catch (error) { setMessageError((error as Error).message); return null }
+    } catch (error) { setMessageError((error as Error).message) } finally { messagesInFlight.current = false }
   }, [])
 
   const submit = useCallback(async (draft: Draft) => {
     const response = await apiFetch('/api/fleet/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) })
-    const body = await response.json() as { ok: boolean; data?: { saved: boolean; error: string | null }; error?: { message: string } }
+    const body = await response.json() as { ok: boolean; data?: SubmitResult; error?: { message: string } }
     if (!body.ok || !body.data) throw new Error(body.error?.message ?? 'Message unavailable')
-    const latest = await refreshMessages()
-    return { ...body.data, canReceive: latest?.find(message => message.requestId === draft.requestId)?.canReceive }
+    void refreshMessages()
+    return body.data
   }, [refreshMessages])
 
   const retry = useCallback((message: OutboxMessage) => {
-    void submit({ requestId: message.requestId, anchorKey: message.anchorKey, kind: message.kind, text: message.text })
+    void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
       .catch(error => setMessageError((error as Error).message))
   }, [submit])
 
@@ -298,7 +298,7 @@ export default function App() {
           <div className="cockpit-switch"><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
         </header>
         <div className="cockpit-worker-content"><section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
-          <details className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /></details>
+          <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /></details>
           <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
           <div className="cockpit-status-detail"><StateChip state={current.state} /><span title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
           <section className="cockpit-terminal"><div className="cockpit-terminal-heading"><span><span className="material-symbols-outlined">terminal</span> LIVE TERMINAL</span><small>Direct terminal input</small></div><div className="cockpit-terminal-stage">

@@ -6,6 +6,7 @@ export interface AttentionCard {
   homeIndex: number
   taskId: string | null
   decisionKey: string | null
+  holdId: string | null
   type: AttentionType
   headline: string
   detail: string
@@ -107,7 +108,7 @@ export function buildAttentionCards(
       const summary = word(entry.summary, word(hold?.hold_reason, worker.detail))
       cards.push({
         key: `${homeKey}:${id}:${type}:${key}`, type,
-        homeIndex, taskId: id, decisionKey: type === 'decision' ? key : null,
+        homeIndex, taskId: id, decisionKey: type === 'decision' ? key : null, holdId: hold ? String(hold.id) : null,
         headline: summary, detail: distinct(word(hold?.title, ''), summary), workerKey: worker.key, workerId: id,
         ageDays: typeof hold?.hold_age_days === 'number' ? hold.hold_age_days : null,
         prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
@@ -117,7 +118,7 @@ export function buildAttentionCards(
       const headline = word(worker.detail, `${id} is blocked`)
       cards.push({
         key: `${homeKey}:${id}:blocked:state`, type: 'blocked', headline,
-        homeIndex, taskId: id, decisionKey: null,
+        homeIndex, taskId: id, decisionKey: null, holdId: null,
         detail: distinct(word(worker.detail, 'unknown'), headline), workerKey: worker.key, workerId: id,
         ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
       })
@@ -126,7 +127,7 @@ export function buildAttentionCards(
       const headline = word(worker.detail, `${id} failed`)
       cards.push({
         key: `${homeKey}:${id}:failure`, type: 'failure', headline,
-        homeIndex, taskId: id, decisionKey: null,
+        homeIndex, taskId: id, decisionKey: null, holdId: null,
         detail: distinct(word(worker.detail, 'Failure detail unknown'), headline), workerKey: worker.key, workerId: id,
         ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
       })
@@ -141,7 +142,7 @@ export function buildAttentionCards(
     const headline = word(hold.hold_reason, word(hold.title, 'Captain decision needed'))
     cards.push({
       key: `${homeKey}:hold:${id}`, type: 'decision', headline, detail: distinct(word(hold.title, ''), headline),
-      homeIndex, taskId: worker?.id ?? id, decisionKey: id,
+      homeIndex, taskId: worker?.id ?? null, decisionKey: id, holdId: id,
       workerKey: worker?.key ?? null, workerId: worker?.id ?? null,
       ageDays: typeof hold.hold_age_days === 'number' ? hold.hold_age_days : null,
       prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown',
@@ -160,7 +161,7 @@ export function buildAttentionCards(
     if (reviewStatus === 'merged' || reviewStatus === 'closed') continue
     cards.push({
       key: `${homeKey}:pr:${worker.prUrl}`, type: 'review', headline: worker.objective,
-      homeIndex, taskId: worker.id, decisionKey: null,
+      homeIndex, taskId: worker.id, decisionKey: null, holdId: null,
       detail: reviewStatus === 'unknown' ? 'Pull request status unavailable' : 'Ready for review',
       workerKey: worker.key, workerId: worker.id, ageDays: null,
       prUrl: worker.prUrl, repository: parsed.repository, prNumber: parsed.number, reviewStatus, ci: 'unknown',

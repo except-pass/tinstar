@@ -52,6 +52,12 @@ export default defineConfig({
     proxy: {
       '/api/': {
         target: `http://localhost:${backendPort}`,
+        configure: proxy => proxy.on('proxyReq', (proxyReq, req) => {
+          const { origin, host } = req.headers
+          if (host && (origin === `http://${host}` || origin === `https://${host}`)) {
+            proxyReq.setHeader('origin', `http://localhost:${backendPort}`)
+          }
+        }),
       },
       '/s/': {
         target: `http://localhost:${backendPort}`,
