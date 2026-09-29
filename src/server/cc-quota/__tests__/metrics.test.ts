@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { emitCcQuotaMetrics, emitIngestCounter } from '../metrics'
-import type { Metric } from '../metrics'
+import type { Metric } from '../../types'
 import type { RawUsage } from '../types'
 
 class StubExporter {

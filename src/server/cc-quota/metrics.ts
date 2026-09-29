@@ -1,12 +1,5 @@
+import type { Metric } from '../types'
 import type { RawUsage, UsageBucket } from './types'
-
-export interface Metric {
-  name: string
-  type: 'gauge' | 'counter'
-  value: number
-  labels: Record<string, string>
-  timestamp: string
-}
 
 export interface MetricSink {
   pushMetric(m: Metric): void

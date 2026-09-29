@@ -6,10 +6,14 @@ import httpProxy from 'http-proxy'
 import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import { CcQuotaService } from './cc-quota/service'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
-import { readBody } from './api/readBody'
-import { ok, fail } from './api/envelope'
-import { currentOriginAllowlist, seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
-import { resolveCorsHeaders } from './api/cors'
+import { ProviderObservationIngestor } from './providers/observation-ingestor'
+import { OtlpExporter } from './stores/otlp-exporter'
+import { ObservabilityStack } from './observability/index'
+import { CodexOtelReceiver } from './observability/codex-otel'
+import { SSEBroadcaster } from './api/sse'
+import { createTelemetryRoutes } from './api/telemetry'
+import { handleCoreApi } from './api/coreRoutes'
+import { seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
 import { getConfigRoot } from './configRoot'
 import { acquireBackendSingleton, describeSingletonFailure, formatSingletonFailureForConsole } from './infra/lock'
 import { openListeners, resolveBindTargets } from './bind'
@@ -17,7 +21,7 @@ import { announceBindChangeOnce } from './bindNotice'
 import { getReachCoordinator } from './reach'
 import { decideStaticServe } from './staticServe'
 import { log } from './logger'
-import { createSessionRequestHandler, createSessionUpgradeHandler, handleSessionProxyError, isUpgradeOriginAllowed } from './sessionProxy'
+import { createSessionRequestHandler, createSessionUpgradeHandler, handleSessionProxyError } from './sessionProxy'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -29,9 +33,14 @@ interface ServerOptions {
   force?: boolean
 }
 
-function rawJson(res: ServerResponse, value: unknown, headers: Record<string, string>) {
-  res.writeHead(200, { ...headers, 'Content-Type': 'application/json' })
-  res.end(JSON.stringify(value))
+function streamFile(res: ServerResponse, filePath: string, mime: string) {
+  createReadStream(filePath)
+    .once('open', () => res.writeHead(200, { 'Content-Type': mime }))
+    .once('error', () => {
+      if (!res.headersSent) res.writeHead(404)
+      res.end('Not found')
+    })
+    .pipe(res)
 }
 
 export function startServer(opts: ServerOptions) {
@@ -50,8 +59,37 @@ export function startServer(opts: ServerOptions) {
   const fleet = new CockpitFleet()
   fleet.start()
   process.on('exit', () => fleet.stop())
+  const otlpExporter = new OtlpExporter()
+  otlpExporter.start()
   const observations = new ProviderCurrentObservationStores()
-  const quota = new CcQuotaService({ observationStores: observations })
+  const quota = new CcQuotaService({ observationStores: observations, sink: otlpExporter })
+  const codexOtel = new CodexOtelReceiver({
+    ingestor: new ProviderObservationIngestor({ stores: observations, sink: otlpExporter }),
+    metricSink: otlpExporter,
+    statePath: join(configDir, 'observability', 'codex-otel-state.json'),
+  })
+  void codexOtel.start().catch(err => log.warn('codex-otel', `receiver unavailable: ${(err as Error).message}`))
+  const observability = new ObservabilityStack()
+  void observability.start()
+  const sse = new SSEBroadcaster()
+  const telemetry = createTelemetryRoutes({
+    sse,
+    get providerQuery() { return observability.query },
+    getState: () => observability.state,
+    getProgress: () => observability.progress,
+    getLastError: () => observability.lastError,
+    restart: () => observability.restart(),
+    getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+  })
+  const shutdown = async () => {
+    telemetry.stopPolling()
+    try { await observability.stop() } catch (err) { log.debug('shutdown', `observability: ${(err as Error).message}`) }
+    try { await codexOtel.stop() } catch (err) { log.debug('shutdown', `codexOtel: ${(err as Error).message}`) }
+    try { await getReachCoordinator().shutdown() } catch (err) { log.debug('shutdown', `reach: ${(err as Error).message}`) }
+    process.exit(0)
+  }
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
   const proxy = httpProxy.createProxyServer({ ws: true })
   proxy.on('error', (err, _req, res) => handleSessionProxyError(err, res, message => log.warn('proxy', message)))
   let boundPort = opts.port
@@ -74,72 +112,23 @@ export function startServer(opts: ServerOptions) {
     onClientSocketError: detail => log.warn('proxy', `upgrade client socket error: ${detail.error}`, detail),
   })
 
-  async function handleCoreApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const url = req.url?.split('?')[0] ?? '/'
-    const method = req.method ?? 'GET'
-    const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: currentOriginAllowlist() }) as Record<string, string>
-    if (method === 'OPTIONS' && url.startsWith('/api/')) { res.writeHead(204, headers); res.end(); return true }
-    if (method === 'GET' && url === '/api/cc-quota') { rawJson(res, quota.getSnapshot(), headers); return true }
-    if (method === 'POST' && url === '/api/cc-quota/ingest') {
-      let payload: unknown
-      try { payload = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'malformed_json', { headers }) }
-      rawJson(res, quota.ingest(payload), headers)
-      return true
-    }
-    if (method === 'GET' && url === '/api/provider-observations') {
-      rawJson(res, observations.toWire(), headers); return true
-    }
-    if (method === 'GET' && url === '/api/provider-observation-view') {
-      rawJson(res, { version: 1, observations: observations.toWire(), managedSessions: [] }, headers)
-      return true
-    }
-    if (method === 'GET' && url === '/api/reach') { return ok(res, await getReachCoordinator().status(), { headers }) }
-    if (method === 'POST' && url === '/api/reach') {
-      const contentType = (req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
-      if (contentType !== 'application/json') return fail(res, 'BAD_REQUEST', 'Content-Type must be application/json', { status: 415, headers })
-      const origin = req.headers.origin
-      if (!isUpgradeOriginAllowed(origin, currentOriginAllowlist())) return fail(res, 'FORBIDDEN', `origin ${origin ?? '(none)'} may not change reach`, { headers })
-      let body: { enabled?: unknown } | null = null
-      try { body = JSON.parse(await readBody(req)) as { enabled?: unknown } } catch { /* invalid */ }
-      if (typeof body?.enabled !== 'boolean') return fail(res, 'BAD_REQUEST', 'body must be {"enabled": true|false}', { headers })
-      const coordinator = getReachCoordinator()
-      const status = body.enabled ? await coordinator.enable(boundPort) : await coordinator.disable()
-      if (status.state === 'refused') return fail(res, 'BAD_REQUEST', status.detail ?? 'reach refused', { headers })
-      return ok(res, status, { headers })
-    }
-    if (method === 'GET' && url === '/api/events') {
-      res.writeHead(200, { ...headers, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
-      res.write('event: snapshot\ndata: {}\n\n')
-      const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15_000)
-      res.on('close', () => clearInterval(heartbeat))
-      return true
-    }
-    return false
-  }
+  const coreApi = { quota, observations, sse, telemetry, boundPort: () => boundPort }
 
   const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
     try {
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
-      if (await handleCoreApi(req, res)) return
+      if (await handleCoreApi(coreApi, req, res)) return
       if (req.url?.startsWith('/api/')) { res.writeHead(404); res.end('Not found'); return }
       const pathname = (req.url ?? '/').split('?')[0]!
       const decision = decideStaticServe(pathname, opts.clientDir, existsSync)
       if (decision.kind === 'forbidden') { res.writeHead(403); res.end('Forbidden'); return }
       if (decision.kind === 'file') {
         try {
-          if (statSync(decision.filePath).isFile()) {
-            res.writeHead(200, { 'Content-Type': decision.mime })
-            createReadStream(decision.filePath).pipe(res)
-            return
-          }
+          if (statSync(decision.filePath).isFile()) { streamFile(res, decision.filePath, decision.mime); return }
         } catch { /* not found */ }
       }
-      if (decision.kind === 'spa') {
-        res.writeHead(200, { 'Content-Type': 'text/html' })
-        createReadStream(decision.indexPath).pipe(res)
-        return
-      }
+      if (decision.kind === 'spa') { streamFile(res, decision.indexPath, 'text/html'); return }
       res.writeHead(404); res.end('Not found')
     } catch (err) {
       log.error('api', `request error: ${(err as Error).message}`)

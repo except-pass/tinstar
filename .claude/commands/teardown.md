@@ -1,9 +1,9 @@
 ---
 name: teardown
-description: Commit worktree work, kill associated tinstar agents, merge back into repo, and remove the worktree
+description: Commit worktree work, merge back into repo, and remove the worktree
 ---
 
-Tear down a git worktree: commit any outstanding work, kill any tinstar agents running inside it, merge back into the parent repo, and clean up. Ask the user about anything that would block removal.
+Tear down a git worktree: commit any outstanding work, merge back into the parent repo, and clean up. Ask the user about anything that would block removal.
 
 ## Steps
 
@@ -32,36 +32,7 @@ If there are staged or unstaged changes, commit them now using the `/tinstar-com
 
 Wait for the user's answer before proceeding.
 
-### 3. Kill tinstar agents on this worktree
-
-Find and stop any tinstar sessions associated with this worktree before merging. Use the tinstar API:
-
-```bash
-TINSTAR_URL=${TINSTAR_URL:-http://localhost:5273}
-
-# List all sessions and find ones whose workspace path matches this worktree
-curl -s "$TINSTAR_URL/api/sessions" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-worktree_path = '$(pwd)'
-for s in data.get('sessions', []):
-    ws = s.get('workspace', {}) or {}
-    if ws.get('path') == worktree_path or ws.get('worktreePath') == worktree_path:
-        print(s['name'])
-"
-```
-
-For each matching session, delete it:
-
-```bash
-curl -s -X DELETE "$TINSTAR_URL/api/sessions/<session-name>"
-```
-
-If sessions fail to delete (e.g. still running), ask the user:
-
-> "Session `<name>` is still running in this worktree. Should I force-stop it, or do you want to stop it manually first?"
-
-### 4. Identify the merge target
+### 3. Identify the merge target
 
 Ask the user (or infer from context):
 
@@ -76,7 +47,7 @@ git log <worktree-branch>..<target> --oneline        # commits worktree is behin
 
 If the worktree branch is behind the target, warn the user and ask how to proceed.
 
-### 5. Merge back into the parent repo
+### 4. Merge back into the parent repo
 
 Switch to the parent repo (main worktree), then merge:
 
@@ -88,7 +59,7 @@ git merge --no-ff <worktree-branch> -m "Merge <worktree-branch> into <target-bra
 
 If there are merge conflicts, stop and report them clearly. Do not proceed to removal until the merge is clean.
 
-### 6. Remove the worktree
+### 5. Remove the worktree
 
 ```bash
 git worktree remove <worktree-path>
@@ -100,19 +71,18 @@ Common blockers — if `git worktree remove` fails, diagnose and ask:
 - **Worktree is the current directory**: Must be run from outside the worktree. Switch to main repo first.
 - **Lock file present**: Run `git worktree unlock <path>` first, then retry.
 
-### 7. Optionally delete the branch
+### 6. Optionally delete the branch
 
 Ask: "Should I also delete the branch `<worktree-branch>` now that it's merged? (`git branch -d <worktree-branch>`)"
 
 Only delete if the user confirms.
 
-### 8. Confirm
+### 7. Confirm
 
 Report success:
 
 ```
 ✓ Committed all changes on <worktree-branch>
-✓ Stopped <N> tinstar agent(s)
 ✓ Merged <worktree-branch> → <target-branch>
 ✓ Worktree removed: <worktree-path>
 [✓ Branch <worktree-branch> deleted]
@@ -120,6 +90,6 @@ Report success:
 
 ## Notes
 
-- Never force-remove the worktree or force-stop agents without explicit user confirmation.
+- Never force-remove the worktree without explicit user confirmation.
 - If the user is currently inside the worktree directory, remind them to `cd` to the main repo before the remove step.
 - If anything is ambiguous (which branch to merge into, whether to delete the branch, conflicting changes), ask — don't guess.

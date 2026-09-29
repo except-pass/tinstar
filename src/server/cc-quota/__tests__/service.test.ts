@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { CcQuotaService } from '../service'
 import type { MetricSink } from '../metrics'
-import type { Metric } from '../metrics'
+import type { Metric } from '../../types'
 import { ProviderCurrentObservationStores } from '../../providers/observation-stores'
 
 class StubSink implements MetricSink {
