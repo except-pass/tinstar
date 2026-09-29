@@ -17,7 +17,7 @@ import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type Atten
 import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
-import { displayedWorkerState, secondmateActivityById } from './workerState'
+import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
 
 const execFileAsync = promisify(execFile)
 
@@ -26,10 +26,9 @@ interface SnapshotTask extends AttentionTask {
   kind?: unknown
   project?: unknown
   branch?: unknown
-  paths?: { worktree?: { path?: unknown } }
+  paths?: MateSnapshot['paths'] & { worktree?: { path?: unknown } }
   current_state?: { state?: unknown; source?: unknown; detail?: unknown; observed_at?: unknown; freshness?: unknown }
   endpoint?: { target?: unknown; exists?: unknown; agent_alive?: unknown; status?: unknown }
-  hints?: AttentionTask['hints'] & { last_event_text?: unknown }
   pr?: { url?: unknown }
   backlog?: { title?: unknown }
 }
