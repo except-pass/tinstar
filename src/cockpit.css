@@ -58,7 +58,7 @@
 .cockpit-rail .cockpit-worker-list{flex:1 1 0;min-height:90px}
 .cockpit-quotas{position:relative;z-index:3;flex:none;border-top:1px solid rgba(130,175,195,.14);background:#0a0e12;padding:6px 8px}
 .cockpit-quota-meters{display:flex;align-items:stretch;gap:2px}
-.cockpit-quota-meter{position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;flex:none;min-width:40px;padding:2px 4px 3px;border:0;border-radius:4px;background:transparent;color:#8fd8c4;font:9px 'JetBrains Mono',monospace}
+.cockpit-quota-meter{display:flex;flex-direction:column;align-items:center;gap:2px;flex:none;min-width:40px;padding:2px 4px 3px;border:0;border-radius:4px;background:transparent;color:#8fd8c4;font:9px 'JetBrains Mono',monospace}
 .cockpit-quota-meter:hover,.cockpit-quota-meter:focus,.cockpit-quota-meter:focus-visible{background:#122028}
 .cockpit-quota-glyph{width:14px;height:14px;display:block}
 .cockpit-quota-bar{width:28px;height:3px;border-radius:2px;background:#1c2a32;overflow:hidden}
@@ -68,9 +68,8 @@
 .cockpit-quota-meter.is-low{color:#e2b15a}
 .cockpit-quota-meter.is-critical{color:#ff6b8a}
 .cockpit-quota-meter.is-error{color:#8aa0ab}
-.cockpit-quota-popover{display:none;position:absolute;bottom:calc(100% + 6px);left:0;width:max-content;max-width:220px;padding:8px 10px;border:1px solid #3a5260;border-radius:6px;background:#10181e;box-shadow:0 8px 24px #000a;text-align:left;color:#d5e3ea;z-index:4;pointer-events:none}
+.cockpit-quota-popover{display:none;position:absolute;bottom:calc(100% + 6px);left:8px;width:max-content;max-width:220px;padding:8px 10px;border:1px solid #3a5260;border-radius:6px;background:#10181e;box-shadow:0 8px 24px #000a;text-align:left;color:#d5e3ea;z-index:4;pointer-events:none}
 .cockpit-quota-meter:hover .cockpit-quota-popover,.cockpit-quota-meter:focus .cockpit-quota-popover,.cockpit-quota-meter:focus-visible .cockpit-quota-popover{display:block}
-.cockpit-quota-meter:last-child:not(:first-child) .cockpit-quota-popover{left:auto;right:0}
 .cockpit-quota-popover strong{display:block;color:#eaf1f5;font:600 12px 'Chakra Petch',sans-serif}
 .cockpit-quota-popover dl{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin:6px 0 0}
 .cockpit-quota-popover dt{color:#7e99a6}

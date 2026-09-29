@@ -110,6 +110,10 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
     })
     expect(phone.height).toBeLessThan(64)
     expect(phone.spread).toBeLessThan(4)
+    const lastMeter = rail.getByRole('button', { name: 'Kimi, 3% remaining' })
+    await lastMeter.hover()
+    const phoneTip = await lastMeter.getByRole('tooltip').evaluate(element => element.getBoundingClientRect().toJSON() as DOMRect)
+    expect(phoneTip.left >= 0 && phoneTip.right <= 390 && phoneTip.top >= 0).toBe(true)
     await page.screenshot({ path: test.info().outputPath('quota-rail-390x844.png') })
   } finally {
     server?.kill('SIGTERM')
