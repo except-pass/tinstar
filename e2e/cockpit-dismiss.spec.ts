@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -20,34 +20,40 @@ async function slide(page: Page, slider: Locator, fraction: number) {
   await page.mouse.up()
 }
 
-test('sliding a decision card to the end asks First Mate to dismiss it', async ({ page, request }) => {
-  test.setTimeout(120_000)
+async function startCockpit(request: APIRequestContext, names: string[]) {
   const root = mkdtempSync(join(tmpdir(), 'tinstar-dismiss-'))
-  const home = join(root, 'firstmate')
+  const homes = names.map(name => join(root, name))
   const config = join(root, 'config')
   const bin = join(root, 'bin')
   const socket = `cockpit-dismiss-${process.pid}-${Date.now()}`
   const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
   const port = 39000 + Math.floor(Math.random() * 10000)
   let server: ChildProcess | null = null
-  const notes = () => readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))
-  const snapshot = (open: boolean) => writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
+  const notes = (home = homes[0]!) => readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))
+  const snapshot = (open: boolean, home = homes[0]!) => writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
     schema: 'fm-fleet-snapshot.v1',
     tasks: [{ id: 'alpha', kind: 'worker', project: 'private-project', branch: 'fm/alpha',
       paths: { worktree: { path: '/private/worktrees/alpha' } }, current_state: { state: 'paused', detail: 'Waiting for a decision', freshness: 'fresh' },
       endpoint: { target: null }, hints: { open_decisions: open ? [{ key: 'choice', verb: 'needs-decision', summary: 'Choose the rollout order' }] : [] } }],
     backlog: { records: open ? [{ id: 'alpha-decision-choice', state: 'held', hold_kind: 'captain', hold_reason: 'Choose the rollout order', title: 'Rollout order', hold_age_days: 2 }] : [] },
   }))
+  const stop = () => {
+    server?.kill('SIGTERM')
+    try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server']) } catch { /* private server absent */ }
+    rmSync(root, { recursive: true, force: true })
+  }
   try {
-    for (const path of [home, config, bin, join(home, 'bin'), join(home, 'state'), join(home, 'data', 'alpha')]) mkdirSync(path, { recursive: true })
-    writeFileSync(join(home, 'data', 'alpha', 'brief.md'), '# Brief\n\n## Captain\'s intent\n\nShip the smaller group first.\n')
+    for (const path of [config, bin]) mkdirSync(path, { recursive: true })
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
-    writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home] } }))
-    writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
-    chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
-    const inbox = join(home, 'bin', 'fm-inbox.sh')
-    writeFileSync(inbox, `#!/usr/bin/env python3
+    writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes } }))
+    for (const home of homes) {
+      for (const path of [join(home, 'bin'), join(home, 'state'), join(home, 'data', 'alpha')]) mkdirSync(path, { recursive: true })
+      writeFileSync(join(home, 'data', 'alpha', 'brief.md'), '# Brief\n\n## Captain\'s intent\n\nShip the smaller group first.\n')
+      writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
+      chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
+      const inbox = join(home, 'bin', 'fm-inbox.sh')
+      writeFileSync(inbox, `#!/usr/bin/env python3
 import json, pathlib, sys
 state = pathlib.Path(__file__).resolve().parent.parent / 'state'
 command = sys.argv[1]
@@ -67,8 +73,9 @@ elif command == 'receipts':
 elif command == 'ready':
     print(json.dumps({'can_receive': True}))
 `)
-    chmodSync(inbox, 0o755)
-    snapshot(true)
+      chmodSync(inbox, 0o755)
+      snapshot(true, home)
+    }
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
@@ -78,7 +85,18 @@ elif command == 'ready':
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try { return (await request.get(`${base}/api/fleet`, { timeout: 1000 }).then(response => response.json()) as { data?: { attention?: unknown[] } }).data?.attention?.length ?? 0 }
       catch { return 0 }
-    }, { timeout: 15_000 }).toBe(1)
+    }, { timeout: 15_000 }).toBe(homes.length)
+    return { base, home: homes[0]!, homes, notes, snapshot, stop }
+  } catch (error) {
+    stop()
+    throw error
+  }
+}
+
+test('sliding a decision card to the end asks First Mate to dismiss it', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const { base, home, notes, snapshot, stop } = await startCockpit(request, ['firstmate'])
+  try {
     const errors: string[] = []
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
     page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
@@ -134,8 +152,30 @@ elif command == 'ready':
     await expect(card.getByText('dismissing…')).toHaveCount(0)
     expect(errors).toEqual([])
   } finally {
-    server?.kill('SIGTERM')
-    try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server']) } catch { /* private server absent */ }
-    rmSync(root, { recursive: true, force: true })
+    stop()
+  }
+})
+
+test('a dismiss note only holds the card from its own First Mate home', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const { base, homes, notes, stop } = await startCockpit(request, ['first', 'second'])
+  try {
+    await page.setViewportSize({ width: 1280, height: 1100 })
+    await page.goto(base)
+    const cards = page.locator('.cockpit-attention-card')
+    await expect(cards).toHaveCount(2)
+    await slide(page, cards.nth(0).getByRole('slider', { name: 'Slide to dismiss' }), 1)
+    await expect(cards.nth(0).getByRole('status')).toHaveText('dismissing…')
+    await expect.poll(() => notes(homes[0]).length, { timeout: 10_000 }).toBe(1)
+    await page.reload()
+    await expect(cards.nth(0).getByRole('status')).toHaveText('dismissing…', { timeout: 15_000 })
+    const other = cards.nth(1).getByRole('slider', { name: 'Slide to dismiss' })
+    await expect(other).toBeVisible()
+    await slide(page, other, 1)
+    await expect(cards.nth(1).getByRole('status')).toHaveText('dismissing…')
+    await expect.poll(() => notes(homes[1]).length, { timeout: 10_000 }).toBe(1)
+    expect(notes(homes[0])).toHaveLength(1)
+  } finally {
+    stop()
   }
 })

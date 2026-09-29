@@ -3,7 +3,7 @@ import { apiFetch, apiUrl } from './apiClient'
 import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
 import { PALETTE_COLORS } from './components/ColorPalette'
 import { QuotaRail } from './cockpit/QuotaRail'
-import type { AttentionCard } from './server/fleet/attention'
+import type { AttentionCard as FleetAttentionCard } from './server/fleet/attention'
 import './cockpit.css'
 
 interface Worker {
@@ -11,10 +11,11 @@ interface Worker {
   observedAt: string | null; freshness: string; objective: string; project: string
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
 }
+type AttentionCard = FleetAttentionCard & { home: string | null }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null; cols: number; rows: number } | { state: 'unavailable'; reason: string }
 interface OutboxMessage {
-  requestId: string; taskId: string | null; decisionKey: string | null
+  requestId: string; home: string; taskId: string | null; decisionKey: string | null
   kind: 'answer' | 'message'; text: string
   state: 'unknown' | 'sending' | 'saved' | 'acknowledged' | 'done'
   announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
@@ -58,7 +59,7 @@ function dismissNote(card: AttentionCard): string {
 }
 
 function sameDismiss(card: AttentionCard, message: OutboxMessage): boolean {
-  return message.kind === 'answer' && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
+  return message.kind === 'answer' && message.home === card.home && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
 }
 
 function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
