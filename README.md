@@ -31,7 +31,7 @@ Requires Node.js 22.12 or newer, a working [First Mate](https://github.com/kunch
 npx tinstar
 ```
 
-Open `http://localhost:5273`. The CLI offers to install the Claude Code statusline hook, which supplies Claude quota observations. `npx tinstar doctor` checks local dependencies and configured First Mate homes.
+Open `http://localhost:5273`. Provider quota in the rail comes from a local `quota-axi` reading. `npx tinstar doctor` checks local dependencies and configured First Mate homes.
 
 Configure the home in `~/.config/tinstar/config.json`:
 
@@ -59,13 +59,7 @@ The server and API use port 5273 by default. Worker view ttyd processes use loop
 
 ## Provider quota
 
-Claude quota comes from the optional statusline hook. To install it later:
-
-```bash
-npx tinstar install-statusline
-```
-
-The hook copies a shim under the Tinstar config root and updates `~/.claude/settings.json`. The rail distinguishes fresh readings from stale or unavailable ones. Other providers appear only where a usable observation exists; a missing feed is never shown as zero usage.
+The server runs `quota-axi --json --full --no-credential-refresh` about every two minutes and caches the result. It does not ask `quota-axi` to refresh a vendor login. The rail shows one compact icon for each provider that is set up. Hover or keyboard focus opens the remaining percent, limiting window, reset time, projected run-out, plan, and how long ago the reading refreshed. A provider that fails shows that error on its own icon. A missing reading is not drawn as zero.
 
 ## About plugins
 

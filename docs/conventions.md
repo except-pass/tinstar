@@ -52,6 +52,6 @@ The headline traps:
 
 Application APIs return `{ ok: true, data, warnings? }` or `{ ok: false, error: { code, message, details? } }`. Use the `ok()` and `fail()` helpers in [`src/server/api/envelope.ts`](../src/server/api/envelope.ts) — they auto-derive the HTTP status from the `ErrorCode`.
 
-Wire-protocol endpoints (`/api/cc-quota`, provider observations, the `/api/events` SSE stream) stay raw and are documented at the route.
+Wire-protocol endpoints (`/api/quota`, provider observations, the `/api/events` SSE stream) stay raw and are documented at the route.
 
 Decision + rationale + migration plan: [ADR 0001](./adrs/0001-response-envelope.md).

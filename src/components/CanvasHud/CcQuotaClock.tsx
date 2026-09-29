@@ -1,4 +1,4 @@
-import type { UsageBucket } from '../../hooks/useCcQuota'
+export interface UsageBucket { utilization: number; resets_at: string }
 
 interface Props {
   bucket: UsageBucket | null

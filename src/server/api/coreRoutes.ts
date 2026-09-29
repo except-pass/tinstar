@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { CcQuotaService } from '../cc-quota/service'
+import type { QuotaAxiPoller } from '../quota/poller'
 import type { ProviderCurrentObservationStores } from '../providers/observation-stores'
 import { getReachCoordinator } from '../reach'
 import { isUpgradeOriginAllowed } from '../sessionProxy'
@@ -11,7 +11,7 @@ import type { SSEBroadcaster } from './sse'
 import type { TelemetryRoutes } from './telemetry'
 
 export interface CoreApiDeps {
-  quota: CcQuotaService
+  quota: QuotaAxiPoller
   observations: ProviderCurrentObservationStores
   sse: SSEBroadcaster
   telemetry: TelemetryRoutes
@@ -30,13 +30,7 @@ export async function handleCoreApi(deps: CoreApiDeps, req: IncomingMessage, res
   const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: currentOriginAllowlist() }) as Record<string, string>
   if (method === 'OPTIONS' && url.startsWith('/api/')) { res.writeHead(204, headers); res.end(); return true }
   if (url.startsWith('/api/telemetry/') && await deps.telemetry.handle(req, res, url, headers)) return true
-  if (method === 'GET' && url === '/api/cc-quota') { rawJson(res, deps.quota.getSnapshot(), headers); return true }
-  if (method === 'POST' && url === '/api/cc-quota/ingest') {
-    let payload: unknown
-    try { payload = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'malformed_json', { headers }) }
-    rawJson(res, deps.quota.ingest(payload), headers)
-    return true
-  }
+  if (method === 'GET' && url === '/api/quota') { rawJson(res, deps.quota.snapshot(), headers); return true }
   if (method === 'GET' && url === '/api/provider-observations') {
     rawJson(res, deps.observations.toWire(), headers); return true
   }

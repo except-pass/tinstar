@@ -1,5 +1,5 @@
 import type { JSX } from 'react'
-import type { UsageBucket } from '../../hooks/useCcQuota'
+import type { UsageBucket } from './CcQuotaClock'
 
 interface Props {
   bucket: UsageBucket | null
