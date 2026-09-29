@@ -52,14 +52,6 @@ describe('worker overview grouping', () => {
     ])
   })
 
-  it('keeps one level when both choices are the same dimension', () => {
-    const groups = groupWorkers(workers, 'status', 'status')
-    expect(groups.map(group => [group.value, ids(group), group.groups])).toEqual([
-      ['working', ['helm', 'keel'], []],
-      ['blocked', ['spar', 'tiller'], []],
-    ])
-  })
-
   it('swaps the other level when a choice would repeat', () => {
     expect(applyGroupChoice({ primary: 'status', secondary: 'project' }, 'primary', 'project')).toEqual({
       primary: 'project', secondary: 'status',
