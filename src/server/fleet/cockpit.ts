@@ -14,6 +14,7 @@ import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
+import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
 import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
@@ -152,6 +153,18 @@ export class CockpitFleet {
       cardType: card?.type ?? null,
     }
     return this.outbox.submit(message, this.describe(message, card))
+  }
+
+  /** Closes a classified decision here. An unclassified decision stays on the inbox-note path. */
+  async dismiss(key: string): Promise<{ dismissed: true } | { dismissed: false; fallback: true } | { dismissed: false; error: string } | null> {
+    const card = this.attention.find(item => item.key === key)
+    const home = card ? this.homes[card.homeIndex] : undefined
+    if (!card || !home || !this.homes.includes(home)) return null
+    if ((card.dismissal === 'captain-hold' && card.holdId) || (card.dismissal === 'resolve-key' && card.taskId && card.decisionKey)) {
+      return dismissDirect(home, card)
+    }
+    if (card.type === 'decision' && card.decisionKey) return { dismissed: false, fallback: true }
+    return null
   }
 
   /** Persists a direct mark and notes First Mate only when the mark changes. */
@@ -351,7 +364,7 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
   const path = (req.url ?? '').split('?')[0]
   const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
   const directMatch = path?.match(/^\/api\/fleet\/([^/]+)\/direct$/)
-  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && !terminalMatch && !directMatch) return false
+  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && path !== '/api/fleet/dismiss' && !terminalMatch && !directMatch) return false
   const allowedOrigins = currentOriginAllowlist()
   const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: allowedOrigins }) as Record<string, string>
   if (req.method === 'OPTIONS') {
@@ -363,6 +376,16 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
   if (path === '/api/fleet/messages' && req.method === 'GET') {
     try { return ok(res, await fleet.messages(), { headers }) }
     catch { return fail(res, 'BACKEND_UNAVAILABLE', 'Messages unavailable', { headers }) }
+  }
+  if (path === '/api/fleet/dismiss' && req.method === 'POST') {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    if (!req.headers['content-type']?.startsWith('application/json')) return fail(res, 'BAD_REQUEST', 'Expected JSON', { headers })
+    let input: unknown
+    try { input = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'Invalid dismiss', { headers }) }
+    const key = input && typeof input === 'object' ? (input as { key?: unknown }).key : undefined
+    if (typeof key !== 'string' || !key) return fail(res, 'BAD_REQUEST', 'Expected a decision', { headers })
+    const result = await fleet.dismiss(key)
+    return result ? ok(res, result, { headers }) : fail(res, 'BAD_REQUEST', 'Decision is unavailable', { headers })
   }
   if (path === '/api/fleet/messages' && req.method === 'POST') {
     // An unrelated page must not queue a note through the operator's local server.
