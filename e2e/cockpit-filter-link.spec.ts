@@ -98,8 +98,12 @@ test('overview filter and worker task-id link on a private fleet', async ({ brow
     await page.locator('.cockpit-card', { hasText: 'alpha' }).click()
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     await expect.poll(() => new URL(page.url()).searchParams.get('worker')).toBe('alpha')
-    await page.getByRole('button', { name: 'Overview' }).click()
+    await page.keyboard.press('Control+BracketRight')
+    await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
+    await expect.poll(() => new URL(page.url()).searchParams.get('worker')).toBe('bravo')
+    await page.goBack()
     await expect(page.getByRole('heading', { name: 'Workers' })).toBeVisible()
+    await expect.poll(() => new URL(page.url()).searchParams.get('worker')).toBeNull()
 
     await filter.fill('zzzz')
     await expect(page.getByText('No workers match.')).toBeVisible()

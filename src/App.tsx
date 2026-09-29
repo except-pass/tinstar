@@ -194,11 +194,11 @@ export default function App() {
     setOverviewLocation(next)
   }, [workers])
 
-  const openWorker = useCallback((key: string) => {
+  const openWorker = useCallback((key: string, mode: 'push' | 'replace' = 'push') => {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
-    applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, 'push')
+    applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, mode)
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
@@ -214,7 +214,7 @@ export default function App() {
     const index = currentKey ? order.indexOf(currentKey) : -1
     openWorker(index < 0
       ? order[direction > 0 ? 0 : order.length - 1]!
-      : order[(index + direction + order.length) % order.length]!)
+      : order[(index + direction + order.length) % order.length]!, 'replace')
   }, [order, workers, openWorker])
 
   useEffect(() => {
