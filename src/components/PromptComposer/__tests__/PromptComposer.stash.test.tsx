@@ -1,33 +1,22 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
-import { PromptComposer } from '../PromptComposer'
-import type { RecapEntry } from '../../../types'
+import { ComposerInput } from '../PromptComposer'
 
 vi.mock('../../../apiClient', () => ({
   apiFetch: vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) })),
   apiUrl: (path: string) => path,
 }))
 
-vi.mock('../../../hooks/useSlashCommands', () => ({
-  useSlashCommands: () => ({ commands: [], usage: {}, refresh: () => {} }),
-}))
-
 const ACCENT = '#ff7700'
-const NO_ENTRIES: RecapEntry[] = []
 
 function renderComposer(sessionId = 'stash-test-session') {
   return render(
-    <PromptComposer
-      recapEntries={NO_ENTRIES}
-      rawLogs=""
-      port={undefined}
+    <ComposerInput
       sessionId={sessionId}
       status="idle"
       accent={ACCENT}
-      promptComposerExpanded={true}
-      controlledTab="recap"
-      onControlledTabChange={() => {}}
+      expanded
     />,
   )
 }
@@ -37,7 +26,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('<PromptComposer> stash slots', () => {
+describe('<ComposerInput> stash slots', () => {
   it('renders two stash slot buttons, initially empty', () => {
     const { container } = renderComposer()
     const s1 = container.querySelector('[data-testid="stash-slot-1"]')

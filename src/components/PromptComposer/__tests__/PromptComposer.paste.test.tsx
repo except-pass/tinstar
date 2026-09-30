@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, fireEvent, waitFor } from '@testing-library/react'
-import { PromptComposer } from '../PromptComposer'
-import type { RecapEntry } from '../../../types'
+import { ComposerInput } from '../PromptComposer'
 
 vi.mock('../../../apiClient', () => ({
   apiFetch: vi.fn(async () => ({
@@ -12,12 +11,9 @@ vi.mock('../../../apiClient', () => ({
   apiUrl: (path: string) => path,
 }))
 
-vi.mock('../../../hooks/useSlashCommands', () => ({
-  useSlashCommands: () => ({ commands: [], usage: {}, refresh: () => {} }),
-}))
+import { apiFetch } from '../../../apiClient'
 
 const ACCENT = '#ff7700'
-const NO_ENTRIES: RecapEntry[] = []
 
 const ORIG_FETCH = global.fetch
 
@@ -36,18 +32,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function renderComposer(overrides: Partial<React.ComponentProps<typeof PromptComposer>> = {}) {
+function renderComposer(overrides: Partial<React.ComponentProps<typeof ComposerInput>> = {}) {
   return render(
-    <PromptComposer
-      recapEntries={NO_ENTRIES}
-      rawLogs=""
-      port={undefined}
+    <ComposerInput
       sessionId="run-1"
       status="idle"
       accent={ACCENT}
-      promptComposerExpanded={true}
-      controlledTab="recap"
-      onControlledTabChange={() => {}}
+      expanded
       {...overrides}
     />,
   )
@@ -68,7 +59,7 @@ function makeImagePasteEvent(file: File): ClipboardEvent {
   return event
 }
 
-describe('PromptComposer — image paste', () => {
+describe('ComposerInput — image paste', () => {
   it('text-only paste does not trigger upload', async () => {
     const { container } = renderComposer()
     const ta = container.querySelector('textarea') as HTMLTextAreaElement
@@ -125,6 +116,33 @@ describe('PromptComposer — image paste', () => {
       const submit = container.querySelector('[data-testid="composer-submit"]') as HTMLButtonElement
       expect(submit?.disabled).toBe(false)
     })
+  })
+
+  it('Ctrl+Enter does not send while an upload is pending', async () => {
+    let resolveFetch!: (v: Response) => void
+    global.fetch = vi.fn(() => new Promise<Response>((r) => { resolveFetch = r }))
+    vi.mocked(apiFetch).mockClear()
+    const { container } = renderComposer()
+    const ta = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'look at this' } })
+    const file = new File([new Uint8Array([0x89])], 'p.png', { type: 'image/png' })
+    fireEvent(ta, makeImagePasteEvent(file))
+    await waitFor(() => {
+      expect((container.querySelector('[data-testid="composer-submit"]') as HTMLButtonElement).disabled).toBe(true)
+    })
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true })
+    expect(apiFetch).not.toHaveBeenCalled()
+    resolveFetch({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { path: '/abs/done.png' } }),
+    } as unknown as Response)
+    await waitFor(() => expect(ta.value).toContain('@/abs/done.png'))
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    const [path, init] = vi.mocked(apiFetch).mock.calls[0]!
+    expect(path).toBe('/api/sessions/run-1/prompt')
+    expect(JSON.parse(init!.body as string).text).toContain('@/abs/done.png')
   })
 
   it('clears thumbnail strip after a successful submit', async () => {

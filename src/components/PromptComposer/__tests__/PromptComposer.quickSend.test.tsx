@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
-import { PromptComposer } from '../PromptComposer'
-import type { RecapEntry } from '../../../types'
+import { ComposerInput } from '../PromptComposer'
 
 vi.mock('../../../apiClient', () => ({
   apiFetch: vi.fn(async () => ({
@@ -12,27 +11,17 @@ vi.mock('../../../apiClient', () => ({
   apiUrl: (path: string) => path,
 }))
 
-vi.mock('../../../hooks/useSlashCommands', () => ({
-  useSlashCommands: () => ({ commands: [], usage: {}, refresh: () => {} }),
-}))
-
 import { apiFetch } from '../../../apiClient'
 
 const ACCENT = '#ff7700'
-const NO_ENTRIES: RecapEntry[] = []
 
-function renderComposer(overrides: Partial<React.ComponentProps<typeof PromptComposer>> = {}) {
+function renderComposer(overrides: Partial<React.ComponentProps<typeof ComposerInput>> = {}) {
   return render(
-    <PromptComposer
-      recapEntries={NO_ENTRIES}
-      rawLogs=""
-      port={undefined}
+    <ComposerInput
       sessionId="run-1"
       status="idle"
       accent={ACCENT}
-      promptComposerExpanded={true}
-      controlledTab="recap"
-      onControlledTabChange={() => {}}
+      expanded
       {...overrides}
     />,
   )
@@ -42,7 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('<PromptComposer> quick-send buttons', () => {
+describe('<ComposerInput> quick-send buttons', () => {
   it('renders all seven quick-send buttons when the textarea is empty', () => {
     const { container } = renderComposer()
     for (const key of ['1', '2', '3', '4', '5', 'y', 'n']) {
@@ -78,13 +67,22 @@ describe('<PromptComposer> quick-send buttons', () => {
     expect(JSON.parse(init.body)).toEqual({ keys: ['y'] })
   })
 
-  it('does not render quick-send buttons when sessionId is missing', () => {
+  it('encodes the worker key in the send-keys path', () => {
+    const { container } = renderComposer({ sessionId: 'cockpit-0-a/b#c' })
+    fireEvent.click(container.querySelector('[data-testid="quick-send-1"]') as HTMLButtonElement)
+    expect((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toBe('/api/sessions/cockpit-0-a%2Fb%23c/send-keys')
+  })
+
+  it('disables quick-send buttons when sessionId is missing', () => {
     const { container } = renderComposer({ sessionId: undefined })
-    expect(container.querySelector('[data-testid="quick-send-1"]')).toBeFalsy()
+    const btn = container.querySelector('[data-testid="quick-send-1"]') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 })
 
-describe('<PromptComposer> quick-send hotkeys', () => {
+describe('<ComposerInput> quick-send hotkeys', () => {
   it('Alt+2 in the focused textarea posts send-keys with ["2"] (empty draft)', () => {
     const { container } = renderComposer()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
@@ -143,7 +141,7 @@ describe('<PromptComposer> quick-send hotkeys', () => {
   })
 })
 
-describe('<PromptComposer> empty-prompt arrow/Enter passthrough', () => {
+describe('<ComposerInput> empty-prompt arrow/Enter passthrough', () => {
   it.each([
     ['ArrowUp',    'Up'],
     ['ArrowDown',  'Down'],
@@ -204,7 +202,7 @@ describe('<PromptComposer> empty-prompt arrow/Enter passthrough', () => {
   })
 })
 
-describe('<PromptComposer> quick-send press flash', () => {
+describe('<ComposerInput> quick-send press flash', () => {
   it('hotkey press flashes the matching button', () => {
     const { container } = renderComposer()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
