@@ -81,10 +81,10 @@ function Detail({ provider, now }: { provider: QuotaMeterProvider; now: number }
 function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number }) {
   const name = providerName(provider.id)
   const weekly = provider.weeklyWindow
-  const remaining = weekly?.remainingPercent ?? provider.remainingPercent
+  const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
   const label = `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
   if (weekly) {
-    return <button type="button" className={`cockpit-quota-meter is-week is-${provider.level}`} aria-label={label}>
+    return <button type="button" className={`cockpit-quota-meter is-week is-${weekly.level}`} aria-label={label}>
       <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
       <WeeklyStrip window={weekly} now={now} />
       <span className="cockpit-quota-side">

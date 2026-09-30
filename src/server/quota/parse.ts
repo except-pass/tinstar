@@ -12,6 +12,7 @@ export interface QuotaWindowReading {
   label: string
   resetsAt: string | null
   remainingPercent: number | null
+  level: QuotaLevel
 }
 
 export interface QuotaMeterProvider {
@@ -181,11 +182,13 @@ function remainingPercent(scope: RawScope | null, windows: NormalizedWindow[]): 
 
 function toReading(window: NormalizedWindow | null): QuotaWindowReading | null {
   if (!window) return null
+  const remaining = window.percentRemaining == null ? null : Math.round(window.percentRemaining)
   return {
     id: window.id,
     label: window.label,
     resetsAt: window.resetsAt,
-    remainingPercent: window.percentRemaining == null ? null : Math.round(window.percentRemaining),
+    remainingPercent: remaining,
+    level: quotaLevel(remaining),
   }
 }
 

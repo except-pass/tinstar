@@ -53,6 +53,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
       } catch { return 0 }
     }, { timeout: 20_000 }).toBe(4)
 
+    await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
     const rail = page.getByRole('region', { name: 'Provider quota' })

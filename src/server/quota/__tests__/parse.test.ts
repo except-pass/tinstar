@@ -22,7 +22,7 @@ describe('parseQuotaAxiReport', () => {
       runway: 'projected_exhaustion',
       error: null,
       refreshedAt: '2026-09-29T11:58:00.000Z',
-      weeklyWindow: { id: 'seven_day', label: 'week', resetsAt: '2026-10-04T17:00:00.000Z', remainingPercent: 64 },
+      weeklyWindow: { id: 'seven_day', label: 'week', resetsAt: '2026-10-04T17:00:00.000Z', remainingPercent: 64, level: 'normal' },
       shortWindow: { id: 'five_hour', label: 'session', resetsAt: '2026-09-29T16:00:00.000Z', remainingPercent: 82 },
     })
 
@@ -34,7 +34,7 @@ describe('parseQuotaAxiReport', () => {
       limitingWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z' },
       projectedRunOutAt: null,
       runway: 'through_reset',
-      weeklyWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z', remainingPercent: 18 },
+      weeklyWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z', remainingPercent: 18, level: 'low' },
       shortWindow: null,
     })
 
