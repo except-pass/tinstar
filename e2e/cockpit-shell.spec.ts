@@ -133,6 +133,15 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await page.screenshot({ path: test.info().outputPath('shell-616-worker.png') })
     await page.getByRole('button', { name: 'Workers' }).click()
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
+    await expect(page.getByTestId('prompt-composer').locator('textarea')).toBeAttached()
+    expect(await page.evaluate(() => {
+      const box = document.querySelector('[data-testid="prompt-composer"] textarea')!.getBoundingClientRect()
+      const y = box.top + box.height / 2
+      return [0.1, 0.5, 0.9].map(f => {
+        const hit = document.elementFromPoint(box.left + box.width * f, y)
+        return hit?.closest('.cockpit-context') ? 'drawer' : hit?.closest('.cockpit-context-backdrop') ? 'backdrop' : 'other'
+      })
+    })).not.toContain('other')
     await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await page.getByRole('button', { name: 'Workers' }).click()
