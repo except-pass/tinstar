@@ -45,15 +45,28 @@ export class PromptDeliveryError extends Error {
   }
 }
 
+// A space, not a tab. Some tmux servers print a tab (or any other control
+// character) inside -F as '_', so `1\t%7` comes back as `1_%7` and a tab split
+// finds no pane.
+const PANE_LIST_FORMAT = '#{pane_active} #{pane_id}'
+
+function parsePaneLine(line: string): { active: string; pane: string } | null {
+  const m = line.match(/^([01]) (%\d+)\s*$/)
+  if (!m) return null
+  return { active: m[1]!, pane: m[2]! }
+}
+
 async function activePane(tmux: Tmux, target: string): Promise<string> {
   const ref = parseWindowRef(target)
   if (!ref) throw new PromptDeliveryError('not a tmux window target')
-  const out = await tmux(['list-panes', '-t', `=${ref.session}:${ref.windowName}`, '-F', '#{pane_active}\t#{pane_id}'])
-  const rows = out.split('\n').map(line => line.split('\t')).filter(parts => parts.length >= 2)
-  const chosen = rows.find(parts => parts[0] === '1') ?? rows[0]
-  const pane = chosen?.[1]?.trim()
-  if (!pane || !/^%\d+$/.test(pane)) throw new PromptDeliveryError('worker pane not found')
-  return pane
+  const out = await tmux(['list-panes', '-t', `=${ref.session}:${ref.windowName}`, '-F', PANE_LIST_FORMAT])
+  const rows = out.split('\n').flatMap(line => {
+    const row = parsePaneLine(line)
+    return row ? [row] : []
+  })
+  const chosen = rows.find(row => row.active === '1') ?? rows[0]
+  if (!chosen) throw new PromptDeliveryError('worker pane not found')
+  return chosen.pane
 }
 
 async function exitMode(tmux: Tmux, pane: string): Promise<void> {
