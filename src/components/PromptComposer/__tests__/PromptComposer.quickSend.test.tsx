@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import { ComposerInput } from '../PromptComposer'
 
 vi.mock('../../../apiClient', () => ({
@@ -235,6 +235,22 @@ describe('<ComposerInput> history popover keys', () => {
     fireEvent.keyDown(textarea, { key })
     expect(queryByTestId('prompt-history-popover')).toBeNull()
     expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it.each([['ctrlKey'], ['metaKey']])('%s+Enter with history open sends the current draft', async (modifier) => {
+    const { container, getByTestId, queryByTestId } = renderComposer({ sessionId: `history-send-${modifier}` })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'earlier prompt' } })
+    fireEvent.keyDown(textarea, { key: 'Enter', [modifier]: true })
+    await waitFor(() => expect(textarea.value).toBe(''))
+    fireEvent.change(textarea, { target: { value: 'new draft' } })
+    fireEvent.click(getByTestId('prompt-history-button'))
+    expect(getByTestId('prompt-history-item-0')).toBeTruthy()
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'Enter', [modifier]: true })
+    expect(queryByTestId('prompt-history-popover')).toBeNull()
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[1]![1].body)).toEqual({ text: 'new draft' })
   })
 
   it('Escape with history closed still reaches the worker', () => {

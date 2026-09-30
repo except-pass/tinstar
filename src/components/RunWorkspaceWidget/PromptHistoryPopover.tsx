@@ -46,7 +46,7 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
       } else if (e.key === 'End') {
         e.preventDefault()
         setSelected(Math.max(history.length - 1, 0))
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault()
         const item = history[selected]
         if (item !== undefined) onSelectRef.current(item)
