@@ -22,6 +22,8 @@ describe('parseQuotaAxiReport', () => {
       runway: 'projected_exhaustion',
       error: null,
       refreshedAt: '2026-09-29T11:58:00.000Z',
+      weeklyWindow: { id: 'seven_day', label: 'week', resetsAt: '2026-10-04T17:00:00.000Z', remainingPercent: 64, level: 'normal' },
+      shortWindow: { id: 'five_hour', label: 'session', resetsAt: '2026-09-29T16:00:00.000Z', remainingPercent: 82 },
     })
 
     expect(report.providers[1]).toMatchObject({
@@ -32,6 +34,8 @@ describe('parseQuotaAxiReport', () => {
       limitingWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z' },
       projectedRunOutAt: null,
       runway: 'through_reset',
+      weeklyWindow: { id: 'weekly', label: 'week', resetsAt: '2026-10-03T09:00:00.000Z', remainingPercent: 18, level: 'low' },
+      shortWindow: null,
     })
 
     expect(report.providers[2]).toMatchObject({
@@ -41,6 +45,8 @@ describe('parseQuotaAxiReport', () => {
       level: 'error',
       limitingWindow: null,
       error: 'usage endpoint rejected the session',
+      weeklyWindow: null,
+      shortWindow: null,
       refreshedAt: '2026-09-29T11:50:00.000Z',
     })
 
@@ -51,6 +57,8 @@ describe('parseQuotaAxiReport', () => {
       runway: 'exhausted_now',
       projectedRunOutAt: '2026-09-29T12:00:00.000Z',
       error: 'stale reading',
+      weeklyWindow: null,
+      shortWindow: { id: 'five_hour', label: 'session', resetsAt: '2026-09-29T14:00:00.000Z', remainingPercent: 3 },
       refreshedAt: '2026-09-29T10:00:00.000Z',
     })
   })
@@ -88,6 +96,38 @@ describe('parseQuotaAxiReport', () => {
       refreshedAt: null,
       error: 'stale reading',
     })
+  })
+
+  it('uses the account week when a model-specific weekly window is also present', () => {
+    const report = parseQuotaAxiReport({
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      providers: [{
+        ...provider('claude', 64),
+        windows: [
+          { id: 'five_hour', label: 'session', kind: 'session', percentRemaining: 82, resetsAt: '2026-09-29T16:00:00.000Z' },
+          { id: 'seven_day_opus', label: 'opus week', kind: 'weekly', percentRemaining: 9, resetsAt: '2026-10-04T17:00:00.000Z' },
+          { id: 'seven_day', label: 'week', kind: 'weekly', percentRemaining: 64, resetsAt: '2026-10-04T17:00:00.000Z' },
+        ],
+      }],
+    })
+    expect(report.providers[0]?.weeklyWindow).toMatchObject({ id: 'seven_day', remainingPercent: 64 })
+    expect(report.providers[0]?.shortWindow).toMatchObject({ id: 'five_hour', remainingPercent: 82 })
+  })
+
+  it('keeps an account weekly window when a product slice is tighter', () => {
+    const report = parseQuotaAxiReport({
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      providers: [{
+        provider: 'grok',
+        plan: 'supergrok',
+        windows: [
+          { id: 'product:grok_build', label: 'Grok Build', kind: 'weekly', percentRemaining: 10, resetsAt: '2026-10-05T00:00:00.000Z' },
+          { id: 'credits', label: 'week', kind: 'weekly', percentRemaining: 77, resetsAt: '2026-10-05T00:00:00.000Z' },
+        ],
+        state: { status: 'fresh', refreshedAt: '2026-09-29T11:00:00.000Z' },
+      }],
+    })
+    expect(report.providers[0]?.weeklyWindow).toMatchObject({ id: 'credits', remainingPercent: 77 })
   })
 
   it('rejects a document that is not a provider report', () => {

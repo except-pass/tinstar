@@ -57,10 +57,18 @@
 .cockpit-rail .cockpit-rail-messages{max-height:15vh}
 .cockpit-rail .cockpit-worker-list{flex:1 1 0;min-height:90px}
 .cockpit-quotas{position:relative;z-index:3;flex:none;border-top:1px solid rgba(130,175,195,.14);background:#0a0e12;padding:6px 8px}
-.cockpit-quota-meters{display:flex;align-items:stretch;gap:2px}
+.cockpit-quota-meters{display:flex;flex-direction:column;align-items:stretch;gap:4px}
+.cockpit-quota-compact{display:flex;align-items:stretch;gap:2px}
 .cockpit-quota-meter{display:flex;flex-direction:column;align-items:center;gap:2px;flex:none;min-width:40px;padding:2px 4px 3px;border:0;border-radius:4px;background:transparent;color:#8fd8c4;font:9px 'JetBrains Mono',monospace}
+.cockpit-quota-meter.is-week{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;min-width:0;padding:3px 4px}
+.cockpit-quota-id{display:flex;flex-direction:column;align-items:center;gap:2px;width:42px;min-width:42px;color:#d5e3ea}
+.cockpit-quota-id>span:last-child{max-width:42px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cockpit-quota-strip{display:block;width:100%;height:auto}
+.cockpit-quota-day{fill:rgba(255,255,255,.55);font:8px 'JetBrains Mono',monospace}
+.cockpit-quota-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:28px}
+.cockpit-quota-short{color:#8aa0ab;font:9px 'JetBrains Mono',monospace;white-space:nowrap}
 .cockpit-quota-meter:hover,.cockpit-quota-meter:focus,.cockpit-quota-meter:focus-visible{background:#122028}
-.cockpit-quota-glyph{width:14px;height:14px;display:block}
+.cockpit-quota-glyph{width:16px;height:16px;display:block;object-fit:contain}
 .cockpit-quota-bar{width:28px;height:3px;border-radius:2px;background:#1c2a32;overflow:hidden}
 .cockpit-quota-bar>span{display:block;height:100%;background:currentColor}
 .cockpit-quota-pct{line-height:1}

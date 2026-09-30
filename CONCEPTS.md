@@ -24,7 +24,7 @@ An answer or note sent with First Mate's `fm-inbox.sh note`. A request id is reu
 
 ## Provider quota
 
-Account quota for each provider that is set up locally. The server runs `quota-axi --json --full --no-credential-refresh` about every two minutes, one read at a time, and caches it. The rail shows one compact icon per provider; hover or focus lists remaining percent, the limiting window, reset, projected run-out, plan, and refresh age. A provider that fails keeps its own error on that icon. See [quota poller](src/server/quota/poller.ts) and [rail](src/cockpit/QuotaRail.tsx).
+Account quota for each provider that is set up locally. The server runs `quota-axi --json --full --no-credential-refresh` about every two minutes, one read at a time, and caches it. A provider with a weekly window gets a 7-day calendar strip: weekday labels, the remaining-quota bar, and a now-line, with the 5-hour window as a small secondary readout. Providers without a weekly window stay compact icons. Hover or focus lists remaining percent, the limiting window, reset, projected run-out, plan, and refresh age. A provider that fails keeps its own error on that icon. See [quota poller](src/server/quota/poller.ts) and [rail](src/cockpit/QuotaRail.tsx).
 
 ## Config root
 

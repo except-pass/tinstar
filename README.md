@@ -59,7 +59,7 @@ The server and API use port 5273 by default. Worker view ttyd processes use loop
 
 ## Provider quota
 
-The server runs `quota-axi --json --full --no-credential-refresh` about every two minutes and caches the result. It does not ask `quota-axi` to refresh a vendor login. The rail shows one compact icon for each provider that is set up. Hover or keyboard focus opens the remaining percent, limiting window, reset time, projected run-out, plan, and how long ago the reading refreshed. A provider that fails shows that error on its own icon. A missing reading is not drawn as zero.
+The server runs `quota-axi --json --full --no-credential-refresh` about every two minutes and caches the result. It does not ask `quota-axi` to refresh a vendor login. Each provider that reports a weekly window shows a calendar strip of the Sunday-to-Saturday weeks that window touches (one or two rows): weekday labels, a bar for quota still left that ends at the reset, and a vertical line at now. The 5-hour window, when reported, sits beside the strip as a small readout. Providers with no weekly window stay compact icons. Hover or keyboard focus opens the remaining percent, limiting window, reset time, projected run-out, plan, and how long ago the reading refreshed. A provider that fails shows that error on its own icon. A missing reading is not drawn as zero.
 
 ## About plugins
 

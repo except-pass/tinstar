@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 
 const repo = resolve(import.meta.dirname, '..')
 
-test('quota rail shows compact provider icons and a hover detail', async ({ page, request }) => {
+test('quota rail shows a weekly calendar strip and a hover detail', async ({ page, request }) => {
   test.setTimeout(60_000)
   const root = mkdtempSync(join(tmpdir(), 'tinstar-quota-'))
   const home = join(root, 'firstmate')
@@ -53,6 +53,7 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
       } catch { return 0 }
     }, { timeout: 20_000 }).toBe(4)
 
+    await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
     const rail = page.getByRole('region', { name: 'Provider quota' })
@@ -60,16 +61,28 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
     await expect(rail.getByRole('button', { name: 'Codex, 18% remaining' })).toBeVisible()
     await expect(rail.getByRole('button', { name: 'Grok, no reading' })).toBeVisible()
     await expect(rail.getByRole('button', { name: 'Kimi, 3% remaining' })).toBeVisible()
+    await expect(rail.getByText('5h 82')).toBeVisible()
     const layout = await rail.evaluate(element => {
-      const meters = Array.from(element.querySelectorAll('.cockpit-quota-meter'))
-      const tops = meters.map(meter => meter.getBoundingClientRect().top)
+      const box = element.getBoundingClientRect()
+      const strips = Array.from(element.querySelectorAll('.cockpit-quota-meter.is-week'))
+      const compact = Array.from(element.querySelectorAll('.cockpit-quota-compact .cockpit-quota-meter'))
+      const tops = compact.map(meter => meter.getBoundingClientRect().top)
       return {
-        height: element.getBoundingClientRect().height,
-        spread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0,
+        strips: strips.length,
+        playheads: element.querySelectorAll('[data-testid="bar-playhead"]').length,
+        days: element.querySelectorAll('[data-testid="weekday-label"]').length,
+        overflow: strips.some(strip => {
+          const stripBox = strip.getBoundingClientRect()
+          return stripBox.left < box.left - 1 || stripBox.right > box.right + 1
+        }),
+        compactSpread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0,
       }
     })
-    expect(layout.height).toBeLessThan(64)
-    expect(layout.spread).toBeLessThan(4)
+    expect(layout.strips).toBe(2)
+    expect(layout.playheads).toBe(2)
+    expect(layout.days).toBe(14)
+    expect(layout.overflow).toBe(false)
+    expect(layout.compactSpread).toBeLessThan(4)
     expect((await rail.evaluate(element => element.textContent ?? '')).toLowerCase()).not.toContain('unavailable')
     await page.screenshot({ path: test.info().outputPath('quota-rail-1440x900.png') })
 
@@ -107,12 +120,18 @@ test('quota rail shows compact provider icons and a hover detail', async ({ page
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
     const phone = await rail.evaluate(element => {
-      const meters = Array.from(element.querySelectorAll('.cockpit-quota-meter'))
-      const tops = meters.map(meter => meter.getBoundingClientRect().top)
-      return { height: element.getBoundingClientRect().height, spread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0 }
+      const box = element.getBoundingClientRect()
+      const strips = Array.from(element.querySelectorAll('.cockpit-quota-meter.is-week'))
+      return {
+        strips: strips.length,
+        overflow: strips.some(strip => {
+          const stripBox = strip.getBoundingClientRect()
+          return stripBox.left < box.left - 1 || stripBox.right > box.right + 1
+        }),
+      }
     })
-    expect(phone.height).toBeLessThan(64)
-    expect(phone.spread).toBeLessThan(4)
+    expect(phone.strips).toBe(2)
+    expect(phone.overflow).toBe(false)
     const lastMeter = rail.getByRole('button', { name: 'Kimi, 3% remaining' })
     await lastMeter.hover()
     const phoneTip = await lastMeter.getByRole('tooltip').evaluate(element => element.getBoundingClientRect().toJSON() as DOMRect)
