@@ -25,7 +25,11 @@ const promptProblems = async (page: Page, id: string) => {
       const box = rail.getBoundingClientRect()
       const wide = innerWidth > 1200
       const top = wide ? 0 : box.bottom
-      if (Math.abs(stage.top - top) > 2 || stage.bottom < innerHeight - 2) found.push(`terminal does not fill the height below ${Math.round(top)} (${Math.round(stage.top)}..${Math.round(stage.bottom)} of ${innerHeight})`)
+      const composer = document.querySelector('[data-testid="prompt-composer"]')
+      const composerBox = composer?.getBoundingClientRect()
+      if (Math.abs(stage.top - top) > 2) found.push(`terminal does not start below ${Math.round(top)} (stage ${Math.round(stage.top)})`)
+      if (!composerBox) found.push('prompt composer missing')
+      else if (Math.abs(stage.bottom - composerBox.top) > 2 || composerBox.bottom < innerHeight - 2) found.push(`terminal does not fill the height down to the composer (${Math.round(stage.top)}..${Math.round(stage.bottom)} composer ${Math.round(composerBox.top)}..${Math.round(composerBox.bottom)} of ${innerHeight})`)
       if (wide && (Math.abs(box.left - stage.right) > 2 || box.width < 200)) found.push(`detail rail is not beside the terminal (${Math.round(box.left)} vs stage ${Math.round(stage.right)})`)
       if (!wide) {
         if (box.height > 64 || box.width < stage.width - 2) found.push(`narrow detail rail is not a slim header above the terminal (${Math.round(box.width)}x${Math.round(box.height)})`)

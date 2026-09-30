@@ -1,0 +1,1163 @@
+/**
+ * PromptComposer — shared session-pane UI used by both RunSessionPanel
+ * (canvas run sessions) and MarshalTerminal (canvas-sidebar copilot).
+ *
+ * Owns: the Recap | Terminal tab toggle, the recap entry renderer, the
+ * ttyd terminal frame, the raw-logs fallback (when no port), and the
+ * collapsible ComposerInput at the bottom.
+ *
+ * Does NOT own: terminated-session resume/delete UI, focus-path bookkeeping,
+ * or marshal-specific lifecycle (ensure/restart). Those live in the callers.
+ */
+import { useState, useRef, useEffect, useCallback, memo } from 'react'
+import type { ComponentPropsWithoutRef, Ref } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
+import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
+import { hexToRgba } from '../runAccent'
+import { usePromptHistory } from '../../hooks/usePromptHistory'
+import { usePromptStash, STASH_SLOTS } from '../../hooks/usePromptStash'
+import { PromptHistoryPopover } from '../RunWorkspaceWidget/PromptHistoryPopover'
+import { useFocusPath } from '../../hotkeys/FocusPathContext'
+import { findSlashToken, rankCommands, type SlashCommand } from '../../lib/slashMatching'
+import { useSlashCommands } from '../../hooks/useSlashCommands'
+import { SlashChips } from '../RunWorkspaceWidget/SlashChips'
+import { apiFetch } from '../../apiClient'
+import { useScreenshotUpload } from './useScreenshotUpload'
+import { ThumbnailStrip } from './ThumbnailStrip'
+
+type QuickKey = '1' | '2' | '3' | '4' | '5' | 'y' | 'n' | 'up' | 'down' | 'left' | 'right' | 'enter'
+const QUICK_KEYS: readonly QuickKey[] = ['1', '2', '3', '4', '5', 'y', 'n']
+const NAV_KEYS: readonly QuickKey[] = ['up', 'down', 'left', 'right', 'enter']
+
+// tmux key names for the keys we passthrough; ASCII chars map to themselves.
+const TMUX_KEY: Record<QuickKey, string> = {
+  '1': '1', '2': '2', '3': '3', '4': '4', '5': '5',
+  y: 'y', n: 'n',
+  up: 'Up', down: 'Down', left: 'Left', right: 'Right', enter: 'Enter',
+}
+
+const NAV_GLYPH: Record<'up' | 'down' | 'left' | 'right' | 'enter', string> = {
+  up: '↑', down: '↓', left: '←', right: '→', enter: '⏎',
+}
+
+// Module-scoped so their identities stay stable — a fresh array/object each
+// render would make react-markdown rebuild its processor and reparse every time.
+// remark-breaks turns a single newline into a hard line break. The recap pane is
+// chat-like (user messages + plain-text agent output), and CommonMark's default
+// (collapse single newlines into spaces) would reflow those onto one line — this
+// preserves the old whitespace-pre-wrap line separation while keeping markdown.
+const RECAP_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
+
+// Compact markdown styling for the recap chat view. Block elements inherit the
+// surrounding text color/size (agent slate-400 / user slate-300, both text-xs
+// font-mono) so the two speakers stay visually distinct; only emphasis, code,
+// and links get their own treatment. Margins collapse on the last child so a
+// message doesn't end with trailing space.
+const RECAP_MD_COMPONENTS: ComponentPropsWithoutRef<typeof ReactMarkdown>['components'] = {
+  p: ({ children }) => <p className="mb-2 last:mb-0 break-words">{children}</p>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words">
+      {children}
+    </a>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-slate-200">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => <ul className="list-disc pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ol>,
+  li: ({ children }) => <li className="break-words">{children}</li>,
+  h1: ({ children }) => <h1 className="text-sm font-semibold text-slate-200 mt-3 first:mt-0 mb-1">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-sm font-semibold text-slate-200 mt-3 first:mt-0 mb-1">{children}</h2>,
+  h3: ({ children }) => <h3 className="font-semibold text-slate-200 mt-2 first:mt-0 mb-1">{children}</h3>,
+  h4: ({ children }) => <h4 className="font-semibold text-slate-200 mt-2 first:mt-0 mb-1">{children}</h4>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-slate-600 pl-2 italic text-slate-500 mb-2 last:mb-0">{children}</blockquote>
+  ),
+  code: ({ className, children }) => {
+    // Block when react-markdown labels the fence (`language-*`) OR the content
+    // spans multiple lines — agents routinely emit unlabeled (```` ``` ````)
+    // fences that carry no className, and rendering those inline collapses every
+    // line onto one. The `pre` override is a passthrough, so this is the only
+    // place block-vs-inline gets decided.
+    const isBlock = /language-/.test(className ?? '') || String(children).includes('\n')
+    if (!isBlock) {
+      return <code className="bg-white/5 px-1 py-0.5 rounded text-[0.95em] text-primary-dim">{children}</code>
+    }
+    return (
+      <pre className="bg-surface-panel border border-white/10 rounded p-2 mb-2 last:mb-0 overflow-x-auto">
+        <code className="text-2xs leading-relaxed">{children}</code>
+      </pre>
+    )
+  },
+  pre: ({ children }) => <>{children}</>,
+  table: ({ children }) => (
+    <div className="overflow-x-auto mb-2 last:mb-0">
+      <table className="text-2xs border-collapse w-full">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="border-b border-white/10">{children}</thead>,
+  th: ({ children }) => <th className="px-2 py-1 text-left text-slate-200 font-medium">{children}</th>,
+  td: ({ children }) => <td className="px-2 py-1 border-t border-white/5">{children}</td>,
+  hr: () => <hr className="border-white/10 my-3" />,
+  // Drop `node` (react-markdown passes the hast node to every component); spreading
+  // it onto the DOM <input> triggers a "React does not recognize the `node` prop"
+  // warning for every GFM task-list checkbox.
+  input: ({ checked, node: _node, ...props }) => <input {...props} checked={checked} disabled className="mr-1.5 accent-primary" />,
+}
+
+const MarkdownText = memo(function MarkdownText({ content }: { content: string }) {
+  return (
+    <div className="break-words">
+      <ReactMarkdown remarkPlugins={RECAP_REMARK_PLUGINS} components={RECAP_MD_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+})
+
+function DiffView({ diff, accent }: { diff: DiffBlock; accent: string }) {
+  return (
+    <div className="border rounded-sm overflow-hidden mt-2" style={{ borderColor: hexToRgba(accent, 0.15) }}>
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-2xs font-mono"
+        style={{
+          background: hexToRgba(accent, 0.06),
+          borderColor: hexToRgba(accent, 0.15),
+          color: hexToRgba(accent, 0.6),
+        }}
+      >
+        <span className="material-symbols-outlined text-xs">difference</span>
+        {diff.filename}
+        <span className="text-slate-600 ml-auto">{diff.header}</span>
+      </div>
+      <pre className="px-2 py-1.5 text-2xs leading-relaxed font-mono overflow-x-auto">
+        {diff.lines.map((line, i) => (
+          <div
+            key={i}
+            className={
+              line.type === 'addition'
+                ? 'text-accent-green bg-accent-green/[0.06]'
+                : line.type === 'deletion'
+                  ? 'text-accent-red bg-accent-red/[0.06]'
+                  : line.type === 'header'
+                    ? 'text-slate-500'
+                    : 'text-slate-400'
+            }
+          >
+            <span className="select-none text-slate-600 inline-block w-3">
+              {line.type === 'addition' ? '+' : line.type === 'deletion' ? '-' : ' '}
+            </span>
+            {line.content}
+          </div>
+        ))}
+      </pre>
+    </div>
+  )
+}
+
+const AgentMessage = memo(function AgentMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
+  return (
+    <div className="flex gap-3">
+      <div
+        className="shrink-0 w-6 h-6 border flex items-center justify-center"
+        style={{ borderColor: hexToRgba(accent, 0.4), background: hexToRgba(accent, 0.1) }}
+      >
+        <span
+          className="material-symbols-outlined text-sm"
+          style={{ color: accent, fontVariationSettings: "'FILL' 1" }}
+        >
+          smart_toy
+        </span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span
+            data-testid="recap-agent-label"
+            className="text-2xs font-mono tracking-wide"
+            style={{ color: accent }}
+          >
+            AGENT
+          </span>
+          {entry.timestamp && (
+            <span className="text-2xs font-mono text-slate-600">{entry.timestamp}</span>
+          )}
+        </div>
+        <div className="text-xs font-mono leading-relaxed text-slate-400 max-w-none">
+          <MarkdownText content={entry.content} />
+        </div>
+        {entry.diff && <DiffView diff={entry.diff} accent={accent} />}
+      </div>
+    </div>
+  )
+})
+
+const UserMessage = memo(function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
+  return (
+    <div className="flex gap-3 flex-row-reverse">
+      <div className="shrink-0 w-6 h-6 border border-slate-600 flex items-center justify-center bg-surface-raised">
+        <span className="material-symbols-outlined text-slate-400 text-sm">person</span>
+      </div>
+      <div className="flex-1 min-w-0 text-right">
+        <div className="flex items-center gap-2 justify-end mb-1">
+          {entry.timestamp && (
+            <span className="text-2xs font-mono text-slate-600">{entry.timestamp}</span>
+          )}
+          <span className="text-2xs font-mono text-slate-500 tracking-wide">YOU</span>
+        </div>
+        <div
+          className="text-xs font-mono leading-relaxed p-2.5 border-r-2 text-left text-slate-300"
+          style={{
+            background: hexToRgba(accent, 0.05),
+            borderColor: hexToRgba(accent, 0.4),
+          }}
+        >
+          <MarkdownText content={entry.content} />
+        </div>
+      </div>
+    </div>
+  )
+})
+
+function formatRecapDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes === 0) return `${seconds}s`
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`
+}
+
+const StatusMessage = memo(function StatusMessage({ entry, accent, working = false }: { entry: RecapEntry; accent: string; working?: boolean }) {
+  const completed = entry.statusKind === 'completed'
+  const label = completed && entry.durationMs !== undefined
+    ? `Completed in ${formatRecapDuration(entry.durationMs)}`
+    : entry.content
+  return (
+    <div
+      className="flex items-center gap-3 py-1"
+      data-testid={working ? 'recap-working-status' : completed ? 'recap-completed-status' : undefined}
+    >
+      <div
+        className="h-px flex-1"
+        style={{ background: `linear-gradient(to right, transparent, ${hexToRgba(accent, 0.15)})` }}
+      />
+      <div
+        className="flex items-center gap-2 text-2xs font-mono tracking-wide uppercase"
+        style={{ color: hexToRgba(accent, 0.5) }}
+      >
+        {completed ? (
+          <span className="material-symbols-outlined text-xs" aria-hidden="true">check_circle</span>
+        ) : (
+          <span
+            className="w-1.5 h-1.5 rounded-full animate-pulse-glow"
+            style={{ background: accent, boxShadow: `0 0 4px ${accent}` }}
+          />
+        )}
+        {label}
+      </div>
+      <div
+        className="h-px flex-1"
+        style={{ background: `linear-gradient(to left, transparent, ${hexToRgba(accent, 0.15)})` }}
+      />
+    </div>
+  )
+})
+
+/** Iframe wrapper keyed by tick to force remount on refresh.
+ *
+ * When zoomed in (zoom > 1): counter-scale the iframe so it renders at screen
+ * pixel resolution — canvas scale(zoom) × iframe scale(1/zoom) = 1×, crisp.
+ *
+ * When zoomed out (zoom ≤ 1): no scaling. The terminal fills the container at
+ * its natural size so ttyd maintains a full row/column count. The canvas zoom
+ * makes text smaller naturally, which is fine and preserves readability.
+ */
+function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus, iframeRef }: { src: string; tick: number; focused?: boolean; accent: string; zoom?: number; onPointerFocus?: () => void; iframeRef?: Ref<HTMLIFrameElement> }) {
+  // Only counter-scale when zoomed in; zooming out lets text shrink naturally.
+  const needsScale = zoom > 1
+  return (
+    <div
+      className="flex-1 relative overflow-hidden"
+      style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
+      onPointerDown={e => { if (e.button === 0) { e.stopPropagation(); onPointerFocus?.() } }}
+    >
+      <div
+        style={needsScale ? {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: `${zoom * 100}%`,
+          height: `${zoom * 100}%`,
+          transformOrigin: '0 0',
+          transform: `scale(${1 / zoom})`,
+        } : {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+        }}
+      >
+        <iframe
+          ref={iframeRef}
+          key={tick}
+          src={src}
+          style={{ display: 'block', width: '100%', height: '100%', border: 0, background: 'black' }}
+          title="Session terminal"
+          allow="clipboard-read; clipboard-write"
+        />
+      </div>
+      {focused && (
+        <div
+          data-testid="terminal-focus-badge"
+          className="absolute top-1.5 right-2 text-2xs font-mono uppercase tracking-widest pointer-events-none select-none px-1.5 py-0.5 rounded"
+          style={{ color: accent, background: hexToRgba(accent, 0.12), border: `1px solid ${hexToRgba(accent, 0.3)}` }}
+        >
+          terminal
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Compact row of quick-send buttons for in-terminal decision dialogs. */
+function QuickSendButtons({
+  accent,
+  flashedKey,
+  onFire,
+  disabled,
+}: {
+  accent: string
+  flashedKey: QuickKey | null
+  onFire: (key: QuickKey) => void
+  disabled: boolean
+}) {
+  return (
+    <div
+      className="flex items-center gap-1 shrink-0 ml-2 pl-3 border-l"
+      style={{ borderColor: hexToRgba(accent, 0.2) }}
+      data-testid="quick-send-cluster"
+    >
+      {[...QUICK_KEYS, ...NAV_KEYS].map(key => {
+        const isLetter = key === 'y' || key === 'n'
+        const isNav = key === 'up' || key === 'down' || key === 'left' || key === 'right' || key === 'enter'
+        const isFirstLetter = key === 'y'
+        const isFirstNav = key === 'up'
+        const flashing = flashedKey === key
+        const label = isLetter ? key.toUpperCase() : key
+        const display = isNav ? NAV_GLYPH[key] : label
+        const hint = isNav
+          ? `Send ${TMUX_KEY[key]} to terminal (when prompt is empty)`
+          : `Send "${key}" to terminal (Alt+${label})`
+        return (
+          <button
+            key={key}
+            type="button"
+            data-testid={`quick-send-${key}`}
+            disabled={disabled}
+            onClick={() => onFire(key)}
+            title={hint}
+            className={`
+              flex items-center justify-center w-6 h-6 rounded-sm
+              text-2xs font-mono font-semibold
+              transition-all duration-150 ease-out
+              disabled:opacity-30 disabled:cursor-not-allowed
+              enabled:hover:scale-110 enabled:active:scale-95
+              ${flashing ? 'animate-[quick-pop_0.25s_ease-out]' : ''}
+              ${isFirstLetter || isFirstNav ? 'ml-2' : ''}
+            `}
+            style={{
+              color: accent,
+              background: flashing ? hexToRgba(accent, 0.4) : hexToRgba(accent, 0.1),
+              border: `1px solid ${hexToRgba(accent, flashing ? 0.7 : 0.25)}`,
+              boxShadow: flashing
+                ? `0 0 10px ${hexToRgba(accent, 0.55)}, 0 0 20px ${hexToRgba(accent, 0.25)}`
+                : 'none',
+            }}
+            onMouseEnter={(e) => {
+              if (disabled) return
+              e.currentTarget.style.boxShadow = `0 0 8px ${hexToRgba(accent, 0.35)}`
+              e.currentTarget.style.background = hexToRgba(accent, 0.2)
+              e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = flashing
+                ? `0 0 10px ${hexToRgba(accent, 0.55)}, 0 0 20px ${hexToRgba(accent, 0.25)}`
+                : 'none'
+              e.currentTarget.style.background = hexToRgba(accent, flashing ? 0.4 : 0.1)
+              e.currentTarget.style.borderColor = hexToRgba(accent, flashing ? 0.7 : 0.25)
+            }}
+          >
+            {display}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function previewText(s: string, max = 80): string {
+  const flat = s.trim().replace(/\s+/g, ' ')
+  if (flat.length <= max) return flat
+  return flat.slice(0, max - 1).trimEnd() + '…'
+}
+
+/** Stash slots — click to store / swap / recall. Shift+click to clear. */
+function StashSlots({
+  accent,
+  slots,
+  onActivate,
+  onClear,
+  disabled,
+}: {
+  accent: string
+  slots: readonly (string | null)[]
+  onActivate: (index: number) => void
+  onClear: (index: number) => void
+  disabled: boolean
+}) {
+  return (
+    <div
+      className="flex items-center gap-1 shrink-0 ml-2 pl-3 border-l"
+      style={{ borderColor: hexToRgba(accent, 0.2) }}
+      data-testid="stash-cluster"
+    >
+      {Array.from({ length: STASH_SLOTS }).map((_, i) => {
+        const filled = !!slots[i]
+        const preview = filled ? previewText(slots[i]!) : ''
+        const label = `${i + 1}`
+        const baseTitle = filled
+          ? `Stash ${i + 1}: "${preview}"\nClick to swap with composer · Shift+click to clear`
+          : `Stash ${i + 1} (empty) — click to store current composer text`
+        return (
+          <button
+            key={i}
+            type="button"
+            data-testid={`stash-slot-${i + 1}`}
+            data-filled={filled || undefined}
+            disabled={disabled}
+            onClick={(e) => {
+              if (e.shiftKey && filled) {
+                onClear(i)
+                return
+              }
+              onActivate(i)
+            }}
+            title={baseTitle}
+            className="
+              flex items-center justify-center w-6 h-6 rounded-sm
+              text-2xs font-mono font-semibold
+              transition-all duration-150 ease-out
+              disabled:opacity-30 disabled:cursor-not-allowed
+              enabled:hover:scale-110 enabled:active:scale-95
+            "
+            style={{
+              color: accent,
+              background: hexToRgba(accent, filled ? 0.25 : 0.08),
+              border: `1px solid ${hexToRgba(accent, filled ? 0.55 : 0.2)}`,
+            }}
+            onMouseEnter={(e) => {
+              if (disabled) return
+              e.currentTarget.style.boxShadow = `0 0 8px ${hexToRgba(accent, 0.35)}`
+              e.currentTarget.style.background = hexToRgba(accent, filled ? 0.35 : 0.18)
+              e.currentTarget.style.borderColor = hexToRgba(accent, filled ? 0.7 : 0.45)
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = 'none'
+              e.currentTarget.style.background = hexToRgba(accent, filled ? 0.25 : 0.08)
+              e.currentTarget.style.borderColor = hexToRgba(accent, filled ? 0.55 : 0.2)
+            }}
+          >
+            <span className="flex items-center gap-0.5 leading-none">
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: '11px', opacity: filled ? 0.9 : 0.5 }}
+              >
+                {filled ? 'inventory_2' : 'inventory'}
+              </span>
+              {label}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function draggedFiles(dt: DataTransfer | null): boolean {
+  if (!dt) return false
+  if (dt.files?.length) return true
+  return Array.from(dt.types ?? []).includes('Files')
+}
+
+/** Collapsible prompt input for sending text to the terminal */
+export const ComposerInput = memo(function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const isExpanded = expanded ?? internalExpanded
+  const toggleExpanded = onToggle ?? (() => setInternalExpanded(e => !e))
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [justSent, setJustSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [flashedKey, setFlashedKey] = useState<QuickKey | null>(null)
+  const [fileDrag, setFileDrag] = useState(false)
+
+  const fireQuickKey = useCallback(async (key: QuickKey) => {
+    if (!sessionId) return
+    setFlashedKey(key)
+    setTimeout(() => {
+      setFlashedKey(prev => (prev === key ? null : prev))
+    }, 250)
+    try {
+      await apiFetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [TMUX_KEY[key]] }),
+      })
+    } catch {
+      /* fire-and-forget — matches the existing PageUp/Escape passthrough */
+    }
+  }, [sessionId])
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const composerRootRef = useRef<HTMLDivElement>(null)
+
+  const { tiles, pendingCount, startUpload, removeTile, clearAll } = useScreenshotUpload()
+
+  const insertReference = useCallback((path: string) => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const before = ta.value.slice(0, ta.selectionStart)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const insert = `${needsLeadingSpace ? ' ' : ''}@${path} `
+    ta.focus({ preventScroll: true })
+    ta.setRangeText(insert, ta.selectionStart, ta.selectionEnd, 'end')
+    // Force the React onChange to fire so controlled state stays in sync
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }, [])
+
+  const uploadFiles = useCallback((files: File[]) => {
+    let chain = Promise.resolve()
+    for (const file of files) {
+      chain = chain.then(() => startUpload(file).then(({ path }) => insertReference(path)).catch(() => { /* tile already marked error */ }))
+    }
+  }, [startUpload, insertReference])
+
+  const onPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const imageItems = items.filter(it => it.type.startsWith('image/'))
+    if (imageItems.length === 0) return // let default text-paste proceed
+    e.preventDefault()
+    const blobs = imageItems
+      .map(it => it.getAsFile())
+      .filter((f): f is File => f !== null)
+    uploadFiles(blobs)
+  }, [uploadFiles])
+
+  const onDropFiles = useCallback((e: React.DragEvent) => {
+    if (!draggedFiles(e.dataTransfer)) return
+    e.preventDefault()
+    setFileDrag(false)
+    uploadFiles(Array.from(e.dataTransfer.files))
+  }, [uploadFiles])
+
+  useEffect(() => {
+    const enter = (e: DragEvent) => { if (draggedFiles(e.dataTransfer)) setFileDrag(true) }
+    const over = (e: DragEvent) => { if (draggedFiles(e.dataTransfer)) e.preventDefault() }
+    const done = () => setFileDrag(false)
+    window.addEventListener('dragenter', enter)
+    window.addEventListener('dragover', over)
+    window.addEventListener('drop', done)
+    window.addEventListener('dragend', done)
+    return () => {
+      window.removeEventListener('dragenter', enter)
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('drop', done)
+      window.removeEventListener('dragend', done)
+    }
+  }, [])
+
+  const handleRemoveTile = useCallback((clientId: string) => {
+    const tile = tiles.find(t => t.clientId === clientId)
+    removeTile(clientId)
+    if (!tile?.path) return
+    const escaped = tile.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    // Strip the @path reference plus one adjacent whitespace. Trailing
+    // whitespace cleanup only; don't collapse internal newlines (user-authored
+    // layout must survive).
+    const refPattern = new RegExp(`\\s?@${escaped}\\s?`, 'g')
+    setText(prev => prev.replace(refPattern, ' ').trimEnd())
+  }, [tiles, removeTile])
+  const { history, push: pushHistory } = usePromptHistory(sessionId)
+  const { slots: stashSlots, setSlot: setStashSlot } = usePromptStash(sessionId)
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const activateStash = useCallback((index: number) => {
+    const current = text
+    const stored = stashSlots[index] ?? null
+    // Swap semantics: empty composer + filled slot = recall (slot empties);
+    // filled composer + empty slot = store; filled both = swap.
+    if (!current && !stored) return
+    setText(stored ?? '')
+    setStashSlot(index, current.length > 0 ? current : null)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      const end = stored?.length ?? 0
+      ta.setSelectionRange(end, end)
+      setSlashCursor(end)
+    })
+  }, [text, stashSlots, setStashSlot])
+
+  const clearStash = useCallback((index: number) => {
+    setStashSlot(index, null)
+  }, [setStashSlot])
+  const { pushFocus, popFocus, path } = useFocusPath()
+  const composerFocusId = sessionId ? `${sessionId}:composer` : null
+  const isOnFocusPath = useRef(false)
+
+  const { commands, usage, refresh: refreshSlash } = useSlashCommands()
+  const [slashCursor, setSlashCursor] = useState<number>(0)
+  const [cycleState, setCycleState] = useState<{ candidates: SlashCommand[]; index: number } | null>(null)
+
+  const slashToken = findSlashToken(text, slashCursor)
+  const candidates: SlashCommand[] = slashToken
+    ? (cycleState?.candidates ?? rankCommands(commands, slashToken.partial, usage))
+    : []
+  const activeIndex = cycleState?.index ?? 0
+
+  useEffect(() => { if (isExpanded) refreshSlash() }, [isExpanded, refreshSlash])
+
+  const enterComposerFocus = useCallback(() => {
+    if (!composerFocusId || isOnFocusPath.current) return
+    pushFocus({ id: composerFocusId, type: 'prompt-composer', label: 'Composer' })
+    isOnFocusPath.current = true
+  }, [composerFocusId, pushFocus])
+
+  const leaveComposerFocus = useCallback(() => {
+    if (!isOnFocusPath.current) return
+    // Only pop if we're still the tail — don't yank something that pushed on top of us
+    if (path[path.length - 1]?.id === composerFocusId) popFocus()
+    isOnFocusPath.current = false
+  }, [path, composerFocusId, popFocus])
+
+  // Pop on unmount / when composer collapses (textarea won't fire blur if it unmounts)
+  useEffect(() => {
+    if (!isExpanded) leaveComposerFocus()
+  }, [isExpanded, leaveComposerFocus])
+  useEffect(() => () => leaveComposerFocus(), [leaveComposerFocus])
+
+  const onTextareaFocus = useCallback(() => enterComposerFocus(), [enterComposerFocus])
+  const onTextareaBlur = useCallback((e: React.FocusEvent<HTMLTextAreaElement>) => {
+    const next = e.relatedTarget as Node | null
+    if (next && composerRootRef.current?.contains(next)) return
+    leaveComposerFocus()
+  }, [leaveComposerFocus])
+
+  // Focus when trigger changes (from parent selecting widget)
+  useEffect(() => {
+    if (focusTrigger && isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [focusTrigger, isExpanded])
+
+  const canSend = sessionId && text.trim().length > 0
+
+  const handleSend = useCallback(async () => {
+    if (!canSend || sending) return
+    setError(null)
+    setSending(true)
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim(), force: status !== 'idle' }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        pushHistory(text)
+        setText('')
+        clearAll()
+        // Trigger success flash
+        setJustSent(true)
+        setTimeout(() => setJustSent(false), 400)
+      } else {
+        setError(data.error?.message ?? data.error ?? 'Failed to send')
+      }
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }, [sessionId, text, canSend, sending, status, pushHistory, clearAll])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Tab' && cycleState) setCycleState(null)
+    if (e.key === 'Tab' && slashToken && candidates.length > 0) {
+      e.preventDefault()
+      const list = cycleState?.candidates ?? candidates
+      const nextIndex = cycleState ? (cycleState.index + 1) % list.length : 0
+      const chosen = list[nextIndex]!
+      const before = text.slice(0, slashToken.start)
+      const after  = text.slice(slashCursor)
+      const replacement = `/${chosen.name}`
+      const newText = before + replacement + after
+      setText(newText)
+      const newCursor = before.length + replacement.length
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(newCursor, newCursor)
+        setSlashCursor(newCursor)
+      })
+      setCycleState({ candidates: list, index: nextIndex })
+      return
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      if (historyOpen) setHistoryOpen(false)
+      handleSend()
+      return
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const match = e.code.match(/^Digit([1-5])$/) ?? e.code.match(/^Key([YN])$/)
+      const key = match?.[1]
+      if (key) {
+        e.preventDefault()
+        fireQuickKey(key.toLowerCase() as QuickKey)
+        return
+      }
+    }
+    if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
+      e.preventDefault()
+      apiFetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [e.key] }),
+      }).catch(() => { /* swallow — passthrough keys are fire-and-forget */ })
+      return
+    }
+    // Empty-prompt passthrough: arrow keys + Enter go straight to terminal,
+    // matching the Alt+1..5 / Alt+Y / Alt+N quick-send affordance. History is
+    // still reachable via the history button.
+    if (text.length === 0 && !historyOpen && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      const navMap: Partial<Record<string, QuickKey>> = {
+        ArrowUp: 'up',
+        ArrowDown: 'down',
+        ArrowLeft: 'left',
+        ArrowRight: 'right',
+        Enter: 'enter',
+      }
+      const navKey = navMap[e.key]
+      if (navKey) {
+        e.preventDefault()
+        fireQuickKey(navKey)
+        return
+      }
+    }
+  }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor, fireQuickKey])
+
+  // Focus textarea when expanded
+  useEffect(() => {
+    if (isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [isExpanded])
+
+  const selectFromHistory = useCallback((item: string) => {
+    setText(item)
+    setHistoryOpen(false)
+    // Focus textarea and place caret at end after the state flush.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(item.length, item.length)
+    })
+  }, [])
+
+  return (
+    <div
+      ref={composerRootRef}
+      data-testid="prompt-composer"
+      data-file-drag={fileDrag ? 'true' : 'false'}
+      className="border-t"
+      style={{
+        borderColor: fileDrag ? accent : hexToRgba(accent, 0.2),
+        boxShadow: fileDrag ? `inset 0 0 0 2px ${accent}` : undefined,
+        background: fileDrag ? hexToRgba(accent, 0.08) : undefined,
+      }}
+      onDragOver={e => { if (draggedFiles(e.dataTransfer)) { e.preventDefault(); setFileDrag(true) } }}
+      onDrop={onDropFiles}
+    >
+      {fileDrag && (
+        <div data-testid="prompt-composer-drop-target" className="px-3 py-1 text-2xs font-mono uppercase tracking-wider" style={{ color: accent }}>
+          Drop files to attach
+        </div>
+      )}
+      {!isExpanded && (
+        <button
+          onClick={toggleExpanded}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
+          style={{ color: hexToRgba(accent, 0.6) }}
+        >
+          <span className="material-symbols-outlined text-sm">expand_less</span>
+          Prompt Composer
+          <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
+          {status !== 'idle' && (
+            <span className="ml-auto text-slate-500 normal-case tracking-normal">
+              (session {status === 'running' ? 'busy' : status})
+            </span>
+          )}
+        </button>
+      )}
+
+      {isExpanded && (
+        <div className="px-3 pt-2 pb-3 space-y-2">
+          {historyOpen && (
+            <PromptHistoryPopover
+              history={history}
+              accent={accent}
+              onSelect={selectFromHistory}
+              onClose={() => setHistoryOpen(false)}
+            />
+          )}
+          <div className="flex flex-row gap-2 items-start">
+            <div className="relative bg-surface-base rounded flex-1">
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={e => {
+                  setText(e.target.value)
+                  setSlashCursor(e.target.selectionStart ?? e.target.value.length)
+                  setCycleState(null)
+                }}
+                onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
+                onKeyDown={handleKeyDown}
+                onFocus={onTextareaFocus}
+                onBlur={onTextareaBlur}
+                onPaste={onPaste}
+                placeholder="Enter prompt text... (Ctrl+Enter to send)"
+                className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50 relative z-10"
+                style={{ borderColor: hexToRgba(accent, 0.2), background: 'transparent' }}
+              />
+              {slashToken && candidates[0] && !cycleState && candidates[0].name.startsWith(slashToken.partial) && candidates[0].name !== slashToken.partial && (
+                <div
+                  aria-hidden
+                  className="absolute inset-0 px-2 py-1.5 text-xs font-mono whitespace-pre-wrap break-words text-slate-600 pointer-events-none overflow-hidden"
+                >
+                  <span className="invisible">{text.slice(0, slashCursor)}</span>
+                  <span>{candidates[0].name.slice(slashToken.partial.length)}</span>
+                </div>
+              )}
+            </div>
+            <ThumbnailStrip tiles={tiles} onRemove={handleRemoveTile} />
+          </div>
+          {error && (
+            <p className="text-2xs font-mono text-accent-red">{error}</p>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                title="Collapse composer"
+                className="flex items-center shrink-0 p-0.5 rounded transition-colors hover:bg-primary/10"
+                style={{ color: hexToRgba(accent, 0.6) }}
+              >
+                <span className="material-symbols-outlined text-sm rotate-180">expand_less</span>
+              </button>
+              <span className="text-2xs text-slate-600 font-mono shrink-0 inline-block w-[6.5rem] truncate">
+                {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+              </span>
+              {!slashToken && (
+                <StashSlots
+                  accent={accent}
+                  slots={stashSlots}
+                  onActivate={activateStash}
+                  onClear={clearStash}
+                  disabled={!sessionId}
+                />
+              )}
+              {text.trim() === '' && (
+                <QuickSendButtons
+                  accent={accent}
+                  flashedKey={flashedKey}
+                  onFire={fireQuickKey}
+                  disabled={!sessionId}
+                />
+              )}
+              {slashToken && (
+                <SlashChips
+                  candidates={candidates}
+                  activeIndex={activeIndex}
+                  accent={accent}
+                  onSelect={(i) => {
+                    const list = cycleState?.candidates ?? candidates
+                    const chosen = list[i]!
+                    const before = text.slice(0, slashToken.start)
+                    const after  = text.slice(slashCursor)
+                    const replacement = `/${chosen.name}`
+                    const newText = before + replacement + after
+                    setText(newText)
+                    const newCursor = before.length + replacement.length
+                    requestAnimationFrame(() => {
+                      textareaRef.current?.focus({ preventScroll: true })
+                      textareaRef.current?.setSelectionRange(newCursor, newCursor)
+                      setSlashCursor(newCursor)
+                    })
+                    setCycleState({ candidates: list, index: i })
+                  }}
+                />
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="prompt-history-button"
+                onClick={() => setHistoryOpen(o => !o)}
+                title="Recent prompts (↑)"
+                className="flex items-center gap-1 px-2 py-1.5 text-2xs font-mono uppercase tracking-wider rounded transition-all duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:scale-105 enabled:active:scale-95"
+                style={{
+                  background: hexToRgba(accent, 0.1),
+                  color: hexToRgba(accent, 0.7),
+                  border: `1px solid ${hexToRgba(accent, 0.25)}`,
+                }}
+              >
+                <span className="material-symbols-outlined text-sm">history</span>
+              </button>
+              <button
+                ref={buttonRef}
+                data-testid="composer-submit"
+                onClick={handleSend}
+                disabled={!canSend || sending || pendingCount > 0}
+                title={pendingCount > 0 ? `Waiting for ${pendingCount} screenshot upload(s)` : undefined}
+                className={`
+                  group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
+                  transition-all duration-150 ease-out
+                  disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100
+                  enabled:hover:scale-105 enabled:active:scale-95
+                  ${justSent ? 'animate-[send-success_0.4s_ease-out]' : ''}
+                `}
+                style={{
+                  background: justSent
+                    ? hexToRgba(accent, 0.4)
+                    : sending
+                      ? hexToRgba(accent, 0.25)
+                      : hexToRgba(accent, 0.15),
+                  color: accent,
+                  border: `1px solid ${hexToRgba(accent, justSent ? 0.7 : 0.3)}`,
+                  boxShadow: canSend && !sending
+                    ? `0 0 0 0 ${hexToRgba(accent, 0)}`
+                    : justSent
+                      ? `0 0 20px ${hexToRgba(accent, 0.5)}, 0 0 40px ${hexToRgba(accent, 0.2)}`
+                      : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (canSend && !sending) {
+                    e.currentTarget.style.boxShadow = `0 0 12px ${hexToRgba(accent, 0.4)}, 0 0 24px ${hexToRgba(accent, 0.15)}`
+                    e.currentTarget.style.background = hexToRgba(accent, 0.25)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!justSent) {
+                    e.currentTarget.style.boxShadow = 'none'
+                    e.currentTarget.style.background = hexToRgba(accent, 0.15)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.3)
+                  }
+                }}
+              >
+                <span
+                  className={`material-symbols-outlined text-sm transition-transform duration-200 ${
+                    sending ? 'animate-[send-fly_0.6s_ease-in-out_infinite]' : ''
+                  } ${justSent ? 'animate-[send-pop_0.3s_ease-out]' : ''}`}
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  {sending ? 'rocket_launch' : 'send'}
+                </span>
+                {sending ? 'Sending...' : 'Send'}
+                {/* Glow ring on hover */}
+                <span
+                  className="absolute inset-0 rounded opacity-0 group-enabled:group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                  style={{
+                    background: `radial-gradient(ellipse at center, ${hexToRgba(accent, 0.1)} 0%, transparent 70%)`,
+                  }}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+})
+
+export interface PromptComposerProps {
+  sessionId: string | undefined
+  status: SessionStatus | undefined
+  port: number | undefined
+  recapEntries: RecapEntry[]
+  rawLogs?: string
+  accent: string
+  defaultTab?: 'recap' | 'terminal'
+  controlledTab?: 'recap' | 'terminal'
+  onControlledTabChange?: (tab: 'recap' | 'terminal') => void
+  activeTabIndex?: number
+  onActiveTabChange?: (tab: 'recap' | 'terminal') => void
+  termTick?: number
+  terminalFocused?: boolean
+  zoom?: number
+  onTerminalPointerFocus?: () => void
+  terminalFrameRef?: Ref<HTMLIFrameElement>
+  promptComposerExpanded?: boolean
+  onPromptComposerToggle?: () => void
+  composerFocusTrigger?: number
+}
+
+export function PromptComposer({
+  sessionId,
+  status,
+  port,
+  recapEntries,
+  rawLogs = '',
+  accent,
+  defaultTab,
+  controlledTab,
+  onControlledTabChange,
+  activeTabIndex,
+  onActiveTabChange,
+  termTick = 0,
+  terminalFocused,
+  zoom,
+  onTerminalPointerFocus,
+  terminalFrameRef,
+  promptComposerExpanded,
+  onPromptComposerToggle,
+  composerFocusTrigger,
+}: PromptComposerProps) {
+  const TABS = ['recap', 'terminal'] as const
+  // A terminal needs BOTH: the port is what says this run has one, and the
+  // session id is what addresses it through the proxy. Gating on the port
+  // alone is how an unresolved session id used to reach the wrapper as an
+  // empty string and fall through to a bare-port URL.
+  const hasTerminal = Boolean(port && sessionId)
+  const fallbackTab: 'recap' | 'terminal' = defaultTab ?? 'recap'
+  const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(fallbackTab)
+  const activeTab = controlledTab
+    ?? (activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? fallbackTab) : internalActiveTab)
+  const setActiveTab = (tab: 'recap' | 'terminal') => {
+    if (onControlledTabChange) onControlledTabChange(tab)
+    else setInternalActiveTab(tab)
+    onActiveTabChange?.(tab)
+  }
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
+    }
+  }, [activeTab, recapEntries, status])
+
+  return (
+    <section
+      className="flex-1 flex flex-col min-w-0 min-h-0 border-x bg-surface-base"
+      style={{ borderColor: hexToRgba(accent, 0.2) }}
+    >
+      {/* Tab toggle — hidden when controlled from outside (e.g. RunWorkspaceHeader). */}
+      {!controlledTab && (
+        <div
+          className="flex items-center justify-center border-b py-2 bg-surface-panel relative"
+          style={{ borderColor: hexToRgba(accent, 0.2) }}
+        >
+          <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
+            {([
+              { key: 'recap' as const, label: 'Recap' },
+              { key: 'terminal' as const, label: hasTerminal ? 'Terminal' : 'Logs' },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                aria-selected={activeTab === key}
+                data-testid={`recap-tab-${key}`}
+                className="px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all"
+                style={activeTab === key
+                  ? { background: accent, color: 'var(--surface-base)' }
+                  : { color: hexToRgba(accent, 0.5) }
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      {activeTab === 'terminal' && hasTerminal && sessionId ? (
+        <TerminalFrame
+          src={`/terminal-wrapper.html?session=${encodeURIComponent(sessionId)}`}
+          tick={termTick}
+          focused={terminalFocused}
+          accent={accent}
+          zoom={zoom}
+          onPointerFocus={onTerminalPointerFocus}
+          iframeRef={terminalFrameRef}
+        />
+      ) : activeTab === 'recap' ? (
+        <div
+          ref={contentRef}
+          data-scrollable
+          data-testid="recap-pane"
+          className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4 bg-black"
+        >
+          <div className="space-y-5">
+            {recapEntries.map((entry) => {
+              switch (entry.type) {
+                case 'agent': return <AgentMessage key={entry.id} entry={entry} accent={accent} />
+                case 'user': return <UserMessage key={entry.id} entry={entry} accent={accent} />
+                case 'status': return <StatusMessage key={entry.id} entry={entry} accent={accent} />
+              }
+            })}
+            {status === 'running' && (
+              <StatusMessage
+                entry={{ id: 'recap-working', type: 'status', content: 'Working' }}
+                accent={accent}
+                working
+              />
+            )}
+          </div>
+        </div>
+      ) : (
+        // activeTab === 'terminal' but no port: raw logs fallback.
+        <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
+          <pre className="text-2xs font-mono leading-relaxed text-slate-400 whitespace-pre-wrap">
+            {rawLogs.split('\n').map((line, i) => (
+              <div
+                key={i}
+                className={`py-px ${
+                  line.includes('PASS') ? 'text-accent-green' :
+                  line.includes('FAIL') ? 'text-accent-red' :
+                  line.includes('claude-agent:') ? 'text-accent-amber/70' :
+                  ''
+                }`}
+              >
+                {line}
+              </div>
+            ))}
+          </pre>
+        </div>
+      )}
+
+      {/* Prompt composer — visible on Recap (always) and Terminal (when port). */}
+      {sessionId && (activeTab === 'recap' || (activeTab === 'terminal' && hasTerminal)) && (
+        <ComposerInput
+          sessionId={sessionId}
+          accent={accent}
+          status={status}
+          expanded={promptComposerExpanded}
+          onToggle={onPromptComposerToggle}
+          focusTrigger={composerFocusTrigger}
+        />
+      )}
+    </section>
+  )
+}

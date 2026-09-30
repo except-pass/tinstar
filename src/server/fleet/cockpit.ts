@@ -17,6 +17,7 @@ import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type Atten
 import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
+import { deliverKeys, deliverPrompt, PromptDeliveryError } from './promptInput'
 import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
 
 const execFileAsync = promisify(execFile)
@@ -207,6 +208,30 @@ export class CockpitFleet {
     return true
   }
 
+  /** Paste a prompt, or one composer key, into the worker pane the terminal shows. */
+  async deliverComposer(key: string, kind: 'prompt' | 'keys', body: { text?: unknown; keys?: unknown }): Promise<{ ok: true } | { ok: false; code: 'BAD_REQUEST' | 'CONFLICT' | 'BACKEND_UNAVAILABLE'; message: string } | null> {
+    const ref = this.targets.get(key)
+    if (!ref) return null
+    if (!ref.target) return { ok: false, code: 'CONFLICT', message: 'no window recorded yet' }
+    try {
+      if (kind === 'prompt') {
+        if (typeof body.text !== 'string' || !body.text.trim()) return { ok: false, code: 'BAD_REQUEST', message: 'missing text' }
+        await deliverPrompt(ref.target, body.text)
+      } else {
+        const keys = Array.isArray(body.keys) ? body.keys.filter((key): key is string => typeof key === 'string') : []
+        if (!Array.isArray(body.keys) || keys.length !== body.keys.length || keys.length === 0) {
+          return { ok: false, code: 'BAD_REQUEST', message: 'keys must be a non-empty array of strings' }
+        }
+        await deliverKeys(ref.target, keys)
+      }
+      return { ok: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof PromptDeliveryError) return { ok: false, code: 'CONFLICT', message }
+      return { ok: false, code: 'BACKEND_UNAVAILABLE', message }
+    }
+  }
+
   refresh(): Promise<void> {
     if (this.polling) { this.again = true; return this.polling }
     this.polling = (async () => {
@@ -353,7 +378,9 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
   const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
   const leaveMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal\/leave$/)
   const directMatch = path?.match(/^\/api\/fleet\/([^/]+)\/direct$/)
-  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && path !== '/api/fleet/dismiss' && !terminalMatch && !leaveMatch && !directMatch) return false
+  const promptMatch = path?.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+  const keysMatch = path?.match(/^\/api\/sessions\/([^/]+)\/send-keys$/)
+  if (path !== '/api/fleet' && path !== '/api/fleet/messages' && path !== '/api/fleet/dismiss' && !terminalMatch && !leaveMatch && !directMatch && !promptMatch && !keysMatch) return false
   const allowedOrigins = currentOriginAllowlist()
   const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist: allowedOrigins }) as Record<string, string>
   if (req.method === 'OPTIONS') {
@@ -410,6 +437,16 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
     if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     const left = await fleet.leaveTerminal(decodeURIComponent(leaveMatch[1]!))
     return left ? ok(res, { left: true }, { headers }) : fail(res, 'NOT_FOUND', 'Worker not found', { headers })
+  }
+  if ((promptMatch || keysMatch) && req.method === 'POST') {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    if (!req.headers['content-type']?.startsWith('application/json')) return fail(res, 'BAD_REQUEST', 'Expected JSON', { headers })
+    let body: { text?: unknown; keys?: unknown }
+    try { body = JSON.parse(await readBody(req)) } catch { return fail(res, 'BAD_REQUEST', 'Invalid prompt', { headers }) }
+    const key = decodeURIComponent((promptMatch ?? keysMatch)![1]!)
+    const result = await fleet.deliverComposer(key, promptMatch ? 'prompt' : 'keys', body)
+    if (!result) return fail(res, 'NOT_FOUND', 'Worker not found', { headers })
+    return result.ok ? ok(res, null, { headers }) : fail(res, result.code, result.message, { headers })
   }
   return false
 }
