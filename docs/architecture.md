@@ -57,7 +57,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 | Terminal proxy | `src/server/sessionProxy.ts` | Proxies `/s/<key>/` HTTP and WebSocket traffic to the worker's view ttyd, with an origin check on upgrades. |
 | Core API | `src/server/api/coreRoutes.ts` | `/api/quota`, `/api/provider-observations`, `/api/provider-observation-view`, `/api/reach`, `/api/events` and the telemetry routes. |
 | SSE Broadcaster | `src/server/api/sse.ts` | Named server-sent events to connected clients, with a 15 s heartbeat. |
-| Quota and observations | `src/server/quota/`, `src/server/providers/`, `src/server/observability/codex-otel.ts` | `quota-axi` poll for the rail, plus provider observation stores. |
+| Quota and observations | `src/server/quota/`, `src/server/providers/`, `src/server/observability/codex-otel.ts` | `quota-axi` poll for the side-panel quota meters, plus provider observation stores. |
 | Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to connected clients. Disabled with `TINSTAR_TELEMETRY=0`. |
 | Bind and reach | `src/server/bind.ts`, `src/server/reach/` | Loopback-only bind plus any `--host` addresses; opt-in tailnet reach. |
 | Logger | `src/server/logger.ts` | Structured logging to console + `~/.config/tinstar/server.log`. Format: `[ISO] [LEVEL] [TAG] message {json}`. |
@@ -81,7 +81,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 `index.html` → `main.tsx` → `App.tsx`
 
-`App.tsx` renders the V6 worker cockpit (rail with the Needs You queue, Overview, worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array. A Decision card has an answer box, and cards and worker views have "Tell First Mate about this"; both post to `/api/fleet/messages`, and the rail's message list polls it for First Mate's receipts and replies ([details](./features/firstmate-observer.md)). Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
+`App.tsx` renders the V6 worker cockpit (an activity strip and one side panel for Needs You, messages and the worker switcher, in `src/cockpit/shell/`, beside the Overview or worker view) from `GET /api/fleet`. Needs You cards (decision, blocked, failure, review ready) are built server-side by `src/server/fleet/attention.ts` and arrive as the response's `attention` array. A Decision card has an answer box, and cards and worker views have "Tell First Mate about this"; both post to `/api/fleet/messages`, and the Messages panel polls it for First Mate's receipts and replies ([details](./features/firstmate-observer.md)). Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
 ### Shared data
 
