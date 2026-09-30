@@ -220,3 +220,28 @@ describe('<ComposerInput> quick-send press flash', () => {
     expect(flashed.className).toMatch(/animate-\[quick-pop/)
   })
 })
+
+describe('<ComposerInput> history popover keys', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  it.each(['Escape', 'PageUp', 'PageDown'])('%s closes history without sending keys to the worker', (key) => {
+    const { container, getByTestId, queryByTestId } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.click(getByTestId('prompt-history-button'))
+    expect(getByTestId('prompt-history-popover')).toBeTruthy()
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key })
+    expect(queryByTestId('prompt-history-popover')).toBeNull()
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('Escape with history closed still reaches the worker', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body)).toEqual({ keys: ['Escape'] })
+  })
+})

@@ -53,7 +53,10 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
       } else if (e.key === 'Escape') {
         e.preventDefault()
         onCloseRef.current()
+      } else {
+        return
       }
+      e.stopPropagation()
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)

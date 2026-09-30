@@ -377,6 +377,11 @@ export const ComposerInput = memo(function ComposerInput({ sessionId, accent, st
         return
       }
     }
+    if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && historyOpen) {
+      e.preventDefault()
+      setHistoryOpen(false)
+      return
+    }
     if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
       e.preventDefault()
       apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/send-keys`, {

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { handleScreenshotUpload } from '../screenshotsRoute'
+import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../originAllowlist'
 
 const ROOT = join(tmpdir(), 'tinstar-screenshot-test-' + process.pid)
 
@@ -11,7 +12,10 @@ beforeEach(() => {
   rmSync(ROOT, { recursive: true, force: true })
   mkdirSync(ROOT, { recursive: true })
 })
-afterEach(() => { rmSync(ROOT, { recursive: true, force: true }) })
+afterEach(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+  resetOriginAllowlistForTests()
+})
 
 function makeReq(boundary: string, body: Buffer): any {
   const stream: any = Readable.from([body])
@@ -25,15 +29,16 @@ function makeReq(boundary: string, body: Buffer): any {
 }
 
 function makeRes() {
-  let body = ''; let status = 200
+  let body = ''; let status = 200; let headers: Record<string, string> = {}
   return {
     headersSent: false,
     writableEnded: false,
     setHeader: () => {},
-    writeHead: (s: number) => { status = s },
+    writeHead: (s: number, h?: Record<string, string>) => { status = s; headers = h ?? {} },
     end: (chunk?: string) => { if (chunk) body += chunk },
     get statusCode() { return status }, set statusCode(v: number) { status = v },
     get _body() { return body },
+    get _headers() { return headers },
   } as any
 }
 
@@ -124,5 +129,45 @@ describe('handleScreenshotUpload', () => {
     const res = makeRes()
     await handleScreenshotUpload(req, res, { configRoot: ROOT })
     expect(res.statusCode).toBe(413)
+  })
+
+  it('answers an allowed desktop origin with the cockpit CORS headers', async () => {
+    seedOriginAllowlist(4321)
+    const boundary = 'b'
+    const req = makeReq(boundary, multipartBody(boundary, 'notes.txt', 'text/plain', Buffer.from('hi')))
+    req.headers.origin = 'tauri://localhost'
+    const res = makeRes()
+    await handleScreenshotUpload(req, res, { configRoot: ROOT })
+    expect(res.statusCode).toBe(200)
+    expect(res._headers['Access-Control-Allow-Origin']).toBe('tauri://localhost')
+    expect(res._headers['Access-Control-Allow-Credentials']).toBe('true')
+  })
+
+  it('sends the same CORS headers on an oversized upload', async () => {
+    seedOriginAllowlist(4321)
+    const req: any = Readable.from([])
+    req.url = '/api/screenshots'
+    req.method = 'POST'
+    req.headers = {
+      origin: 'tauri://localhost',
+      'content-type': 'multipart/form-data; boundary=b',
+      'content-length': String(30 * 1024 * 1024),
+    }
+    const res = makeRes()
+    await handleScreenshotUpload(req, res, { configRoot: ROOT })
+    expect(res.statusCode).toBe(413)
+    expect(res._headers['Access-Control-Allow-Origin']).toBe('tauri://localhost')
+  })
+
+  it('refuses an origin outside the allowlist without writing a file', async () => {
+    seedOriginAllowlist(4321)
+    const boundary = 'b'
+    const req = makeReq(boundary, multipartBody(boundary, 's.png', 'image/png', Buffer.from([0x89])))
+    req.headers.origin = 'https://evil.example'
+    const res = makeRes()
+    expect(await handleScreenshotUpload(req, res, { configRoot: ROOT })).toBe(true)
+    expect(res.statusCode).toBe(403)
+    expect(res._headers['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(existsSync(join(ROOT, 'screenshots'))).toBe(false)
   })
 })

@@ -84,6 +84,18 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
       target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
     })
     await expect(textarea).toHaveValue(/@\S+notes\.txt|@\S+\.txt/)
+
+    const wrapper = page.frameLocator('.cockpit-terminal-frame[data-session]').first()
+    const refused = await wrapper.locator('body').evaluate(body => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['stray'], 'stray.txt', { type: 'text/plain' }))
+      return ['dragover', 'drop'].map(type => {
+        const event = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer })
+        body.dispatchEvent(event)
+        return event.defaultPrevented
+      })
+    })
+    expect(refused).toEqual([true, true])
     await expect(composer.locator('[data-testid^="thumb-file-"]')).toContainText('notes.txt')
     await page.screenshot({ path: test.info().outputPath('composer-docked-1440x900.png') })
   } finally {

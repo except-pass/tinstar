@@ -13,8 +13,7 @@ import { CodexOtelReceiver } from './observability/codex-otel'
 import { SSEBroadcaster } from './api/sse'
 import { createTelemetryRoutes } from './api/telemetry'
 import { handleCoreApi } from './api/coreRoutes'
-import { currentOriginAllowlist, seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
-import { fail } from './api/envelope'
+import { seedOriginAllowlist, sessionUpgradeOrigins } from './api/originAllowlist'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { getConfigRoot } from './configRoot'
 import { acquireBackendSingleton, describeSingletonFailure, formatSingletonFailureForConsole } from './infra/lock'
@@ -129,13 +128,7 @@ export function startServer(opts: ServerOptions) {
     try {
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
-      if ((req.url ?? '').split('?')[0] === '/api/screenshots' && req.method === 'POST') {
-        if (req.headers.origin && !currentOriginAllowlist().includes(req.headers.origin)) {
-          fail(res, 'FORBIDDEN', 'Origin not allowed')
-          return
-        }
-        if (await handleScreenshotUpload(req, res, { configRoot: getConfigRoot() })) return
-      }
+      if (await handleScreenshotUpload(req, res, { configRoot: getConfigRoot() })) return
       if (await handleCoreApi(coreApi, req, res)) return
       if (req.url?.startsWith('/api/')) { res.writeHead(404); res.end('Not found'); return }
       const pathname = (req.url ?? '/').split('?')[0]!

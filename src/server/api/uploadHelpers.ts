@@ -11,6 +11,7 @@ export interface UploadResponder {
 
 export function createUploadResponder(
   res: ServerResponse,
+  headers: Record<string, string>,
   resolve: (v: boolean) => void,
   getTempPath: () => string | null,
 ): UploadResponder {
@@ -22,14 +23,14 @@ export function createUploadResponder(
     sendOk(data: unknown) {
       if (responded) return
       responded = true
-      ok(res, data)
+      ok(res, data, { headers })
       resolve(true)
     },
 
     sendFail(code, message, opts = {}) {
       if (responded) return
       responded = true
-      fail(res, code, message, opts)
+      fail(res, code, message, { ...opts, headers })
       resolve(true)
     },
 

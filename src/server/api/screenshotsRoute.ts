@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
 import { fail } from './envelope'
+import { resolveCorsHeaders } from './cors'
+import { currentOriginAllowlist } from './originAllowlist'
 import { createUploadResponder } from './uploadHelpers'
 
 interface Ctx { configRoot: string }
@@ -40,11 +42,18 @@ export async function handleScreenshotUpload(
   ctx: Ctx,
 ): Promise<boolean> {
   if (!req.url || req.method !== 'POST') return false
-  if (!URL_RE.test(req.url)) return false
+  if (!URL_RE.test(req.url.split('?')[0]!)) return false
+
+  const allowlist = currentOriginAllowlist()
+  const headers = resolveCorsHeaders({ origin: req.headers.origin, allowlist }) as Record<string, string>
+  if (req.headers.origin && !allowlist.includes(req.headers.origin)) {
+    fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    return true
+  }
 
   const declared = Number(req.headers['content-length'] || 0)
   if (declared && declared > MAX_BYTES + 16 * 1024) {
-    fail(res, 'INVALID_PARAMS', `Upload exceeds ${MAX_BYTES} bytes`, { status: 413 })
+    fail(res, 'INVALID_PARAMS', `Upload exceeds ${MAX_BYTES} bytes`, { status: 413, headers })
     return true
   }
 
@@ -58,7 +67,7 @@ export async function handleScreenshotUpload(
     try {
       bb = Busboy({ headers: req.headers, limits: { fileSize: MAX_BYTES, files: 1, fields: 0 } })
     } catch (err) {
-      fail(res, 'BAD_REQUEST', (err as Error).message)
+      fail(res, 'BAD_REQUEST', (err as Error).message, { headers })
       return resolve(true)
     }
 
@@ -66,7 +75,7 @@ export async function handleScreenshotUpload(
     let finalPath: string | null = null
     let receivedFile = false
     let aborted = false
-    const responder = createUploadResponder(res, resolve, () => tempPath)
+    const responder = createUploadResponder(res, headers, resolve, () => tempPath)
     const { sendOk, sendFail, cleanup } = responder
 
     bb.on('file', (_name, fileStream, info) => {
