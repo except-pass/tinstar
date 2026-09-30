@@ -21,6 +21,11 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+function shown(text: string): boolean {
+  const element = screen.queryByText(text)
+  return element !== null && element.closest('[hidden]') === null
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -64,13 +69,13 @@ describe('cockpit shell', () => {
     expect(workerCount?.className).toContain('is-quiet')
     expect(workerCount?.className).not.toContain('is-alert')
     expect(document.querySelector('.cockpit-context-title span')?.className ?? '').not.toContain('is-quiet')
-    expect(document.querySelector('.cockpit-worker-button')).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Jump to worker' })).toBeNull()
     expect(window.location.search).toBe('')
 
     fireEvent.click(screen.getByRole('button', { name: /Messages/ }))
     expect(screen.getByText('Hold the gate')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry sending' })).toBeTruthy()
-    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(shown('Ship the shell?')).toBe(false)
     expect(screen.getByRole('heading', { name: 'Workers' })).toBeTruthy()
     expect(window.location.search).toBe('')
 
@@ -80,7 +85,7 @@ describe('cockpit shell', () => {
     expect(jump).toBeTruthy()
     const alpha = document.querySelector('.cockpit-worker-button')
     expect(alpha).toBeTruthy()
-    expect(screen.queryByText('Hold the gate')).toBeNull()
+    expect(shown('Hold the gate')).toBe(false)
 
     fireEvent.click(alpha!)
     expect(await screen.findByRole('heading', { name: 'alpha' })).toBeTruthy()
@@ -94,8 +99,8 @@ describe('cockpit shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
     expect(await screen.findByRole('heading', { name: 'Workers' })).toBeTruthy()
-    expect(screen.getByText('Ship the shell?')).toBeTruthy()
-    expect(document.querySelector('.cockpit-worker-button')).toBeNull()
+    expect(shown('Ship the shell?')).toBe(true)
+    expect(screen.queryByRole('textbox', { name: 'Jump to worker' })).toBeNull()
   })
 
   it('opens a narrow window as a drawer and closes it from the backdrop or Escape', async () => {
@@ -115,18 +120,42 @@ describe('cockpit shell', () => {
     })
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Workers' })).toBeTruthy()
-    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(shown('Ship the shell?')).toBe(false)
     expect(screen.getByRole('button', { name: 'Overview' }).getAttribute('title')).toBe('Overview')
 
     fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
-    expect(screen.getByText('Ship the shell?')).toBeTruthy()
+    expect(shown('Ship the shell?')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss panel' }))
-    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(shown('Ship the shell?')).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(shown('Ship the shell?')).toBe(false)
     expect(screen.getByRole('heading', { name: 'Workers' })).toBeTruthy()
+  })
+
+  it('keeps an answer draft through a panel switch and a collapse', async () => {
+    vi.stubGlobal('fetch', (input: RequestInfo) => {
+      const url = String(input)
+      if (url.includes('/api/fleet/messages')) return Promise.resolve(json({ ok: true, data: [] }))
+      if (url.includes('/api/quota')) return Promise.resolve(json({ checkedAt: null, fetchedAt: null, commandError: null, providers: [] }))
+      if (url.includes('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [decision], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    render(<App />)
+    expect(await screen.findByText('Ship the shell?')).toBeTruthy()
+    fireEvent.click(screen.getByText('Answer'))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Answer this decision' }), { target: { value: 'ship it' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Messages/ }))
+    expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
+    expect((screen.getByRole('textbox', { name: 'Answer this decision' }) as HTMLTextAreaElement).value).toBe('ship it')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }))
+    expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
+    expect((screen.getByRole('textbox', { name: 'Answer this decision' }) as HTMLTextAreaElement).value).toBe('ship it')
   })
 
   it('shows a receipt total as a quiet tally until a message needs a retry', async () => {

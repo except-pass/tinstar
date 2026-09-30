@@ -9,20 +9,20 @@ const copy: Record<Exclude<ContextPanelMode, null>, { title: string; lede: strin
 }
 
 export function ContextPanel({ mode, count, onCollapse, children }: {
-  mode: Exclude<ContextPanelMode, null>
+  mode: ContextPanelMode
   count: number
   onCollapse: () => void
   children: ReactNode
 }) {
-  const panel = copy[mode]
-  return <aside className="cockpit-context" aria-label={panel.title}>
-    <header className="cockpit-context-header">
+  const panel = mode ? copy[mode] : null
+  return <aside className="cockpit-context" aria-label={panel?.title} hidden={!panel}>
+    {panel && <header className="cockpit-context-header">
       <div>
         <div className="cockpit-context-title"><strong>{panel.title}</strong><span className={mode === 'needs' ? undefined : 'is-quiet'}>{count}</span></div>
         <p>{panel.lede}</p>
       </div>
       <button type="button" aria-label="Close panel" onClick={onCollapse}><span className="material-symbols-outlined" aria-hidden="true">close</span><span>Close</span></button>
-    </header>
+    </header>}
     <div className="cockpit-context-body">{children}</div>
     <QuotaRail />
   </aside>
