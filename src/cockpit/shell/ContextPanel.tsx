@@ -18,7 +18,7 @@ export function ContextPanel({ mode, count, onCollapse, children }: {
   return <aside className="cockpit-context" aria-label={panel.title}>
     <header className="cockpit-context-header">
       <div>
-        <div className="cockpit-context-title"><strong>{panel.title}</strong><span>{count}</span></div>
+        <div className="cockpit-context-title"><strong>{panel.title}</strong><span className={mode === 'needs' ? undefined : 'is-quiet'}>{count}</span></div>
         <p>{panel.lede}</p>
       </div>
       <button type="button" aria-label="Close panel" onClick={onCollapse}><span className="material-symbols-outlined" aria-hidden="true">close</span><span>Close</span></button>

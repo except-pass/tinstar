@@ -15,6 +15,11 @@ export interface OutboxMessage {
   announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
 }
 
+/** A receipt needs the operator when sending failed or First Mate was not woken. */
+export function messageNeedsAttention(message: OutboxMessage): boolean {
+  return message.state === 'sending' || (message.state === 'saved' && message.announced === false)
+}
+
 export type Draft = { requestId: string; anchorKey?: string; kind: 'answer' | 'message'; text: string }
 export type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
 

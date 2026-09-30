@@ -1,4 +1,4 @@
-import type { OutboxMessage } from './types'
+import { messageNeedsAttention, type OutboxMessage } from './types'
 
 export function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; retry: (message: OutboxMessage) => void }) {
   if (!messages.length) return null
@@ -6,7 +6,7 @@ export function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; re
     <div className="cockpit-message-top"><strong>{message.kind === 'answer' ? 'Answer' : 'Message'} · {message.taskId ?? 'First Mate backlog'}</strong><span>{message.state === 'acknowledged' ? 'First Mate has it' : message.state === 'unknown' ? 'status unknown' : message.state}</span></div>
     <p>{message.text}</p>
     {message.state === 'saved' && message.canReceive === false && <small role="status">Saved, not yet read. First Mate will read it when it wakes.</small>}
-    {(message.state === 'sending' || (message.state === 'saved' && message.announced === false)) && <button type="button" onClick={() => retry(message)}>{message.state === 'sending' ? 'Retry sending' : 'Retry waking First Mate'}</button>}
+    {messageNeedsAttention(message) && <button type="button" onClick={() => retry(message)}>{message.state === 'sending' ? 'Retry sending' : 'Retry waking First Mate'}</button>}
     {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
   </article>)}</div>
 }

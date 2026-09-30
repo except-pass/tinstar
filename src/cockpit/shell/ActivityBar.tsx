@@ -9,10 +9,12 @@ const tools: Array<{ mode: PanelTool; label: string; icon: string }> = [
   { mode: 'workers', label: 'Workers', icon: 'groups' },
 ]
 
-export function ActivityBar({ overviewActive, panelMode, counts, onOverview, onSelect }: {
+export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect }: {
   overviewActive: boolean
   panelMode: ContextPanelMode
   counts: Record<PanelTool, number>
+  /** Messages that still need a retry. The receipt total stays a quiet tally. */
+  messageAttention?: number
   onOverview: () => void
   onSelect: (mode: PanelTool) => void
 }) {
@@ -23,13 +25,15 @@ export function ActivityBar({ overviewActive, panelMode, counts, onOverview, onS
       <span className="cockpit-activity-label">Overview</span>
     </button>
     {tools.map(tool => {
-      const count = counts[tool.mode]
+      const total = counts[tool.mode]
+      const alert = tool.mode === 'needs' || (tool.mode === 'messages' && messageAttention > 0)
+      const count = tool.mode === 'messages' && messageAttention > 0 ? messageAttention : total
       const open = panelMode === tool.mode
       const name = count > 0 ? `${tool.label}, ${count}` : tool.label
       return <button type="button" key={tool.mode} className={`cockpit-activity-button${open ? ' is-panel' : ''}`} aria-pressed={open} aria-label={name} title={name} onClick={() => onSelect(tool.mode)}>
         <span className="material-symbols-outlined" aria-hidden="true">{tool.icon}</span>
         <span className="cockpit-activity-label" aria-hidden="true">{tool.label}</span>
-        {count > 0 && <span className="cockpit-activity-count" aria-hidden="true">{count}</span>}
+        {count > 0 && <span className={`cockpit-activity-count${alert ? ' is-alert' : ' is-quiet'}`} aria-hidden="true">{count}</span>}
       </button>
     })}
     <QuotaBadges />

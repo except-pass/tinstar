@@ -57,6 +57,13 @@ describe('cockpit shell', () => {
     render(<App />)
     expect(await screen.findByText('Ship the shell?')).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Workers' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Needs You/ }).querySelector('.cockpit-activity-count')?.className).toContain('is-alert')
+    expect((await screen.findByRole('button', { name: 'Messages, 1' })).querySelector('.cockpit-activity-count')?.className).toContain('is-alert')
+    const workerCount = screen.getByRole('button', { name: /Workers/ }).querySelector('.cockpit-activity-count')
+    expect(workerCount?.textContent).toBe('1')
+    expect(workerCount?.className).toContain('is-quiet')
+    expect(workerCount?.className).not.toContain('is-alert')
+    expect(document.querySelector('.cockpit-context-title span')?.className ?? '').not.toContain('is-quiet')
     expect(document.querySelector('.cockpit-worker-button')).toBeNull()
     expect(window.location.search).toBe('')
 
@@ -68,6 +75,7 @@ describe('cockpit shell', () => {
     expect(window.location.search).toBe('')
 
     fireEvent.click(screen.getByRole('button', { name: /Workers/ }))
+    expect(document.querySelector('.cockpit-context-title span')?.className).toContain('is-quiet')
     const jump = screen.getByRole('textbox', { name: 'Jump to worker' })
     expect(jump).toBeTruthy()
     const alpha = document.querySelector('.cockpit-worker-button')
@@ -119,6 +127,25 @@ describe('cockpit shell', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByText('Ship the shell?')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Workers' })).toBeTruthy()
+  })
+
+  it('shows a receipt total as a quiet tally until a message needs a retry', async () => {
+    vi.stubGlobal('fetch', (input: RequestInfo) => {
+      const url = String(input)
+      if (url.includes('/api/fleet/messages')) return Promise.resolve(json({ ok: true, data: [{
+        requestId: 'tinstar-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', home: '/tmp/firstmate', taskId: 'alpha',
+        decisionKey: null, kind: 'message', text: 'Noted', state: 'acknowledged', announced: true, reply: null, canReceive: true,
+      }] }))
+      if (url.includes('/api/quota')) return Promise.resolve(json({ checkedAt: null, fetchedAt: null, commandError: null, providers: [] }))
+      if (url.includes('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    render(<App />)
+    const messages = await screen.findByRole('button', { name: 'Messages, 1' })
+    const tally = messages.querySelector('.cockpit-activity-count')
+    expect(tally?.textContent).toBe('1')
+    expect(tally?.className).toContain('is-quiet')
+    expect(tally?.className).not.toContain('is-alert')
   })
 })
 

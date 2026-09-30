@@ -57,13 +57,15 @@
 .cockpit-activity .cockpit-overview-button{width:100%}
 .cockpit-activity-button .material-symbols-outlined{font-size:20px}
 .cockpit-activity-button:hover,.cockpit-activity-button.is-panel,.cockpit-activity .cockpit-overview-button.active{color:#00f0ff;background:#0f2428;border-color:transparent;border-left-color:#00f0ff}
-.cockpit-activity-count{position:absolute;top:4px;right:6px;min-width:14px;padding:0 3px;border-radius:8px;background:#c4485a;color:#fff;font:9px 'JetBrains Mono',monospace;line-height:14px}
+.cockpit-activity-count{position:absolute;top:4px;right:6px;box-sizing:border-box;min-width:14px;height:14px;padding:0 3px;border:1px solid rgba(138,160,171,.45);border-radius:8px;background:transparent;color:#8aa0ab;font:9px/12px 'JetBrains Mono',monospace;text-align:center}
+.cockpit-activity-count.is-alert{border-color:transparent;background:#c4485a;color:#fff}
 .cockpit-context{width:min(340px,calc(100vw - 64px));flex:none;display:flex;flex-direction:column;height:100vh;min-width:0;background:#0a0e12;border-right:1px solid rgba(130,175,195,.16)}
 .cockpit-context-header{display:flex;align-items:flex-start;gap:8px;padding:16px 14px 12px;border-bottom:1px solid rgba(130,175,195,.12)}
 .cockpit-context-header>div{min-width:0;flex:1}
 .cockpit-context-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .cockpit-context-title strong{font-size:18px;font-weight:600}
 .cockpit-context-title span{color:#8fd8e4;font:12px 'JetBrains Mono',monospace}
+.cockpit-context-title span.is-quiet{color:#8aa0ab}
 .cockpit-context-header p{margin:6px 0 0;color:#8195a1;font-size:12px;line-height:1.35}
 .cockpit-context-header button{flex:none;display:flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 8px;border:1px solid #29404a;border-radius:4px;background:#10191e;color:#d5e4ea;font:11px 'JetBrains Mono',monospace}
 .cockpit-context-header button .material-symbols-outlined{font-size:18px}

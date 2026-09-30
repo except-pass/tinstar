@@ -11,7 +11,7 @@ import { MessagesPanel } from './cockpit/shell/MessagesPanel'
 import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
 import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
-import { DRAWER_MEDIA, defaultPanelMode, initialPanelMode, isDrawerLayout, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
+import { DRAWER_MEDIA, defaultPanelMode, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import './cockpit.css'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
@@ -419,7 +419,7 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} onOverview={openOverview} onSelect={selectPanel} />
+    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     {panelMode && <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
       {panelMode === 'needs' && <NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} />}
