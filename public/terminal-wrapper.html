@@ -195,6 +195,18 @@
     })
     window.parent.postMessage({ type: 'terminal-wrapper-ready', sessionName: session }, '*')
 
+    function refuseFileDrop(e) {
+      var types = e.dataTransfer && e.dataTransfer.types
+      if (types && Array.prototype.indexOf.call(types, 'Files') !== -1) e.preventDefault()
+    }
+
+    function guardFileDrop(win) {
+      win.addEventListener('dragover', refuseFileDrop, true)
+      win.addEventListener('drop', refuseFileDrop, true)
+    }
+
+    guardFileDrop(window)
+
     var handledCycleEvents = new WeakSet()
     function cycleAction(e) {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return null
@@ -243,6 +255,7 @@
     // Layer 2b: capture-phase DOM listener (fallback)
     function tryAttachKeydown() {
       try {
+        guardFileDrop(termEl.contentWindow)
         termEl.contentWindow.addEventListener('keydown', function(e) {
           if (notifyCycle(e)) return
           // Ctrl+V: read clipboard and paste into terminal
