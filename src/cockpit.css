@@ -68,7 +68,7 @@
 .cockpit-quota-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:28px}
 .cockpit-quota-short{color:#8aa0ab;font:9px 'JetBrains Mono',monospace;white-space:nowrap}
 .cockpit-quota-meter:hover,.cockpit-quota-meter:focus,.cockpit-quota-meter:focus-visible{background:#122028}
-.cockpit-quota-glyph{width:14px;height:14px;display:block}
+.cockpit-quota-glyph{width:16px;height:16px;display:block;object-fit:contain}
 .cockpit-quota-bar{width:28px;height:3px;border-radius:2px;background:#1c2a32;overflow:hidden}
 .cockpit-quota-bar>span{display:block;height:100%;background:currentColor}
 .cockpit-quota-pct{line-height:1}

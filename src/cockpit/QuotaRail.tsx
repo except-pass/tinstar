@@ -40,16 +40,16 @@ function runOutLabel(provider: QuotaMeterProvider, now: number): string {
   return 'Not projected'
 }
 
+/** Marks already shipped in public/agent-icons for the old session templates. */
+const PROVIDER_LOGO: Record<string, string> = {
+  claude: '/agent-icons/claude.svg',
+  codex: '/agent-icons/openai.svg',
+  grok: '/agent-icons/grok.svg',
+}
+
 function Glyph({ id }: { id: string }) {
-  if (id === 'claude') {
-    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4 9.3 6.1 14 8 9.3 9.9 8 14.6 6.7 9.9 2 8 6.7 6.1Z" fill="currentColor" /></svg>
-  }
-  if (id === 'codex') {
-    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M2.5 8h11M2.5 11.5h7" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" /></svg>
-  }
-  if (id === 'grok') {
-    return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M5.2 10.8 10.8 5.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-  }
+  const logo = PROVIDER_LOGO[id]
+  if (logo) return <img className="cockpit-quota-glyph" src={logo} alt="" />
   return <svg className="cockpit-quota-glyph" viewBox="0 0 16 16" aria-hidden="true"><text x="8" y="12" textAnchor="middle" fontSize="11" fill="currentColor">{id.slice(0, 1).toUpperCase()}</text></svg>
 }
 
