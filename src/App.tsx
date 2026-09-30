@@ -12,6 +12,7 @@ import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismis
 import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
 import { DRAWER_MEDIA, defaultPanelMode, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
+import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
@@ -58,6 +59,7 @@ type DismissResult = { dismissed: boolean; fallback?: boolean; error?: string | 
 export default function App() {
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
+  const [composerOpen, setComposerOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
   const [drawer, setDrawer] = useState(isDrawerLayout)
@@ -428,6 +430,7 @@ export default function App() {
     </ContextPanel>}
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {current ? <>
+        <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {
             const terminal = terminals[worker.key]
@@ -439,6 +442,10 @@ export default function App() {
           {!current.terminalAvailable && <p className="cockpit-terminal-placeholder">Terminal endpoint unavailable</p>}
           {terminals[current.key]?.state === 'unavailable' && <p className="cockpit-terminal-placeholder">{(terminals[current.key] as Extract<Terminal, { state: 'unavailable' }>).reason}</p>}
         </div></section>
+        <div className="cockpit-prompt-dock">
+          <ComposerInput key={current.key} sessionId={current.key} accent={identityColor(current.id)} status={current.state} expanded={composerOpen} onToggle={() => setComposerOpen(open => !open)} />
+        </div>
+        </div>
         <aside className={`cockpit-detail-rail ${detailOpen ? 'is-open' : ''}`}>
           <button type="button" className="cockpit-detail-summary" aria-expanded={detailOpen} onClick={() => setDetailOpen(open => !open)}>{detailOpen ? 'Close' : 'Details'}</button>
           <div className="cockpit-detail-body">
