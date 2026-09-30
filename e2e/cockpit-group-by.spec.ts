@@ -90,6 +90,7 @@ else:
     }
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(4)
     await expect(page.getByRole('combobox', { name: 'Group by' })).toHaveValue('status')
     await expect(page.getByRole('combobox', { name: 'Then by' })).toHaveValue('project')

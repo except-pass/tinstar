@@ -63,10 +63,11 @@ test('overview filter and worker task-id link on a private fleet', async ({ brow
       } catch { /* starting */ }
       await new Promise(resolve => setTimeout(resolve, 200))
     }
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+    const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
     const cards = () => page.locator('.cockpit-card')
     const filter = page.getByRole('searchbox', { name: 'Filter workers' })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(2)
     await expect(cards()).toHaveCount(2)
     await expect(page.locator('.cockpit-group')).toHaveCount(2)
@@ -84,7 +85,7 @@ test('overview filter and worker task-id link on a private fleet', async ({ brow
     await expect(filter).toBeVisible()
     await expect(cards()).toHaveCount(1)
     await page.screenshot({ path: test.info().outputPath('filter-mobile.png') })
-    await page.setViewportSize({ width: 1280, height: 720 })
+    await page.setViewportSize({ width: 1600, height: 900 })
 
     await page.reload()
     await expect(filter).toHaveValue('harbor')

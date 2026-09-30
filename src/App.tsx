@@ -5,12 +5,13 @@ import {
   applyGroupChoice, browserGroupStorage, directLabel, groupDimensionLabels, groupDimensions, groupWorkers,
   readGroupChoice, writeGroupChoice, type GroupDimension,
 } from './cockpit/groupWorkers'
-import { QuotaRail } from './cockpit/QuotaRail'
-import { MessageFeed } from './cockpit/shell/MessagesPanel'
+import { ActivityBar } from './cockpit/shell/ActivityBar'
+import { ContextPanel } from './cockpit/shell/ContextPanel'
+import { MessagesPanel } from './cockpit/shell/MessagesPanel'
 import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
 import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
-import { WorkerList } from './cockpit/shell/WorkerSwitcherPanel'
-import type { AttentionCard, Draft, OutboxMessage, SubmitResult, Worker } from './cockpit/shell/types'
+import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
+import { defaultPanelMode, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import './cockpit.css'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
@@ -59,6 +60,7 @@ export default function App() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
+  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => defaultPanelMode(readOverviewSearch(window.location.search).worker))
   const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
@@ -276,13 +278,19 @@ export default function App() {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
+    setPanelMode('workers')
     applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, mode)
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
     setSelectedAttention(null)
+    setPanelMode('needs')
     applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
+
+  const selectPanel = useCallback((mode: Exclude<ContextPanelMode, null>) => {
+    setPanelMode(current => current === mode ? null : mode)
+  }, [])
 
   const order = useMemo(() => workers.map(w => w.key), [workers])
   const cycle = useCallback((direction: number, fromTerminal = false) => {
@@ -305,7 +313,11 @@ export default function App() {
   }, [cycle])
 
   useEffect(() => {
-    const onPop = () => setOverviewLocation(readOverviewSearch(window.location.search))
+    const onPop = () => {
+      const next = readOverviewSearch(window.location.search)
+      setOverviewLocation(next)
+      setPanelMode(defaultPanelMode(next.worker))
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -384,25 +396,12 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <aside className="cockpit-rail">
-      <div className="cockpit-brand"><span className="cockpit-brand-mark">✦</span><div><strong>TIN STAR</strong><small>WORKER COCKPIT</small></div></div>
-      <button className={`cockpit-overview-button ${!overviewLocation.worker ? 'active' : ''}`} onClick={openOverview}><span className="material-symbols-outlined">dashboard</span>Overview</button>
-      <input className="cockpit-jump" aria-label="Jump to worker" placeholder="Jump to worker ↵" value={jumpText} onChange={e => setJumpText(e.target.value)} onKeyDown={e => {
-        if (e.key !== 'Enter') return
-        const needle = jumpText.trim().toLowerCase()
-        const match = workers.find(w => w.id.toLowerCase().includes(needle))
-        if (match && needle) { openWorker(match.key); setJumpText('') }
-      }} />
-      <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
-      <NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} />
-      <div className="cockpit-rail-heading"><span>MESSAGES</span><span>{messages.length}</span></div>
-      {messageError && <p className="cockpit-attention-empty" role="alert">{messageError}</p>}
-      <div className="cockpit-rail-messages"><MessageFeed messages={messages} retry={retry} /></div>
-      <div className="cockpit-rail-heading"><span>WORKERS</span><span>{workers.length}</span></div>
-      <WorkerList workers={workers} currentKey={current?.key ?? null} onOpen={openWorker} />
-      <QuotaRail />
-      <div className="cockpit-rail-footer">CTRL + [ &nbsp; / &nbsp; CTRL + ]<span>Switch workers</span></div>
-    </aside>
+    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} onOverview={openOverview} onSelect={selectPanel} />
+    {panelMode && <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
+      {panelMode === 'needs' && <NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} />}
+      {panelMode === 'messages' && <MessagesPanel messages={messages} error={messageError} retry={retry} />}
+      {panelMode === 'workers' && <WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} />}
+    </ContextPanel>}
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {current ? <>
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
