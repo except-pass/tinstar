@@ -100,7 +100,16 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.locator('.cockpit-context')).toHaveCount(0)
     await expect(page.locator('.cockpit-context-backdrop')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Overview' })).toHaveAttribute('title', 'Overview')
-    expect(await page.locator('.cockpit-activity').evaluate(bar => bar.scrollWidth <= bar.clientWidth + 1)).toBe(true)
+    expect(await page.locator('.cockpit-activity').evaluate(bar => {
+      if (bar.scrollWidth > bar.clientWidth + 1) return false
+      const barBox = bar.getBoundingClientRect()
+      const lines = Array.from(bar.querySelectorAll('.cockpit-activity-line'))
+      const words = lines.map(line => line.textContent)
+      return words.join(' ') === 'Overview Needs You Messages Workers' && lines.every(line => {
+        const box = line.getBoundingClientRect()
+        return box.width > 8 && box.left >= barBox.left - 1 && box.right <= barBox.right + 1
+      })
+    })).toBe(true)
     await page.screenshot({ path: test.info().outputPath('shell-616-closed.png') })
     await page.getByRole('button', { name: 'Needs You' }).click()
     await expect(page.locator('.cockpit-context')).toBeVisible()

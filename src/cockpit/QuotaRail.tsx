@@ -137,7 +137,7 @@ export function QuotaRail() {
   return <QuotaMeters snapshot={snapshot} now={now} />
 }
 
-/** Glyph and percent for the 64px activity strip. Weekly strips stay on QuotaRail. */
+/** Glyph and percent for the activity strip. Weekly strips stay on QuotaRail. */
 const BADGE_LIMIT = 4
 
 export function QuotaBadges() {
