@@ -11,7 +11,7 @@ import { MessagesPanel } from './cockpit/shell/MessagesPanel'
 import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
 import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
-import { DRAWER_MEDIA, defaultPanelMode, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
+import { DRAWER_MEDIA, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
 
@@ -283,13 +283,16 @@ export default function App() {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
-    if (!drawerRef.current) setPanelMode('workers')
+    if (mode === 'push') {
+      if (drawerRef.current) setPanelMode(null)
+      else if (!overviewRef.current.worker) setPanelMode(current => current && 'workers')
+    }
     applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, mode)
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
     setSelectedAttention(null)
-    setPanelMode(drawerRef.current ? null : 'needs')
+    if (drawerRef.current) setPanelMode(null)
     applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
 
@@ -339,9 +342,7 @@ export default function App() {
 
   useEffect(() => {
     const onPop = () => {
-      const next = readOverviewSearch(window.location.search)
-      setOverviewLocation(next)
-      setPanelMode(drawerRef.current ? null : defaultPanelMode(next.worker))
+      setOverviewLocation(readOverviewSearch(window.location.search))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)

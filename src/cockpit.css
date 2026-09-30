@@ -71,7 +71,7 @@
 .cockpit-context-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .cockpit-context-title strong{font-size:18px;font-weight:600}
 .cockpit-context-title span{color:#8fd8e4;font:12px 'JetBrains Mono',monospace}
-.cockpit-context-title span.is-quiet{color:#8aa0ab}
+.cockpit-context-title span.is-quiet{box-sizing:border-box;min-width:18px;padding:0 5px;border:1px solid rgba(138,160,171,.45);border-radius:8px;background:transparent;color:#8aa0ab;text-align:center}
 .cockpit-context-header p{margin:6px 0 0;color:#8195a1;font-size:12px;line-height:1.35}
 .cockpit-context-header button{flex:none;display:flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 8px;border:1px solid #29404a;border-radius:4px;background:#10191e;color:#d5e4ea;font:11px 'JetBrains Mono',monospace}
 .cockpit-context-header button .material-symbols-outlined{font-size:18px}

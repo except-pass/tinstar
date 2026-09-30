@@ -85,6 +85,8 @@ test('activity strip switches panels, opens a worker, and restores overview on b
 
     await page.goBack()
     await expect(page.getByRole('heading', { name: 'Workers' })).toBeVisible()
+    await expect(page.locator('.cockpit-context')).toBeHidden()
+    await page.getByRole('button', { name: 'Needs You' }).click()
     await expect(page.getByText('Nothing needs you right now.')).toBeVisible()
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
@@ -92,6 +94,8 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await page.getByRole('button', { name: 'Workers' }).click()
     await expect(page.locator('.cockpit-context')).toBeVisible()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(1)
+    await expect(page.locator('.cockpit-context-title span')).toHaveCSS('border-top-width', '1px')
+    await expect(page.locator('.cockpit-context-title span')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
     await page.screenshot({ path: test.info().outputPath('shell-medium-1200x800.png') })
 
     await page.setViewportSize({ width: 616, height: 800 })
@@ -127,6 +131,10 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.locator('iframe[title="alpha terminal"]')).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: test.info().outputPath('shell-616-worker.png') })
+    await page.getByRole('button', { name: 'Workers' }).click()
+    await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
+    await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
+    await expect(page.locator('.cockpit-context')).toBeHidden()
     await page.getByRole('button', { name: 'Workers' }).click()
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
     await page.getByRole('button', { name: 'Close panel' }).click()

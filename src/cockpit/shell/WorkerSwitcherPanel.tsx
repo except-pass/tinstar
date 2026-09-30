@@ -23,8 +23,8 @@ export function WorkerSwitcherPanel({ workers, currentKey, query, onQuery, onOpe
   return <>
     <input className="cockpit-jump" aria-label="Jump to worker" placeholder="Search workers" value={query} onChange={event => onQuery(event.target.value)} onKeyDown={event => {
       if (event.key !== 'Enter') return
-      const match = workers.find(worker => worker.id.toLowerCase().includes(needle))
-      if (match && needle) { onOpen(match.key); onQuery('') }
+      const first = shown[0]
+      if (first && needle) { onOpen(first.key); onQuery('') }
     }} />
     <WorkerList workers={shown} currentKey={currentKey} onOpen={onOpen} />
     <p className="cockpit-switch-hint">Ctrl+[ / Ctrl+] switches workers</p>
