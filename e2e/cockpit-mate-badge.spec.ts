@@ -103,6 +103,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     await page.screenshot({ path: test.info().outputPath('private-mate-badge-detail-800x900.png') })
     await page.setViewportSize({ width: 720, height: 900 })
     await expect(page.locator('.cockpit-detail-rail .cockpit-worker-marks .cockpit-mate')).toBeHidden()
+    if (await page.locator('.cockpit-context-backdrop').count()) await page.keyboard.press('Escape')
     await page.locator('.cockpit-detail-summary').click()
     await expect(page.locator('.cockpit-detail-rail .cockpit-status-detail .cockpit-mate')).toHaveText('Second mate')
     await page.locator('.cockpit-detail-summary').click()

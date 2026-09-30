@@ -25,3 +25,15 @@ export type ContextPanelMode = 'needs' | 'messages' | 'workers' | null
 export function defaultPanelMode(worker: string | null): Exclude<ContextPanelMode, null> {
   return worker ? 'workers' : 'needs'
 }
+
+/** Below this width the context panel is a drawer and starts closed. */
+export const DRAWER_MEDIA = '(max-width: 1099px)'
+
+export function isDrawerLayout(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia(DRAWER_MEDIA).matches
+}
+
+/** A narrow window starts with the canvas clear. Wide desktop opens the matching panel. */
+export function initialPanelMode(worker: string | null, drawer = isDrawerLayout()): ContextPanelMode {
+  return drawer ? null : defaultPanelMode(worker)
+}

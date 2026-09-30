@@ -11,7 +11,7 @@ import { MessagesPanel } from './cockpit/shell/MessagesPanel'
 import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
 import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
-import { defaultPanelMode, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
+import { DRAWER_MEDIA, defaultPanelMode, initialPanelMode, isDrawerLayout, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import './cockpit.css'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
@@ -60,7 +60,10 @@ export default function App() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
-  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => defaultPanelMode(readOverviewSearch(window.location.search).worker))
+  const [drawer, setDrawer] = useState(isDrawerLayout)
+  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => initialPanelMode(readOverviewSearch(window.location.search).worker))
+  const drawerRef = useRef(drawer)
+  drawerRef.current = drawer
   const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
@@ -278,13 +281,13 @@ export default function App() {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
-    setPanelMode('workers')
+    if (!drawerRef.current) setPanelMode('workers')
     applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, mode)
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
     setSelectedAttention(null)
-    setPanelMode('needs')
+    setPanelMode(drawerRef.current ? null : 'needs')
     applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
 
@@ -313,10 +316,30 @@ export default function App() {
   }, [cycle])
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(DRAWER_MEDIA)
+    const onChange = () => setDrawer(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!drawer || !panelMode) return
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setPanelMode(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [drawer, panelMode])
+
+  useEffect(() => {
     const onPop = () => {
       const next = readOverviewSearch(window.location.search)
       setOverviewLocation(next)
-      setPanelMode(defaultPanelMode(next.worker))
+      setPanelMode(drawerRef.current ? null : defaultPanelMode(next.worker))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -397,6 +420,7 @@ export default function App() {
 
   return <div className="cockpit-shell">
     <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} onOverview={openOverview} onSelect={selectPanel} />
+    {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     {panelMode && <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
       {panelMode === 'needs' && <NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} />}
       {panelMode === 'messages' && <MessagesPanel messages={messages} error={messageError} retry={retry} />}

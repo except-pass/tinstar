@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
 import { NeedsYouPanel } from './NeedsYouPanel'
-import { defaultPanelMode, type AttentionCard, type Worker } from './types'
+import { defaultPanelMode, initialPanelMode, type AttentionCard, type Worker } from './types'
 
 const worker: Worker = {
   key: 'cockpit-0-alpha', id: 'alpha', home: '/tmp/firstmate', kind: 'worker', state: 'working',
@@ -31,6 +31,13 @@ describe('context panel defaults', () => {
   it('opens Needs You on overview and the worker switcher on a worker route', () => {
     expect(defaultPanelMode(null)).toBe('needs')
     expect(defaultPanelMode('alpha')).toBe('workers')
+  })
+
+  it('starts closed on a narrow window', () => {
+    expect(initialPanelMode(null, false)).toBe('needs')
+    expect(initialPanelMode('alpha', false)).toBe('workers')
+    expect(initialPanelMode(null, true)).toBeNull()
+    expect(initialPanelMode('alpha', true)).toBeNull()
   })
 })
 
@@ -72,7 +79,7 @@ describe('cockpit shell', () => {
     expect(document.querySelector('.cockpit-worker-button')?.className).toContain('active')
     expect(new URLSearchParams(window.location.search).get('worker')).toBe('alpha')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }))
     expect(screen.queryByRole('textbox', { name: 'Jump to worker' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'alpha' })).toBeTruthy()
     expect(new URLSearchParams(window.location.search).get('worker')).toBe('alpha')
@@ -81,6 +88,37 @@ describe('cockpit shell', () => {
     expect(await screen.findByRole('heading', { name: 'Workers' })).toBeTruthy()
     expect(screen.getByText('Ship the shell?')).toBeTruthy()
     expect(document.querySelector('.cockpit-worker-button')).toBeNull()
+  })
+
+  it('opens a narrow window as a drawer and closes it from the backdrop or Escape', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('1099'),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() { return false },
+    }))
+    vi.stubGlobal('fetch', (input: RequestInfo) => {
+      const url = String(input)
+      if (url.includes('/api/fleet/messages')) return Promise.resolve(json({ ok: true, data: [] }))
+      if (url.includes('/api/quota')) return Promise.resolve(json({ checkedAt: null, fetchedAt: null, commandError: null, providers: [] }))
+      if (url.includes('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [decision], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Workers' })).toBeTruthy()
+    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Overview' }).getAttribute('title')).toBe('Overview')
+
+    fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
+    expect(screen.getByText('Ship the shell?')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss panel' }))
+    expect(screen.queryByText('Ship the shell?')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Needs You/ }))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByText('Ship the shell?')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Workers' })).toBeTruthy()
   })
 })
 

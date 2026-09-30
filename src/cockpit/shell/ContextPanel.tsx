@@ -21,7 +21,7 @@ export function ContextPanel({ mode, count, onCollapse, children }: {
         <div className="cockpit-context-title"><strong>{panel.title}</strong><span>{count}</span></div>
         <p>{panel.lede}</p>
       </div>
-      <button type="button" aria-label="Collapse panel" onClick={onCollapse}><span className="material-symbols-outlined" aria-hidden="true">left_panel_close</span></button>
+      <button type="button" aria-label="Close panel" onClick={onCollapse}><span className="material-symbols-outlined" aria-hidden="true">close</span><span>Close</span></button>
     </header>
     <div className="cockpit-context-body">{children}</div>
     <QuotaRail />

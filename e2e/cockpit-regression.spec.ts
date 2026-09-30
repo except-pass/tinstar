@@ -249,6 +249,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       await page.screenshot({ path: test.info().outputPath(`private-prompt-${viewport.width}x${viewport.height}.png`) })
     }
     await page.setViewportSize({ width: 720, height: 900 })
+    if (await page.locator('.cockpit-context-backdrop').count()) await page.keyboard.press('Escape')
     await page.locator('.cockpit-detail-summary').click()
     await expect(page.locator('.cockpit-objective')).toBeVisible()
     await expect(page.locator('.cockpit-status-detail')).toBeVisible()
