@@ -3,8 +3,15 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import {
   FirstmateViews, orphanViewTtydPids, parsePs, parseWindowRef, resolveViewScript, staleViewSessions,
-  viewTtydArgv, type ViewsDeps,
+  tmuxFields, viewTtydArgv, type ViewsDeps,
 } from './views'
+
+/** Expand -F after rewriting controls to '_', matching a tmux that will not print a tab. */
+function tmuxFormat(args: string[], rows: Array<Record<string, string>>): string {
+  const fmt = args[args.indexOf('-F') + 1] ?? ''
+  const safe = fmt.replace(/[\u0000-\u001F\u007F]/g, '_')
+  return rows.map(row => safe.replace(/#\{([A-Za-z0-9_]+)\}/g, (_match, key: string) => row[key] ?? '')).join('\n')
+}
 
 const SCRIPT = '/opt/tinstar/bin/tinstar-fm-view'
 
@@ -168,8 +175,18 @@ describe('FirstmateViews.ensure', () => {
   it('only ever runs read-only tmux verbs against workers; kill-session and send-keys only name tsview- sessions', async () => {
     const h = harness({ tmux: async args => {
       h.tmuxCalls.push(args)
-      if (args[0] === 'list-sessions') return `firstmate\t1\t900000\ntsview-a-1\t0\t100\ntsview-b-2\t1\t100\ntsview-c-3\t0\t999990\n`
-      if (args[0] === 'list-panes') return 'firstmate\t@4\t1\ntsview-fix-login-9\t@4\t1\n'
+      if (args[0] === 'list-sessions') return tmuxFormat(args, [
+        { session_name: 'firstmate', session_attached: '1', session_created: '900000' },
+        { session_name: 'tsview-a-1', session_attached: '0', session_created: '100' },
+        { session_name: 'tsview-has space', session_attached: '0', session_created: '100' },
+        { session_name: 'tsview-a|b', session_attached: '0', session_created: '100' },
+        { session_name: 'tsview-b-2', session_attached: '1', session_created: '100' },
+        { session_name: 'tsview-c-3', session_attached: '0', session_created: '999990' },
+      ])
+      if (args[0] === 'list-panes') return tmuxFormat(args, [
+        { session_name: 'firstmate', window_id: '@4', pane_in_mode: '1' },
+        { session_name: 'tsview-fix-login-9', window_id: '@4', pane_in_mode: '1' },
+      ])
       if (args[0] === 'list-clients') return '/dev/ttys009\n'
       return '@4 fm-fix-login\n'
     } })
@@ -180,7 +197,12 @@ describe('FirstmateViews.ensure', () => {
     const verbs = new Set(h.tmuxCalls.map(c => c[0]))
     expect([...verbs].sort()).toEqual(['kill-session', 'list-clients', 'list-panes', 'list-sessions', 'list-windows', 'send-keys', 'switch-client'])
     const kills = h.tmuxCalls.filter(c => c[0] === 'kill-session')
-    expect(kills).toEqual([['kill-session', '-t', '=tsview-a-1']])   // unattached + old; not b (attached), not c (fresh)
+    // unattached + old, including a name with a space or a pipe; not b (attached), not c (fresh)
+    expect(kills).toEqual([
+      ['kill-session', '-t', '=tsview-a-1'],
+      ['kill-session', '-t', '=tsview-has space'],
+      ['kill-session', '-t', '=tsview-a|b'],
+    ])
     expect(h.tmuxCalls.filter(c => c[0] === 'send-keys')).toEqual([['send-keys', '-X', '-t', '=tsview-fix-login-9:', 'cancel']])
     expect(h.tmuxCalls.filter(c => c[0] === 'list-clients')).toEqual([['list-clients', '-t', '=tsview-fix-login-9', '-F', '#{client_tty}']])
     expect(h.tmuxCalls.filter(c => c[0] === 'switch-client')).toEqual([['switch-client', '-c', '/dev/ttys009', '-T', 'tsview-passthrough']])
@@ -191,15 +213,21 @@ describe('FirstmateViews.ensure', () => {
 describe('FirstmateViews.leave', () => {
   it('cancels the mode through a view of the left worker only when its pane is in one, and returns its clients to passthrough', async () => {
     const passthrough = (tty: string) => ['switch-client', '-c', tty, '-T', 'tsview-passthrough']
-    for (const [rows, expected] of [
-      ['tsview-other-1\t@5\t1\ntsview-fix-login-2\t@4\t1\n', [['send-keys', '-X', '-t', '=tsview-fix-login-2:', 'cancel'], passthrough('/dev/tty-tsview-fix-login-2')]],
-      ['tsview-fix-login-2\t@4\t0\nfirstmate\t@4\t0\n', [passthrough('/dev/tty-tsview-fix-login-2')]],
-      ['firstmate\t@4\t1\n', []],
-    ] as [string, string[][]][]) {
+    for (const [panes, expected] of [
+      [[
+        { session_name: 'tsview-other-1', window_id: '@5', pane_in_mode: '1' },
+        { session_name: 'tsview-fix-login-2', window_id: '@4', pane_in_mode: '1' },
+      ], [['send-keys', '-X', '-t', '=tsview-fix-login-2:', 'cancel'], passthrough('/dev/tty-tsview-fix-login-2')]],
+      [[
+        { session_name: 'tsview-fix-login-2', window_id: '@4', pane_in_mode: '0' },
+        { session_name: 'firstmate', window_id: '@4', pane_in_mode: '0' },
+      ], [passthrough('/dev/tty-tsview-fix-login-2')]],
+      [[{ session_name: 'firstmate', window_id: '@4', pane_in_mode: '1' }], []],
+    ] as [Array<Record<string, string>>, string[][]][]) {
       const sent: string[][] = []
       const h = harness({ tmux: async args => {
         if (args[0] === 'send-keys' || args[0] === 'switch-client') sent.push(args)
-        if (args[0] === 'list-panes') return rows
+        if (args[0] === 'list-panes') return tmuxFormat(args, panes)
         if (args[0] === 'list-clients') return `/dev/tty-${args[2]!.slice(1)}\n`
         return args[0] === 'list-windows' ? '@4 fm-fix-login\n@5 fm-other\n' : ''
       } })
@@ -213,6 +241,13 @@ describe('FirstmateViews.leave', () => {
     const h = harness()
     await h.views.leave('fm--fix-login')
     expect(h.tmuxCalls).toEqual([])
+  })
+})
+
+describe('tmuxFields', () => {
+  it('keeps the last field intact and does not split on an underscore', () => {
+    expect(tmuxFields('@4 1 tsview-has space', 3)).toEqual(['@4', '1', 'tsview-has space'])
+    expect(tmuxFields('1_%255', 2)).toBeNull()
   })
 })
 

@@ -110,6 +110,25 @@ export function orphanViewTtydPids(rows: ProcRow[], script: string): number[] {
 
 export interface SessionRow { name: string; attached: number; createdSec: number }
 
+/** Split one tmux -F line into `fixed` fields on single spaces, keeping the
+ *  last field intact. Formats here use a space, not a tab: some tmux servers
+ *  print a control character in -F as '_', and a session name may contain
+ *  spaces, so the free-text field is last. */
+export function tmuxFields(line: string, fixed: number): string[] | null {
+  if (fixed < 1) return null
+  const parts: string[] = []
+  let rest = line
+  for (let i = 1; i < fixed; i++) {
+    const sp = rest.indexOf(' ')
+    if (sp <= 0) return null
+    parts.push(rest.slice(0, sp))
+    rest = rest.slice(sp + 1)
+  }
+  if (rest.length === 0) return null
+  parts.push(rest)
+  return parts
+}
+
 /** View sessions nobody is attached to that have outlived their attach window: the
  *  residue of a viewer that hung up between session creation and attach. */
 export function staleViewSessions(rows: SessionRow[], nowSec: number, graceSec = 60): string[] {
@@ -219,12 +238,17 @@ export class FirstmateViews {
     if (!view) return
     let out: string
     try {
-      out = await this.deps.tmux(['list-panes', '-a', '-F', '#{session_name}\t#{window_id}\t#{pane_in_mode}'])
+      out = await this.deps.tmux(['list-panes', '-a', '-F', '#{window_id} #{pane_in_mode} #{session_name}'])
     } catch { return }
     const views = new Map<string, boolean>()
     for (const line of out.split('\n')) {
-      const [session, windowId, inMode] = line.split('\t')
-      if (session?.startsWith(VIEW_SESSION_PREFIX) && windowId === view.windowId) views.set(session, inMode === '1')
+      const fields = tmuxFields(line, 3)
+      if (!fields) continue
+      const windowId = fields[0]
+      const inMode = fields[1]
+      const session = fields[2]
+      if (!windowId || !inMode || !session) continue
+      if (session.startsWith(VIEW_SESSION_PREFIX) && windowId === view.windowId) views.set(session, inMode === '1')
     }
     const scrolled = [...views].find(([, inMode]) => inMode)?.[0]
     if (scrolled) {
@@ -359,12 +383,18 @@ export class FirstmateViews {
   async sweepStaleViewSessions(): Promise<number> {
     let out: string
     try {
-      out = await this.deps.tmux(['list-sessions', '-F', '#{session_name}\t#{session_attached}\t#{session_created}'])
+      out = await this.deps.tmux(['list-sessions', '-F', '#{session_attached} #{session_created} #{session_name}'])
     } catch { return 0 }
     const rows: SessionRow[] = []
     for (const line of out.split('\n')) {
-      const [name, attached, created] = line.split('\t')
-      if (name && attached !== undefined && created !== undefined) rows.push({ name, attached: Number(attached), createdSec: Number(created) })
+      const fields = tmuxFields(line, 3)
+      if (!fields) continue
+      const attached = fields[0]
+      const created = fields[1]
+      const name = fields[2]
+      if (!attached || !created || !name) continue
+      if (!/^\d+$/.test(attached) || !/^\d+$/.test(created)) continue
+      rows.push({ name, attached: Number(attached), createdSec: Number(created) })
     }
     const stale = staleViewSessions(rows, this.deps.now())
     for (const name of stale) {
