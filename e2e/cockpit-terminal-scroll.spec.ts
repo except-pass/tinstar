@@ -74,6 +74,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     }
     await page.setViewportSize({ width: 1280, height: 720 })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     const term = page.frameLocator('iframe[title="scroll terminal"]').frameLocator('#term')
     const screen = term.locator('.xterm-screen')

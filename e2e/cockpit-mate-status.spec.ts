@@ -79,8 +79,9 @@ test('a second mate whose last status line is a child done shows working or idle
       ['ship-done', 'done', 'checks green'],
     ])
     expect(fleet.data.attention).toEqual([])
-    await page.setViewportSize({ width: 1280, height: 720 })
+    await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     const chip = (id: string) => page.locator('.cockpit-worker-button', { hasText: id }).locator('.cockpit-state')
     const group = (id: string) => page.locator('.cockpit-group').filter({ has: page.locator('.cockpit-card strong', { hasText: new RegExp(`^${id}$`) }) })
     await expect(chip('busy-mate')).toHaveText('working')
@@ -109,6 +110,7 @@ test('a second mate whose last status line is a child done shows working or idle
     await expect(page.locator('.cockpit-worker-header .cockpit-state')).toHaveText('done')
     await page.getByRole('button', { name: 'Overview' }).click()
     await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('button', { name: 'Workers' }).click()
     await expect(chip('kd')).toHaveText('idle')
     await expect(chip('busy-mate')).toHaveText('working')
     await expect(chip('ship-done')).toHaveText('done')

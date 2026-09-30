@@ -1,57 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
-import { getAvatarDataUrl, subscribeAvatarCache } from './components/agentAvatarCache'
-import { PALETTE_COLORS } from './components/ColorPalette'
 import { filterWorkers, findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
 import {
   applyGroupChoice, browserGroupStorage, directLabel, groupDimensionLabels, groupDimensions, groupWorkers,
   readGroupChoice, writeGroupChoice, type GroupDimension,
 } from './cockpit/groupWorkers'
-import { QuotaRail } from './cockpit/QuotaRail'
+import { ActivityBar } from './cockpit/shell/ActivityBar'
+import { ContextPanel } from './cockpit/shell/ContextPanel'
+import { MessagesPanel } from './cockpit/shell/MessagesPanel'
+import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
+import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
+import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
+import { DRAWER_MEDIA, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
-import type { AttentionCard as FleetAttentionCard } from './server/fleet/attention'
 import './cockpit.css'
 
-interface Worker {
-  key: string; id: string; home: string; kind: string; state: string; detail: string
-  observedAt: string | null; freshness: string; objective: string; project: string; direct: boolean
-  worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
-}
-type AttentionCard = FleetAttentionCard & { home: string | null }
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
-interface OutboxMessage {
-  requestId: string; home: string; taskId: string | null; decisionKey: string | null
-  kind: 'answer' | 'message'; text: string
-  state: 'unknown' | 'sending' | 'saved' | 'acknowledged' | 'done'
-  announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
-}
-type Draft = { requestId: string; anchorKey?: string; kind: 'answer' | 'message'; text: string }
-
-function identityColor(id: string): string {
-  let hash = 2166136261
-  for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0
-  return PALETTE_COLORS[(hash % 8) * 3 + 1]!
-}
-
-function Face({ worker, size = 40 }: { worker: Worker; size?: number }) {
-  const [, refresh] = useState(0)
-  useEffect(() => subscribeAvatarCache(() => refresh(n => n + 1)), [])
-  const color = identityColor(worker.id)
-  const avatar = getAvatarDataUrl(worker.id, color)
-  return <span className="cockpit-face" style={{ width: size, height: size, borderColor: color }}>
-    {avatar ? <img src={avatar} alt="" /> : <span aria-hidden="true">✦</span>}
-  </span>
-}
-
-function StateChip({ state }: { state: string }) {
-  return <span className={`cockpit-state cockpit-state-${state.toLowerCase().replace(/[^a-z0-9-]/g, '')}`}>{state}</span>
-}
-
-function MateBadge({ kind }: { kind: string }) {
-  if (kind !== 'secondmate') return null
-  return <span className="cockpit-mate">Second mate</span>
-}
 
 function DirectControl({ worker, disabled, onChange }: { worker: Worker; disabled: boolean; onChange: (direct: boolean) => void }) {
   const label = directLabel(worker.direct)
@@ -89,170 +54,7 @@ function displayTime(value: string | null): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Failure', review: 'Review Ready' } as const
-const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
-
-type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
 type DismissResult = { dismissed: boolean; fallback?: boolean; error?: string | null }
-
-function dismissNote(card: AttentionCard): string {
-  const key = card.decisionKey ?? ''
-  return card.taskId ? `Dismiss decision ${key} on task ${card.taskId}.` : `Dismiss decision ${key}.`
-}
-
-function sameDismiss(card: AttentionCard, message: OutboxMessage): boolean {
-  return message.kind === 'answer' && message.home === card.home && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
-}
-
-function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
-  const track = useRef<HTMLDivElement>(null)
-  const knob = useRef<HTMLSpanElement>(null)
-  const pos = useRef(0)
-  const dragging = useRef(false)
-  const [x, setX] = useState(0)
-  const [travel, setTravel] = useState(1)
-
-  const limit = () => {
-    const width = track.current?.clientWidth ?? 0
-    const knobWidth = knob.current?.offsetWidth ?? 0
-    return width > 0 ? Math.max(0, width - knobWidth - 4) : 0
-  }
-  const moveTo = (next: number) => {
-    const max = limit()
-    const clamped = Math.min(max, Math.max(0, next))
-    pos.current = clamped
-    setTravel(max || 1)
-    setX(clamped)
-    return { clamped, max }
-  }
-  const reset = () => { pos.current = 0; setX(0) }
-  const release = () => {
-    const max = limit()
-    const confirmed = max > 0 && pos.current >= max - 4
-    reset()
-    if (confirmed) onConfirm()
-  }
-
-  return <div
-    className="cockpit-slide"
-    ref={track}
-    role="slider"
-    tabIndex={0}
-    aria-label="Slide to dismiss"
-    aria-valuemin={0}
-    aria-valuemax={100}
-    aria-valuenow={Math.min(100, Math.round((x / travel) * 100))}
-    onKeyDown={event => {
-      const max = limit()
-      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
-        event.preventDefault()
-        const { clamped, max: travelMax } = moveTo(pos.current + max / 6)
-        if (travelMax > 0 && clamped >= travelMax - 4) { reset(); onConfirm() }
-      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'Escape') {
-        event.preventDefault()
-        reset()
-      } else if (event.key === ' ' || event.key === 'Enter') event.preventDefault()
-    }}
-    onBlur={() => { if (!dragging.current) reset() }}
-  >
-    <span className="cockpit-slide-label">Slide to dismiss</span>
-    <span
-      ref={knob}
-      className={`cockpit-slide-knob${dragging.current ? ' dragging' : ''}`}
-      style={{ transform: `translateX(${x}px)` }}
-      onPointerDown={event => {
-        if (event.button !== 0) return
-        dragging.current = true
-        event.currentTarget.setPointerCapture(event.pointerId)
-        event.preventDefault()
-      }}
-      onPointerMove={event => {
-        if (!dragging.current || !track.current) return
-        const rect = track.current.getBoundingClientRect()
-        moveTo(event.clientX - rect.left - 2 - (knob.current?.offsetWidth ?? 0) / 2)
-      }}
-      onPointerUp={() => { if (!dragging.current) return; dragging.current = false; release() }}
-      onPointerCancel={() => { dragging.current = false; reset() }}
-    />
-  </div>
-}
-
-function DismissControl({ card, held, dismissed, error, onDismiss }: { card: AttentionCard; held: boolean; dismissed: boolean; error: string | null; onDismiss: (card: AttentionCard) => void }) {
-  if (card.type !== 'decision' || !card.decisionKey) return null
-  if (dismissed) return <p className="cockpit-dismissed" role="status">dismissed</p>
-  if (held) return <p className="cockpit-dismissing" role="status">dismissing…</p>
-  return <>
-    <SlideToDismiss onConfirm={() => onDismiss(card)} />
-    {error && <p className="cockpit-dismiss-error" role="alert">{error}</p>}
-  </>
-}
-
-function AttentionCardView({ card, worker, open, submit, dismissing, dismissed, dismissError, onDismiss }: {
-  card: AttentionCard; worker: Worker | null; open: () => void; submit: (draft: Draft) => Promise<SubmitResult>
-  dismissing: boolean; dismissed: boolean; dismissError: string | null; onDismiss: (card: AttentionCard) => void
-}) {
-  const origin = worker ? <span className="cockpit-attention-origin"><Face worker={worker} size={25} /><span>{worker.id}</span></span>
-    : <span className="cockpit-attention-origin cockpit-attention-origin-empty"><span className="material-symbols-outlined">account_tree</span>First Mate backlog</span>
-  return <article className={`cockpit-attention-card cockpit-attention-${card.type}`}>
-    <div className="cockpit-attention-type"><span className="material-symbols-outlined" aria-hidden="true">{attentionIcons[card.type]}</span><strong>{attentionLabels[card.type]}</strong></div>
-    {card.type === 'review' ? <>
-      <div className="cockpit-attention-review-ref"><span>{card.repository}</span><strong>#{card.prNumber}</strong></div>
-      <p title={card.headline}>{card.headline}</p>
-      <div className="cockpit-attention-review-meta"><span>CI {card.ci}</span>{card.reviewStatus === 'unknown' && <span>PR status unknown</span>}</div>
-      <div className="cockpit-attention-bottom">{origin}<a className="cockpit-attention-action" href={card.prUrl!} target="_blank" rel="noopener noreferrer">Open GitHub ↗</a></div>
-      <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
-    </> : <>
-      <p title={card.headline}>{card.headline}</p>
-      {card.type === 'decision' && <small className="cockpit-attention-age">Age {card.ageDays === null ? 'unknown' : `${card.ageDays}d`}</small>}
-      {card.type === 'blocked' && card.detail && <small className="cockpit-attention-needed">NEEDED · {card.detail}</small>}
-      {card.type === 'failure' && card.detail && <small className="cockpit-attention-failure-detail">{card.detail}</small>}
-      <div className="cockpit-attention-bottom">{origin}<button className="cockpit-attention-action" onClick={open}>Open →</button></div>
-      {card.type === 'decision' && <details className="cockpit-card-composer"><summary>Answer</summary><Composer anchorKey={card.key} kind="answer" submit={submit} /></details>}
-      <DismissControl card={card} held={dismissing} dismissed={dismissed} error={dismissError} onDismiss={onDismiss} />
-      <button className="cockpit-attention-message-link" onClick={open}>Tell First Mate about this</button>
-    </>}
-  </article>
-}
-
-function mintRequestId(): string {
-  const hex = [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('')
-  return `tinstar-${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-function Composer({ anchorKey, kind, submit }: { anchorKey: string; kind: 'answer' | 'message'; submit: (draft: Draft) => Promise<SubmitResult> }) {
-  const [text, setText] = useState('')
-  const [requestId, setRequestId] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
-  const inFlight = useRef(false)
-  const label = kind === 'answer' ? 'Answer this decision' : 'Tell First Mate about this'
-  return <form className="cockpit-composer" onSubmit={event => {
-    event.preventDefault()
-    if (inFlight.current || !text.trim()) return
-    const id = requestId ?? mintRequestId()
-    inFlight.current = true; setBusy(true); setNotice(null)
-    setRequestId(id)
-    void submit({ requestId: id, anchorKey, kind, text: text.trim() }).then(result => {
-      if (result.saved) { setText(''); setRequestId(null); setNotice(result.error ?? (result.canReceive === false ? 'Saved, not yet read. First Mate will read it when it wakes.' : 'Saved. First Mate will receive it at the next check.')) }
-      else setNotice(result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.')
-    }).catch(error => setNotice((error as Error).message)).finally(() => { inFlight.current = false; setBusy(false) })
-  }}>
-    <label>{label}<textarea value={text} onChange={event => { setText(event.target.value); setRequestId(null) }} rows={3} maxLength={10000} placeholder={kind === 'answer' ? 'Write your answer…' : 'Write your message…'} /></label>
-    <button type="submit" disabled={busy || !text.trim()}>{busy ? 'Sending…' : requestId ? 'Retry' : 'Send to First Mate'}</button>
-    {notice && <p role="status">{notice}</p>}
-  </form>
-}
-
-function MessageFeed({ messages, retry }: { messages: OutboxMessage[]; retry: (message: OutboxMessage) => void }) {
-  if (!messages.length) return null
-  return <div className="cockpit-messages">{messages.map(message => <article key={message.requestId}>
-    <div className="cockpit-message-top"><strong>{message.kind === 'answer' ? 'Answer' : 'Message'} · {message.taskId ?? 'First Mate backlog'}</strong><span>{message.state === 'acknowledged' ? 'First Mate has it' : message.state === 'unknown' ? 'status unknown' : message.state}</span></div>
-    <p>{message.text}</p>
-    {message.state === 'saved' && message.canReceive === false && <small role="status">Saved, not yet read. First Mate will read it when it wakes.</small>}
-    {(message.state === 'sending' || (message.state === 'saved' && message.announced === false)) && <button onClick={() => retry(message)}>{message.state === 'sending' ? 'Retry sending' : 'Retry waking First Mate'}</button>}
-    {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
-  </article>)}</div>
-}
 
 export default function App() {
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
@@ -260,6 +62,10 @@ export default function App() {
   const [composerOpen, setComposerOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
+  const [drawer, setDrawer] = useState(isDrawerLayout)
+  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => initialPanelMode(readOverviewSearch(window.location.search).worker))
+  const drawerRef = useRef(drawer)
+  drawerRef.current = drawer
   const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
@@ -477,13 +283,22 @@ export default function App() {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
     setSelectedAttention(null)
+    if (mode === 'push') {
+      if (drawerRef.current) setPanelMode(null)
+      else if (!overviewRef.current.worker) setPanelMode(current => current && 'workers')
+    }
     applyOverviewLocation({ worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q }, mode)
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
     setSelectedAttention(null)
+    if (drawerRef.current) setPanelMode(null)
     applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
+
+  const selectPanel = useCallback((mode: Exclude<ContextPanelMode, null>) => {
+    setPanelMode(current => current === mode ? null : mode)
+  }, [])
 
   const order = useMemo(() => workers.map(w => w.key), [workers])
   const cycle = useCallback((direction: number, fromTerminal = false) => {
@@ -506,7 +321,29 @@ export default function App() {
   }, [cycle])
 
   useEffect(() => {
-    const onPop = () => setOverviewLocation(readOverviewSearch(window.location.search))
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(DRAWER_MEDIA)
+    const onChange = () => setDrawer(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!drawer || !panelMode) return
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setPanelMode(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [drawer, panelMode])
+
+  useEffect(() => {
+    const onPop = () => {
+      setOverviewLocation(readOverviewSearch(window.location.search))
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -585,33 +422,13 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <aside className="cockpit-rail">
-      <div className="cockpit-brand"><span className="cockpit-brand-mark">✦</span><div><strong>TIN STAR</strong><small>WORKER COCKPIT</small></div></div>
-      <button className={`cockpit-overview-button ${!overviewLocation.worker ? 'active' : ''}`} onClick={openOverview}><span className="material-symbols-outlined">dashboard</span>Overview</button>
-      <input className="cockpit-jump" aria-label="Jump to worker" placeholder="Jump to worker ↵" value={jumpText} onChange={e => setJumpText(e.target.value)} onKeyDown={e => {
-        if (e.key !== 'Enter') return
-        const needle = jumpText.trim().toLowerCase()
-        const match = workers.find(w => w.id.toLowerCase().includes(needle))
-        if (match && needle) { openWorker(match.key); setJumpText('') }
-      }} />
-      <div className="cockpit-rail-heading cockpit-attention-heading"><span>NEEDS YOU</span><span>{attention.length}</span></div>
-      <div className="cockpit-attention-list" aria-label="Needs You">
-        {fleet.errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {fleet.errors.join('; ')}</p>}
-        {attention.length ? attention.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} />)
-          : fleet.errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
-      </div>
-      <div className="cockpit-rail-heading"><span>MESSAGES</span><span>{messages.length}</span></div>
-      {messageError && <p className="cockpit-attention-empty" role="alert">{messageError}</p>}
-      <div className="cockpit-rail-messages"><MessageFeed messages={messages} retry={retry} /></div>
-      <div className="cockpit-rail-heading"><span>WORKERS</span><span>{workers.length}</span></div>
-      <div className="cockpit-worker-list">
-        {workers.map(worker => <button key={worker.key} className={`cockpit-worker-button ${current?.key === worker.key ? 'active' : ''}`} onClick={() => openWorker(worker.key)} style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
-          <Face worker={worker} size={35} /><span className="cockpit-worker-label"><strong>{worker.id}</strong><small>{worker.project}</small></span><StateChip state={worker.state} />
-        </button>)}
-      </div>
-      <QuotaRail />
-      <div className="cockpit-rail-footer">CTRL + [ &nbsp; / &nbsp; CTRL + ]<span>Switch workers</span></div>
-    </aside>
+    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
+    {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
+    <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
+      <div hidden={panelMode !== 'needs'}><NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} /></div>
+      <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
+      <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
+    </ContextPanel>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {current ? <>
         <div className="cockpit-session">

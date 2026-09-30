@@ -136,3 +136,30 @@ export function QuotaRail() {
   }, [])
   return <QuotaMeters snapshot={snapshot} now={now} />
 }
+
+/** Glyph and percent for the activity strip. Weekly strips stay on QuotaRail. */
+const BADGE_LIMIT = 4
+
+export function QuotaBadges() {
+  const snapshot = useQuotaMeters()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  if (snapshot.providers.length === 0 || snapshot.providers.length > BADGE_LIMIT) return null
+  return <div className="cockpit-quota-badges" aria-label="Quota summary">
+    {snapshot.providers.map(provider => {
+      const weekly = provider.weeklyWindow
+      const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
+      const name = providerName(provider.id)
+      const level = weekly ? weekly.level : provider.level
+      const label = `${name} summary, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+      return <button type="button" key={provider.id} className={`cockpit-quota-badge is-${level}`} aria-label={label}>
+        <Glyph id={provider.id} />
+        <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
+        <Detail provider={provider} now={now} />
+      </button>
+    })}
+  </div>
+}

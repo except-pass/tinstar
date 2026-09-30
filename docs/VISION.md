@@ -7,7 +7,7 @@ The first release focuses on an overview, direct worker navigation, safe termina
 ## Design principles
 
 - Show First Mate's observed state, including unknown or stale values, without inventing certainty.
-- Make a worker recognizable across the rail and worker view through stable identity, face and color.
+- Make a worker recognizable across the worker switcher and worker view through stable identity, face and color.
 - Keep attention cards distinct by type and make their actions explicit.
 - Send answers and messages through First Mate's documented inbox; show saved, acknowledged and resolved as separate states.
 - Link terminal views to worker windows without changing the worker's tmux lifecycle or size.

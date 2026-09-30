@@ -69,8 +69,9 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
       ['shell', 'unknown', 'backend target gone (agent gone, pane shell remains)'],
     ])
     expect(fleet.data.attention).toEqual([])
-    await page.setViewportSize({ width: 1280, height: 720 })
+    await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     const chip = (id: string) => page.locator('.cockpit-worker-button', { hasText: id }).locator('.cockpit-state')
     const group = (id: string) => page.locator('.cockpit-group').filter({ has: page.locator('.cockpit-card strong', { hasText: new RegExp(`^${id}$`) }) })
     const card = (id: string) => page.locator('.cockpit-card').filter({ has: page.locator('strong', { hasText: new RegExp(`^${id}$`) }) })
@@ -91,6 +92,7 @@ test('an unknown worker shows its latest status report, and a dead endpoint stay
     await page.screenshot({ path: test.info().outputPath('unknown-state-detail-1280x720.png') })
     await page.getByRole('button', { name: 'Overview' }).click()
     await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('button', { name: 'Workers' }).click()
     await expect(chip('reported')).toHaveText('working')
     await expect(chip('gone')).toHaveText('unknown')
     await expect(card('reported').locator('small')).toHaveText(reported)

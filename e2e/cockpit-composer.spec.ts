@@ -53,6 +53,7 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
 
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
+    await page.getByRole('button', { name: 'Workers' }).click()
     await page.locator('.cockpit-worker-button', { hasText: 'scribe' }).click()
     const composer = page.getByTestId('prompt-composer')
     const textarea = composer.locator('textarea')
