@@ -6,6 +6,14 @@ export interface QuotaLimitingWindow {
   resetsAt: string | null
 }
 
+/** One quota-axi window the rail can draw. Percents are rounded. */
+export interface QuotaWindowReading {
+  id: string
+  label: string
+  resetsAt: string | null
+  remainingPercent: number | null
+}
+
 export interface QuotaMeterProvider {
   id: string
   plan: string | null
@@ -13,6 +21,10 @@ export interface QuotaMeterProvider {
   remainingPercent: number | null
   level: QuotaLevel
   limitingWindow: QuotaLimitingWindow | null
+  /** Account week. Null when quota-axi reported no weekly window. */
+  weeklyWindow: QuotaWindowReading | null
+  /** Five-hour or other session window. Null when the provider has none. */
+  shortWindow: QuotaWindowReading | null
   projectedRunOutAt: string | null
   runway: 'projected_exhaustion' | 'exhausted_now' | 'through_reset' | 'unknown' | null
   error: string | null
@@ -34,6 +46,7 @@ export interface ParsedQuotaReport {
 interface RawWindow {
   id?: unknown
   label?: unknown
+  kind?: unknown
   percentRemaining?: unknown
   resetsAt?: unknown
 }
@@ -64,9 +77,13 @@ interface RawProvider {
 interface NormalizedWindow {
   id: string
   label: string
+  kind: string | null
   percentRemaining: number | null
   resetsAt: string | null
 }
+
+/** Account week ids. A model slice such as seven_day_opus must not replace these. */
+const WEEKLY_WINDOW_IDS = new Set(['weekly', 'seven_day', '7d'])
 
 /** Colour of the rail icon. Boundaries match the displayed (rounded) percent. */
 export function quotaLevel(remainingPercent: number | null): QuotaLevel {
@@ -116,6 +133,8 @@ function readProvider(item: unknown): QuotaMeterProvider | null {
     remainingPercent: remaining,
     level: quotaLevel(remaining),
     limitingWindow,
+    weeklyWindow: toReading(pickWeekly(windows)),
+    shortWindow: toReading(pickShort(windows)),
     projectedRunOutAt: projected,
     runway,
     error: providerError(raw, remaining),
@@ -133,6 +152,7 @@ function readWindows(raw: RawProvider): NormalizedWindow[] {
     windows.push({
       id: window.id,
       label: typeof window.label === 'string' && window.label ? window.label : window.id,
+      kind: typeof window.kind === 'string' && window.kind ? window.kind : null,
       percentRemaining: finite(window.percentRemaining),
       resetsAt: stringOrNull(window.resetsAt),
     })
@@ -157,6 +177,41 @@ function remainingPercent(scope: RawScope | null, windows: NormalizedWindow[]): 
   const values = windows.map(window => window.percentRemaining).filter((value): value is number => value != null)
   if (values.length === 0) return null
   return Math.round(Math.min(...values))
+}
+
+function toReading(window: NormalizedWindow | null): QuotaWindowReading | null {
+  if (!window) return null
+  return {
+    id: window.id,
+    label: window.label,
+    resetsAt: window.resetsAt,
+    remainingPercent: window.percentRemaining == null ? null : Math.round(window.percentRemaining),
+  }
+}
+
+function pickTightest(windows: NormalizedWindow[]): NormalizedWindow | null {
+  if (windows.length === 0) return null
+  return windows.reduce((best, window) => {
+    if (best.percentRemaining == null) return window.percentRemaining == null ? best : window
+    if (window.percentRemaining == null) return best
+    return window.percentRemaining < best.percentRemaining ? window : best
+  })
+}
+
+function isWeekly(window: NormalizedWindow): boolean {
+  return window.kind === 'weekly' || WEEKLY_WINDOW_IDS.has(window.id) || /seven_day|weekly/.test(window.id)
+}
+
+function pickWeekly(windows: NormalizedWindow[]): NormalizedWindow | null {
+  const weekly = windows.filter(isWeekly)
+  // A product or model slice (id contains ':') must not replace the account week.
+  const account = weekly.filter(window => WEEKLY_WINDOW_IDS.has(window.id) || !window.id.includes(':'))
+  const named = account.filter(window => WEEKLY_WINDOW_IDS.has(window.id))
+  return pickTightest(named.length > 0 ? named : account.length > 0 ? account : weekly)
+}
+
+function pickShort(windows: NormalizedWindow[]): NormalizedWindow | null {
+  return pickTightest(windows.filter(window => window.kind === 'session' || window.id === 'five_hour' || window.id === 'session'))
 }
 
 function limitingWindowOf(scope: RawScope | null, windows: NormalizedWindow[]): QuotaLimitingWindow | null {
