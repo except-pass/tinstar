@@ -32,6 +32,9 @@ const testConfig = {
 } satisfies InlineConfig
 
 export default defineConfig({
+  // vitest 2 nests its own vite 5, so its `test` augmentation never reaches
+  // the root vite 6 UserConfig. Spreading skips the excess-property check
+  // (TS2769); `satisfies InlineConfig` above keeps the test config typed.
   ...{ test: testConfig },
   plugins: [react(), devTitle()],
   resolve: {
