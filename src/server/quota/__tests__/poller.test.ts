@@ -19,7 +19,7 @@ describe('QuotaAxiPoller', () => {
     const snapshot = poller.snapshot()
     expect(snapshot.commandError).toBeNull()
     expect(snapshot.checkedAt).toBe('2026-09-29T12:00:05.000Z')
-    expect(snapshot.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'kimi'])
+    expect(snapshot.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'cursor', 'kimi'])
   })
 
   it('keeps the last good providers when a later read fails', async () => {
@@ -36,7 +36,7 @@ describe('QuotaAxiPoller', () => {
     await poller.refresh()
     const snapshot = poller.snapshot()
     expect(snapshot.commandError).toBe('quota-axi exited 1')
-    expect(snapshot.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'kimi'])
+    expect(snapshot.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'cursor', 'kimi'])
     expect(snapshot.fetchedAt).toBe('2026-09-29T12:00:00.000Z')
   })
 

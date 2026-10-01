@@ -122,6 +122,7 @@ describe('GET /api/quota', () => {
       ['claude', 64],
       ['codex', 18],
       ['grok', null],
+      ['cursor', null],
       ['kimi', 3],
     ])
   })
