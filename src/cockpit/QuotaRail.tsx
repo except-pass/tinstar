@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuotaMeters } from '../hooks/useQuotaMeters'
 import type { QuotaMeterProvider, QuotaMeterSnapshot, QuotaWindowReading } from '../server/quota/parse'
 import { WeeklyStrip } from './WeeklyStrip'
+import { WindowRaceBar } from './WindowRaceBar'
 
 const DAY_MS = 24 * 60 * 60_000
 
@@ -45,6 +46,7 @@ const PROVIDER_LOGO: Record<string, string> = {
   claude: '/agent-icons/claude.svg',
   codex: '/agent-icons/openai.svg',
   grok: '/agent-icons/grok.svg',
+  cursor: '/agent-icons/cursor.svg',
 }
 
 function Glyph({ id }: { id: string }) {
@@ -63,7 +65,7 @@ function Detail({ provider, now }: { provider: QuotaMeterProvider; now: number }
   const remaining = provider.remainingPercent
   return <span className="cockpit-quota-popover" role="tooltip">
     <strong>{providerName(provider.id)}</strong>
-    <dl>
+    {provider.notSetUp ? <p>Not signed in. Sign in to Cursor to show quota.</p> : <dl>
       <dt>Remaining</dt><dd>{remaining == null ? '—' : `${remaining}%`}</dd>
       <dt>Limiting window</dt><dd>{provider.limitingWindow?.label ?? '—'}</dd>
       <dt>Resets</dt><dd><time dateTime={provider.limitingWindow?.resetsAt ?? undefined}>{formatWhen(provider.limitingWindow?.resetsAt ?? null, now)}</time></dd>
@@ -73,8 +75,8 @@ function Detail({ provider, now }: { provider: QuotaMeterProvider; now: number }
       <dt>Plan</dt><dd>{provider.plan ?? '—'}</dd>
       <dt>Refreshed</dt><dd>{ageLabel(provider.refreshedAt, now)}</dd>
       {provider.shortWindow && <><dt>{shortReadout(provider.shortWindow).split(' ')[0]}</dt><dd>{provider.shortWindow.remainingPercent == null ? '—' : `${provider.shortWindow.remainingPercent}%`}</dd></>}
-    </dl>
-    {provider.error && <p>{provider.error}</p>}
+    </dl>}
+    {provider.error && !provider.notSetUp && <p>{provider.error}</p>}
   </span>
 }
 
@@ -82,7 +84,7 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   const name = providerName(provider.id)
   const weekly = provider.weeklyWindow
   const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
-  const label = `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+  const label = provider.notSetUp ? `${name}, not signed in` : `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
   if (weekly) {
     return <button type="button" className={`cockpit-quota-meter is-week is-${weekly.level}`} aria-label={label}>
       <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
@@ -90,6 +92,18 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
       <span className="cockpit-quota-side">
         <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
         {provider.shortWindow && <span className="cockpit-quota-short">{shortReadout(provider.shortWindow)}</span>}
+      </span>
+      <Detail provider={provider} now={now} />
+    </button>
+  }
+  if (provider.cycleWindow || provider.notSetUp) {
+    const reset = provider.cycleWindow?.resetsAt
+    return <button type="button" className={`cockpit-quota-meter is-cycle is-${provider.level}`} aria-label={label}>
+      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
+      <WindowRaceBar window={provider.cycleWindow ?? null} now={now} />
+      <span className="cockpit-quota-side">
+        <span className="cockpit-quota-pct">{provider.notSetUp ? 'Sign in' : remaining == null ? '–' : remaining}</span>
+        {reset && <span className="cockpit-quota-short">{new Date(reset).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>}
       </span>
       <Detail provider={provider} now={now} />
     </button>
@@ -106,11 +120,11 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
 export function QuotaMeters({ snapshot, now }: { snapshot: QuotaMeterSnapshot; now: number }) {
   const showRefresh = snapshot.commandError != null && snapshot.providers.length > 0
   const showOnlyError = snapshot.commandError != null && snapshot.providers.length === 0
-  const weekly = snapshot.providers.filter(provider => provider.weeklyWindow)
-  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow)
+  const rows = snapshot.providers.filter(provider => provider.weeklyWindow || provider.cycleWindow || provider.notSetUp)
+  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.cycleWindow && !provider.notSetUp)
   return <section className="cockpit-quotas" aria-label="Provider quota">
     <div className="cockpit-quota-meters">
-      {weekly.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
+      {rows.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
       {(compact.length > 0 || showRefresh || showOnlyError) && <div className="cockpit-quota-compact">
         {compact.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
         {(showRefresh || showOnlyError) && <button type="button" className="cockpit-quota-meter is-error" aria-label="Quota refresh, no reading">
@@ -147,9 +161,11 @@ export function QuotaBadges() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-  if (snapshot.providers.length === 0 || snapshot.providers.length > BADGE_LIMIT) return null
+  // Keep the existing activity summaries when Cursor becomes a fifth provider.
+  const providers = snapshot.providers.filter(provider => provider.id !== 'cursor' && !provider.notSetUp)
+  if (providers.length === 0 || providers.length > BADGE_LIMIT) return null
   return <div className="cockpit-quota-badges" aria-label="Quota summary">
-    {snapshot.providers.map(provider => {
+    {providers.map(provider => {
       const weekly = provider.weeklyWindow
       const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
       const name = providerName(provider.id)

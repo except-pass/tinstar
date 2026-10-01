@@ -10,7 +10,7 @@ describe('parseQuotaAxiReport', () => {
   it('reads the recorded quota-axi document', () => {
     const report = parseQuotaAxiReport(recorded)
     expect(report.fetchedAt).toBe('2026-09-29T12:00:00.000Z')
-    expect(report.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'kimi'])
+    expect(report.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'cursor', 'kimi'])
 
     const claude = report.providers[0]!
     expect(claude).toMatchObject({
@@ -51,6 +51,14 @@ describe('parseQuotaAxiReport', () => {
     })
 
     expect(report.providers[3]).toMatchObject({
+      id: 'cursor',
+      notSetUp: true,
+      remainingPercent: null,
+      weeklyWindow: null,
+      error: null,
+    })
+
+    expect(report.providers[4]).toMatchObject({
       id: 'kimi',
       remainingPercent: 3,
       level: 'critical',
@@ -128,6 +136,22 @@ describe('parseQuotaAxiReport', () => {
       }],
     })
     expect(report.providers[0]?.weeklyWindow).toMatchObject({ id: 'credits', remainingPercent: 77 })
+  })
+
+  it('uses Cursor main usage cycle rather than its independent weekly resource', () => {
+    const report = parseQuotaAxiReport({ providers: [{
+      provider: 'cursor', plan: 'Free',
+      windows: [
+        { id: 'included_usage', label: 'included usage', kind: 'monthly', percentRemaining: 75, startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z' },
+        { id: 'grok_bot', label: 'Grok Bot', kind: 'weekly', percentRemaining: 100 },
+      ],
+      quotaSemantics: { effectiveAvailability: [{ scope: 'all_models', status: 'known', effectivePercentRemaining: 75, boundedBy: ['included_usage'], limitingWindowIds: ['included_usage'] }] },
+      state: { status: 'fresh' },
+    }] })
+    expect(report.providers[0]).toMatchObject({
+      id: 'cursor', remainingPercent: 75, weeklyWindow: null,
+      cycleWindow: { id: 'included_usage', startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z', remainingPercent: 75 },
+    })
   })
 
   it('rejects a document that is not a provider report', () => {
