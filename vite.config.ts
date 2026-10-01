@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
+import type { InlineConfig } from 'vitest'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
-/// <reference types="vitest" />
 
 function devTitle(): import('vite').Plugin {
   return {
@@ -16,21 +16,26 @@ function devTitle(): import('vite').Plugin {
 const backendPort = process.env.TINSTAR_BACKEND_PORT ?? '5281'
 const frontendPort = parseInt(process.env.TINSTAR_FRONTEND_PORT ?? '5280')
 
+const testConfig = {
+  globals: true,
+  environment: 'jsdom',
+  // Backend tests are pure Node (filesystem and child_process) and have no
+  // business booting jsdom. Running them under the `node` environment is both
+  // faster and avoids jsdom's dependency chain (html-encoding-sniffer →
+  // @exodus/bytes), which is ESM-only and unrequireable on Node < 22.12.
+  // Anything that genuinely needs the DOM stays on the default jsdom env.
+  environmentMatchGlobs: [
+    ['src/server/**', 'node'],
+    ['tests/server/**', 'node'],
+  ],
+  setupFiles: ['./tests/setup.ts'],
+} satisfies InlineConfig
+
 export default defineConfig({
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    // Backend tests are pure Node (filesystem and child_process) and have no
-    // business booting jsdom. Running them under the `node` environment is both
-    // faster and avoids jsdom's dependency chain (html-encoding-sniffer →
-    // @exodus/bytes), which is ESM-only and unrequireable on Node < 22.12.
-    // Anything that genuinely needs the DOM stays on the default jsdom env.
-    environmentMatchGlobs: [
-      ['src/server/**', 'node'],
-      ['tests/server/**', 'node'],
-    ],
-    setupFiles: ['./tests/setup.ts'],
-  },
+  // vitest 2 nests its own vite 5, so its `test` augmentation never reaches
+  // the root vite 6 UserConfig. Spreading skips the excess-property check
+  // (TS2769); `satisfies InlineConfig` above keeps the test config typed.
+  ...{ test: testConfig },
   plugins: [react(), devTitle()],
   resolve: {
     alias: {
