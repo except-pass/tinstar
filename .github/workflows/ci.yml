@@ -45,6 +45,9 @@ jobs:
       - name: Typecheck (tsc must report zero errors)
         run: npm run typecheck
 
+      - name: Build
+        run: npm run build
+
       - name: Unit tests
         # Fails rather than skips if ttyd went missing from the runner image.
         env:
