@@ -10,7 +10,7 @@ describe('parseQuotaAxiReport', () => {
   it('reads the recorded quota-axi document', () => {
     const report = parseQuotaAxiReport(recorded)
     expect(report.fetchedAt).toBe('2026-09-29T12:00:00.000Z')
-    expect(report.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'kimi'])
+    expect(report.providers.map(provider => provider.id)).toEqual(['claude', 'codex', 'grok', 'cursor', 'kimi'])
 
     const claude = report.providers[0]!
     expect(claude).toMatchObject({
@@ -51,6 +51,14 @@ describe('parseQuotaAxiReport', () => {
     })
 
     expect(report.providers[3]).toMatchObject({
+      id: 'cursor',
+      notSetUp: true,
+      remainingPercent: null,
+      weeklyWindow: null,
+      error: null,
+    })
+
+    expect(report.providers[4]).toMatchObject({
       id: 'kimi',
       remainingPercent: 3,
       level: 'critical',

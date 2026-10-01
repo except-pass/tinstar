@@ -45,6 +45,7 @@ const PROVIDER_LOGO: Record<string, string> = {
   claude: '/agent-icons/claude.svg',
   codex: '/agent-icons/openai.svg',
   grok: '/agent-icons/grok.svg',
+  cursor: '/agent-icons/cursor.svg',
 }
 
 function Glyph({ id }: { id: string }) {
@@ -63,7 +64,7 @@ function Detail({ provider, now }: { provider: QuotaMeterProvider; now: number }
   const remaining = provider.remainingPercent
   return <span className="cockpit-quota-popover" role="tooltip">
     <strong>{providerName(provider.id)}</strong>
-    <dl>
+    {provider.notSetUp ? <p>Not signed in. Sign in to Cursor to show quota.</p> : <dl>
       <dt>Remaining</dt><dd>{remaining == null ? '—' : `${remaining}%`}</dd>
       <dt>Limiting window</dt><dd>{provider.limitingWindow?.label ?? '—'}</dd>
       <dt>Resets</dt><dd><time dateTime={provider.limitingWindow?.resetsAt ?? undefined}>{formatWhen(provider.limitingWindow?.resetsAt ?? null, now)}</time></dd>
@@ -73,8 +74,8 @@ function Detail({ provider, now }: { provider: QuotaMeterProvider; now: number }
       <dt>Plan</dt><dd>{provider.plan ?? '—'}</dd>
       <dt>Refreshed</dt><dd>{ageLabel(provider.refreshedAt, now)}</dd>
       {provider.shortWindow && <><dt>{shortReadout(provider.shortWindow).split(' ')[0]}</dt><dd>{provider.shortWindow.remainingPercent == null ? '—' : `${provider.shortWindow.remainingPercent}%`}</dd></>}
-    </dl>
-    {provider.error && <p>{provider.error}</p>}
+    </dl>}
+    {provider.error && !provider.notSetUp && <p>{provider.error}</p>}
   </span>
 }
 
@@ -82,13 +83,13 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   const name = providerName(provider.id)
   const weekly = provider.weeklyWindow
   const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
-  const label = `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
-  if (weekly) {
-    return <button type="button" className={`cockpit-quota-meter is-week is-${weekly.level}`} aria-label={label}>
+  const label = provider.notSetUp ? `${name}, not signed in` : `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+  if (weekly || provider.notSetUp) {
+    return <button type="button" className={`cockpit-quota-meter is-week is-${weekly?.level ?? provider.level}`} aria-label={label}>
       <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
-      <WeeklyStrip window={weekly} now={now} />
+      <WeeklyStrip window={weekly ?? { id: 'weekly', label: 'week', resetsAt: null, remainingPercent: null, level: 'error' }} now={now} />
       <span className="cockpit-quota-side">
-        <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
+        <span className="cockpit-quota-pct">{provider.notSetUp ? 'Sign in' : remaining == null ? '–' : remaining}</span>
         {provider.shortWindow && <span className="cockpit-quota-short">{shortReadout(provider.shortWindow)}</span>}
       </span>
       <Detail provider={provider} now={now} />
@@ -106,8 +107,8 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
 export function QuotaMeters({ snapshot, now }: { snapshot: QuotaMeterSnapshot; now: number }) {
   const showRefresh = snapshot.commandError != null && snapshot.providers.length > 0
   const showOnlyError = snapshot.commandError != null && snapshot.providers.length === 0
-  const weekly = snapshot.providers.filter(provider => provider.weeklyWindow)
-  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow)
+  const weekly = snapshot.providers.filter(provider => provider.weeklyWindow || provider.notSetUp)
+  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.notSetUp)
   return <section className="cockpit-quotas" aria-label="Provider quota">
     <div className="cockpit-quota-meters">
       {weekly.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
@@ -154,7 +155,7 @@ export function QuotaBadges() {
       const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
       const name = providerName(provider.id)
       const level = weekly ? weekly.level : provider.level
-      const label = `${name} summary, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+      const label = provider.notSetUp ? `${name} summary, not signed in` : `${name} summary, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
       return <button type="button" key={provider.id} className={`cockpit-quota-badge is-${level}`} aria-label={label}>
         <Glyph id={provider.id} />
         <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>

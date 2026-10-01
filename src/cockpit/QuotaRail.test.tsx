@@ -109,4 +109,17 @@ describe('cockpit provider quota', () => {
     expect(within(rail.getByRole('button', { name: 'Quota refresh, no reading' })).getByText('quota-axi timed out')).toBeTruthy()
     expect(view.container.textContent?.toLowerCase()).not.toContain('unavailable')
   })
+
+  it('shows an unsigned Cursor in the weekly layout with its company logo', () => {
+    const cursor = {
+      ...snapshot.providers[2]!, id: 'cursor', notSetUp: true, error: 'Cursor sign-in required',
+    }
+    const view = render(<QuotaMeters snapshot={{ ...snapshot, providers: [cursor] }} now={NOW} />)
+    const meter = within(view.getByRole('region', { name: 'Provider quota' })).getByRole('button', { name: 'Cursor, not signed in' })
+    expect(meter.className).toContain('is-week')
+    expect(meter.querySelector('img')?.getAttribute('src')).toBe('/agent-icons/cursor.svg')
+    expect(meter.querySelectorAll('.cockpit-quota-day')).toHaveLength(7)
+    expect(within(meter).getByText('Sign in')).toBeTruthy()
+    expect(within(meter).getByText('Not signed in. Sign in to Cursor to show quota.')).toBeTruthy()
+  })
 })

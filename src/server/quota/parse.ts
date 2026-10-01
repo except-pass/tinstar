@@ -17,6 +17,8 @@ export interface QuotaWindowReading {
 
 export interface QuotaMeterProvider {
   id: string
+  /** Cursor can be present before its account is signed in. */
+  notSetUp?: boolean
   plan: string | null
   /** Rounded percent remaining. Null when this provider produced no reading. */
   remainingPercent: number | null
@@ -96,7 +98,7 @@ export function quotaLevel(remainingPercent: number | null): QuotaLevel {
 
 /**
  * Turn one `quota-axi --json` document into the rail snapshot.
- * Providers with `notSetUp: true` are omitted. A document without a
+ * Unconfigured providers are omitted except Cursor, which has a visible setup state. A document without a
  * `providers` array is rejected so a bad read does not wipe a good cache.
  */
 export function parseQuotaAxiReport(payload: unknown): ParsedQuotaReport {
@@ -116,7 +118,7 @@ export function parseQuotaAxiReport(payload: unknown): ParsedQuotaReport {
 function readProvider(item: unknown): QuotaMeterProvider | null {
   if (!item || typeof item !== 'object') return null
   const raw = item as RawProvider
-  if (raw.notSetUp === true) return null
+  if (raw.notSetUp === true && raw.provider !== 'cursor') return null
   if (typeof raw.provider !== 'string' || raw.provider.trim() === '') return null
 
   const windows = readWindows(raw)
@@ -130,6 +132,7 @@ function readProvider(item: unknown): QuotaMeterProvider | null {
 
   return {
     id: raw.provider,
+    ...(raw.provider === 'cursor' && raw.notSetUp === true ? { notSetUp: true } : {}),
     plan: stringOrNull(raw.plan),
     remainingPercent: remaining,
     level: quotaLevel(remaining),
