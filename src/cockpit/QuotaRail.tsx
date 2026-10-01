@@ -148,14 +148,15 @@ export function QuotaBadges() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-  if (snapshot.providers.length === 0 || snapshot.providers.length > BADGE_LIMIT) return null
+  const providers = snapshot.providers.filter(provider => !provider.notSetUp)
+  if (providers.length === 0 || providers.length > BADGE_LIMIT) return null
   return <div className="cockpit-quota-badges" aria-label="Quota summary">
-    {snapshot.providers.map(provider => {
+    {providers.map(provider => {
       const weekly = provider.weeklyWindow
       const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
       const name = providerName(provider.id)
       const level = weekly ? weekly.level : provider.level
-      const label = provider.notSetUp ? `${name} summary, not signed in` : `${name} summary, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
+      const label = `${name} summary, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
       return <button type="button" key={provider.id} className={`cockpit-quota-badge is-${level}`} aria-label={label}>
         <Glyph id={provider.id} />
         <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
