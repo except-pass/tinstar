@@ -113,17 +113,36 @@ describe('cockpit provider quota', () => {
     expect(view.container.textContent?.toLowerCase()).not.toContain('unavailable')
   })
 
-  it('shows an unsigned Cursor in the weekly layout with its company logo', () => {
+  it('shows an unsigned Cursor without implying a weekly quota', () => {
     const cursor = {
       ...snapshot.providers[2]!, id: 'cursor', notSetUp: true, error: 'Cursor sign-in required',
     }
     const view = render(<QuotaMeters snapshot={{ ...snapshot, providers: [cursor] }} now={NOW} />)
     const meter = within(view.getByRole('region', { name: 'Provider quota' })).getByRole('button', { name: 'Cursor, not signed in' })
-    expect(meter.className).toContain('is-week')
+    expect(meter.className).toContain('is-cycle')
     expect(meter.querySelector('img')?.getAttribute('src')).toBe('/agent-icons/cursor.svg')
-    expect(meter.querySelectorAll('.cockpit-quota-day')).toHaveLength(7)
+    expect(meter.querySelectorAll('.cockpit-quota-day')).toHaveLength(0)
     expect(within(meter).getByText('Sign in')).toBeTruthy()
     expect(within(meter).getByText('Not signed in. Sign in to Cursor to show quota.')).toBeTruthy()
+  })
+
+  it('draws a signed-in Cursor quota against its reported cycle, not an unrelated week', () => {
+    const cursor = {
+      ...snapshot.providers[2]!, id: 'cursor', plan: 'Free', remainingPercent: 75, level: 'normal' as const,
+      error: null,
+      limitingWindow: { id: 'included_usage', label: 'included usage', resetsAt: '2026-10-24T12:00:00.000Z' },
+      cycleWindow: {
+        id: 'included_usage', label: 'included usage', startsAt: '2026-09-24T12:00:00.000Z',
+        resetsAt: '2026-10-24T12:00:00.000Z', remainingPercent: 75, level: 'normal' as const,
+      },
+    }
+    const view = render(<QuotaMeters snapshot={{ ...snapshot, providers: [cursor] }} now={NOW} />)
+    const meter = within(view.getByRole('region', { name: 'Provider quota' })).getByRole('button', { name: 'Cursor, 75% remaining' })
+    expect(meter.className).toContain('is-cycle')
+    expect(meter.querySelector('img')?.getAttribute('src')).toBe('/agent-icons/cursor.svg')
+    expect(meter.querySelector('.cockpit-quota-race line')?.getAttribute('x1')).toBe('30')
+    expect(meter.querySelectorAll('.cockpit-quota-day')).toHaveLength(0)
+    expect(within(meter).getByText('Oct 24')).toBeTruthy()
   })
 
   it('keeps every activity-strip badge when an unsigned Cursor joins four providers', () => {
@@ -137,5 +156,12 @@ describe('cockpit provider quota', () => {
       'Grok summary, no reading',
       'Kimi summary, 3% remaining',
     ])
+  })
+
+  it('keeps every activity-strip badge when Cursor signs in as a fifth provider', () => {
+    const cursor = { ...snapshot.providers[2]!, id: 'cursor', remainingPercent: 75, level: 'normal' as const, error: null }
+    quotaSnapshot.current = { ...snapshot, providers: [...snapshot.providers, cursor] }
+    const view = render(<QuotaBadges />)
+    expect(within(view.getByLabelText('Quota summary')).getAllByRole('button')).toHaveLength(4)
   })
 })

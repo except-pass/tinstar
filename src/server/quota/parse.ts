@@ -10,6 +10,7 @@ export interface QuotaLimitingWindow {
 export interface QuotaWindowReading {
   id: string
   label: string
+  startsAt?: string | null
   resetsAt: string | null
   remainingPercent: number | null
   level: QuotaLevel
@@ -26,6 +27,8 @@ export interface QuotaMeterProvider {
   limitingWindow: QuotaLimitingWindow | null
   /** Account week. Null when quota-axi reported no weekly window. */
   weeklyWindow: QuotaWindowReading | null
+  /** A measured nonweekly cycle, when the provider reports both endpoints. */
+  cycleWindow?: QuotaWindowReading | null
   /** Five-hour or other session window. Null when the provider has none. */
   shortWindow: QuotaWindowReading | null
   projectedRunOutAt: string | null
@@ -51,6 +54,7 @@ interface RawWindow {
   label?: unknown
   kind?: unknown
   percentRemaining?: unknown
+  startsAt?: unknown
   resetsAt?: unknown
 }
 
@@ -64,6 +68,7 @@ interface RawScope {
   scope?: unknown
   status?: unknown
   effectivePercentRemaining?: unknown
+  boundedBy?: unknown
   limitingWindowIds?: unknown
   runway?: RawRunway
 }
@@ -82,6 +87,7 @@ interface NormalizedWindow {
   label: string
   kind: string | null
   percentRemaining: number | null
+  startsAt: string | null
   resetsAt: string | null
 }
 
@@ -137,7 +143,9 @@ function readProvider(item: unknown): QuotaMeterProvider | null {
     remainingPercent: remaining,
     level: quotaLevel(remaining),
     limitingWindow,
-    weeklyWindow: toReading(pickWeekly(windows)),
+    // Cursor's independent Grok Bot week is not its main usage quota.
+    weeklyWindow: raw.provider === 'cursor' ? null : toReading(pickWeekly(windows)),
+    ...(raw.provider === 'cursor' ? { cycleWindow: toReading(pickCycle(scopedWindows(scope, windows))) } : {}),
     shortWindow: toReading(pickShort(windows)),
     projectedRunOutAt: projected,
     runway,
@@ -158,6 +166,7 @@ function readWindows(raw: RawProvider): NormalizedWindow[] {
       label: typeof window.label === 'string' && window.label ? window.label : window.id,
       kind: typeof window.kind === 'string' && window.kind ? window.kind : null,
       percentRemaining: finite(window.percentRemaining),
+      startsAt: stringOrNull(window.startsAt),
       resetsAt: stringOrNull(window.resetsAt),
     })
   }
@@ -189,6 +198,7 @@ function toReading(window: NormalizedWindow | null): QuotaWindowReading | null {
   return {
     id: window.id,
     label: window.label,
+    startsAt: window.startsAt,
     resetsAt: window.resetsAt,
     remainingPercent: remaining,
     level: quotaLevel(remaining),
@@ -214,6 +224,15 @@ function pickWeekly(windows: NormalizedWindow[]): NormalizedWindow | null {
   const account = weekly.filter(window => WEEKLY_WINDOW_IDS.has(window.id) || !window.id.includes(':'))
   const named = account.filter(window => WEEKLY_WINDOW_IDS.has(window.id))
   return pickTightest(named.length > 0 ? named : account.length > 0 ? account : weekly)
+}
+
+function scopedWindows(scope: RawScope | null, windows: NormalizedWindow[]): NormalizedWindow[] {
+  const ids = Array.isArray(scope?.boundedBy) ? scope.boundedBy.filter((id): id is string => typeof id === 'string') : []
+  return ids.length > 0 ? windows.filter(window => ids.includes(window.id)) : windows
+}
+
+function pickCycle(windows: NormalizedWindow[]): NormalizedWindow | null {
+  return pickTightest(windows.filter(window => !isWeekly(window) && window.startsAt && window.resetsAt))
 }
 
 function pickShort(windows: NormalizedWindow[]): NormalizedWindow | null {

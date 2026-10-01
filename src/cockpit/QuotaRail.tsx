@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuotaMeters } from '../hooks/useQuotaMeters'
 import type { QuotaMeterProvider, QuotaMeterSnapshot, QuotaWindowReading } from '../server/quota/parse'
 import { WeeklyStrip } from './WeeklyStrip'
+import { WindowRaceBar } from './WindowRaceBar'
 
 const DAY_MS = 24 * 60 * 60_000
 
@@ -84,13 +85,25 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   const weekly = provider.weeklyWindow
   const remaining = weekly ? weekly.remainingPercent : provider.remainingPercent
   const label = provider.notSetUp ? `${name}, not signed in` : `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
-  if (weekly || provider.notSetUp) {
-    return <button type="button" className={`cockpit-quota-meter is-week is-${weekly?.level ?? provider.level}`} aria-label={label}>
+  if (weekly) {
+    return <button type="button" className={`cockpit-quota-meter is-week is-${weekly.level}`} aria-label={label}>
       <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
-      <WeeklyStrip window={weekly ?? { id: 'weekly', label: 'week', resetsAt: null, remainingPercent: null, level: 'error' }} now={now} />
+      <WeeklyStrip window={weekly} now={now} />
+      <span className="cockpit-quota-side">
+        <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
+        {provider.shortWindow && <span className="cockpit-quota-short">{shortReadout(provider.shortWindow)}</span>}
+      </span>
+      <Detail provider={provider} now={now} />
+    </button>
+  }
+  if (provider.cycleWindow || provider.notSetUp) {
+    const reset = provider.cycleWindow?.resetsAt
+    return <button type="button" className={`cockpit-quota-meter is-cycle is-${provider.level}`} aria-label={label}>
+      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
+      <WindowRaceBar window={provider.cycleWindow ?? null} now={now} />
       <span className="cockpit-quota-side">
         <span className="cockpit-quota-pct">{provider.notSetUp ? 'Sign in' : remaining == null ? '–' : remaining}</span>
-        {provider.shortWindow && <span className="cockpit-quota-short">{shortReadout(provider.shortWindow)}</span>}
+        {reset && <span className="cockpit-quota-short">{new Date(reset).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>}
       </span>
       <Detail provider={provider} now={now} />
     </button>
@@ -107,11 +120,11 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
 export function QuotaMeters({ snapshot, now }: { snapshot: QuotaMeterSnapshot; now: number }) {
   const showRefresh = snapshot.commandError != null && snapshot.providers.length > 0
   const showOnlyError = snapshot.commandError != null && snapshot.providers.length === 0
-  const weekly = snapshot.providers.filter(provider => provider.weeklyWindow || provider.notSetUp)
-  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.notSetUp)
+  const rows = snapshot.providers.filter(provider => provider.weeklyWindow || provider.cycleWindow || provider.notSetUp)
+  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.cycleWindow && !provider.notSetUp)
   return <section className="cockpit-quotas" aria-label="Provider quota">
     <div className="cockpit-quota-meters">
-      {weekly.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
+      {rows.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
       {(compact.length > 0 || showRefresh || showOnlyError) && <div className="cockpit-quota-compact">
         {compact.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
         {(showRefresh || showOnlyError) && <button type="button" className="cockpit-quota-meter is-error" aria-label="Quota refresh, no reading">
@@ -148,7 +161,8 @@ export function QuotaBadges() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-  const providers = snapshot.providers.filter(provider => !provider.notSetUp)
+  // Keep the existing activity summaries when Cursor becomes a fifth provider.
+  const providers = snapshot.providers.filter(provider => provider.id !== 'cursor' && !provider.notSetUp)
   if (providers.length === 0 || providers.length > BADGE_LIMIT) return null
   return <div className="cockpit-quota-badges" aria-label="Quota summary">
     {providers.map(provider => {

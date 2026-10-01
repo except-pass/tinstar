@@ -138,6 +138,22 @@ describe('parseQuotaAxiReport', () => {
     expect(report.providers[0]?.weeklyWindow).toMatchObject({ id: 'credits', remainingPercent: 77 })
   })
 
+  it('uses Cursor main usage cycle rather than its independent weekly resource', () => {
+    const report = parseQuotaAxiReport({ providers: [{
+      provider: 'cursor', plan: 'Free',
+      windows: [
+        { id: 'included_usage', label: 'included usage', kind: 'monthly', percentRemaining: 75, startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z' },
+        { id: 'grok_bot', label: 'Grok Bot', kind: 'weekly', percentRemaining: 100 },
+      ],
+      quotaSemantics: { effectiveAvailability: [{ scope: 'all_models', status: 'known', effectivePercentRemaining: 75, boundedBy: ['included_usage'], limitingWindowIds: ['included_usage'] }] },
+      state: { status: 'fresh' },
+    }] })
+    expect(report.providers[0]).toMatchObject({
+      id: 'cursor', remainingPercent: 75, weeklyWindow: null,
+      cycleWindow: { id: 'included_usage', startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z', remainingPercent: 75 },
+    })
+  })
+
   it('rejects a document that is not a provider report', () => {
     expect(() => parseQuotaAxiReport({ generatedAt: '2026-09-29T12:00:00.000Z' })).toThrow(/providers/)
     expect(() => parseQuotaAxiReport('nope')).toThrow(/providers/)
