@@ -148,10 +148,67 @@ describe('parseQuotaAxiReport', () => {
       quotaSemantics: { effectiveAvailability: [{ scope: 'all_models', status: 'known', effectivePercentRemaining: 75, boundedBy: ['included_usage'], limitingWindowIds: ['included_usage'] }] },
       state: { status: 'fresh' },
     }] })
+    expect(report.providers.map(item => item.id)).toEqual(['cursor', 'grok_bot'])
     expect(report.providers[0]).toMatchObject({
       id: 'cursor', remainingPercent: 75, weeklyWindow: null,
       cycleWindow: { id: 'included_usage', startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z', remainingPercent: 75 },
     })
+    expect(report.providers[1]).toMatchObject({
+      id: 'grok_bot',
+      plan: null,
+      remainingPercent: 100,
+      level: 'normal',
+      limitingWindow: { id: 'grok_bot', label: 'Grok Bot', resetsAt: null },
+      weeklyWindow: { id: 'grok_bot', label: 'Grok Bot', remainingPercent: 100, level: 'normal' },
+      shortWindow: null,
+    })
+    expect(report.providers[1]?.cycleWindow).toBeUndefined()
+  })
+
+  it('keeps Grok Bot week bounds on its own meter and rounds its remaining percent', () => {
+    const report = parseQuotaAxiReport({ providers: [{
+      provider: 'cursor', plan: 'Pro',
+      windows: [
+        { id: 'included_usage', label: 'included usage', kind: 'monthly', percentRemaining: 40, startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z' },
+        { id: 'grok_bot', label: 'Grok Bot', kind: 'weekly', percentRemaining: 12.4, startsAt: '2026-09-28T00:00:00.000Z', resetsAt: '2026-10-05T00:00:00.000Z' },
+      ],
+      quotaSemantics: { effectiveAvailability: [
+        { scope: 'all_models', status: 'known', effectivePercentRemaining: 40, boundedBy: ['included_usage'], limitingWindowIds: ['included_usage'] },
+        { scope: 'grok_bot', status: 'known', effectivePercentRemaining: 12.4, boundedBy: ['grok_bot'], limitingWindowIds: ['grok_bot'] },
+      ] },
+      state: { status: 'fresh', refreshedAt: '2026-09-29T11:59:00.000Z' },
+    }] })
+    expect(report.providers[0]).toMatchObject({
+      id: 'cursor', remainingPercent: 40, weeklyWindow: null, plan: 'Pro',
+      cycleWindow: { id: 'included_usage', remainingPercent: 40 },
+    })
+    expect(report.providers[1]).toMatchObject({
+      id: 'grok_bot',
+      remainingPercent: 12,
+      level: 'low',
+      refreshedAt: '2026-09-29T11:59:00.000Z',
+      weeklyWindow: {
+        id: 'grok_bot',
+        label: 'Grok Bot',
+        remainingPercent: 12,
+        level: 'low',
+        startsAt: '2026-09-28T00:00:00.000Z',
+        resetsAt: '2026-10-05T00:00:00.000Z',
+      },
+    })
+  })
+
+  it('does not add a Grok Bot meter when Cursor has no grok_bot window', () => {
+    const report = parseQuotaAxiReport({ providers: [{
+      provider: 'cursor', plan: 'Pro',
+      windows: [
+        { id: 'included_usage', label: 'included usage', kind: 'monthly', percentRemaining: 40, startsAt: '2026-09-24T12:00:00.000Z', resetsAt: '2026-10-24T12:00:00.000Z' },
+      ],
+      quotaSemantics: { effectiveAvailability: [{ scope: 'all_models', status: 'known', effectivePercentRemaining: 40, boundedBy: ['included_usage'], limitingWindowIds: ['included_usage'] }] },
+      state: { status: 'fresh' },
+    }] })
+    expect(report.providers.map(item => item.id)).toEqual(['cursor'])
+    expect(report.providers[0]?.weeklyWindow).toBeNull()
   })
 
   it('rejects a document that is not a provider report', () => {

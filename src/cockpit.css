@@ -87,6 +87,7 @@
 .cockpit-quota-badge .cockpit-quota-popover{left:calc(100% + 8px);bottom:0;z-index:7}
 .cockpit-quota-badge:hover .cockpit-quota-popover,.cockpit-quota-badge:focus .cockpit-quota-popover,.cockpit-quota-badge:focus-visible .cockpit-quota-popover{display:block}
 .cockpit-quota-badges:hover .cockpit-quota-badge:not(:hover) .cockpit-quota-popover{display:none}
+.cockpit-shell:has(.cockpit-quota-meter:hover) .cockpit-quota-badge:not(:hover) .cockpit-quota-popover{display:none}
 .cockpit-quota-badge.is-normal{color:#5ddec0}
 .cockpit-quota-badge.is-low{color:#e2b15a}
 .cockpit-quota-badge.is-critical{color:#ff6b8a}
@@ -105,6 +106,7 @@
 .cockpit-quota-meter.is-cycle{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;min-width:0;padding:3px 4px}
 .cockpit-quota-id{display:flex;flex-direction:column;align-items:center;gap:2px;width:42px;min-width:42px;color:#d5e3ea}
 .cockpit-quota-id>span:last-child{max-width:42px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cockpit-quota-id>span.is-wrap{white-space:normal;text-align:center;text-overflow:clip;line-height:1.05}
 .cockpit-quota-strip{display:block;width:100%;height:auto}
 .cockpit-quota-race{display:block;width:100%;height:16px}
 .cockpit-quota-day{fill:rgba(255,255,255,.55);font:8px 'JetBrains Mono',monospace}
