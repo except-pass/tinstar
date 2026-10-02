@@ -25,7 +25,7 @@ export interface QuotaMeterProvider {
   remainingPercent: number | null
   level: QuotaLevel
   limitingWindow: QuotaLimitingWindow | null
-  /** Account week. Null when quota-axi reported no weekly window. */
+  /** This meter's account week; Cursor's Grok Bot week has its own meter. */
   weeklyWindow: QuotaWindowReading | null
   /** A measured nonweekly cycle, when the provider reports both endpoints. */
   cycleWindow?: QuotaWindowReading | null
