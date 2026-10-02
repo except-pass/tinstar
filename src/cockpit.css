@@ -105,6 +105,7 @@
 .cockpit-quota-meter.is-cycle{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;min-width:0;padding:3px 4px}
 .cockpit-quota-id{display:flex;flex-direction:column;align-items:center;gap:2px;width:42px;min-width:42px;color:#d5e3ea}
 .cockpit-quota-id>span:last-child{max-width:42px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cockpit-quota-id>span.is-wrap{white-space:normal;text-align:center;text-overflow:clip;line-height:1.05}
 .cockpit-quota-strip{display:block;width:100%;height:auto}
 .cockpit-quota-race{display:block;width:100%;height:16px}
 .cockpit-quota-day{fill:rgba(255,255,255,.55);font:8px 'JetBrains Mono',monospace}

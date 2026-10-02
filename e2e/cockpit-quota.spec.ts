@@ -81,6 +81,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
           const stripBox = strip.getBoundingClientRect()
           return stripBox.left < box.left - 1 || stripBox.right > box.right + 1
         }),
+        compact: compact.length,
         compactSpread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0,
       }
     })
@@ -88,6 +89,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     expect(layout.playheads).toBe(2)
     expect(layout.days).toBe(14)
     expect(layout.overflow).toBe(false)
+    expect(layout.compact).toBe(2)
     expect(layout.compactSpread).toBeLessThan(4)
     expect((await rail.evaluate(element => element.textContent ?? '')).toLowerCase()).not.toContain('unavailable')
     await page.screenshot({ path: test.info().outputPath('quota-rail-1440x900.png') })
@@ -103,7 +105,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     expect(await claudeTip.evaluate(element => element.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0)
     await page.screenshot({ path: test.info().outputPath('quota-hover-1440x900.png') })
 
-    for (const name of ['Codex, 18% remaining', 'Kimi, 3% remaining']) {
+    for (const name of ['Codex, 18% remaining']) {
       const meter = rail.getByRole('button', { name })
       await meter.hover()
       const tip = meter.getByRole('tooltip')
@@ -112,19 +114,41 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
       expect(box.left).toBeGreaterThanOrEqual(0)
       expect(box.right).toBeLessThanOrEqual(1440)
     }
-    await expect(rail.getByRole('button', { name: 'Kimi, 3% remaining' }).getByRole('tooltip')).toContainText('stale reading')
+    const kimi = page.getByRole('button', { name: 'Kimi summary, 3% remaining' })
+    await kimi.hover()
+    await expect(kimi.getByRole('tooltip')).toContainText('stale reading')
+    await expect(kimi.getByRole('tooltip')).toBeVisible()
 
     await page.mouse.move(0, 0)
-    const grok = rail.getByRole('button', { name: 'Grok, no reading' })
+    const grok = page.getByRole('button', { name: 'Grok summary, no reading' })
     await grok.focus()
     await expect(grok.getByRole('tooltip')).toContainText('usage endpoint rejected the session')
     await page.screenshot({ path: test.info().outputPath('quota-focus-1440x900.png') })
     await claude.hover()
     await expect(claudeTip).toBeVisible()
-    await expect(grok.getByRole('tooltip')).toBeHidden()
     await unsignedCursor.hover()
     await expect(unsignedCursor.getByRole('tooltip')).toContainText('Not signed in. Sign in to Cursor to show quota.')
     await page.screenshot({ path: test.info().outputPath('quota-cursor-signin-1440x900.png') })
+
+    await page.setViewportSize({ width: 1440, height: 600 })
+    await expect(page.getByLabel('Quota summary')).toBeHidden()
+    const compactMeters = [
+      rail.getByRole('button', { name: 'Grok, no reading' }),
+      rail.getByRole('button', { name: 'Kimi, 3% remaining' }),
+    ]
+    for (const meter of compactMeters) {
+      await expect(meter).toBeVisible()
+      const box = await meter.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.y).toBeGreaterThanOrEqual(0)
+      expect(box!.y + box!.height).toBeLessThanOrEqual(600)
+    }
+    await page.screenshot({ path: test.info().outputPath('quota-rail-1440x600.png') })
+    await compactMeters[0]!.hover()
+    await expect(compactMeters[0]!.getByRole('tooltip')).toContainText('usage endpoint rejected the session')
+    await compactMeters[1]!.hover()
+    await expect(compactMeters[1]!.getByRole('tooltip')).toContainText('stale reading')
+    await page.screenshot({ path: test.info().outputPath('quota-compact-hover-1440x600.png') })
 
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
@@ -141,7 +165,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     })
     expect(phone.strips).toBe(2)
     expect(phone.overflow).toBe(false)
-    const lastMeter = rail.getByRole('button', { name: 'Kimi, 3% remaining' })
+    const lastMeter = rail.getByRole('button', { name: 'Cursor, not signed in' })
     await lastMeter.hover()
     const phoneTip = await lastMeter.getByRole('tooltip').evaluate(element => element.getBoundingClientRect().toJSON() as DOMRect)
     expect(phoneTip.left >= 0 && phoneTip.right <= 390 && phoneTip.top >= 0).toBe(true)
@@ -168,9 +192,9 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     windows: [
       { id: 'included_usage', label: 'included usage', percentRemaining: 40, ...cycle },
       { id: 'auto_usage', label: 'auto usage', percentRemaining: 90, ...cycle },
-      { id: 'grok_bot', label: 'Grok Bot', kind: 'weekly', percentRemaining: 5, startsAt: '2026-09-28T00:00:00.000Z' },
+      { id: 'grok_bot', label: 'Grok Bot', kind: 'weekly', percentRemaining: 5, startsAt: '2026-09-28T00:00:00.000Z', resetsAt: '2026-10-05T00:00:00.000Z' },
     ],
-    state: { status: 'fresh', stale: false, refreshedAt: '2026-09-29T11:59:00.000Z' },
+    state: { status: 'stale', stale: true, refreshedAt: '2026-09-29T11:59:00.000Z' },
     quotaSemantics: { status: 'known', effectiveAvailability: [
       { scope: 'all_models', status: 'known', effectivePercentRemaining: 40, boundedBy: ['included_usage', 'auto_usage'], limitingWindowIds: ['included_usage'] },
       { scope: 'grok_bot', status: 'known', effectivePercentRemaining: 5, boundedBy: ['grok_bot'], limitingWindowIds: ['grok_bot'] },
@@ -203,17 +227,22 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
         const body = await request.get(`${base}/api/quota`, { timeout: 1000 }).then(response => response.json()) as { providers?: unknown[] }
         return body.providers?.length ?? 0
       } catch { return 0 }
-    }, { timeout: 20_000 }).toBe(5)
+    }, { timeout: 20_000 }).toBe(6)
 
     await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
     const rail = page.getByRole('region', { name: 'Provider quota' })
-    // The Grok Bot week (5%) is an independent resource; the meter reports the all-models cycle.
+    // The Grok Bot week is its own strip; Cursor's meter stays on the all-models cycle.
     const cursor = rail.getByRole('button', { name: 'Cursor, 40% remaining' })
     await expect(cursor).toBeVisible()
     await expect(cursor.getByText('Oct 24', { exact: true })).toBeVisible()
     await expect(cursor.locator('img')).toHaveAttribute('src', '/agent-icons/cursor.svg')
+    const bot = rail.getByRole('button', { name: 'Grok Bot, 5% remaining' })
+    await expect(bot).toBeVisible()
+    await expect(bot).toHaveClass(/is-week/)
+    await expect(bot.locator('img')).toHaveAttribute('src', '/agent-icons/grok-bot.png')
+    await expect(bot.getByTestId('weekday-label')).toHaveCount(7)
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
     const shape = await cursor.evaluate(element => {
       const race = element.querySelector('.cockpit-quota-race')
@@ -239,6 +268,10 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     await expect(tip).toContainText('Pro')
     await expect(tip).not.toContainText('Grok Bot')
     await page.screenshot({ path: test.info().outputPath('quota-cursor-hover-1440x900.png') })
+    await expect(tip).toContainText('stale reading')
+    await bot.hover()
+    await expect(bot.getByRole('tooltip')).toContainText('stale reading')
+    await page.screenshot({ path: test.info().outputPath('quota-grok-bot-stale-hover-1440x900.png') })
   } finally {
     server?.kill('SIGTERM')
     rmSync(root, { recursive: true, force: true })

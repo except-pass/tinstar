@@ -25,7 +25,7 @@ export interface QuotaMeterProvider {
   remainingPercent: number | null
   level: QuotaLevel
   limitingWindow: QuotaLimitingWindow | null
-  /** Account week. Null when quota-axi reported no weekly window. */
+  /** This meter's account week; Cursor's Grok Bot week has its own meter. */
   weeklyWindow: QuotaWindowReading | null
   /** A measured nonweekly cycle, when the provider reports both endpoints. */
   cycleWindow?: QuotaWindowReading | null
@@ -116,7 +116,10 @@ export function parseQuotaAxiReport(payload: unknown): ParsedQuotaReport {
   const rows: QuotaMeterProvider[] = []
   for (const item of body.providers) {
     const provider = readProvider(item)
-    if (provider) rows.push(provider)
+    if (!provider) continue
+    rows.push(provider)
+    const bot = grokBotMeter(item)
+    if (bot) rows.push(bot)
   }
   return { fetchedAt, providers: rows }
 }
@@ -143,13 +146,35 @@ function readProvider(item: unknown): QuotaMeterProvider | null {
     remainingPercent: remaining,
     level: quotaLevel(remaining),
     limitingWindow,
-    // Cursor's independent Grok Bot week is not its main usage quota.
+    // Cursor's Grok Bot week is its own meter, below, not Cursor's main usage quota.
     weeklyWindow: raw.provider === 'cursor' ? null : toReading(pickWeekly(windows)),
     ...(raw.provider === 'cursor' ? { cycleWindow: toReading(pickCycle(scopedWindows(scope, windows))) } : {}),
     shortWindow: toReading(pickShort(windows)),
     projectedRunOutAt: projected,
     runway,
     error: providerError(raw, remaining),
+    refreshedAt: stringOrNull(raw.state?.refreshedAt),
+  }
+}
+
+/** Cursor reports Grok Bot as its own weekly window, separate from included usage. */
+function grokBotMeter(item: unknown): QuotaMeterProvider | null {
+  if (!item || typeof item !== 'object') return null
+  const raw = item as RawProvider
+  if (raw.provider !== 'cursor') return null
+  const reading = toReading(readWindows(raw).find(window => window.id === 'grok_bot') ?? null)
+  if (!reading) return null
+  return {
+    id: 'grok_bot',
+    plan: null,
+    remainingPercent: reading.remainingPercent,
+    level: reading.level,
+    limitingWindow: { id: reading.id, label: 'Grok Bot', resetsAt: reading.resetsAt },
+    weeklyWindow: { ...reading, label: 'Grok Bot' },
+    shortWindow: null,
+    projectedRunOutAt: null,
+    runway: null,
+    error: providerError(raw, reading.remainingPercent),
     refreshedAt: stringOrNull(raw.state?.refreshedAt),
   }
 }

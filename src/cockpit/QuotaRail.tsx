@@ -10,6 +10,7 @@ function providerName(id: string): string {
   if (id === 'claude') return 'Claude'
   if (id === 'codex') return 'Codex'
   if (id === 'grok') return 'Grok'
+  if (id === 'grok_bot') return 'Grok Bot'
   return id.slice(0, 1).toUpperCase() + id.slice(1)
 }
 
@@ -46,6 +47,7 @@ const PROVIDER_LOGO: Record<string, string> = {
   claude: '/agent-icons/claude.svg',
   codex: '/agent-icons/openai.svg',
   grok: '/agent-icons/grok.svg',
+  grok_bot: '/agent-icons/grok-bot.png',
   cursor: '/agent-icons/cursor.svg',
 }
 
@@ -87,7 +89,7 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   const label = provider.notSetUp ? `${name}, not signed in` : `${name}, ${remaining == null ? 'no reading' : `${remaining}% remaining`}`
   if (weekly) {
     return <button type="button" className={`cockpit-quota-meter is-week is-${weekly.level}`} aria-label={label}>
-      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
+      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span className={name.includes(' ') ? 'is-wrap' : undefined}>{name}</span></span>
       <WeeklyStrip window={weekly} now={now} />
       <span className="cockpit-quota-side">
         <span className="cockpit-quota-pct">{remaining == null ? '–' : remaining}</span>
@@ -99,7 +101,7 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   if (provider.cycleWindow || provider.notSetUp) {
     const reset = provider.cycleWindow?.resetsAt
     return <button type="button" className={`cockpit-quota-meter is-cycle is-${provider.level}`} aria-label={label}>
-      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span>{name}</span></span>
+      <span className="cockpit-quota-id"><Glyph id={provider.id} /><span className={name.includes(' ') ? 'is-wrap' : undefined}>{name}</span></span>
       <WindowRaceBar window={provider.cycleWindow ?? null} now={now} />
       <span className="cockpit-quota-side">
         <span className="cockpit-quota-pct">{provider.notSetUp ? 'Sign in' : remaining == null ? '–' : remaining}</span>
@@ -161,8 +163,7 @@ export function QuotaBadges() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-  // Keep the existing activity summaries when Cursor becomes a fifth provider.
-  const providers = snapshot.providers.filter(provider => provider.id !== 'cursor' && !provider.notSetUp)
+  const providers = snapshot.providers.filter(provider => provider.id !== 'cursor' && provider.id !== 'grok_bot' && !provider.notSetUp)
   if (providers.length === 0 || providers.length > BADGE_LIMIT) return null
   return <div className="cockpit-quota-badges" aria-label="Quota summary">
     {providers.map(provider => {
