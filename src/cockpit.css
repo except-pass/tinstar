@@ -87,7 +87,6 @@
 .cockpit-quota-badge .cockpit-quota-popover{left:calc(100% + 8px);bottom:0;z-index:7}
 .cockpit-quota-badge:hover .cockpit-quota-popover,.cockpit-quota-badge:focus .cockpit-quota-popover,.cockpit-quota-badge:focus-visible .cockpit-quota-popover{display:block}
 .cockpit-quota-badges:hover .cockpit-quota-badge:not(:hover) .cockpit-quota-popover{display:none}
-.cockpit-shell:has(.cockpit-quota-meter:hover) .cockpit-quota-badge:not(:hover) .cockpit-quota-popover{display:none}
 .cockpit-quota-badge.is-normal{color:#5ddec0}
 .cockpit-quota-badge.is-low{color:#e2b15a}
 .cockpit-quota-badge.is-critical{color:#ff6b8a}

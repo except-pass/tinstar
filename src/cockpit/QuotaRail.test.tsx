@@ -50,9 +50,9 @@ describe('cockpit provider quota', () => {
   it('shows a weekly calendar strip per weekly provider and keeps the short window beside it', () => {
     const view = render(<QuotaMeters snapshot={snapshot} now={NOW} />)
     const rail = within(view.getByRole('region', { name: 'Provider quota' }))
-    expect(rail.getAllByRole('button')).toHaveLength(2)
-    expect(rail.queryByRole('button', { name: 'Grok, no reading' })).toBeNull()
-    expect(rail.queryByRole('button', { name: 'Kimi, 3% remaining' })).toBeNull()
+    expect(rail.getAllByRole('button')).toHaveLength(4)
+    expect(within(rail.getByRole('button', { name: 'Grok, no reading' })).getByText('usage endpoint rejected the session')).toBeTruthy()
+    expect(within(rail.getByRole('button', { name: 'Kimi, 3% remaining' })).getByText('stale reading')).toBeTruthy()
     const claudeButton = rail.getByRole('button', { name: 'Claude, 64% remaining' })
     expect(claudeButton.className).toContain('is-week')
     expect(claudeButton.className).toContain('is-normal')

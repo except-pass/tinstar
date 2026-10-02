@@ -174,7 +174,7 @@ function grokBotMeter(item: unknown): QuotaMeterProvider | null {
     shortWindow: null,
     projectedRunOutAt: null,
     runway: null,
-    error: null,
+    error: providerError(raw, reading.remainingPercent),
     refreshedAt: stringOrNull(raw.state?.refreshedAt),
   }
 }

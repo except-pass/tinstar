@@ -119,22 +119,11 @@ function Meter({ provider, now }: { provider: QuotaMeterProvider; now: number })
   </button>
 }
 
-/** Glyph and percent for the activity strip. Weekly strips stay on QuotaRail. */
-const BADGE_LIMIT = 4
-
-function activityBadges(providers: QuotaMeterProvider[]): QuotaMeterProvider[] {
-  // Cursor and its separate Grok Bot week stay on the quota rail so they do not push these summaries past the cap.
-  const shown = providers.filter(provider => provider.id !== 'cursor' && provider.id !== 'grok_bot' && !provider.notSetUp)
-  if (shown.length === 0 || shown.length > BADGE_LIMIT) return []
-  return shown
-}
-
 export function QuotaMeters({ snapshot, now }: { snapshot: QuotaMeterSnapshot; now: number }) {
   const showRefresh = snapshot.commandError != null && snapshot.providers.length > 0
   const showOnlyError = snapshot.commandError != null && snapshot.providers.length === 0
   const rows = snapshot.providers.filter(provider => provider.weeklyWindow || provider.cycleWindow || provider.notSetUp)
-  const onStrip = new Set(activityBadges(snapshot.providers).map(provider => provider.id))
-  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.cycleWindow && !provider.notSetUp && !onStrip.has(provider.id))
+  const compact = snapshot.providers.filter(provider => !provider.weeklyWindow && !provider.cycleWindow && !provider.notSetUp)
   return <section className="cockpit-quotas" aria-label="Provider quota">
     <div className="cockpit-quota-meters">
       {rows.map(provider => <Meter key={provider.id} provider={provider} now={now} />)}
@@ -164,6 +153,9 @@ export function QuotaRail() {
   return <QuotaMeters snapshot={snapshot} now={now} />
 }
 
+/** Glyph and percent for the activity strip. Weekly strips stay on QuotaRail. */
+const BADGE_LIMIT = 4
+
 export function QuotaBadges() {
   const snapshot = useQuotaMeters()
   const [now, setNow] = useState(() => Date.now())
@@ -171,8 +163,8 @@ export function QuotaBadges() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
-  const providers = activityBadges(snapshot.providers)
-  if (providers.length === 0) return null
+  const providers = snapshot.providers.filter(provider => provider.id !== 'cursor' && provider.id !== 'grok_bot' && !provider.notSetUp)
+  if (providers.length === 0 || providers.length > BADGE_LIMIT) return null
   return <div className="cockpit-quota-badges" aria-label="Quota summary">
     {providers.map(provider => {
       const weekly = provider.weeklyWindow

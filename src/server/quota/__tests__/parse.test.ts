@@ -198,6 +198,21 @@ describe('parseQuotaAxiReport', () => {
     })
   })
 
+  it('marks Cursor and its Grok Bot week stale from the same provider state', () => {
+    const report = parseQuotaAxiReport({ providers: [{
+      provider: 'cursor',
+      windows: [
+        { id: 'included_usage', kind: 'monthly', percentRemaining: 40 },
+        { id: 'grok_bot', kind: 'weekly', percentRemaining: 12, resetsAt: '2026-10-05T00:00:00.000Z' },
+      ],
+      state: { status: 'stale', stale: true, refreshedAt: '2026-09-29T10:00:00.000Z' },
+    }] })
+    expect(report.providers.map(item => ({ id: item.id, error: item.error, refreshedAt: item.refreshedAt }))).toEqual([
+      { id: 'cursor', error: 'stale reading', refreshedAt: '2026-09-29T10:00:00.000Z' },
+      { id: 'grok_bot', error: 'stale reading', refreshedAt: '2026-09-29T10:00:00.000Z' },
+    ])
+  })
+
   it('does not add a Grok Bot meter when Cursor has no grok_bot window', () => {
     const report = parseQuotaAxiReport({ providers: [{
       provider: 'cursor', plan: 'Pro',
