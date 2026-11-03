@@ -99,6 +99,23 @@ describe('fleet collection', () => {
     expect(scene.findings.some(f => f.kind === 'untracked-worker' || f.kind === 'task-execution-gap')).toBe(false)
   })
 
+  it('preserves structured child outcome provenance through fleet normalization', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'manager.json')
+    const raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw, tasks: [{
+      ...raw.tasks[0], kind: 'secondmate', endpoint: { exists: true },
+      current_state: { state: 'working', source: 'pane', freshness: 'fresh' },
+      paths: { status_log: { last_event: {
+        state: 'done', raw: 'done [key=child-outcome-child-done-05b032a1]: child child done: complete',
+      } } },
+    }] }))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const scene = reconcileScene(await sources.snapshot(), Date.parse(timestamp))
+    expect(scene.executions[0]?.liveness).toBe('running')
+    expect(scene.counts).toMatchObject({ running: 1, finished: 0 })
+  })
+
   it('marks missing attempt/backlog inventory partial', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
     const dir = await temp(); const file = join(dir, 'partial.json')

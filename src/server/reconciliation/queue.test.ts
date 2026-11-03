@@ -32,7 +32,7 @@ function task(decisions: unknown[] = [{ key: 'choose', verb: 'needs-decision', s
     identity: { fm_home: '/farm/hulk', task_id: id, spawn_gen: 'attempt-1' }, cardReferences: [],
     current_state: { state: 'unknown', source: 'pane', detail: null, observed_at: at, freshness: 'fresh' },
     endpoint: { exists: true, agent_alive: null, status: null, observed_at: at, freshness: 'fresh' }, paths: { home: null, worktree: null }, lastEventText: null,
-    last_event: { state: null, note: null, age_seconds: null }, pr: { url: null, head: null, source: null },
+    last_event: { raw: null, state: null, note: null, age_seconds: null }, pr: { url: null, head: null, source: null },
     backlog: { id, title: 'Work', state: 'in_flight', hold_reason: null, blocked_by: null, hold_until: null }, ...queueSignals({ hints: { open_decisions: decisions } }) }
 }
 function hold(values: Partial<Backlog> = {}): Backlog {
