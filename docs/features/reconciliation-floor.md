@@ -3,7 +3,7 @@
 This reference covers the first three slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
-S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). Desk readiness and authenticated conversational MCP belong to subsequent slices; the existing cockpit worker routes remain available. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
+S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). S4 adds the [read-only desk queue and readiness API](reconciliation-queue.md). Authenticated conversational MCP belongs to a subsequent slice; the existing cockpit worker routes remain available. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
 
 ## Observed First Mate contract
 

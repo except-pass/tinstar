@@ -24,6 +24,8 @@ Notion's existing property reader additionally retains optional `Next action` / 
 
 PR checks use an optional authenticated `gh-axi` CLI on the backend host (`gh-axi api GET` only). Missing CLI, credentials or repository permissions produce unknown PR readiness without preventing the queue from loading. No public endpoint or new credential is created. Reads are demand-driven with a 60-second cache (including failures), concurrent coalescing, a maximum of four PR refreshes / 12 GET requests per queue read, four concurrent PR refreshes, 5-second command deadlines, 64 KiB projected responses and a 64-entry memory cache. Check runs are bounded to 100; truncation and zero observed checks remain unknown. Checks/statuses are read against the observed PR head; a conflicting published execution head requires verification. Fresh merged/closed responses need only one GET. There are no retries or background pollers; unqueried candidates explicitly lack verification. Published source waits and one-touch prerequisites still apply even when a PR is green. Passing CI/mergeability is not proof of delivered behavior.
 
+Eligible PR refreshes rotate across the current candidate list using one cursor, so a stable list larger than the cache still receives reads across successive requests. Cache eviction does not reset the rotation; concurrent reads share pending requests. Candidates without a cached or pending read remain unverified.
+
 ## Run and verify on Hulk
 
 Use the existing server setup and operator-provided Notion read token, then:
