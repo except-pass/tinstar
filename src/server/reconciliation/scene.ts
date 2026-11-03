@@ -215,6 +215,8 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const related = claims.filter(claim => claim.cardId === card.id)
     const linked = executions.filter(execution => related.some(claim => claim.executionId === execution.id))
     const live = linked.filter(execution => execution.activity === 'executing' || execution.activity === 'waiting')
+    const confirmedWaiting = linked.filter(execution => execution.activity === 'waiting' &&
+      related.some(claim => claim.executionId === execution.id && claim.verification === 'confirmed' && claim.state === 'current'))
     // The configured set is not a census of the farm. A card with no known
     // accountable home might be executing on an unconfigured machine. Only
     // explicit attempt/backlog identifiers establish a relevant absence scope.
@@ -244,8 +246,8 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       if (absenceCovered && accountableHomes.length && related.every(claim => claim.verification === 'confirmed') && !card.source.archived && !card.source.in_trash) {
         add('task-execution-gap', [card.id], linked.map(e => e.id), `${card.expectationReason}; explicit accountability in ${accountableHomes.join(', ')} and complete fresh configured coverage contain no execution or legitimate wait`, accountableHomes)
       } else add('unknown-stale-source', [card.id], linked.map(e => e.id), 'Expected execution cannot be accounted for; insufficient coverage, unverified claims or missing explicit home accountability suppress an execution-gap conclusion')
-    } else if (linked.some(execution => execution.activity === 'waiting')) {
-      add('legitimate-wait-planned', [card.id], live.map(e => e.id), 'Observed worker wait; retain worker state/detail and card next action/checkpoint')
+    } else if (confirmedWaiting.length) {
+      add('legitimate-wait-planned', [card.id], confirmedWaiting.map(e => e.id), 'Observed worker wait; retain worker state/detail and card next action/checkpoint')
     }
   }
   const arrangements = groupScene(cards, executions, claims, findings, fleet.map(home => ({

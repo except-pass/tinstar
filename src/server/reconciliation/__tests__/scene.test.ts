@@ -171,6 +171,32 @@ describe('truthful reconciliation findings', () => {
     expect(findings(snapshot([waiting]), 'legitimate-wait-planned')).toHaveLength(1)
   })
 
+  it('requires current confirmed claims for worker waits while retaining candidate activity', () => {
+    const waiting = { state: 'blocked', freshness: 'fresh', observed_at: at } as const
+    const candidates = [
+      task('candidate', null, { current_state: waiting, backlog: { title: 'Build reconciliation' } }),
+      task('candidate', null, { current_state: waiting, cardReferences: cardReferences({ title: `card ${a}` }, 'task') }),
+      task('candidate', null, { current_state: waiting, cardReferences: cardReferences({ notion_page_id: a, title: `card ${b}` }, 'task') }),
+    ]
+    for (const worker of candidates) {
+      const scene = reconcileScene(expectedHome(snapshot([worker], [card(a), card(b)])), now)
+      expect(scene.executions[0]?.activity).toBe('waiting')
+      expect(scene.claims.length).toBeGreaterThan(0)
+      expect(scene.claims.every(claim => claim.verification !== 'confirmed')).toBe(true)
+      expect(scene.findings.some(f => f.kind === 'unverified-conflicting')).toBe(true)
+      expect(scene.findings.some(f => f.kind === 'legitimate-wait-planned' || f.kind === 'task-execution-gap')).toBe(false)
+    }
+    const source = snapshot([task('confirmed', a, { current_state: waiting }), candidates[0]!])
+    const confirmed = reconcileScene(source, now)
+    expect(confirmed.findings.filter(f => f.kind === 'legitimate-wait-planned').map(f => f.executionIds))
+      .toEqual([[confirmed.executions[0]!.id]])
+    source.intentions.status = 'stale'
+    const stale = reconcileScene(source, now)
+    expect(stale.executions.every(execution => execution.activity === 'waiting')).toBe(true)
+    expect(stale.claims.every(claim => claim.state === 'last-known')).toBe(true)
+    expect(stale.findings.some(f => f.kind === 'legitimate-wait-planned' || f.kind === 'task-execution-gap')).toBe(false)
+  })
+
   it('accounts for queued/held First Mate backlog without inventing an execution attempt', () => {
     const source = snapshot()
     source.fleet[0]!.observation.data!.backlog = [{ id: 'queued-work', title: 'Waiting on input', state: 'queued', kind: 'ship', repo: null,
