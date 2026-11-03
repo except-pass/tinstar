@@ -1,9 +1,11 @@
-# Reconciliation Floor (S1–S5)
+# Reconciliation sources and scene (S1–S5)
+
+The v8 [Overview](overview.md) replaces the original Floor presentation. Prototype 08 is the current visual reference; the source and reconciliation contracts below remain active.
 
 This reference covers the source, scene and Floor slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
-S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). S4 adds the [read-only desk queue and readiness API](reconciliation-queue.md). S5 adds [authenticated conversational MCP](reconciliation-mcp.md); the existing cockpit worker routes remain available. These endpoints supply no orchestration or Notion-write actions.
+S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. The UI is now the primary Overview at `/`; old `?view=floor` links open the same Overview. S4 adds the [read-only desk queue and readiness API](reconciliation-queue.md). S5 adds [authenticated conversational MCP](reconciliation-mcp.md); the existing cockpit worker routes remain available. These endpoints supply no orchestration or Notion-write actions.
 
 ## Observed First Mate contract
 

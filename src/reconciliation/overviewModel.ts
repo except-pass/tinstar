@@ -1,10 +1,12 @@
+import { homeLabel } from '../shared/reconciliationLabels'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import { managerCollapsed, type FloorScene, type PresentationState, type Target } from './presentation'
 
 export const cardTitle = (card: SceneCard) => String(card.source.properties.Name?.value || 'Untitled card')
 export const cardStatus = (card: SceneCard) => String(card.source.properties.Status?.value || 'Status unknown')
 export const workerTitle = (worker: Execution) => String(worker.source.backlog.title || worker.identity.task_id?.replace(/[-_]/g, ' ') || 'Unknown worker')
-export const shortHome = (home: string) => home.split('/').filter(Boolean).at(-1)?.replace(/-home$/, '').replace(/[-_]/g, ' ') || 'Unknown manager'
+export const managerName = (scene: FloorScene, home: string) => homeLabel(scene.coverage.homes.find(h => h.source.home === home)?.source ?? { home })
+export const rootHome = (scene: FloorScene) => scene.coverage.homes.find(h => !h.source.parentHome && (h.source.label === 'main' || scene.coverage.homes.some(child => child.source.parentHome === h.source.home)))
 export const stale = (observation: { status: string; expiresAt: string | null }, now: number) =>
   !['fresh', 'partial'].includes(observation.status) || !!observation.expiresAt && Date.parse(observation.expiresAt) <= now
 export const workerState = (worker: Execution, now: number, readFailed = false) => readFailed || stale(worker.observation, now) ? 'Last known' : ({ running: 'Running', waiting: 'Waiting', finished: 'Finished', absent: 'Offline', 'liveness-not-observed': 'State unknown' })[worker.liveness]
@@ -58,6 +60,6 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
     const cs = scene.cards.filter(c => group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
     ws.sort(state.sort === 'priority' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
     cs.sort(state.sort === 'activity' ? (a, b) => (relatedRank(a.id, 'card') - relatedRank(b.id, 'card') || compareCards(a, b)) : compareCards)
-    return { ...group, label: state.arrangement === 'secondMate' ? shortHome(group.label) : group.label, workers: ws, cards: cs }
+    return { ...group, label: state.arrangement === 'secondMate' ? managerName(scene, group.homeIds[0] ?? group.label) : group.label, workers: ws, cards: cs }
   }).filter(group => group.workers.length || group.cards.length)
 }

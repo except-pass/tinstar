@@ -115,7 +115,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'open-queue':
       next.selection = null
       next.queueOpen = true; next.queueCardId = action.cardId ?? null
-      next.queueItemId = action.cardId ? state.queueItemId : action.itemId ?? (hasQueue(queue) && queue.items.some(item => item.id === state.queueItemId) ? state.queueItemId : null) ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null
+      next.queueItemId = action.cardId ? state.queueItemId ?? null : action.itemId ?? (hasQueue(queue) && queue.items.some(item => item.id === state.queueItemId) ? state.queueItemId : null) ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null
       break
     case 'navigate-queue': {
       const items = hasQueue(queue) ? decisionItems(queue, now) : []

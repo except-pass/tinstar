@@ -339,9 +339,9 @@ describe('arrangement data and rollups', () => {
       expect(groups.find(g => g.label === 'Unassigned / unknown')?.cardIds).toContain(a)
     }
     expect(scene.arrangements.machine.find(g => g.label === 'Unassigned / unknown')?.executionIds).toHaveLength(1)
-    expect(scene.arrangements.secondMate.find(g => g.label === '/farm/missing')?.homeIds).toEqual(['/farm/missing'])
+    expect(scene.arrangements.secondMate.find(g => g.label === 'missing')?.homeIds).toEqual(['/farm/missing'])
     expect(scene.coverage.wholeFarm).toBe('not-certified')
-    expect(scene.arrangements.secondMate.find(g => g.label === '/farm/missing')?.counts.exceptions).toBe(1)
+    expect(scene.arrangements.secondMate.find(g => g.label === 'missing')?.counts.exceptions).toBe(1)
     expect(scene.findings.some(f => f.kind === 'untracked-worker')).toBe(false)
   })
 

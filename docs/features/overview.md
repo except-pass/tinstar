@@ -31,3 +31,10 @@ Development preview: `TINSTAR_BACKEND_PORT=5381 TINSTAR_FRONTEND_PORT=5380 npm r
 Use a private `TINSTAR_CONFIG_HOME` containing an authorized config; never commit
 credentials. A Notion access failure leaves the worker column usable. Sharing the
 configured board with its integration is an owner prerequisite, not an empty board.
+
+Fleet entries accept an optional `label`, for example `{ "home": "/absolute/home",
+"label": "hulk", "parentHome": "/absolute/root" }`. Labels only affect display.
+Fallback is the home basename without a leading `fm-`; stable IDs and authorized
+routing continue to use the complete home path. The configured root appears as
+First Mate in the command strip, with its own worker count, rather than as a
+duplicate manager card.

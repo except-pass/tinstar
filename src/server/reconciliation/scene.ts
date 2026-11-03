@@ -1,3 +1,4 @@
+import { homeLabel } from '../../shared/reconciliationLabels'
 import { childOutcomeVerb } from '../fleet/workerState'
 import { countLiveness, type ExecutionLiveness, type LivenessCounts } from '../../domain/execution-liveness'
 import type { SourceSnapshot } from './index'
@@ -271,7 +272,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     }
   }
   const arrangements = groupScene(cards, executions, claims, findings, fleet.map(home => ({
-    home: home.source.home, machine: home.source.machine ?? null,
+    home: home.source.home, label: home.source.label, machine: home.source.machine ?? null,
   })))
   return {
     generatedAt: new Date(now).toISOString(), scope: input.scope, warnings: input.warnings,
@@ -293,7 +294,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   }
 }
 
-function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[], findings: Finding[], homes: Array<{ home: string; machine: string | null }>) {
+function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[], findings: Finding[], homes: Array<{ home: string; label?: string; machine: string | null }>) {
   const arrangements = { initiative: new Map<string, SceneGroup>(), secondMate: new Map<string, SceneGroup>(), machine: new Map<string, SceneGroup>() }
   const group = (arrangement: keyof typeof arrangements, id: string, label: string) => {
     let entry = arrangements[arrangement].get(id)
@@ -310,7 +311,7 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
     return roots.length ? roots.map(id => group('initiative', key('initiative', id), byCard.has(id) ? word(byCard.get(id)!.source, 'Name') ?? id : `Unavailable parent ${id}`)) : [unassigned('initiative')]
   }
   for (const home of homes) {
-    group('secondMate', key('home', home.home), home.home).homeIds.push(home.home)
+    group('secondMate', key('home', home.home), homeLabel(home)).homeIds.push(home.home)
     const entry = home.machine ? group('machine', key('machine', home.machine), home.machine) : unassigned('machine')
     entry.homeIds.push(home.home)
     entry.placements.push({ machine: home.machine, basis: home.machine ? 'configured' : 'unknown', configuredMachine: home.machine })
@@ -327,7 +328,7 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
     if (!related.length) unassigned('initiative').executionIds.push(execution.id)
     const machine = execution.placement.machine ? group('machine', key('machine', execution.placement.machine), execution.placement.machine) : unassigned('machine')
     machine.placements.push(execution.placement)
-    for (const entry of [group('secondMate', key('home', execution.home), execution.home), machine]) {
+    for (const entry of [group('secondMate', key('home', execution.home), homeLabel(homes.find(home => home.home === execution.home) ?? { home: execution.home })), machine]) {
       entry.executionIds.push(execution.id); entry.claimIds.push(...related.map(claim => claim.id)); entry.cardIds.push(...related.map(claim => claim.cardId).filter(id => byCard.has(id)))
     }
   }

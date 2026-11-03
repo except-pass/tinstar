@@ -1,8 +1,10 @@
-# Conversational Floor (S5)
+# Conversational Overview
 
-Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Floor window. The UI uses the same pure semantic reducer as clicks. There are no execution, command, approval, merge, Notion-edit, claim-repair or domain-priority tools.
+Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. There are no execution, command, approval, merge, Notion-edit, claim-repair or domain-priority tools.
 
 ## Start and connect
+
+The default Desk navigates verified ready requests; secondary requests may be opened explicitly by item ID. Worker questions require explicit owner routing before becoming ready for Will.
 
 Use Node >=22.12. Configure fleet/Notion reads as described in [reconciliation-floor.md](reconciliation-floor.md). The configured list covers only those homes; a successful connection does not certify a whole-farm census. No extra source credentials or public listener are created by MCP.
 
@@ -12,7 +14,7 @@ npm run build:all
 TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar.js --host 127.0.0.1 --port 5281 --no-open
 ```
 
-Open `http://127.0.0.1:5281/?view=floor`. Each open Floor has an ephemeral `scene_id` shown above the hierarchy. Two tabs have separate IDs, revisions and selections. A reload creates a new ID. The Floor must remain open to apply commands; background browser throttling can delay acknowledgments.
+Open `http://127.0.0.1:5281/`. Each Overview has an ephemeral `scene_id` available through `list_ui_sessions` (also the root `data-scene-id` attribute for browser tests). Two tabs have separate IDs, revisions and selections. A reload creates a new ID. The Overview must remain open to apply commands; background browser throttling can delay acknowledgments.
 
 The first backend start creates `<TINSTAR_CONFIG_HOME>/mcp-token` (default `~/.config/tinstar/mcp-token`), a random per-install token with mode 0600. Tin Star never prints it or sends it to the browser. Config permission trouble disables MCP with a visible API error while source viewing continues. The operator can rotate the token by removing that file while the backend is stopped, restarting, and updating their client’s private secret. Do not paste it into chat, command history, screenshots or source control.
 
@@ -47,6 +49,8 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 `present_view` requires `scene_id`, `command_id`, `expected_revision`, and `action`; optional `ttl_ms` is 500–15000 (default 8000). Actions:
 
 ```text
+{type:"set-sort", sort:"activity"|"priority"}
+{type:"set-links", visible:boolean}
 {type:"set-arrangement", arrangement:"initiative"|"secondMate"|"machine"}
 {type:"set-expanded", target:{kind:"manager"|"group",id}, expanded:boolean}
 {type:"focus", target:{kind,id}}
@@ -113,7 +117,7 @@ console.log(receipt) // queued requires get_command; only applied certifies the 
 await client.close()
 ```
 
-In conversation: list windows, select the intended ID, read its scene/card, regroup by Machine, focus a returned actual card/execution, open that card, and flash its semantic ID. Check the browser and applied receipt after each step. Open a second Floor and verify it stays unchanged. Close one window and verify commands report disconnected. Click manually while an older command is queued and verify it reports stale-revision. Unknown IDs and unauthorized requests must fail without changing either window.
+In conversation: list windows, select the intended ID, read its scene/card, regroup by Machine, focus a returned actual card/execution, open that card, and flash its semantic ID. Check the browser and applied receipt after each step. Open a second Overview and verify it stays unchanged. Close one window and verify commands report disconnected. Click manually while an older command is queued and verify it reports stale-revision. Unknown IDs and unauthorized requests must fail without changing either window.
 
 Run controlled acceptance on an isolated config, with no production source writes:
 
