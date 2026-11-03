@@ -403,7 +403,11 @@ export default function App() {
           if (source.kind !== 'firstmate') return false
           try { const [home, task] = JSON.parse(source.id); return home === card.home && task === card.taskId } catch { return false }
         }))
-        return matches.map(card => <details key={card.key}><summary>{actionable ? 'Respond through First Mate' : 'First Mate context'}</summary>{actionable ? <AttentionCardView card={card} worker={workers.find(w => w.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} /> : <><p>{card.headline}</p>{card.detail && <p>{card.detail}</p>}{card.workerKey && <button type="button" onClick={() => openWorker(card.workerKey!)}>Read worker request</button>}</>}<MessagesPanel messages={messages.filter(m => m.home === card.home && m.taskId === card.taskId && m.decisionKey === card.decisionKey)} error={messageError} retry={retry} /></details>)
+        return matches.map(card => {
+          const worker = workers.find(item => item.key === card.workerKey)
+          const workerHref = worker ? writeOverviewSearch('', linkLocation(workers, { worker: worker.id, home: homeName(worker.home), key: worker.key, q: '' })) : null
+          return <details key={card.key}><summary>{actionable ? 'Respond through First Mate' : 'First Mate context'}</summary>{actionable ? <AttentionCardView card={card} worker={workers.find(w => w.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} /> : <><p>{card.headline}</p>{card.detail && <p>{card.detail}</p>}{workerHref && <a href={workerHref} target="_blank" rel="noopener noreferrer">Read worker request ↗</a>}</>}<MessagesPanel messages={messages.filter(m => m.home === card.home && m.taskId === card.taskId && m.decisionKey === card.decisionKey)} error={messageError} retry={retry} /></details>
+        })
       }} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
