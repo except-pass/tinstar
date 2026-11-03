@@ -54,6 +54,7 @@ it('shows separate liveness totals in the headline and manager subtree', () => {
   tasks[1]!.lastEventText = 'done [at=1]: finished but window open'
   tasks[2]!.endpoint.exists = false
   tasks[3]!.endpoint.exists = null
+  tasks[3]!.current_state.freshness = 'stale'
   observed.scene = new SceneReconciler().reconcile(sources)
   const { container } = render(<ReconciliationFloor workers={[]} />)
   expect(container.querySelector('.floor-coverage')!.textContent).toContain('1 running · 1 waiting · 1 finished · 1 absent · 1 liveness not observed · 5 task records')
