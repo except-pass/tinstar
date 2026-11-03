@@ -14,6 +14,7 @@ import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
 import { DRAWER_MEDIA, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
+import { ReconciliationFloor } from './reconciliation/ReconciliationFloor'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
@@ -57,13 +58,14 @@ function displayTime(value: string | null): string {
 type DismissResult = { dismissed: boolean; fallback?: boolean; error?: string | null }
 
 export default function App() {
+  const [floorActive, setFloorActive] = useState(() => new URLSearchParams(window.location.search).get('view') === 'floor')
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
   const [drawer, setDrawer] = useState(isDrawerLayout)
-  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => initialPanelMode(readOverviewSearch(window.location.search).worker))
+  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => new URLSearchParams(window.location.search).get('view') === 'floor' ? null : initialPanelMode(readOverviewSearch(window.location.search).worker))
   const drawerRef = useRef(drawer)
   drawerRef.current = drawer
   const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
@@ -343,6 +345,7 @@ export default function App() {
   useEffect(() => {
     const onPop = () => {
       setOverviewLocation(readOverviewSearch(window.location.search))
+      setFloorActive(new URLSearchParams(window.location.search).get('view') === 'floor')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -422,7 +425,7 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
+    <ActivityBar overviewActive={!overviewLocation.worker && !floorActive} floorActive={floorActive && !overviewLocation.worker} onFloor={() => { openOverview(); setFloorActive(true); setPanelMode(null); const url = new URL(window.location.href); url.searchParams.set('view', 'floor'); window.history.replaceState(null, '', url) }} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={() => { setFloorActive(false); openOverview(); const url = new URL(window.location.href); url.searchParams.delete('view'); window.history.replaceState(null, '', url) }} onSelect={selectPanel} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
       <div hidden={panelMode !== 'needs'}><NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} /></div>
@@ -430,7 +433,7 @@ export default function App() {
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {current ? <>
+      {!current && !overviewLocation.worker && floorActive ? <ReconciliationFloor workers={workers} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {
