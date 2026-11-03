@@ -225,7 +225,7 @@ Worker ↔ claim ↔ intention rows retain multiple attempts/workers per card. D
 
 The inspector links eligible exact home/task identities to the existing guarded worker/terminal page in a separate tab. File-published homes do not acquire terminal access. Ambiguous basename routes are withheld to avoid opening the wrong home. Closing this page uses the existing viewer lifecycle and never stops the worker. No new domain-write route, orchestration, approval or claim repair is added.
 
-All floor arrangement, expansion, focus, roadmap, filter, flash and clear changes pass through `src/reconciliation/presentation.ts`. `applyPresentationAction` returns the next revision and an applied/unknown-id/stale-revision result; it is pure and has no source writes. Focus/regroup reveal relevant ancestors and preserve selection. Historical or removed IDs remain selected with explicit unavailable labeling. Flash lasts at most four seconds; reduced motion retains a static outline. Optional assistant origin supplies a subtle clearable cue. S5 uses this shared pure reducer with authenticated command delivery and browser-committed acknowledgments; see [the MCP contract](reconciliation-mcp.md).
+All floor presentation changes pass through the pure reducer in `src/shared/reconciliationPresentation.ts`, re-exported by `src/reconciliation/presentation.ts`. Historical or removed IDs remain selected with explicit unavailable labeling. S5 uses this reducer for clicks and authenticated command delivery; see [the MCP presentation and acknowledgment contract](reconciliation-mcp.md).
 
 ### Click acceptance and controlled browser proof
 

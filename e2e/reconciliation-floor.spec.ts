@@ -96,7 +96,7 @@ test('arrangements, missing sides, collapse, inspector, roadmap and read-only ke
   await screenshot(page, 'exceptions')
   await page.getByRole('button', { name: 'Clear highlights', exact: true }).click()
   await expect(page.locator('.is-flashed')).toHaveCount(0)
-  await page.getByRole('button', { name: /^Exceptions Only/ }).click()
+  await expect(page.getByRole('button', { name: /^Exceptions Only/ })).toHaveAttribute('aria-pressed', 'false')
   await page.getByRole('button', { name: /Roadmap \/ waits/ }).first().click()
   await expect(page.locator(`[data-card-id="${fixtureId(5)}"]`)).toBeVisible()
   await expect(page.locator(`[data-card-id="${fixtureId(4)}"]`)).toContainText('blocked')
