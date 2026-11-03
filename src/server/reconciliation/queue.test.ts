@@ -296,6 +296,42 @@ describe('desk queue correctness', () => {
     ])
   })
 
+  it.each(['task', 'matched-hold', 'standalone-hold'] as const)('verifies every published hold time on %s', route => {
+    for (const [timing, readiness] of [
+      ['after release', 'needs-readiness-verification'],
+      ['2026-12-01T00:00:00Z', 'future-or-conditional'],
+      ['2026-10-01T00:00:00Z', 'ready-now'],
+      [null, 'ready-now'],
+    ] as const) {
+      const worker = task()
+      const held = hold({ id: 'choose' })
+      if (route === 'task') worker.backlog.hold_until = timing
+      else held.hold_until = timing
+      const s = snapshot([], route === 'standalone-hold' ? [] : [worker], route === 'task' ? [] : [held])
+      expect(build(s).items).toEqual([expect.objectContaining({ readiness, oneTouch: readiness === 'ready-now' })])
+    }
+  })
+
+  it.each(['none', 'card', 'holds', 'pull'] as const)('preserves distinct blocked keys with shared %s context', context => {
+    const summaries = context === 'card' ? ['Need access', 'Need access'] : context === 'pull' ? ['Merge this PR', 'Merge this PR'] : ['Need repository access', 'Need reviewer']
+    const worker = task([
+      { key: 'access', verb: 'blocked', summary: summaries[0] },
+      { key: 'reviewer', verb: 'blocked', summary: summaries[1] },
+    ])
+    if (context === 'card') worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
+    if (context === 'pull') worker.pr.url = pull
+    const s = snapshot(context === 'card' ? [card()] : [], [worker], context === 'holds' ? [hold({ id: 'access' }), hold({ id: 'reviewer' })] : [])
+    const result = build(s, new Map([[pull, readyPull()]]))
+    expect(result.items).toHaveLength(2)
+    expect(new Set(result.items.map(item => item.id)).size).toBe(2)
+    expect(result.items.map(item => item.action).sort()).toEqual([...summaries].sort())
+    expect(result.items.every(item => item.kind === 'blocked' && !item.oneTouch && item.decisionKeys.length === 0)).toBe(true)
+    worker.queue!.decisions.reverse()
+    expect(build(s).items.map(item => item.id)).toEqual(result.items.map(item => item.id))
+    s.fleet.unshift({ ...s.fleet[0]!, source: { ...s.fleet[0]!.source, home: '/farm/empty' }, observation: obs({ ...s.fleet[0]!.observation.data!, tasks: [], backlog: [] }) })
+    expect(build(s).items.map(item => item.id)).toEqual(result.items.map(item => item.id))
+  })
+
   it('does not deduplicate separate decisions sharing a card, PR or title', () => {
     const first = task(); first.pr.url = pull; first.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
     const second = task([{ key: 'other', verb: 'needs-decision', summary: 'Choose C or D' }], 'other'); second.cardReferences = first.cardReferences; second.pr.url = pull
@@ -347,6 +383,30 @@ describe('bounded cached PR reads', () => {
     expect(first.get(urls[0]!)).toMatchObject({ status: 'fresh', checks: 'passed', mergeability: 'ready' })
     expect(read.mock.calls.some(([path]) => path.includes(`/commits/${info.head}/check-runs`))).toBe(true)
     await reader.get([urls[0]!]); expect(read).toHaveBeenCalledTimes(12)
+  })
+
+  it.each([false, true])('shares the refresh budget fairly across expired reads, failure=%s', async fail => {
+    let clock = now
+    const read = vi.fn(async (path: string) => {
+      if (fail) throw new Error('Unavailable')
+      return response(path)
+    })
+    const reader = new QueuePullReader(read, () => clock)
+    const urls = Array.from({ length: 5 }, (_, i) => `https://github.com/except-pass/tinstar/pull/${i + 1}`)
+    await reader.get(urls)
+    const firstCount = read.mock.calls.length
+    expect(firstCount).toBe(fail ? 4 : 12)
+    clock += 61_000
+    const [next, concurrent] = await Promise.all([reader.get(urls), reader.get(urls)])
+    expect(read.mock.calls.length - firstCount).toBe(fail ? 4 : 12)
+    expect(next.get(urls[4]!)?.status).toBe(fail ? 'unknown' : 'fresh')
+    expect(concurrent.get(urls[4]!)).toEqual(next.get(urls[4]!))
+    const attempted = read.mock.calls.map(([path]) => path).filter(path => /\/pulls\/\d+$/.test(path))
+    expect(attempted.slice(4)).toEqual([5, 1, 2, 3].map(id => `/repos/except-pass/tinstar/pulls/${id}`))
+    clock += 61_000
+    await reader.get(urls)
+    const later = read.mock.calls.map(([path]) => path).filter(path => /\/pulls\/\d+$/.test(path))
+    expect(later[8]).toBe('/repos/except-pass/tinstar/pulls/4')
   })
 
   it('does not mistake no CI, truncated checks, pending or failed checks for readiness', async () => {

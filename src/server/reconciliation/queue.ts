@@ -157,7 +157,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const explicitRelationship = refs.length === 1 && known.length === 1 &&
         [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
       if (fresh(intentions) && explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
-      const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
+      const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.type === 'blocked' ? call.key.replace(/^attention-\d+:/, '') : call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
       restrictAction(item, text(hold?.hold_reason))
       restrictAction(item, text(task?.backlog.hold_reason))
@@ -181,7 +181,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (future(text(hold?.hold_until), now) || future(text(task?.backlog.hold_until), now) || text(hold?.blocked_by) || text(task?.backlog.blocked_by)) {
         lower(item, 'future-or-conditional', 'Published hold/dependency must clear before the decision is immediate')
       }
-      if (hold?.hold_until && !Number.isFinite(Date.parse(String(hold.hold_until)))) lower(item, 'needs-readiness-verification', 'Hold timing is not a verifiable date')
+      for (const timing of [hold?.hold_until, task?.backlog.hold_until]) {
+        if (timing && !Number.isFinite(Date.parse(String(timing)))) lower(item, 'needs-readiness-verification', 'Hold timing is not a verifiable date')
+      }
       if (item.readiness === 'ready-now') item.reasons.push('First Mate publishes an open keyed owner decision or an explicitly captain-actionable hold')
       candidates.push(item)
     }
@@ -193,9 +195,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const urls = pulls(item)
     // Exact PR identity unifies merge requests only. Other decisions on the same
     // card/PR remain independent; title similarity never collapses decisions.
-    const merge = item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action))
+    const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
-    const duplicateKey = merge && urls.length === 1 ? `merge:${urls[0]}` : item.cardIds.length === 1 && item.action
+    const duplicateKey = merge && urls.length === 1 ? `merge:${urls[0]}` : item.kind !== 'blocked' && item.cardIds.length === 1 && item.action
       ? JSON.stringify(['decision', item.cardIds[0], normalize(item.action)]) : item.id
     const existing = result.get(duplicateKey)
     if (existing) {

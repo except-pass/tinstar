@@ -62,7 +62,9 @@ export class QueuePullReader {
     const result = new Map<string, PullReadiness>()
     let budget = 4
     const work: Promise<void>[] = []
-    for (const url of new Set(urls)) {
+    const ordered = [...new Set(urls)].sort((a, b) =>
+      (this.cache.get(a)?.retryAt ?? -Infinity) - (this.cache.get(b)?.retryAt ?? -Infinity))
+    for (const url of ordered) {
       if (!parsePullUrl(url)) continue
       const cached = this.cache.get(url)
       let pending = this.pending.get(url)
