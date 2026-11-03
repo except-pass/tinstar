@@ -12,7 +12,7 @@ afterEach(cleanup)
 
 it.each(['queued', 'held'])('presents an expected-now card with an explicit %s backlog wait consistently', state => {
   const sources = fixtureSources()
-  const entry = sources.fleet[1]!.observation.data!.backlog[0]!
+  const entry = sources.fleet[1]!.observation.data!.backlog![0]!
   entry.state = state
   entry.hold_reason = 'Awaiting review capacity'
   entry.blocked_by = 'review-task'

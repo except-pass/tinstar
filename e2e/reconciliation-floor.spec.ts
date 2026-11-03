@@ -155,7 +155,7 @@ test('large fixture, unavailable home, failed refresh and restart keep identitie
 for (const state of ['queued', 'held']) {
   test(`explicit ${state} backlog wait overrides expected-now socket and preserves supplied hold details`, async ({ page }) => {
     const sources = fixtureSources()
-    Object.assign(sources.fleet[1]!.observation.data!.backlog[0]!, {
+    Object.assign(sources.fleet[1]!.observation.data!.backlog![0]!, {
       state, hold_reason: 'Awaiting review capacity', blocked_by: 'review-task', hold_until: '2026-11-05T12:00:00Z',
     })
     const scene = new SceneReconciler().reconcile(sources)
