@@ -14,7 +14,7 @@ Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint af
 
 Completed/answered/resolved/archived cards and calls, completed source holds, and freshly closed/merged merge requests are excluded. There is no persistent answered list: First Mate's current open keys/holds and Notion's current properties are authoritative. Stale closed/merged evidence cannot establish a new completion; retained candidates are labeled for verification. Partial or failed reads never imply all-clear.
 
-Deduplication reuses the cockpit's exact decision-key/captain-hold matching. Across sources it uses explicit card identity plus the same normalized action, or the exact canonical PR URL for a merge decision. Distinct decisions on one card/PR remain separate. A tag-only candidate can be corroborated by an explicit current First Mate request; published dependencies or conflicting/stale context still prevent ready-now. Titles and textual card references cannot establish confirmed relationships. Source metadata and all contributing IDs/evidence remain available on the combined item.
+Deduplication reuses the cockpit's exact decision-key/captain-hold matching. Across sources it uses explicit card identity plus the same normalized action, or the exact canonical PR URL for a merge decision. Distinct non-merge decisions on one card/PR remain separate. A tag-only candidate can be corroborated by an explicit current First Mate request; published dependencies or conflicting/stale context still prevent ready-now. Titles and textual card references cannot establish confirmed relationships. Source metadata and all contributing IDs/evidence remain available on the combined item.
 
 ## Source limits and prerequisites
 
