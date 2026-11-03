@@ -1,4 +1,5 @@
 /** Explicit synthetic data for UI/reducer acceptance. Never imported by production. */
+import type { Worker } from '../../src/cockpit/shell/types'
 import type { SourceSnapshot } from '../../src/server/reconciliation'
 import type { Observation } from '../../src/server/reconciliation/observation'
 import { SceneReconciler } from '../../src/server/reconciliation/scene'
@@ -47,3 +48,10 @@ export function fixtureSources({ now = Date.now(), size = 0, unavailable = false
     intentions: observation({ dataSourceId: fixtureId(999), schema: {}, cards, hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'fixture' }, now) }
 }
 export const fixtureScene = (options: Parameters<typeof fixtureSources>[0] = {}) => new SceneReconciler().reconcile(fixtureSources(options), options.now ?? Date.now())
+
+/** Matching cockpit record for verifying the existing safe viewer route. */
+export function fixtureViewerWorkers(): Worker[] {
+  return [{ key: 'fixture-linked-worker', id: 'linked-worker', home: fixtureHomes[1]!, kind: 'ship', state: 'working', detail: 'Fixture state',
+    observedAt: new Date().toISOString(), freshness: 'fresh', objective: fixtureNames.linked, project: 'fixture/tinstar', direct: false,
+    worktree: '/fixture/worktree', branch: 'fixture/example', prUrl: null, terminalAvailable: true, terminalPid: 1 }]
+}

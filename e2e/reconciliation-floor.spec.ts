@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fixtureHomes, fixtureId, fixtureNames, fixtureScene, fixtureSources } from '../test-fixtures/reconciliation/scenes'
+import { fixtureHomes, fixtureId, fixtureNames, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
 
 async function freePort() {
@@ -54,6 +54,7 @@ test('arrangements, missing sides, collapse, inspector, roadmap and read-only ke
   const mutations: string[] = []
   page.on('request', request => { if (request.method() !== 'GET') mutations.push(`${request.method()} ${request.url()}`) })
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
   await page.goto(`${base}/?view=floor`)
   await expect(page.getByRole('heading', { name: 'Reconciliation Floor' })).toBeVisible()
   await expect(page.locator('.floor-coverage')).toContainText('7 cards · 5 unique workers · 5 attempts')
@@ -63,6 +64,11 @@ test('arrangements, missing sides, collapse, inspector, roadmap and read-only ke
   await screenshot(page, 'initiative')
   const card = page.locator(`[data-card-id="${fixtureId(1)}"]`)
   await expect(card.locator('.floor-worker')).toHaveCount(2)
+  await card.locator('.floor-worker').first().click()
+  const viewer = page.getByRole('link', { name: 'Open safe worker / terminal viewer' })
+  await expect(viewer).toHaveAttribute('href', '?worker=linked-worker&home=hulk')
+  await expect(viewer).toHaveAttribute('target', '_blank')
+  await page.getByRole('button', { name: 'Close inspector' }).click()
   await card.locator('.floor-task').click()
   await expect(page.getByLabel('Scene inspector')).toContainText(fixtureNames.linked)
   const selected = await page.locator('.floor-task.is-selected').getAttribute('data-semantic-id')
