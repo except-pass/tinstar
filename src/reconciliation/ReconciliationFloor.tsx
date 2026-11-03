@@ -4,7 +4,7 @@ import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
 import {
-  ancestorHomes, managerCollapsed, applyPresentationAction, arrangements, findingLabels, initialPresentation, isException, semanticId, targetExists, targetInGroup,
+  ancestorHomes, managerCollapsed, applyPresentationAction, arrangements, findingLabels, initialPresentation, isException, isPlanned, semanticId, targetExists, targetInGroup,
   type FloorScene, type PresentationAction, type PresentationState, type Target,
 } from './presentation'
 import { useFloorScene } from './useFloorScene'
@@ -28,6 +28,23 @@ function relatedFindings(scene: FloorScene, cardIds: string[], executionIds: str
 }
 const tone = (findings: Finding[]) => findings.some(f => f.kind === 'task-execution-gap') ? 'gap' : findings.some(f => f.kind === 'untracked-worker') ? 'untracked' :
   findings.some(isException) ? 'unknown' : 'quiet'
+
+function waitExplanation(scene: FloorScene, card: SceneCard) {
+  const waits = scene.findings.filter(f => f.kind === 'legitimate-wait-planned' && f.cardIds.includes(card.id))
+  const backlog = waits.length ? scene.backlog.filter(entry =>
+    ['fresh', 'partial'].includes(entry.observation.status) &&
+    new Set(entry.source.cardReferences.map(ref => ref.pageId)).size === 1 &&
+    entry.source.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit') &&
+    (entry.source.state === 'queued' || entry.source.hold_reason || entry.source.blocked_by || entry.source.hold_until)) : []
+  return [waits.length ? unique(waits.map(f => f.reason)).join('; ') : card.expectationReason,
+    ...backlog.map(({ home, source }) => [
+      `First Mate ${home} / ${source.id}: ${source.state}`,
+      source.hold_reason && `Hold reason: ${source.hold_reason}`,
+      source.blocked_by && `Blocked by: ${source.blocked_by}`,
+      source.hold_until && `Hold until: ${source.hold_until}`,
+    ].filter(Boolean).join(' · ')),
+  ].join(' · ')
+}
 
 type Dispatch = (action: PresentationAction) => void
 interface Context { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; delayed: boolean; readFailed: boolean }
@@ -73,13 +90,13 @@ function CardRow({ card, group, context }: { card: SceneCard; group: SceneGroup;
   const executions = context.scene.executions.filter(e => claims.some(c => c.executionId === e.id))
   const shown = executions.filter(e => !managerCollapsed(context.scene, context.state, e.home))
   const findings = relatedFindings(context.scene, [card.id], executions.map(e => e.id))
-  return <article className={`floor-row floor-${tone(findings)}${card.expectation === 'wait-planned' ? ' floor-planned' : ''}`} data-card-id={card.id}>
+  return <article className={`floor-row floor-${tone(findings)}${isPlanned(context.scene, card) ? ' floor-planned' : ''}`} data-card-id={card.id}>
     <div className="floor-execution-stack">{shown.length ? shown.map(execution => <div key={execution.id} className="floor-pair">
       <WorkerNode execution={execution} context={context} /><div className="floor-claim-stack">{claims.filter(c => c.executionId === execution.id).map(claim => <ClaimNode key={claim.id} claim={claim} context={context} />)}</div>
     </div>) : <div className={`floor-socket floor-${executions.length || context.delayed ? 'quiet' : tone(findings)}`}>
-      <span aria-hidden="true">{executions.length ? '⊞' : card.expectation === 'wait-planned' ? '◷' : '○'}</span>
-      <strong>{executions.length ? `${executions.length} attempt(s) under collapsed managers` : findings.some(f => f.kind === 'task-execution-gap') ? context.delayed ? 'Last-known execution gap' : 'Execution gap' : card.expectation === 'wait-planned' ? 'No worker required now' : card.expectation === 'outside' ? 'Outside First Mate coverage' : 'Execution unverified'}</strong>
-      <small>{executions.length ? 'Expand the home above to reveal workers' : context.delayed ? 'Source read delayed; absence conclusions suspended' : card.expectationReason}</small>
+      <span aria-hidden="true">{executions.length ? '⊞' : isPlanned(context.scene, card) ? '◷' : '○'}</span>
+      <strong>{executions.length ? `${executions.length} attempt(s) under collapsed managers` : findings.some(f => f.kind === 'task-execution-gap') ? context.delayed ? 'Last-known execution gap' : 'Execution gap' : isPlanned(context.scene, card) ? 'No worker required now' : card.expectation === 'outside' ? 'Outside First Mate coverage' : 'Execution unverified'}</strong>
+      <small>{executions.length ? 'Expand the home above to reveal workers' : context.delayed ? 'Source read delayed; absence conclusions suspended' : waitExplanation(context.scene, card)}</small>
     </div>}</div>
     <TaskNode card={card} context={context} />
   </article>
@@ -98,8 +115,8 @@ function Neighborhood({ group, context }: { group: SceneGroup; context: Context 
   const open = !state.collapsed.includes(semanticId(item))
   const exceptions = relatedFindings(scene, group.cardIds, group.executionIds, group.homeIds).filter(isException)
   const cards = scene.cards.filter(c => group.cardIds.includes(c.id) && (!state.exceptionsOnly || exceptions.some(f => f.cardIds.includes(c.id))))
-  const roadmap = cards.filter(c => c.expectation === 'wait-planned')
-  const current = cards.filter(c => c.expectation !== 'wait-planned')
+  const roadmap = cards.filter(c => isPlanned(scene, c))
+  const current = cards.filter(c => !isPlanned(scene, c))
   const unlinked = scene.executions.filter(e => group.executionIds.includes(e.id) &&
     !scene.claims.some(c => c.executionId === e.id && scene.cards.some(card => card.id === c.cardId)) &&
     !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || exceptions.some(f => f.executionIds.includes(e.id))))
@@ -112,7 +129,7 @@ function Neighborhood({ group, context }: { group: SceneGroup; context: Context 
     {open && <div className="floor-group-body">
       {current.map(card => <CardRow key={card.id} card={card} group={group} context={context} />)}
       {unlinked.map(execution => <UnlinkedRow key={execution.id} execution={execution} context={context} />)}
-      {roadmap.length > 0 && <div className="floor-roadmap"><button type="button" aria-expanded={state.roadmapExpanded} onClick={() => send({ type: 'set-roadmap', expanded: !state.roadmapExpanded })}>{state.roadmapExpanded ? '−' : '+'} Roadmap / waits · {roadmap.length} cards · no worker required by status</button>
+      {roadmap.length > 0 && <div className="floor-roadmap"><button type="button" aria-expanded={state.roadmapExpanded} onClick={() => send({ type: 'set-roadmap', expanded: !state.roadmapExpanded })}>{state.roadmapExpanded ? '−' : '+'} Roadmap / waits · {roadmap.length} cards · planned or accounted-for waits</button>
         {state.roadmapExpanded && roadmap.map(card => <CardRow key={card.id} card={card} group={group} context={context} />)}</div>}
       {!cards.length && !unlinked.length && <p className="floor-empty">{group.homeIds.length ? 'No visible rows. Home observation coverage is shown above; this does not certify an empty home.' : 'No assigned records in this grouping.'}</p>}
       {exceptions.filter(f => !f.cardIds.length && !f.executionIds.length).map(f => <p key={f.id} className="floor-source-warning">{f.reason}</p>)}
@@ -177,7 +194,7 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
     <dl><dt>Semantic ID</dt><dd>{semanticId(selection)}</dd></dl>
     {selection.kind === 'you' && <p>The executive queue is reserved for S4. Reading and navigating the floor do not approve or complete work.</p>}
     {selection.kind === 'firstMate' && <p>First Mate owns execution. This floor reads configured homes across machines; whole-farm coverage is not certified.</p>}
-    {card && <><p>{card.expectationReason}</p><dl><dt>Card ID</dt><dd>{card.id}</dd><dt>Owner</dt><dd>{String(card.source.properties.Owner?.value ?? 'Unknown')}</dd><dt>Status</dt><dd>{status(card)}</dd><dt>Content edited</dt><dd>{time(card.source.last_edited_time)}</dd><dt>Next action / wait</dt><dd>{card.nextAction ?? 'Not collected or published'}</dd><dt>Checkpoint</dt><dd>{card.checkpoint.state} · {time(card.checkpoint.at)}</dd><dt>Progress assessment</dt><dd>Not collected; checkpoints and links do not prove progress</dd></dl>
+    {card && <><p>{waitExplanation(scene, card)}</p><dl><dt>Card ID</dt><dd>{card.id}</dd><dt>Owner</dt><dd>{String(card.source.properties.Owner?.value ?? 'Unknown')}</dd><dt>Status</dt><dd>{status(card)}</dd><dt>Content edited</dt><dd>{time(card.source.last_edited_time)}</dd><dt>Next action / wait</dt><dd>{card.nextAction ?? 'Not collected or published'}</dd><dt>Checkpoint</dt><dd>{card.checkpoint.state} · {time(card.checkpoint.at)}</dd><dt>Progress assessment</dt><dd>Not collected; checkpoints and links do not prove progress</dd></dl>
       {cardUrl && <a href={cardUrl} target="_blank" rel="noopener noreferrer">Read source card ↗</a>}
       {card.parentIds.map(id => <button type="button" key={id} disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : `${id} (unavailable)`}</button>)}
       <p>Card body and full context are not collected by this source slice.</p></>}

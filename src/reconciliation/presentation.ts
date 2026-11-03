@@ -1,4 +1,4 @@
-import type { SceneReconciler, Finding, SceneGroup } from '../server/reconciliation/scene'
+import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
 export type FloorScene = ReturnType<SceneReconciler['reconcile']>
 export type Arrangement = keyof FloorScene['arrangements']
@@ -6,6 +6,7 @@ export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 
 export interface Target { kind: TargetKind; id: string }
 export const semanticId = (target: Target) => `${target.kind}:${target.id}`
 export const isException = (finding: Finding) => !['confirmed-link', 'legitimate-wait-planned', 'outside-coverage'].includes(finding.kind)
+export const isPlanned = (scene: FloorScene, card: SceneCard) => card.expectation === 'wait-planned' || scene.findings.some(f => f.kind === 'legitimate-wait-planned' && f.cardIds.includes(card.id))
 export const arrangements: Record<Arrangement, string> = { initiative: 'Initiative', secondMate: 'Second Mate', machine: 'Machine' }
 export const findingLabels: Record<Finding['kind'], string> = {
   'confirmed-link': 'Confirmed link', 'task-execution-gap': '△ Execution gap', 'untracked-worker': '◇ Untracked execution',
@@ -100,7 +101,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   const revealTargets = action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement') ? [next.selection] : []
   for (const target of revealTargets) {
     const selectedCardIds = target.kind === 'card' ? [target.id] : [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'claim' ? c.id === target.id : target.kind === 'execution' && c.executionId === target.id).map(c => c.cardId)
-    if (scene.cards.some(c => selectedCardIds.includes(c.id) && c.expectation === 'wait-planned')) next.roadmapExpanded = true
+    if (scene.cards.some(c => selectedCardIds.includes(c.id) && isPlanned(scene, c))) next.roadmapExpanded = true
     const reveal = scene.arrangements[next.arrangement].filter(group => targetInGroup(scene, group, target)).map(group => semanticId({ kind: 'group', id: group.id }))
     const claims = [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'claim' && c.id === target.id)
     const executions = scene.executions.filter(e => target.kind === 'execution' ? e.id === target.id : claims.some(c => c.executionId === e.id))
