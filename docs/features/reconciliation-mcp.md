@@ -34,7 +34,7 @@ Localhost is the default. For a remote client, the operator must explicitly bind
 | Tool | Result |
 | --- | --- |
 | `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
-| `get_scene(scene_id)` | Last browser-applied presentation, freshness/coverage, counts, semantic card/actor/claim indexes and actual arrangements |
+| `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes and actual arrangements |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness from the queue source, or `queue-source-unavailable` |
@@ -79,7 +79,7 @@ The registry keeps at most 64 windows and 256 command receipts per window. Windo
 - `stale-revision`: input revision differs from the browser’s current revision. Read the window again before deciding to send a new command.
 - `conflict`: the same command ID was reused with different input, or the bounded receipt capacity was reached. Identical retries return the original receipt.
 
-Direct clicks update the same revision synchronously. A queued assistant focus received after a click fails its expected-revision check instead of replacing the user’s view. Competing commands based on the same revision can therefore produce a stale result. Do not automatically override it. UI fetch failure retains last-known presentation and source coverage; it never declares an empty fleet or all-clear.
+Direct clicks update the same revision synchronously. A queued assistant focus received after a click fails its expected-revision check instead of replacing the user’s view. Competing commands based on the same revision can therefore produce a stale result. Do not automatically override it. The read result distinguishes the browser’s rendered-scene observation from the server’s current source freshness. UI fetch failure retains last-known presentation and source coverage; it never declares an empty fleet or all-clear.
 
 ## SDK client and acceptance
 

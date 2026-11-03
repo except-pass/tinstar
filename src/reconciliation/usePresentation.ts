@@ -6,10 +6,12 @@ import type { CommandResult, ViewCommand } from '../shared/reconciliationCommand
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false) {
   const [state, setState] = useState(initialPresentation)
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
+  const readFailure = useRef(readFailed)
+  readFailure.current = readFailed
   const current = useRef(state), latestScene = useRef(scene), latestQueue = useRef(queue)
   const pending = useRef<CommandResult[]>([]), ready = useRef<CommandResult[]>([])
   const seen = useRef(new Map<string, CommandResult>())
@@ -60,11 +62,11 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
       const batch = ready.current.splice(0, 32)
       try {
         if (!credentials) {
-          credentials = await post({ type: 'register', state: current.current })
+          credentials = await post({ type: 'register', state: current.current, rendered_scene: { scene_generated_at: latestScene.current?.generatedAt ?? null, scene_read_failed: readFailure.current } })
           if (stopped) { if (credentials) void post({ type: 'disconnect', ...credentials }, true).catch(() => {}); return }
           setConnection({ scene_id: credentials!.scene_id }); setBridgeError(false)
         } else {
-          const data = await post({ type: 'sync', ...credentials, state: current.current, acknowledgments: batch })
+          const data = await post({ type: 'sync', ...credentials, state: current.current, acknowledgments: batch, rendered_scene: { scene_generated_at: latestScene.current?.generatedAt ?? null, scene_read_failed: readFailure.current } })
           if (!stopped) { setBridgeError(false); for (const command of data.commands as ViewCommand[]) receive(command) }
         }
       } catch (error) {

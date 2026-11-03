@@ -5,7 +5,8 @@ import type { CommandResult, ViewCommand } from '../../shared/reconciliationComm
 
 export const CONNECTED_MS = 10_000
 const RETENTION_MS = 10 * 60_000
-interface Session { scene_id: string; key: string; lastSeen: number; state: PresentationState; commands: Map<string, { command: ViewCommand; fingerprint: string; result: CommandResult; created: number }> }
+export interface RenderedObservation { scene_generated_at: string | null; scene_read_failed: boolean }
+interface Session { rendered_scene?: RenderedObservation; scene_id: string; key: string; lastSeen: number; state: PresentationState; commands: Map<string, { command: ViewCommand; fingerprint: string; result: CommandResult; created: number }> }
 export const secretEquals = (a: string, b: string) => {
   const left = Buffer.from(a), right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
@@ -25,10 +26,10 @@ export class SceneSessions {
       }
     }
   }
-  register(state: PresentationState) {
+  register(state: PresentationState, rendered_scene?: RenderedObservation) {
     this.sweep()
     if (this.sessions.size >= 64) throw new Error('Window limit reached')
-    const session: Session = { scene_id: randomUUID(), key: randomBytes(32).toString('hex'), lastSeen: this.clock(), state, commands: new Map() }
+    const session: Session = { rendered_scene, scene_id: randomUUID(), key: randomBytes(32).toString('hex'), lastSeen: this.clock(), state, commands: new Map() }
     this.sessions.set(session.scene_id, session)
     return { scene_id: session.scene_id, key: session.key }
   }
@@ -40,13 +41,14 @@ export class SceneSessions {
   read(id: string) {
     this.sweep()
     const session = this.sessions.get(id)
-    return session ? { scene_id: id, outcome: this.clock() - session.lastSeen < CONNECTED_MS ? 'connected' : 'disconnected', state: session.state, last_seen: new Date(session.lastSeen).toISOString() } : { scene_id: id, outcome: 'unknown-id' }
+    return session ? { scene_id: id, outcome: this.clock() - session.lastSeen < CONNECTED_MS ? 'connected' : 'disconnected', state: session.state, rendered_scene: session.rendered_scene ?? null, last_seen: new Date(session.lastSeen).toISOString() } : { scene_id: id, outcome: 'unknown-id' }
   }
   disconnect(id: string) { const s = this.sessions.get(id); if (s) s.lastSeen = this.clock() - CONNECTED_MS }
-  sync(id: string, state: PresentationState, acknowledgments: CommandResult[]) {
+  sync(id: string, state: PresentationState, acknowledgments: CommandResult[], rendered_scene?: RenderedObservation) {
     this.sweep()
     const session = this.sessions.get(id)!
     session.lastSeen = this.clock()
+    if (rendered_scene) session.rendered_scene = rendered_scene
     // A response lost on the wire can be retried; revisions never go backwards.
     if (state.revision >= session.state.revision) session.state = state
     for (const ack of acknowledgments) {

@@ -222,7 +222,7 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
 export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
   const { scene, error, now } = useFloorScene()
   const { queue, error: queueError } = useDeskQueue()
-  const { state, send, connection, bridgeError } = usePresentation(scene, queue)
+  const { state, send, connection, bridgeError } = usePresentation(scene, queue, !!error)
   const root = useRef<HTMLDivElement>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   const previousSelection = useRef<string | null>(null)

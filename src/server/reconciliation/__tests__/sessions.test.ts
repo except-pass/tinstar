@@ -79,3 +79,12 @@ it('retains a browser commit made before expiry when its acknowledgment arrives 
   broker.sync(a.scene_id, applied, [{ scene_id: a.scene_id, command_id: 'short', outcome: 'applied', applied_at: 1200, state: applied, revision: 1 }])
   expect(broker.result(a.scene_id, 'short').outcome).toBe('applied')
 })
+
+it('distinguishes the rendered UI observation from newer server source reads', () => {
+  const broker = new SceneSessions(), state = initialPresentation()
+  const observation = { scene_generated_at: '2026-11-03T20:00:00.000Z', scene_read_failed: true }
+  const a = broker.register(state, observation)
+  expect(broker.read(a.scene_id).rendered_scene).toEqual(observation)
+  broker.sync(a.scene_id, state, [], { ...observation, scene_read_failed: false })
+  expect(broker.read(a.scene_id).rendered_scene?.scene_read_failed).toBe(false)
+})

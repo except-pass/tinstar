@@ -54,6 +54,7 @@ export interface PresentationReaders {
   queue(): Promise<QueueRead>
 }
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
+const renderedSchema = z.object({ scene_generated_at: z.string().datetime().nullable(), scene_read_failed: z.boolean() }).strict()
 const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), state: stateSchema.optional() }).strict()
 
 export class ReconciliationMcp {
@@ -147,14 +148,14 @@ export class ReconciliationMcp {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     try {
       const parsed = z.discriminatedUnion('type', [
-        z.object({ type: z.literal('register'), state: stateSchema }).strict(),
-        z.object({ type: z.literal('sync'), scene_id: z.string().uuid(), key: z.string().max(128), state: stateSchema, acknowledgments: z.array(ackSchema).max(32) }).strict(),
+        z.object({ type: z.literal('register'), state: stateSchema, rendered_scene: renderedSchema.optional() }).strict(),
+        z.object({ type: z.literal('sync'), scene_id: z.string().uuid(), key: z.string().max(128), state: stateSchema, acknowledgments: z.array(ackSchema).max(32), rendered_scene: renderedSchema.optional() }).strict(),
         z.object({ type: z.literal('disconnect'), scene_id: z.string().uuid(), key: z.string().max(128) }).strict(),
       ]).parse(await body(req))
-      if (parsed.type === 'register') return ok(res, this.sessions.register(parsed.state), { headers })
+      if (parsed.type === 'register') return ok(res, this.sessions.register(parsed.state, parsed.rendered_scene), { headers })
       if (!this.sessions.authorized(parsed.scene_id, parsed.key)) return fail(res, 'FORBIDDEN', 'unauthorized', { headers })
       if (parsed.type === 'disconnect') { this.sessions.disconnect(parsed.scene_id); return ok(res, { outcome: 'disconnected' }, { headers }) }
-      return ok(res, { commands: this.sessions.sync(parsed.scene_id, parsed.state, parsed.acknowledgments as CommandResult[]) }, { headers })
+      return ok(res, { commands: this.sessions.sync(parsed.scene_id, parsed.state, parsed.acknowledgments as CommandResult[], parsed.rendered_scene) }, { headers })
     } catch { return fail(res, 'BAD_REQUEST', 'Invalid UI presentation request', { headers }) }
   }
 }
