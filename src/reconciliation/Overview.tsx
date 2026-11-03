@@ -4,8 +4,8 @@ import type { QueueItem } from '../server/reconciliation/queue'
 import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
-import { arrangements, semanticId, ancestorHomes, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
-import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups } from './overviewModel'
+import { arrangements, semanticId, ancestorHomes, isPlanned, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
+import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, historyRecord, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups } from './overviewModel'
 import { useFloorScene } from './useFloorScene'
 import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
@@ -41,12 +41,12 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const worker = kind === 'execution' ? entity as Execution : null, card = kind === 'card' ? entity as SceneCard : null
   const title = worker ? workerTitle(worker) : cardTitle(card!)
   const flashed = flashRelated(view, item)
-  const meta = worker ? `${worker.placement.machine ?? 'Unknown machine'} · ${workerState(worker, now, readFailed)}${workerActivity(worker) ? ` · ${workerActivity(worker)}` : ''}` : `${cardStatus(card!)}${tone === 'gap' ? ' · No worker' : card!.expectation === 'outside' ? ' · Outside coverage' : tone === 'uncertain' ? ' · Unverified' : ''}`
+  const meta = worker ? `${worker.placement.machine ?? 'Unknown machine'} · ${tone === 'orphan' ? 'No card · ' : ''}${workerState(worker, now, readFailed)}${workerActivity(worker) ? ` · ${workerActivity(worker)}` : ''}` : `${cardStatus(card!)}${tone === 'gap' ? ' · No worker' : card!.expectation === 'outside' ? ' · Outside coverage' : tone === 'uncertain' ? ' · Unverified' : ''}`
   return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus ? related(scene, focus, item) ? ' related' : ' dim' : ''}${flashed ? ' flashed' : ''}`}
-    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} aria-pressed={same(state.selection, item)} title={title}
+    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} aria-pressed={same(state.selection, item)} aria-label={`${title}. ${meta}${tone === 'uncertain' ? '. Link unverified' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => send({ type: 'focus', target: item })}>
     {worker && <span className="ov-face"><AgentIcon seed={worker.identity.task_id ?? worker.id} color="#00f0ff" className="ov-avatar" /></span>}
-    <span className="ov-item-text"><strong>{title}</strong><small>{meta}</small></span>
+    <span className="ov-item-text"><strong>{title.replace(/\s*\((?:card|Notion(?: card)?)\s+[a-f0-9-]{32,36}\)/gi, '')}</strong><small>{meta}</small></span>
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
   </button>
@@ -56,7 +56,11 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
   const body = useRef<HTMLDivElement>(null)
   const [paths, setPaths] = useState<Array<{ id: string; d: string; tone: string; worker?: string; card?: string }>>([])
   const collapsed = state.collapsed.includes(semanticId(target('group', group.id)))
-  const ws = group.workers, cs = group.cards
+  const ws = group.workers, cards = group.cards
+  const planned = useMemo(() => cards.filter(c => isPlanned(scene, c)), [cards, scene])
+  // Measurement updates local path state; keep its filtered input stable so
+  // that update cannot retrigger measurement in a render loop.
+  const cs = useMemo(() => state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), [cards, scene, state.roadmapExpanded])
   useLayoutEffect(() => {
     const root = body.current
     if (!root || collapsed || state.linksVisible === false) return
@@ -92,11 +96,11 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
   return <section className={`ov-group${flashRelated(view, target('group', group.id)) ? ' flashed' : ''}`} data-group-id={group.id}>
     <header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${group.label}`} onClick={() => send({ type: 'set-expanded', target: target('group', group.id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button>
       <button type="button" className="ov-group-name" onClick={() => send({ type: 'focus', target: target('group', group.id) })}>{group.label}</button>
-      <span>{ws.length} workers{!cs.length && (readFailed || stale(scene.coverage.intentions, now)) ? ' · Notion unavailable' : ` · ${cs.length}${readFailed || stale(scene.coverage.intentions, now) ? ' last known' : ''} cards`}{gaps > 0 && <em> · {gaps} gaps</em>}</span></header>
+      <span>{ws.length} workers{!cards.length && (readFailed || stale(scene.coverage.intentions, now)) ? ' · Notion unavailable' : ` · ${cards.length}${readFailed || stale(scene.coverage.intentions, now) ? ' last known' : ''} cards`}{gaps > 0 && <em> · {gaps} gaps</em>}</span>{planned.length > 0 && <button className="ov-planned-toggle" type="button" aria-expanded={state.roadmapExpanded} title="Show or hide waiting and planned cards" onClick={() => send({ type: 'set-roadmap', expanded: !state.roadmapExpanded })}>Planned · {planned.length}</button>}</header>
     {!collapsed && <div className="ov-group-body" ref={body}>
       <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">No workers in this group</div>}</div>
       <div aria-hidden="true" />
-      <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : 'No cards in this group'}</div>}</div>
+      <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : cards.length ? 'Waiting & planned hidden' : 'No cards in this group'}</div>}</div>
       {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(scene, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
     </div>}
   </section>
@@ -126,13 +130,13 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     {card && <><p>{cardStatus(card)}</p><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{safeUrl(card.source.url) && <a href={safeUrl(card.source.url)!} target="_blank" rel="noreferrer">Open Notion card ↗</a>}<button type="button" onClick={() => send({ type: 'open-queue', cardId: card.id })}>Read full card</button>
       {card.parentIds.map(id => <button key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{scene.executions.filter(e => e.kind !== 'secondmate' && e.home === home.source.home).length} workers · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
-    {group && <p>{group.counts.cards} cards · {group.counts.running} running · {group.counts.waiting} waiting</p>}
+    {group && <><p>{group.counts.cards} cards · {group.counts.running} running · {group.counts.waiting} waiting</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
     {selection.kind === 'firstMate' && <><p>Supervising the configured managers.</p>{scene.coverage.homes.map(h => <div key={h.source.home} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('manager', h.source.home) })}>{managerName(scene, h.source.home)}</button></div>)}</>}
     {claims.length > 0 && <><h4>Connections & history</h4>{claims.map(c => <div className="ov-related" key={c.id}><small>{c.state === 'historical' ? 'History' : c.verification === 'confirmed' && c.state === 'current' ? 'Linked' : 'Unverified'}</small><button type="button" disabled={!scene.cards.some(card => card.id === c.cardId)} onClick={() => send({ type: 'focus', target: target('card', c.cardId) })}>{scene.cards.find(card => card.id === c.cardId) ? cardTitle(scene.cards.find(card => card.id === c.cardId)!) : 'Card unavailable'}</button><button type="button" disabled={!scene.executions.some(e => e.id === c.executionId)} onClick={() => send({ type: 'focus', target: target('execution', c.executionId) })}>{scene.executions.find(e => e.id === c.executionId) ? workerTitle(scene.executions.find(e => e.id === c.executionId)!) : 'Worker history'}</button></div>)}</>}
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </section>
 }
-export function Overview({ workers, requestControls }: { workers: Worker[]; requestControls?: (request: QueueItem) => React.ReactNode }) {
+export function Overview({ workers, requestControls }: { workers: Worker[]; requestControls?: (request: QueueItem, actionable: boolean) => React.ReactNode }) {
   const { scene, error, now } = useFloorScene(), { queue, error: queueError } = useDeskQueue()
   const { state, send, connection, bridgeError } = usePresentation(scene, queue, !!error)
   const [hovered, setHovered] = useState<Target | null>(null), [diagnostics, setDiagnostics] = useState(false)
@@ -157,8 +161,8 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
   const fleetDelayed = !!error || !scene.coverage.homes.length || scene.coverage.homes.some(h => stale(h.observation, now) || h.observation.coverage !== 'complete')
   const rootManager = rootHome(scene)
   const checksSuspended = notionUnavailable || fleetDelayed || scene.coverage.absenceConclusions === 'suppressed'
-  const liveWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !['finished', 'absent'].includes(e.liveness))
-  const history = scene.executions.filter(e => e.kind !== 'secondmate' && ['finished', 'absent'].includes(e.liveness))
+  const liveWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e))
+  const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
   return <div ref={root} className="ov" data-arrangement={state.arrangement} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
     <header className="ov-top"><div><b>TIN STAR</b><small>OVERVIEW</small></div><button type="button" className={checksSuspended ? 'ov-warning' : 'ov-signal'} onClick={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }}>{notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} · Details</button></header>
     <div className="ov-columns"><div className="ov-main">

@@ -11,7 +11,7 @@ counts are deduplicated. Activity and priority sorting coordinate both stacks,
 with deterministic ties. Links may be hidden without removing either list.
 Gaps only uses confirmed execution gaps on both sides, never filter-created
 absence. Expired/failed reads retain last-known data and suppress gap coloring.
-Finished and offline worker records move to expandable history.
+Finished and offline worker records move to expandable history, including last-known final reports after expiry. Waiting and planned cards can be collapsed using the compact Planned control; selecting a hidden counterpart reveals it without changing gap classification.
 
 One contextual Desk shows the current verified request and the next few. Secondary
 requests remain in Later & needs verification. Inspecting and regrouping retain
@@ -27,7 +27,14 @@ wire names (`initiative`, `secondMate`, `machine`), with Manager as the UI label
 The existing targeted window, revision, expiry, idempotency and post-commit
 acknowledgment protocol remains in place. No domain-write tool is added.
 
-Development preview: `TINSTAR_BACKEND_PORT=5381 TINSTAR_FRONTEND_PORT=5380 npm run dev`.
+Development preview (two terminals):
+
+```sh
+TINSTAR_TELEMETRY=0 TINSTAR_CONFIG_HOME=/private/config node --import tsx src/server/standalone.ts --host 127.0.0.1 --port 5381 --no-open
+TINSTAR_BACKEND_PORT=5381 TINSTAR_FRONTEND_PORT=5380 npm run dev:frontend
+```
+
+Open `http://127.0.0.1:5380`.
 Use a private `TINSTAR_CONFIG_HOME` containing an authorized config; never commit
 credentials. A Notion access failure leaves the worker column usable. Sharing the
 configured board with its integration is an owner prerequisite, not an empty board.

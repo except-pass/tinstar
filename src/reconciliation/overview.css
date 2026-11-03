@@ -5,3 +5,7 @@
 .cockpit-shell:has(.ov) .cockpit-activity{width:62px;flex-basis:62px;min-width:62px}.cockpit-shell:has(.ov) .cockpit-activity-name{display:none}.cockpit-shell:has(.ov) .cockpit-activity-brand{height:61px}.cockpit-main .ov h1{font-size:27px;margin:0;line-height:1.1}
 
 .ov-line.flashed{stroke-width:3;opacity:1;filter:drop-shadow(0 0 5px #00f0ff55)}.ov-group.flashed,.ov-manager.flashed{border-color:#00f0ff;box-shadow:0 0 12px #00f0ff28}
+
+.ov-group-head .ov-planned-toggle{flex:none;border:1px solid #334650;background:none;color:#8aa6b3;padding:3px 5px;font:8px var(--ov-mono)}
+
+.ov-orphan .ov-port{border-radius:0;transform:translateY(-50%) rotate(45deg)}

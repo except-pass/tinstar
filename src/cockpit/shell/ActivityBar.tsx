@@ -9,8 +9,6 @@ const tools: Array<{ mode: PanelTool; label: string; lines: string[]; icon: stri
 ]
 
 export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect }: {
-  onFloor?: () => void
-  floorActive?: boolean
   overviewActive: boolean
   panelMode: ContextPanelMode
   counts: Record<PanelTool, number>
@@ -25,9 +23,9 @@ export function ActivityBar({ overviewActive, panelMode, counts, messageAttentio
       <span className="material-symbols-outlined" aria-hidden="true">dashboard</span>
       <span className="cockpit-activity-label"><span className="cockpit-activity-line">Overview</span></span>
     </button>
-    {!overviewActive && tools.map(tool => {
+    {tools.map(tool => {
       const total = counts[tool.mode]
-      const alert = tool.mode === 'needs' || (tool.mode === 'messages' && messageAttention > 0)
+      const alert = tool.mode === 'messages' && messageAttention > 0
       const count = tool.mode === 'messages' && messageAttention > 0 ? messageAttention : total
       const open = panelMode === tool.mode
       const name = count > 0 ? `${tool.label}, ${count}` : tool.label

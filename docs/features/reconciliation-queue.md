@@ -4,11 +4,13 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
+The default Desk and Next navigation show verified ready requests. Verification and conditional requests remain secondary context. A worker's keyed question alone does not establish Will as next actor; explicit captain-actionable routing or a corroborating Will-owned card next action is required. Existing response controls appear only while readiness remains current; context, receipts and safe worker navigation remain available otherwise.
+
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
 | Readiness | Required interpretation |
 | --- | --- |
-| `ready-now` | A current published Will next action or explicit First Mate keyed owner decision/captain-actionable hold, with no observed dependency, stale/conflicting context or unresolved readiness check. A merge also needs one exact PR link and fresh open, nondraft, mergeable, passing-check evidence for its head. |
+| `ready-now` | A current published Will next action or explicitly owner-routed First Mate decision/captain-actionable hold, with no observed dependency, stale/conflicting context or unresolved readiness check. A merge also needs one exact PR link and fresh open, nondraft, mergeable, passing-check evidence for its head. |
 | `needs-readiness-verification` | A candidate whose concrete owner action, context, linking, PR state or prerequisites cannot be established. Tags, a title mentioning Will, an open PR, unknown checks and an unclassified block/hold do not prove readiness. A title mention alone does not even create a candidate. |
 | `future-or-conditional` | Planned/backlog/queued work, a future Start Date/hold, Waiting For/dependency, explicit conditional action text, or a draft/blocked/failing/pending-check PR. Retain the card, named wait, checkpoint and evidence in context; do not put it among immediate decisions. |
 

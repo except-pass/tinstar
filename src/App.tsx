@@ -398,12 +398,12 @@ export default function App() {
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {!current && !overviewLocation.worker ? <Overview workers={workers} requestControls={request => {
+      {!current && !overviewLocation.worker ? <Overview workers={workers} requestControls={(request, actionable) => {
         const matches = attention.filter(card => (request.decisionKeys.length ? !!card.decisionKey && request.decisionKeys.includes(card.decisionKey) : !card.decisionKey) && request.sources.some(source => {
           if (source.kind !== 'firstmate') return false
           try { const [home, task] = JSON.parse(source.id); return home === card.home && task === card.taskId } catch { return false }
         }))
-        return matches.map(card => <details key={card.key}><summary>Respond through First Mate</summary><AttentionCardView card={card} worker={workers.find(w => w.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} /><MessagesPanel messages={messages.filter(m => m.home === card.home && m.taskId === card.taskId && m.decisionKey === card.decisionKey)} error={messageError} retry={retry} /></details>)
+        return matches.map(card => <details key={card.key}><summary>{actionable ? 'Respond through First Mate' : 'First Mate context'}</summary>{actionable ? <AttentionCardView card={card} worker={workers.find(w => w.key === card.workerKey) ?? null} open={() => setSelectedAttention(card.key)} submit={submit} dismissing={dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={dismissed[card.key] === true} dismissError={dismissErrors[card.key] ?? null} onDismiss={dismiss} /> : <><p>{card.headline}</p>{card.detail && <p>{card.detail}</p>}{card.workerKey && <button type="button" onClick={() => openWorker(card.workerKey!)}>Read worker request</button>}</>}<MessagesPanel messages={messages.filter(m => m.home === card.home && m.taskId === card.taskId && m.decisionKey === card.decisionKey)} error={messageError} retry={retry} /></details>)
       }} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">

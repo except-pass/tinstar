@@ -55,6 +55,14 @@ describe('independent Overview stacks', () => {
     expect(gapTargets(scene, Date.now())).toHaveLength(2)
     expect(overviewGroups(scene, { ...state, exceptionsOnly: true }, Date.now()).flatMap(g => g.cards).map(c => c.id)).toEqual([fixtureId(2)])
   })
+  it('keeps published final reports in history when the source expires', () => {
+    const now = Date.now(), sources = fixtureSources({ now })
+    sources.fleet[1]!.observation.data!.tasks[0]!.lastEventText = 'done [at=1]: Finished attempt'
+    const scene = new SceneReconciler().reconcile(sources, now + 61_000)
+    const groups = overviewGroups(scene, initialPresentation(), now + 61_000)
+    expect(groups.flatMap(g => g.workers).some(e => e.identity.task_id === 'linked-worker')).toBe(false)
+    expect(scene.executions.some(e => e.identity.task_id === 'linked-worker')).toBe(true)
+  })
   it('uses configured labels and treats the configured root as First Mate', () => {
     const scene = fixtureScene()
     scene.coverage.homes[0]!.source.label = 'main'

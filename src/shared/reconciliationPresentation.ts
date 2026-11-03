@@ -30,7 +30,7 @@ export interface PresentationState {
   queueItemId?: string | null
 }
 export const initialPresentation = (): PresentationState => ({
-  revision: 0, sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: false, flash: null, assistantChangedView: false,
+  revision: 0, sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
 })
 type Change =
   | { type: 'set-arrangement'; arrangement: Arrangement }

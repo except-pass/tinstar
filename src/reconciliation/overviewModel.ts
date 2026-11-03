@@ -9,6 +9,11 @@ export const managerName = (scene: FloorScene, home: string) => homeLabel(scene.
 export const rootHome = (scene: FloorScene) => scene.coverage.homes.find(h => !h.source.parentHome && (h.source.label === 'main' || scene.coverage.homes.some(child => child.source.parentHome === h.source.home)))
 export const stale = (observation: { status: string; expiresAt: string | null }, now: number) =>
   !['fresh', 'partial'].includes(observation.status) || !!observation.expiresAt && Date.parse(observation.expiresAt) <= now
+/** A stale feed cannot make a recorded final report into a current worker.
+ * This preserves history placement only; it does not certify present liveness. */
+export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
+  /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
+  ['done', 'landed'].includes(String(worker.source.last_event.state))
 export const workerState = (worker: Execution, now: number, readFailed = false) => readFailed || stale(worker.observation, now) ? 'Last known' : ({ running: 'Running', waiting: 'Waiting', finished: 'Finished', absent: 'Offline', 'liveness-not-observed': 'State unknown' })[worker.liveness]
 export const observedAt = (worker: Execution) => {
   const time = Date.parse(worker.observation.observedAt ?? '')
@@ -53,7 +58,7 @@ export function gapTargets(scene: FloorScene, now: number, readFailed = false): 
  * one stable identity, with cross-group references explicitly exposed in the UI. */
 export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false) {
   const workers = scene.executions.filter(e => e.kind !== 'secondmate' &&
-    !['finished', 'absent'].includes(e.liveness) && !managerCollapsed(scene, state, e.home))
+    !historyRecord(e) && !managerCollapsed(scene, state, e.home))
   const compareWorkers = (a: Execution, b: Execution) => observedAt(b) - observedAt(a) || tie(a, b)
   const compareCards = (a: SceneCard, b: SceneCard) => priority(a) - priority(b) || workRank(a) - workRank(b) || cardTitle(a).localeCompare(cardTitle(b)) || tie(a, b)
   const globalWorkers = [...workers].sort(compareWorkers), globalCards = [...scene.cards].sort(compareCards)
