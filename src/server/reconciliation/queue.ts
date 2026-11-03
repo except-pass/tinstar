@@ -60,6 +60,19 @@ function lower(item: QueueItem, readiness: QueueReadiness, reason: string) {
   if (rank[readiness] > rank[item.readiness]) item.readiness = readiness
   item.reasons.push(reason)
 }
+function restrictAction(item: QueueItem, value: string | null): boolean {
+  const action = value?.replace(/^(?:decide|choose|determine)\s+(?:if|when)\b/i, '')
+  let restricted = false
+  if (action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
+    restricted = true
+    lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
+  }
+  if (value && /\bthen\b|;\s*\w|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(value)) {
+    restricted = true
+    lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
+  }
+  return restricted
+}
 function context(item: QueueItem, card: Card, observation: SourceSnapshot['intentions'], now: number) {
   item.cardIds.push(card.id)
   item.sources.push(source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', observation))
@@ -92,7 +105,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   })
 
   for (const card of cards.values()) {
-    if (card.archived || card.in_trash || complete(word(card, 'Status'))) continue
+    if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
     const tags = Array.isArray(actions) ? actions.filter((a): a is string => typeof a === 'string') : []
     const owner = normalize(word(card, 'Owner') ?? '')
@@ -121,7 +134,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const backlog = observation.data?.backlog ?? []
     const attention = buildAttentionCards(homeIndex,
       tasks.map(task => ({ id: task.id, hints: { open_decisions: task.queue?.decisions ?? [] } })),
-      backlog.map(row => ({ ...row, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
+      backlog.map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
         body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })),
       tasks.map(task => ({ key: JSON.stringify(task.identity), id: String(task.id), objective: String(task.backlog.title ?? task.id),
         state: String(task.current_state.state), detail: String(task.current_state.detail ?? ''), prUrl: null })), new Map())
@@ -135,16 +148,17 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     for (const call of attention) {
       const task = tasks.find(task => task.id === call.taskId)
       const hold = backlog.find(row => row.id === (call.holdId ?? call.taskId))
-      if (task?.queue?.completed || hold?.queue?.completed || complete(hold?.state) || complete(task?.backlog.state) ||
-        (task?.current_state.freshness === 'fresh' && complete(task.current_state.state))) continue
+      if (fresh(observation) && (task?.queue?.completed || hold?.queue?.completed || complete(hold?.state) || complete(task?.backlog.state) ||
+        (task?.current_state.freshness === 'fresh' && complete(task.current_state.state)))) continue
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
       const refs = unique([...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].map(ref => ref.pageId))
       const known = refs.map(id => cards.get(id)).filter((card): card is Card => !!card)
       const explicitRelationship = refs.length === 1 && known.length === 1 &&
         [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
-      if (explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
+      if (fresh(intentions) && explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
       const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
+      restrictAction(item, text(hold?.hold_reason))
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (call.decisionKey) item.decisionKeys.push(call.decisionKey)
@@ -173,15 +187,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
 
   const result = new Map<string, QueueItem>()
   for (const item of candidates) {
-    const action = item.action?.replace(/^(?:decide|choose|determine)\s+(?:if|when)\b/i, '')
-    if (action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
-      tagOnlyCandidates.delete(item)
-      lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
-    }
-    if (item.action && /\bthen\b|;\s*\w|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(item.action)) {
-      tagOnlyCandidates.delete(item)
-      lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
-    }
+    if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
     const urls = pulls(item)
     // Exact PR identity unifies merge requests only. Other decisions on the same
     // card/PR remain independent; title similarity never collapses decisions.

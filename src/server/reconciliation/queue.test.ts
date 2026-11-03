@@ -198,6 +198,52 @@ describe('desk queue correctness', () => {
     expect(build(snapshot([card({ Status: 'Done' })], [], [held])).items).toEqual([])
   })
 
+  it.each(['stale', 'expired'] as const)('retains %s completion evidence for verification', mode => {
+    const stale = <T>(observation: Observation<T>) => {
+      if (mode === 'stale') observation.status = 'stale'
+      else observation.expiresAt = at
+    }
+    for (const values of [{}, { archived: true }, { in_trash: true }]) {
+      const completed = card({ Owner: 'Will', 'Next action': 'Choose A or B', Status: 'Done' })
+      Object.assign(completed, values)
+      const worker = task(); worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
+      const s = snapshot([completed], [worker]); stale(s.intentions)
+      const result = build(s)
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false, decisionKeys: ['choose'] })
+      expect(build({ ...s, fleet: [] }).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+    }
+    for (const completion of ['task-signal', 'task-backlog', 'runtime', 'hold-signal', 'hold-state'] as const) {
+      const worker = task(); const held = hold({ id: 'choose' })
+      if (completion === 'task-signal') worker.queue!.completed = true
+      if (completion === 'task-backlog') worker.backlog.state = 'done'
+      if (completion === 'runtime') worker.current_state.state = 'done'
+      if (completion === 'hold-signal') held.queue!.completed = true
+      if (completion === 'hold-state') held.state = 'done'
+      const s = snapshot([], [worker], [held]); stale(s.fleet[0]!.observation)
+      expect(build(s).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+      s.fleet[0]!.observation = obs(s.fleet[0]!.observation.data!)
+      expect(build(s).items).toEqual([])
+    }
+    const s = snapshot([], [], [hold({ state: 'done' })]); stale(s.fleet[0]!.observation)
+    expect(build(s).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+  })
+
+  it.each(['exact', 'legacy', 'published', 'task-text', 'origin-text'] as const)('preserves prerequisites from %s matched holds', route => {
+    const key = route === 'published' ? 'captain-hold-release-123' : 'merge'
+    const summary = route.endsWith('text') ? 'Merge after release' : 'Merge this PR'
+    const id = route === 'exact' ? key : route === 'legacy' ? `worker-decision-${key}` : route === 'published' ? 'release' : route === 'task-text' ? 'worker' : 'origin-hold'
+    const worker = task([{ key, verb: 'needs-decision', summary }]); worker.pr.url = pull
+    const held = hold({ id, hold_reason: 'Merge after release', pr_url: pull,
+      ...queueSignals({ hold_kind: 'captain', body_lines: route === 'origin-text' ? ['Origin: worker'] : [] }) })
+    const result = build(snapshot([], [worker], [held]), new Map([[pull, readyPull()]]))
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]).toMatchObject({ decisionKeys: [key], readiness: 'future-or-conditional', oneTouch: false })
+    held.hold_reason = summary === 'Merge this PR' ? 'Review then merge' : summary
+    if (summary === 'Merge this PR') expect(build(snapshot([], [worker], [held]), new Map([[pull, readyPull()]])).items[0])
+      .toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+  })
+
   it('does not deduplicate separate decisions sharing a card, PR or title', () => {
     const first = task(); first.pr.url = pull; first.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
     const second = task([{ key: 'other', verb: 'needs-decision', summary: 'Choose C or D' }], 'other'); second.cardReferences = first.cardReferences; second.pr.url = pull
