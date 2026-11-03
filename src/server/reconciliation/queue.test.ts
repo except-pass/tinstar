@@ -156,6 +156,48 @@ describe('desk queue correctness', () => {
     expect(build(snapshot([], [worker]), new Map([[pull, readyPull()]])).items[0]?.readiness).toBe('needs-readiness-verification')
   })
 
+  it.each([false, true])('preserves merge prerequisites across source orders: %s', reverse => {
+    const actions = reverse ? ['Merge after release', 'Merge this PR'] : ['Merge this PR', 'Merge after release']
+    const worker = task([{ key: 'merge', verb: 'needs-decision', summary: actions[1] }]); worker.pr.url = pull
+    const result = build(snapshot([mergeCard({ 'Next action': actions[0] })], [worker]), new Map([[pull, readyPull()]]))
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]).toMatchObject({ readiness: 'future-or-conditional', oneTouch: false })
+    const other = task([{ key: 'other', verb: 'needs-decision', summary: actions[1] }], 'other'); other.pr.url = pull
+    const first = task([{ key: 'first', verb: 'needs-decision', summary: actions[0] }]); first.pr.url = pull
+    expect(build(snapshot([], [first, other].reverse()), new Map([[pull, readyPull()]])).items[0])
+      .toMatchObject({ readiness: 'future-or-conditional', oneTouch: false })
+    expect(build(snapshot([mergeCard({ 'Next action': actions[0] }), card({ Owner: 'Will', 'Will action': ['Merge'], 'Next action': actions[1], Link: pull }, b)]), new Map([[pull, readyPull()]])).items[0])
+      .toMatchObject({ readiness: 'future-or-conditional', oneTouch: false })
+  })
+
+  it.each(['Decide if we should ship', 'Choose when to launch'])('keeps decision subjects actionable: %s', action => {
+    expect(build(snapshot([card({ Owner: 'Will', 'Next action': action })])).items[0])
+      .toMatchObject({ readiness: 'ready-now', oneTouch: true })
+    expect(build(snapshot([], [task([{ key: 'subject', verb: 'needs-decision', summary: action }])])).items[0])
+      .toMatchObject({ readiness: 'ready-now', oneTouch: true })
+  })
+
+  it.each(['Decide if we should ship after release', 'Choose when to launch once approved'])('retains prerequisites after a decision subject: %s', action => {
+    expect(build(snapshot([card({ Owner: 'Will', 'Next action': action })])).items[0]?.readiness).toBe('future-or-conditional')
+    expect(build(snapshot([], [task([{ key: 'subject', verb: 'needs-decision', summary: action }])])).items[0]?.readiness).toBe('future-or-conditional')
+  })
+
+  it.each(['task', 'hold'] as const)('requires an unambiguous explicit completed-card relationship on %s', location => {
+    for (const references of [
+      [{ pageId: a, basis: 'textual' as const, source: 'backlog.raw' }],
+      [{ pageId: a, basis: 'explicit' as const, source: 'notion_page_id' }, { pageId: b, basis: 'textual' as const, source: 'backlog.raw' }],
+    ]) {
+      const worker = task(); const held = hold()
+      if (location === 'task') worker.cardReferences = references
+      else held.cardReferences = references
+      const result = build(snapshot([card({ Status: 'Done', 'Waiting For': 'release' }), card({ Status: 'Planned' }, b)], location === 'task' ? [worker] : [], location === 'hold' ? [held] : []))
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', cardIds: [], oneTouch: false })
+    }
+    const held = hold({ cardReferences: [{ pageId: a, basis: 'explicit', source: 'notion_page_id' }] })
+    expect(build(snapshot([card({ Status: 'Done' })], [], [held])).items).toEqual([])
+  })
+
   it('does not deduplicate separate decisions sharing a card, PR or title', () => {
     const first = task(); first.pr.url = pull; first.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
     const second = task([{ key: 'other', verb: 'needs-decision', summary: 'Choose C or D' }], 'other'); second.cardReferences = first.cardReferences; second.pr.url = pull

@@ -140,8 +140,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
       const refs = unique([...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].map(ref => ref.pageId))
       const known = refs.map(id => cards.get(id)).filter((card): card is Card => !!card)
-      // Source-completed cards never reappear merely because a worker retained a call.
-      if (known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
+      const explicitRelationship = refs.length === 1 && known.length === 1 &&
+        [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
+      if (explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
       const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
       item.homeIds.push(home.source.home)
@@ -149,11 +150,11 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (call.decisionKey) item.decisionKeys.push(call.decisionKey)
       item.sources.push(source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation))
       link(item, text(task?.pr.url)); link(item, text(hold?.pr_url))
-      for (const card of known) context(item, card, intentions, now)
-      if (known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
+      if (explicitRelationship) for (const card of known) context(item, card, intentions, now)
+      if (explicitRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
-      if (refs.length > 1 || refs.some(id => !cards.has(id)) || refs.some(id => !task?.cardReferences.some(ref => ref.pageId === id && ref.basis === 'explicit') && !hold?.cardReferences.some(ref => ref.pageId === id && ref.basis === 'explicit'))) {
+      if (refs.length > 0 && !explicitRelationship) {
         lower(item, 'needs-readiness-verification', 'Card relationship is textual, conflicting or outside the readable source; verify context')
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
@@ -172,6 +173,15 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
 
   const result = new Map<string, QueueItem>()
   for (const item of candidates) {
+    const action = item.action?.replace(/^(?:decide|choose|determine)\s+(?:if|when)\b/i, '')
+    if (action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
+      tagOnlyCandidates.delete(item)
+      lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
+    }
+    if (item.action && /\bthen\b|;\s*\w|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(item.action)) {
+      tagOnlyCandidates.delete(item)
+      lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
+    }
     const urls = pulls(item)
     // Exact PR identity unifies merge requests only. Other decisions on the same
     // card/PR remain independent; title similarity never collapses decisions.
@@ -195,12 +205,6 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     } else { item.id = duplicateKey; result.set(duplicateKey, item) }
   }
   const items = [...result.values()].filter(item => {
-    if (item.action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(item.action)) {
-      lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
-    }
-    if (item.action && /\bthen\b|;\s*\w|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(item.action)) {
-      lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
-    }
     const urls = pulls(item)
     if (item.kind === 'merge') {
       if (urls.length !== 1) lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
