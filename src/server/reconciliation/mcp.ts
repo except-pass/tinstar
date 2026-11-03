@@ -95,32 +95,22 @@ export class ReconciliationMcp {
       return result(card ? { card, context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
     })
     server.registerTool('get_queue', { description: 'Read ordered desk readiness. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Queue source read failed' }))))
-    server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
-      const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
-      const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
-      const queued = this.sessions.enqueue(input, await this.readers.scene(), queue)
-      if (queued.outcome !== 'queued') return result(queued)
-      // Short bounded wait is convenient for clients; retries/query preserve IDs.
-      for (let i = 0; i < 20; i++) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        const current = this.sessions.result(input.scene_id, input.command_id)
-        if (current.outcome !== 'queued') return result(current)
-      }
-      return result(this.sessions.result(input.scene_id, input.command_id))
-    })
-    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered ready/verification desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
-      const queue = await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' }))
-      const queued = this.sessions.enqueue({ ...input, action: { type: 'navigate-queue', direction: 'next' } }, await this.readers.scene(), queue)
-      if (queued.outcome !== 'queued') return result(queued)
-      for (let i = 0; i < 20; i++) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        const current = this.sessions.result(input.scene_id, input.command_id)
-        if (current.outcome !== 'queued') return result(current)
-      }
-      return result(this.sessions.result(input.scene_id, input.command_id))
-    })
+    server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
+    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered ready/verification desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
     return server
+  }
+  private async submitAndWait(input: Parameters<SceneSessions['enqueue']>[0]) {
+    const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
+    const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
+    const queued = this.sessions.enqueue(input, await this.readers.scene(), queue)
+    if (queued.outcome !== 'queued') return result(queued)
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const current = this.sessions.result(input.scene_id, input.command_id)
+      if (current.outcome !== 'queued') return result(current)
+    }
+    return result(this.sessions.result(input.scene_id, input.command_id))
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]

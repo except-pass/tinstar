@@ -37,6 +37,12 @@ describe('authenticated real MCP transport', () => {
     expect(parse(await client.callTool({ name: 'get_card_context', arguments: { scene_id: identity.scene_id, card_id: scene.cards[0]!.id } })).context.outcome).toBe('available')
     expect(parse(await client.callTool({ name: 'get_queue', arguments: { scene_id: identity.scene_id } })).outcome).toBe('queue-source-unavailable')
     expect(parse(await client.callTool({ name: 'present_view', arguments: { scene_id: identity.scene_id, command_id: 'missing', expected_revision: 0, action: { type: 'focus', target: { kind: 'card', id: 'missing' } } } })).outcome).toBe('unknown-id')
+    for (const name of ['present_view', 'next_queue_item']) {
+      const args = { scene_id: identity.scene_id, command_id: `queue-${name}`, expected_revision: 0 }
+      const action = name === 'present_view' ? { action: { type: 'navigate-queue', direction: 'next' } } : {}
+      expect(parse(await client.callTool({ name, arguments: { ...args, ...action } })).outcome).toBe('queue-source-unavailable')
+      expect(mcp.sessions.read(identity.scene_id).state).toEqual(initialPresentation())
+    }
     const wrong = await fetch(`${base}/api/reconciliation/ui`, { method: 'POST', headers: { 'X-Tinstar-UI': '1' }, body: JSON.stringify({ type: 'disconnect', scene_id: identity.scene_id, key: 'wrong' }) })
     expect(wrong.status).toBe(403)
     mcp.sessions.disconnect(identity.scene_id)
