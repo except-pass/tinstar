@@ -19,6 +19,7 @@ import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
 import { deliverKeys, deliverPrompt, PromptDeliveryError } from './promptInput'
 import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
+import { readFleetSnapshot } from './snapshot'
 
 const execFileAsync = promisify(execFile)
 
@@ -301,10 +302,7 @@ export class CockpitFleet {
   }> {
     const targets = new Map<string, { id: string; target: string | null }>()
     try {
-      const { stdout } = await execFileAsync(join(home, 'bin', 'fm-fleet-snapshot.sh'), ['--json'], {
-        timeout: 18_000, maxBuffer: 16 * 1024 * 1024,
-      })
-      const snapshot = JSON.parse(stdout) as {
+      const snapshot = await readFleetSnapshot(home) as {
         schema?: string; tasks?: SnapshotTask[]; backlog?: { records?: AttentionBacklogRow[] }
         secondmate_current?: { records?: unknown }
       }
