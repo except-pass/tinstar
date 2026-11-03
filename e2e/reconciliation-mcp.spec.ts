@@ -7,7 +7,7 @@ import { join, extname } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
-import { fixtureScene, fixtureQueue } from '../test-fixtures/reconciliation/scenes'
+import { fixtureScene, fixtureQueue, fixtureId } from '../test-fixtures/reconciliation/scenes'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 
 let server: Server, root: string, base: string, client: Client
@@ -78,8 +78,16 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   expect(retry).toEqual(regroup.ack)
   await present(page, { type: 'focus', target: { kind: 'card', id: scene.cards[0]!.id } }, 'focus')
   await expect(page.getByLabel('Scene inspector')).toContainText(scene.cards[0]!.id)
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: scene.cards[0]!.id }], durationMs: 4000 }, 'flash')
-  await expect(page.locator('.is-flashed').first()).toBeVisible()
+  const linkedCardId = fixtureId(1)
+  const linkedClaim = scene.claims.find(c => c.cardId === linkedCardId && c.verification === 'confirmed')!
+  await present(page, { type: 'set-exceptions', enabled: true }, 'exceptions-before-flash')
+  await expect(page.locator(`[data-card-id="${linkedCardId}"]`)).toHaveCount(0)
+  const flashed = await present(page, { type: 'flash', targets: [{ kind: 'card', id: linkedCardId }, { kind: 'execution', id: linkedClaim.executionId }, { kind: 'claim', id: linkedClaim.id }], durationMs: 4000 }, 'flash')
+  expect(flashed.ack.state.exceptionsOnly).toBe(false)
+  expect(flashed.ack.state.selection).toEqual({ kind: 'card', id: scene.cards[0]!.id })
+  const linkedRow = page.locator(`[data-card-id="${linkedCardId}"]`).first()
+  await expect(linkedRow).toBeVisible()
+  await expect(linkedRow.locator('.is-flashed')).toHaveCount(3)
   await expect(page.getByRole('status').filter({ hasText: 'Assistant changed this view' })).toBeVisible()
   await present(page, { type: 'open-queue' }, 'open-desk')
   const beforeNext = await call('get_scene', { scene_id: first })
