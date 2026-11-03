@@ -2,6 +2,7 @@
 import type { Worker } from '../../src/cockpit/shell/types'
 import type { SourceSnapshot } from '../../src/server/reconciliation'
 import type { Observation } from '../../src/server/reconciliation/observation'
+import { buildQueue } from '../../src/server/reconciliation/queue'
 import { SceneReconciler } from '../../src/server/reconciliation/scene'
 
 type FleetData = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>
@@ -54,4 +55,16 @@ export function fixtureViewerWorkers(): Worker[] {
   return [{ key: 'fixture-linked-worker', id: 'linked-worker', home: fixtureHomes[1]!, kind: 'ship', state: 'working', detail: 'Fixture state',
     observedAt: new Date().toISOString(), freshness: 'fresh', objective: fixtureNames.linked, project: 'fixture/tinstar', direct: false,
     worktree: '/fixture/worktree', branch: 'fixture/example', prUrl: null, terminalAvailable: true, terminalPid: 1 }]
+}
+
+/** Explicit desk fixture with two ready actions, a verification candidate and
+ * future work. This changes fixture intentions only, never a live board. */
+export function fixtureQueue(now = Date.now()) {
+  const sources = fixtureSources({ now })
+  for (const n of [1, 2, 5]) {
+    const item = sources.intentions.data!.cards.find(c => c.id === fixtureId(n))!
+    item.properties.Owner!.value = 'Will'
+    item.properties['Next action'] = { id: 'next', type: 'rich_text', value: `Choose option ${n}`, hasMore: false }
+  }
+  return buildQueue(sources, new Map(), now)
 }

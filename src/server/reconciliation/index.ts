@@ -6,6 +6,7 @@ import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource }
 import { fleetObservation } from './fleet'
 import { notionObservation } from './notion'
 import { ageObservation } from './observation'
+import { CardContextReader } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader } from './queuePulls'
@@ -16,10 +17,12 @@ export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot'
 export class ReconciliationSources {
   private fleet
   private notion
+  private context
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig()) {
+    this.context = new CardContextReader(config.notion)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
     this.notion = notionObservation(config.notion)
   }
@@ -42,6 +45,8 @@ export class ReconciliationSources {
     }
   }
 
+  async card(id: string) { return this.context.get(id) }
+
   async scene() { return this.reconciler.reconcile(await this.snapshot()) }
 
   async queue() {
@@ -55,11 +60,17 @@ export class ReconciliationSources {
 
 export async function handleReconciliationRequest(sources: ReconciliationSources, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0] ?? ''
-  if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue'].includes(path)) return false
+  if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue', '/api/reconciliation/card-context'].includes(path)) return false
   const allowlist = currentOriginAllowlist()
   const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Cache-Control': 'no-store' }
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
+  if (path === '/api/reconciliation/card-context') {
+    const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
+    const scene = await sources.scene()
+    if (!id || !scene.cards.some(c => c.id === id)) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
+    return ok(res, await sources.card(id), { headers })
+  }
   return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene() : await sources.snapshot(), { headers })
 }

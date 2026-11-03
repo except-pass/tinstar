@@ -38,6 +38,32 @@ describe('shared semantic presentation transitions', () => {
     expect(state).toMatchObject({ selection: card, roadmapExpanded: true, exceptionsOnly: false })
     expect(applyPresentationAction(state, { type: 'clear-transient' }, scene).state).toMatchObject({ selection: card, flash: null, assistantChangedView: false })
   })
+  it.each(['initiative', 'machine', 'secondMate'] as const)('reveals filtered flash targets in %s without changing selection or domain data', arrangement => {
+    const scene = fixtureScene()
+    const claim = scene.claims.find(c => c.cardId === fixtureId(1) && c.verification === 'confirmed')!
+    expect(claim).toBeDefined()
+    const group = scene.arrangements[arrangement].find(g => g.cardIds.includes(claim.cardId))!
+    const execution = scene.executions.find(e => e.id === claim.executionId)!
+    const targets: Target[] = [
+      { kind: 'card', id: claim.cardId }, { kind: 'execution', id: execution.id },
+      { kind: 'claim', id: claim.id }, { kind: 'group', id: group.id }, { kind: 'manager', id: execution.home },
+    ]
+    expect(new Set(scene.findings.filter(f => f.cardIds.includes(claim.cardId)).map(f => f.kind))).toEqual(new Set(['confirmed-link']))
+    const before = JSON.stringify(scene)
+    for (const origin of ['manual', 'assistant'] as const) {
+      for (const target of targets) {
+        const state = { ...initialPresentation(), arrangement, exceptionsOnly: true, selection: { kind: 'you', id: 'root' } as Target,
+          collapsed: [...scene.arrangements[arrangement].map(g => semanticId({ kind: 'group', id: g.id })), ...fixtureHomes.map(id => semanticId({ kind: 'manager', id }))] }
+        const result = applyPresentationAction(state, { type: 'flash', targets: [target], origin }, scene, 100)
+        expect(result.outcome).toBe('applied')
+        expect(result.state).toMatchObject({ exceptionsOnly: false, selection: state.selection, flash: { ids: [semanticId(target)], until: 2500 } })
+        expect(result.state.collapsed).not.toContain(semanticId({ kind: 'group', id: group.id }))
+        if (target.kind !== 'group') expect(result.state.collapsed).not.toContain(semanticId({ kind: 'manager', id: execution.home }))
+        expect(state.exceptionsOnly).toBe(true)
+      }
+    }
+    expect(JSON.stringify(scene)).toBe(before)
+  })
   it('retains historic selection over restart/reassignment without changing domain data', () => {
     const now = Date.now()
     const sources = fixtureSources({ now })

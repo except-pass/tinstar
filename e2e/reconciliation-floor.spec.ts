@@ -52,7 +52,7 @@ test('arrangements, missing sides, collapse, inspector, roadmap and read-only ke
   await page.setViewportSize({ width: 1680, height: 1050 })
   const scene = fixtureScene()
   const mutations: string[] = []
-  page.on('request', request => { if (request.method() !== 'GET') mutations.push(`${request.method()} ${request.url()}`) })
+  page.on('request', request => { if (request.method() !== 'GET' && !request.url().includes('/api/reconciliation/ui')) mutations.push(`${request.method()} ${request.url()}`) })
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
   await page.goto(`${base}/?view=floor`)
@@ -96,7 +96,7 @@ test('arrangements, missing sides, collapse, inspector, roadmap and read-only ke
   await screenshot(page, 'exceptions')
   await page.getByRole('button', { name: 'Clear highlights', exact: true }).click()
   await expect(page.locator('.is-flashed')).toHaveCount(0)
-  await page.getByRole('button', { name: /^Exceptions Only/ }).click()
+  await expect(page.getByRole('button', { name: /^Exceptions Only/ })).toHaveAttribute('aria-pressed', 'false')
   await page.getByRole('button', { name: /Roadmap \/ waits/ }).first().click()
   await expect(page.locator(`[data-card-id="${fixtureId(5)}"]`)).toBeVisible()
   await expect(page.locator(`[data-card-id="${fixtureId(4)}"]`)).toContainText('blocked')
@@ -161,7 +161,7 @@ for (const state of ['queued', 'held']) {
     const scene = new SceneReconciler().reconcile(sources)
     expect(scene.cards.find(card => card.id === fixtureId(2))!.expectation).toBe('expected-now')
     const mutations: string[] = []
-    page.on('request', request => { if (request.method() !== 'GET') mutations.push(request.url()) })
+    page.on('request', request => { if (request.method() !== 'GET' && !request.url().includes('/api/reconciliation/ui')) mutations.push(request.url()) })
     await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
     await page.goto(`${base}/?view=floor`)
     const row = page.locator(`[data-card-id="${fixtureId(2)}"]`)

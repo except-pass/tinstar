@@ -47,6 +47,8 @@ Configure the home in `~/.config/tinstar/config.json`:
 
 The home must contain First Mate's `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`. Direct dismiss also runs `bin/fm-captain-hold.sh` or `bin/fm-send.sh` from that same directory. Tinstar reads the fleet snapshot and opens private terminal views linked to worker windows. It does not create or stop workers. See [the integration reference](docs/features/firstmate-observer.md) for the current boundary.
 
+The **Floor** view connects fleet observations with Notion intentions and a read-only desk queue. See the [Floor setup](docs/features/reconciliation-floor.md#run-and-configure) and [conversational MCP connection instructions](docs/features/reconciliation-mcp.md#start-and-connect).
+
 ## Access and configuration
 
 The server binds to loopback by default. For a separately authorized address, use `tinstar --host <address>`; terminal services remain on loopback behind the Tinstar proxy. [Reach](docs/release-notes-v5-4.md#if-you-were-reaching-tinstar-from-another-device) can provide tailnet access without widening the listener.
