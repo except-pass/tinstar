@@ -30,7 +30,7 @@ const tone = (findings: Finding[]) => findings.some(f => f.kind === 'task-execut
   findings.some(isException) ? 'unknown' : 'quiet'
 
 type Dispatch = (action: PresentationAction) => void
-interface Context { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; delayed: boolean }
+interface Context { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; delayed: boolean; readFailed: boolean }
 function FocusButton({ context, item, className = '', children }: { context: Context; item: Target; className?: string; children: ReactNode }) {
   const id = semanticId(item)
   const selected = context.state.selection && semanticId(context.state.selection) === id
@@ -43,10 +43,10 @@ function FindingChips({ findings, delayed = false }: { findings: Finding[]; dela
     {delayed && ['task-execution-gap', 'untracked-worker'].includes(kind) ? 'Last-known: ' : ''}{findingLabels[kind]}</span>)}</span>
 }
 function WorkerNode({ execution, context }: { execution: Execution; context: Context }) {
-  const stale = context.delayed || expired(execution.observation, context.now)
+  const stale = context.readFailed || expired(execution.observation, context.now)
   return <FocusButton context={context} item={target('execution', execution.id)} className="floor-worker">
     <span className="floor-worker-avatar"><AgentIcon seed={execution.identity.task_id ?? execution.id} color="#00f0ff" className="floor-avatar-image" /></span>
-    <span><strong>{execution.identity.task_id ?? 'Unknown worker'}</strong><small>{stale ? 'last-known · ' : ''}{String(execution.source.current_state.state ?? execution.activity)} · {execution.placement.machine ?? 'Unknown machine'}</small>
+    <span><strong>{execution.identity.task_id ?? 'Unknown worker'}</strong><small>{execution.kind === 'secondmate' ? 'Second Mate · ' : ''}{stale ? 'last-known · ' : ''}{String(execution.source.current_state.state ?? execution.activity)} · {execution.placement.machine ?? 'Unknown machine'}</small>
       <small>{execution.placement.basis} placement · {homeName(execution.home)}</small>
       <span className="floor-activity">{String(execution.source.last_event.note ?? execution.source.current_state.detail ?? 'No activity detail published')}</span>
       <time dateTime={execution.source.current_state.observed_at ? String(execution.source.current_state.observed_at) : undefined}>State observed {time(typeof execution.source.current_state.observed_at === 'string' ? execution.source.current_state.observed_at : null)}</time>
@@ -124,7 +124,7 @@ function Hierarchy({ context }: { context: Context }) {
   return <section className="floor-hierarchy" aria-label="Accountability hierarchy">
     <div className="floor-command-chain"><FocusButton context={context} item={target('you', 'root')}><span className="floor-avatar">Y</span><strong>You</strong><small>Management</small></FocusButton><span aria-hidden="true">→</span>
       <FocusButton context={context} item={target('firstMate', 'root')}><span className="floor-avatar">FM</span><strong>First Mate</strong><small>Execution authority</small></FocusButton><span className="floor-chain-caption">→ observed homes / Second Mates</span>
-      <div className="floor-desk-slot" data-slot="desk-queue"><strong>Your desk</strong><small>Queue readiness arrives in S4</small></div>
+      <div className="floor-desk-slot" data-slot="desk-queue"><strong>Your desk</strong><small>Decision queue not connected</small></div>
     </div>
     <div className="floor-managers">{scene.coverage.homes.filter(home => !ancestorHomes(scene, home.source.home).slice(1).some(id => state.collapsed.includes(semanticId(target('manager', id))))).map(home => {
       const id = home.source.home
@@ -140,7 +140,7 @@ function Hierarchy({ context }: { context: Context }) {
           <FocusButton context={context} item={target('manager', id)}><strong>{homeName(id)}</strong><small>{home.source.parentHome ? `Second Mate → ${homeName(home.source.parentHome)}` : 'Root home · parent not configured'} · {home.source.machine ?? 'Unknown machine'} ({home.source.machineBasis})</small></FocusButton></div>
         <span className="floor-manager-count">{workerCount} unique workers in subtree · {executions.length} attempts · {childHomes.length} child homes · {findings.length} findings</span>
         <span className="floor-manager-count">{executions.filter(e => e.activity === 'executing').length} executing · {executions.filter(e => e.activity === 'waiting').length} waiting · {executions.filter(e => e.activity === 'unknown').length} unknown</span>
-        <small>{context.delayed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage} · observed {time(home.observation.observedAt)}</small>
+        <small>{context.readFailed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage} · observed {time(home.observation.observedAt)}</small>
         {latest && <p className="floor-manager-event">{latest.identity.task_id}: {String(latest.source.last_event.note)}<time>{activityAt(latest) ? `Report time (from source age): ${time(activityAt(latest))}` : 'Report timestamp not published'}</time></p>}
         {home.observation.error && <p className="floor-source-warning">{home.observation.error}</p>}
       </article>
@@ -186,7 +186,7 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
       <h3>Latest published report</h3><p>{String(execution.source.last_event.note ?? 'No report published')}</p><time>{activityAt(execution) ? `${time(activityAt(execution))} (derived from source report age)` : 'Report timestamp not published'}</time>
       {workerHref && worker?.terminalAvailable ? <a href={workerHref} target="_blank" rel="noopener noreferrer">Open safe worker / terminal viewer ↗</a> : <p>Terminal route unavailable for this exact observed worker. File-published homes are read-only.</p>}
       <p>Closing the viewer leaves the worker running.</p></>}
-    {home && <><h3>Home observation</h3><dl><dt>Home</dt><dd>{home.source.home}</dd><dt>Parent</dt><dd>{home.source.parentHome ?? 'Not configured'}</dd><dt>Coverage</dt><dd>{context.delayed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage}</dd><dt>Observed</dt><dd>{time(home.observation.observedAt)}</dd><dt>Expires</dt><dd>{time(home.observation.expiresAt)}</dd></dl></>}
+    {home && <><h3>Home observation</h3><dl><dt>Home</dt><dd>{home.source.home}</dd><dt>Parent</dt><dd>{home.source.parentHome ?? 'Not configured'}</dd><dt>Coverage</dt><dd>{context.readFailed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage}</dd><dt>Observed</dt><dd>{time(home.observation.observedAt)}</dd><dt>Expires</dt><dd>{time(home.observation.expiresAt)}</dd></dl></>}
     {group && <p>{group.counts.cards} cards · {group.counts.workers} unique workers · {group.counts.attempts} attempts. Membership can overlap other groups; totals use unions.</p>}
     {findings.length > 0 && <section><h3>Reconciliation evidence</h3>{findings.map(f => <div key={f.id} className="floor-evidence"><FindingChips findings={[f]} delayed={context.delayed} /><p>{f.reason}</p></div>)}</section>}
     {related.length > 0 && <section><h3>Relationships & observed history</h3><p>{scene.historyScope}</p>{related.map(c => <div key={c.id} className="floor-evidence">
@@ -221,7 +221,7 @@ export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
   ]) : [], [scene])
   if (!scene) return <section className="floor"><h1>Reconciliation Floor</h1><p role="status">{error ?? 'Reading configured sources…'}</p><p>Whole-farm coverage is unknown until observations arrive.</p></section>
   const delayed = !!error || expired(scene.coverage.intentions, now) || scene.coverage.homes.some(home => expired(home.observation, now))
-  const context: Context = { scene, state, send, now, delayed }
+  const context: Context = { scene, state, send, now, delayed, readFailed: !!error }
   const exceptions = scene.findings.filter(isException)
   const sourceFindings = exceptions.filter(f => !f.cardIds.length && !f.executionIds.length)
   return <div className="floor" ref={root} data-arrangement={state.arrangement} data-revision={state.revision} onKeyDown={event => {

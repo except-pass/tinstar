@@ -25,7 +25,7 @@ test.beforeAll(async () => {
   const port = await freePort()
   base = `http://127.0.0.1:${port}`
   server = spawn(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })

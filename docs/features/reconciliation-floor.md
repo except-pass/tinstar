@@ -215,7 +215,7 @@ Proof artifacts are `/home/farm/fm-home/data/tinstar-recon-s1/live-proof.ts` and
 
 ## Floor UI (S3)
 
-Start the existing web app with `npm run build:all && node bin/tinstar.js --no-open`, then open `http://127.0.0.1:5281/?view=floor` (use the actual port printed by the CLI). Desktop uses the same component and `apiFetch` transport. Configure the live fleet and Notion sources as above; no demo records are substituted when configuration or reads fail. Whole-farm publication routes and Notion credentials are operator prerequisites, not implied by a successful local read. The desk is a labeled S4 slot; there is no MCP transport in S3.
+Start the existing web app with `npm run build:all && node bin/tinstar.js --no-open`, then open `http://127.0.0.1:5273/?view=floor` (use the actual port printed by the CLI). Desktop uses the same component and `apiFetch` transport. Configure the live fleet and Notion sources as above; no demo records are substituted when configuration or reads fail. Whole-farm publication routes and Notion credentials are operator prerequisites, not implied by a successful local read. The desk is a labeled S4 slot; there is no MCP transport in S3.
 
 The floor polls `GET /api/reconciliation/scene` sequentially, 20 seconds after the preceding read completes, with a 60-second request deadline and cancellation on unmount. Failed reads retain the last scene and suspend absence conclusions. Source expiration also labels retained observations and findings as last-known. Partial coverage remains visible. There is no all-clear indicator.
 
