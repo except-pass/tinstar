@@ -89,6 +89,24 @@ describe('fleet collection', () => {
     expect(await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()).toMatchObject({ coverage: 'partial', data: { backlog: null } })
   })
 
+  it('preserves structured and textual linking evidence without publishing raw backlog text', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'references.json')
+    const raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw,
+      tasks: [{ ...raw.tasks[0], notion_page_id: '40d50ce6-d422-814a-a741-c102cd00aaae', backlog: { raw: `private body (card ${id})` } }],
+      backlog: { records: [{ id: 'same-task', notion_page_id: id, title: `Work (card ${id})`, raw: 'private standalone body' }] },
+    }))
+    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
+    expect(result.data?.tasks[0]?.cardReferences).toEqual([
+      { pageId: id, basis: 'explicit', source: 'task.notion_page_id' }, { pageId: id, basis: 'textual', source: 'task.backlog.raw' },
+    ])
+    expect(result.data?.backlog?.[0]?.cardReferences).toEqual([
+      { pageId: id, basis: 'explicit', source: 'backlog.notion_page_id' }, { pageId: id, basis: 'textual', source: 'backlog.title' },
+    ])
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
   it('retains identical task IDs in distinct homes and follows attempt changes', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
     const dir = await temp(); const first = join(dir, 'first.json'); const second = join(dir, 'second.json')
@@ -187,6 +205,15 @@ describe('config and HTTP boundary', () => {
       expect(await res.json()).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
       expect((await fetch(url, { method: 'POST' })).status).toBe(400)
       expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
+      const sceneUrl = url.replace('/sources', '/scene')
+      const scene = await fetch(sceneUrl)
+      expect(scene.headers.get('cache-control')).toBe('no-store')
+      expect(await scene.json()).toMatchObject({ ok: true, data: { coverage: { absenceConclusions: 'suppressed', wholeFarm: 'not-certified' },
+        cards: [], executions: [], claims: [], findings: [expect.any(Object), expect.any(Object)],
+        arrangements: { initiative: [expect.objectContaining({ label: 'Unassigned / unknown' })] } } })
+      expect((await fetch(sceneUrl, { method: 'POST' })).status).toBe(400)
+      expect((await fetch(sceneUrl, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
+      expect((await fetch(sceneUrl, { method: 'OPTIONS' })).status).toBe(204)
     } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
   })
 })

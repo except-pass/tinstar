@@ -1,9 +1,9 @@
-# Reconciliation Floor: source integration (S1)
+# Reconciliation Floor: sources and claim model (S1–S2)
 
-This is the first slice of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
+This reference covers the first two slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
-S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. The cockpit UI still uses its existing routes. Claim reconciliation, arrangements, desk readiness, authenticated conversational MCP and browser acceptance belong to subsequent slices. This endpoint makes no gap/orphan/progress/readiness judgments and supplies no orchestration or Notion-write action.
+S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. The cockpit UI still uses its existing routes. Floor UI, desk readiness, authenticated conversational MCP and browser acceptance belong to subsequent slices. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
 
 ## Observed First Mate contract
 
@@ -151,6 +151,61 @@ The response uses the application envelope `{ok:true,data:{generatedAt,scope,war
 - Raw transcripts, brief bodies, operator command suggestions and Notion credentials are omitted from the source response. Generic failure text avoids exposing fetch/exec diagnostics or secrets.
 
 Acceptance for S1: inspect source IDs/timestamps, find the real card and task, stop refreshing a controlled published fixture and observe stale, supply a missing source and observe unknown, and verify GET produces no domain mutations. UI, queue decisions and MCP proofs remain explicitly unavailable until later slices.
+
+## Reconciled scene (S2)
+
+With the same server/configuration above, read:
+
+```sh
+curl -s http://127.0.0.1:5281/api/reconciliation/scene
+```
+
+The response retains the application envelope and the sources route's origin policy, GET/OPTIONS restriction, `no-store` header, bounded caches and source freshness rules. There is no new listener, source write or fleet lifecycle operation. Both routes share the same cached readers.
+
+The scene contains:
+
+- `coverage`: source timestamps, expiry, errors, each configured home (including failed homes), and whether configured-source absence conclusions are suppressed. `wholeFarm: not-certified` explicitly records that a configured list does not independently establish a census of the farm.
+- `cards`: canonical Notion IDs, selected source properties, actual Parent item IDs/ancestry, missing/cyclic/truncated hierarchy issues, property-based execution expectations, named waiting/delegation text and independent checkpoint state. Card bodies and PM Bot progress assessments remain uncollected; `progressAssessment` is null.
+- `executions`: IDs encoded from the tuple `[fm_home, task_id, spawn_gen]`, their home/parent-home accountability, source state and timestamps. Only fresh known runtime states establish executing/waiting/inactive activity. A fresh metadata snapshot with unknown runtime is still unknown. Secondmate records are managers, not untracked ship workers.
+- `backlog`: home-scoped task metadata with references and source coverage. Queued/held work can be accounted for without inventing a worker or spawn generation.
+- `claims`: a card-to-attempt relationship, basis (`explicit`, `textual`, `inferred`), evidence field paths, observation time, accountability, verification and current/last-known status. A dedicated `notion_page_id` on the snapshot task or backlog row is explicit evidence. IDs extracted from a `card <id>` marker or Notion URL in title/raw text are textual; raw text is not returned. Equal normalized titles can suggest inferred candidates only. Conflicting references, completed/archived cards, outside ownership or missing attempt identity never become confirmed links.
+- `claimHistory`: previously observed relationships with their attempt identity. Complete fresh observations can retire a missing attempt or an explicitly reassigned relationship. Failed reads keep previous relationships labeled last-known. History is in memory only, bounded to 24 hours/2,000 prior claims and reset on server restart. It is neither a complete event history nor proof of continuous execution. Historical relationships do not count toward current totals or arrangements.
+- `findings`: semantic categories with card/execution/home IDs and explanatory evidence. Confirmed linking establishes a relationship, never progress or delivered behavior.
+- `arrangements`: `initiative`, `secondMate`, and `machine` groups over the same card/execution/claim IDs. Initiative uses the observed Parent item chain, preserving missing-parent IDs rather than inventing initiative/epic names. Each arrangement has an explicit Unassigned / unknown group. Home grouping preserves configured parent-home accountability. Machine grouping uses a row's observed `remote.host` when present, otherwise the collecting home's configured machine, otherwise unknown; both the placement basis and configured machine remain visible. Failed configured homes retain their home/machine groups.
+- `cardRollups` and `counts`: deduplicated descendant card, worker and attempt membership. Workers use `(home, task_id)` while attempts include `spawn_gen`; two homes sharing a task name remain distinct. Cards linked to multiple workers or referenced by multiple descendants count once per parent/group. Multi-parent or multi-machine membership can overlap; consumers must union IDs rather than sum group counts. Managers are excluded from worker counts and retained in attempt membership.
+
+Finding rules:
+
+| Finding | S2 evidence and limits |
+| --- | --- |
+| Confirmed link | Explicit structured ID, recognized card, complete attempt identity, no contradictory references/status/ownership; freshness is separately labeled. |
+| Task execution gap | Firstmate-owned In Progress work with no published wait/future start; explicit home accountability from a confirmed attempt or in-flight structured backlog reference; fresh complete configured sources and known runtime states; no execution, wait or unverified candidate accounting for it. Missing home accountability suppresses the conclusion because work could run elsewhere in the farm. The reason names the accountable home and configured scope. |
+| Untracked worker | Observed executing worker with complete identity/known placement, no recognized reference or inferred candidate, and complete fresh configured fleet/Notion reads. Missing/unavailable/partial sources suppress this conclusion. |
+| Unverified/conflicting | Textual/inferred/missing/contradictory IDs, unknown expectations, hierarchy issues, or a textual backlog wait. Contradictory standalone backlog references cannot establish home accountability or a legitimate wait and suppress execution-gap conclusions. No automatic repair. |
+| Unknown/stale source | Partial, unavailable, expired, permission-limited observations, unknown runtime or insufficient accountability coverage. Last-known records remain labeled and absence conclusions are suppressed. |
+| Legitimate wait/planned | Backlog, Todo, Queued, planned, review, waiting, completed/archived status, future Start Date or published Waiting For; observed worker wait through a current confirmed claim; or noncontradictory structured queued/held backlog reference. Inferred, textual or conflicting worker relationships remain unverified and suppress execution-gap conclusions; the worker's waiting activity remains visible independently. Source wait detail and card checkpoint remain available. |
+| Outside coverage | Owner other than Firstmate (including PM Bot and humans). No missing-First-Mate-worker assertion. |
+
+An overdue/missing checkpoint is independent accountability data. It does not imply a crashed worker; a future checkpoint does not excuse an otherwise evidenced execution gap. S2 does not assess PR readiness, delivery or the executive queue.
+
+Controlled tests in `src/server/reconciliation/__tests__/scene.test.ts` cover explicit/textual/inferred/conflicting links, gap/accountability scope, untracked workers, planned/waiting/outside work, stale/partial/unavailable coverage, unknown placement/runtime, duplicate identity, multiple workers/attempts, identical IDs across homes, restart/reassignment history, Parent item chains and deduplicated grouping. Source HTTP tests cover the scene envelope, unknown coverage, foreign origins and rejected writes.
+
+### Measured S2 proof on Hulk
+
+At `2026-11-03T19:25:26.558Z`, the real Hulk snapshot and authenticated live Notion read produced 10 observed execution records and 854 authorized cards. These are observation counts, not product constants. The S2 execution was:
+
+```text
+fm_home: /home/farm/fm-home
+task_id: tinstar-recon-s2
+spawn_gen: s1793733334.1652833.9158
+card: 40d50ce6d422814aa741c102cd00aaae
+basis: textual; verification: unverified
+evidence: task.backlog.title, task.backlog.raw, backlog.title, backlog.raw
+```
+
+The card/task remained reachable in initiative Unassigned, the Hulk home and configured Hulk machine groups. Notion was partial because two Sub-item relations were truncated; the fleet metadata was fresh while runtime states remained unknown. The scene correctly suppressed absence conclusions and produced zero execution-gap or untracked-worker assertions. No textual relationship was promoted to confirmed.
+
+Evidence and rerunnable discovery proof: `/home/farm/fm-home/data/tinstar-recon-s2/live-proof.json` and `live-proof.ts` (outside the repository). The proof uses the authorized discovery helper for authenticated GET/schema and POST/query only, through an injected read bridge. No credential is read/copied into Tin Star, printed or committed. As in S1, a production Notion token and the other homes' authorized publication routes remain operator prerequisites. This proves the server-side reconciliation model with live sources, not whole-farm deployment, floor UI, queue readiness or MCP delivery.
 
 ## Measured source proof on Hulk
 

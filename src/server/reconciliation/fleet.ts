@@ -4,11 +4,12 @@ import { readFleetSnapshot } from '../fleet/snapshot'
 import { CachedObservation } from './observation'
 import type { FleetSource } from './config'
 import { record, text } from './values'
+import { cardReferences } from './references'
 
-const fields = (value: unknown, keys: string[]) => Object.fromEntries(keys.map(key => {
+const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string | number | boolean | null> => Object.fromEntries(keys.map(key => {
   const item = record(value)[key]
   return [key, typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean' ? item : null]
-}))
+})) as Record<K, string | number | boolean | null>
 
 export function fleetObservation(source: FleetSource) {
   return new CachedObservation(async () => {
@@ -27,6 +28,7 @@ export function fleetObservation(source: FleetSource) {
       remote: task.remote ? fields(task.remote, ['host', 'root']) : null,
       // Identity uses a tuple, never delimiter concatenation or array position.
       identity: { fm_home: source.home, task_id: text(task.id), spawn_gen: text(task.spawn_gen) },
+      cardReferences: [...cardReferences(task, 'task'), ...cardReferences(record(task.backlog), 'task.backlog')],
       current_state: fields(task.current_state, ['state', 'source', 'detail', 'observed_at', 'freshness']),
       endpoint: fields(task.endpoint, ['exists', 'agent_alive', 'status', 'observed_at', 'freshness']),
       paths: { home: text(record(record(task.paths).home).path), worktree: text(record(record(task.paths).worktree).path) },
@@ -47,9 +49,9 @@ export function fleetObservation(source: FleetSource) {
         main_inventory: fields(snapshot.main_inventory, ['valid', 'reason', 'unstructured_current_count']),
         backlogPresent: typeof snapshot.backlog?.present === 'boolean' ? snapshot.backlog.present : null,
         ledger: { role: 'change-signal-only', cursor: ledger, scope: source.snapshotFile ? 'not-collected' : 'local-file-stat' },
-        tasks, backlog: Array.isArray(backlog) ? backlog.map(row => fields(row, [
+        tasks, backlog: Array.isArray(backlog) ? backlog.map(row => ({ ...fields(row, [
           'id', 'title', 'state', 'kind', 'repo', 'hold_reason', 'hold_until', 'blocked_by', 'captain_actionable', 'pr_url',
-        ])) : null,
+        ]), cardReferences: cardReferences(row, 'backlog') })) : null,
       },
     }
   }, 20_000, 60_000, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source')
