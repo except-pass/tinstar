@@ -2,7 +2,8 @@ import { CachedObservation } from './observation'
 import { record, text } from './values'
 import type { ReconciliationConfig } from './config'
 
-const UUID = /^[a-fA-F0-9-]{32,36}$/
+// Malformed hyphen strings must not normalize into supposedly canonical links.
+const UUID = /^(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})$/
 export const notionPageId = (value: unknown): string | null =>
   typeof value === 'string' && UUID.test(value) ? value.replaceAll('-', '').toLowerCase() : null
 const PROPERTY_NAMES = [
