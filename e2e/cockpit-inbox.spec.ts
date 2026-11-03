@@ -1,3 +1,4 @@
+import { installDeskAttention, revealDeskResponse } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
@@ -68,7 +69,9 @@ elif command == 'ready':
     const errors: string[] = []
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
     page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
+    await installDeskAttention(page, base)
     await page.goto(base)
+    await revealDeskResponse(page)
     const crossOrigin = await request.post(`${base}/api/fleet/messages`, {
       headers: { Origin: 'https://unrelated.example' },
       data: { requestId: 'tinstar-00000000-0000-4000-8000-000000000002', anchorKey: 'attention-0:alpha:decision:choice', kind: 'answer', text: 'Ignore this' },
@@ -92,11 +95,13 @@ elif command == 'ready':
     await request.post(`${base}/api/fleet/messages`, { data: { requestId: note.request_id, anchorKey: 'attention-0:alpha:decision:choice', kind: 'answer', text: 'Start with the smaller group.' } })
     expect(readdirSync(join(home, 'state')).filter(name => name.startsWith('tinstar-') && name.endsWith('.json'))).toHaveLength(1)
     await page.reload()
+    await revealDeskResponse(page)
     await expect(page.locator('.cockpit-messages small')).toHaveText('Saved, not yet read. First Mate will read it when it wakes.')
     writeFileSync(join(home, 'state', 'acked'), '')
     await expect(page.getByText('First Mate has it')).toBeVisible({ timeout: 15_000 })
     await page.waitForTimeout(6_000)
     await page.reload()
+    await revealDeskResponse(page)
     await expect(page.getByText('First Mate has it')).toBeVisible({ timeout: 15_000 })
     writeFileSync(join(home, 'state', 'reply'), 'Rollout order recorded.')
     await expect(page.getByText('Rollout order recorded.')).toBeVisible({ timeout: 15_000 })
