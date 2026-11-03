@@ -25,13 +25,13 @@ export function QueuePanel({ state, send, queue, error, now }: { state: Presenta
       .catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()
   }, [state.queueOpen, cardId])
-  if (!state.queueOpen) return <section className="floor-coverage" aria-label="Desk preview">
+  if (!state.queueOpen) return <section className="floor-desk" aria-label="Desk preview">
     <strong>Your desk · {queue ? `${items.length} ready / verification candidates` : 'queue source unavailable'}</strong>
     {error && <span>{error}</span>}
     {items.slice(0, 3).map(item => <button key={item.id} type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{item.title} · {readiness(item)}</button>)}
     <span>Presentation only. Future items stay in their work context; no empty queue all-clear.</span>
   </section>
-  return <section className="floor-coverage" aria-label="Your desk" ref={desk} data-queue-item-id={state.queueItemId ?? ''}>
+  return <section className="floor-desk" aria-label="Your desk" ref={desk} data-queue-item-id={state.queueItemId ?? ''}>
     <strong>{state.queueCardId ? `Card ${state.queueCardId}` : selected?.title ?? 'Your desk'}</strong>
     {error && <span>{error}</span>}
     {!queue && <span>Queue source unavailable. No readiness or absence conclusions.</span>}
