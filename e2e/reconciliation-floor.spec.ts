@@ -151,3 +151,32 @@ test('large fixture, unavailable home, failed refresh and restart keep identitie
   await page.getByRole('button', { name: 'Machine', exact: true }).click()
   await expect(page.getByLabel('Scene inspector')).toContainText(fixtureNames.linked)
 })
+
+for (const state of ['queued', 'held']) {
+  test(`explicit ${state} backlog wait overrides expected-now socket and preserves supplied hold details`, async ({ page }) => {
+    const sources = fixtureSources()
+    Object.assign(sources.fleet[1]!.observation.data!.backlog[0]!, {
+      state, hold_reason: 'Awaiting review capacity', blocked_by: 'review-task', hold_until: '2026-11-05T12:00:00Z',
+    })
+    const scene = new SceneReconciler().reconcile(sources)
+    expect(scene.cards.find(card => card.id === fixtureId(2))!.expectation).toBe('expected-now')
+    const mutations: string[] = []
+    page.on('request', request => { if (request.method() !== 'GET') mutations.push(request.url()) })
+    await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+    await page.goto(`${base}/?view=floor`)
+    const row = page.locator(`[data-card-id="${fixtureId(2)}"]`)
+    await expect(row).toHaveCount(0)
+    await page.getByRole('button', { name: /Roadmap \/ waits/ }).first().click()
+    await expect(row.locator('.floor-socket')).toContainText('No worker required now')
+    for (const detail of ['Awaiting review capacity', 'review-task', '2026-11-05T12:00:00Z']) await expect(row.locator('.floor-socket')).toContainText(detail)
+    await row.locator('.floor-task').click()
+    for (const detail of ['Awaiting review capacity', 'review-task', '2026-11-05T12:00:00Z']) await expect(page.getByLabel('Scene inspector')).toContainText(detail)
+    for (const name of ['Second Mate', 'Machine', 'Initiative']) {
+      await page.getByRole('button', { name, exact: true }).click()
+      await expect(row.locator('.floor-socket').first()).toContainText('No worker required now')
+      await expect(page.getByLabel('Scene inspector')).toContainText('Awaiting review capacity')
+    }
+    await screenshot(page, `explicit-${state}-wait`)
+    expect(mutations).toEqual([])
+  })
+}

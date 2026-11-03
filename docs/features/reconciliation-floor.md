@@ -221,7 +221,7 @@ The floor polls `GET /api/reconciliation/scene` sequentially, 20 seconds after t
 
 Initiative is the initial arrangement; Initiative, Second Mate and Machine use S2's actual group membership. Unassigned groups remain visible, including roadmap cards without workers. Headline counts are S2's union counts, never sums of overlapping groups. Root-home and child-home manager summaries use configured parent relationships, deduplicate workers by home/task, retain attempt and exception counts, and show actual published state/report timestamps. Parent relationships not configured stay labeled as such. Collapsing a home also collapses its descendant workers; rows say attempts are hidden, rather than claiming execution is missing.
 
-Worker ↔ claim ↔ intention rows retain multiple attempts/workers per card. Dashed amber execution sockets, double pink untracked sockets, violet uncertainty and quiet waits have text and shape cues. **Exceptions Only** counts findings in the full configured scene (not workers or just currently expanded rows). **Flash gaps** counts unique card/execution records and reveals their groups/managers; unavailable observations disable absence-based flashing. Roadmap/wait sections expand together without changing domain priority. Selecting any row opens an inspector with IDs, source fields, observation times, checkpoint and expectation separately, current relationships and bounded observed relationship history. It explicitly discloses that full card bodies/progress assessments and complete event history are unavailable.
+Worker ↔ claim ↔ intention rows retain multiple attempts/workers per card. Dashed amber execution sockets, double pink untracked sockets, violet uncertainty and quiet waits have text and shape cues. **Exceptions Only** counts findings in the full configured scene (not workers or just currently expanded rows). **Flash gaps** counts unique card/execution records and reveals their groups/managers; unavailable observations disable absence-based flashing. Roadmap/wait sections include cards with a reconciled legitimate wait even when their Notion expectation is expected-now. Their empty sockets say **No worker required now**; the socket and inspector retain the reconciled reason and explicitly linked queued/held backlog details (`hold_reason`, `blocked_by`, `hold_until`) when supplied. These sections expand together without changing domain priority. Selecting any row opens an inspector with IDs, source fields, observation times, checkpoint and expectation separately, current relationships and bounded observed relationship history. It explicitly discloses that full card bodies/progress assessments and complete event history are unavailable.
 
 The inspector links eligible exact home/task identities to the existing guarded worker/terminal page in a separate tab. File-published homes do not acquire terminal access. Ambiguous basename routes are withheld to avoid opening the wrong home. Closing this page uses the existing viewer lifecycle and never stops the worker. No new domain-write route, orchestration, approval or claim repair is added.
 
@@ -235,14 +235,14 @@ All floor arrangement, expansion, focus, roadmap, filter, flash and clear change
 4. Toggle **Exceptions Only**, use **Flash gaps**, clear highlights, and expand **Roadmap / waits**. None of these approve, complete, send, dismiss or reorder domain work.
 5. At mobile width, operate buttons with keyboard, open/close the inspector with Escape, and enable reduced motion. Colors also have textual/shape cues.
 
-Explicit fixtures are confined to `test-fixtures/reconciliation/scenes.ts`. They cover gap, untracked worker, inferred claim, wait, backlog, outside ownership, multiple workers/machines, 857 cards/85 workers, and an unavailable home. They are imported only by tests, never the production UI. Browser tests use an isolated empty First Mate config and intercept only the read-only scene API; no production incident or source write is manufactured.
+Shared scene fixtures live in `test-fixtures/reconciliation/scenes.ts`; individual tests also construct controlled variations. They cover gap, untracked worker, inferred claim, wait, backlog, outside ownership, multiple workers/machines, 857 cards/85 workers, and an unavailable home. They are imported only by tests, never the production UI. Browser tests use an isolated empty First Mate config and intercept only the read-only scene API; no production incident or source write is manufactured.
 
 Run on Hulk:
 
 ```bash
 npm run typecheck
 npm run build:all
-npx vitest run src/reconciliation/__tests__/presentation.test.ts src/server/reconciliation/__tests__ --exclude='e2e/**'
+npx vitest run src/reconciliation/__tests__ src/server/reconciliation/__tests__ --exclude='e2e/**'
 TINSTAR_FLOOR_SCREENSHOTS=/home/farm/fm-home/data/tinstar-recon-s3/screenshots npx playwright test --config playwright.cockpit.config.ts e2e/reconciliation-floor.spec.ts
 ```
 
