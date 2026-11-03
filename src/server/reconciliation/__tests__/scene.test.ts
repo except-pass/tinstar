@@ -185,6 +185,21 @@ describe('truthful reconciliation findings', () => {
     expect(textual.findings.map(f => f.kind)).toEqual(['unverified-conflicting'])
   })
 
+  it('keeps contradictory standalone backlog references unverified across accountability and waits', () => {
+    for (const state of ['in_flight', 'queued']) for (const held of [false, true]) {
+      const source = expectedHome(snapshot([], [card(a), card(b)]))
+      const row = source.fleet[0]!.observation.data!.backlog![0]!
+      row.state = state
+      row.hold_reason = held ? 'Review required' : null
+      row.cardReferences = cardReferences({ notion_page_id: a, title: `card ${b}` }, 'backlog')
+      const scene = reconcileScene(source, now)
+      expect(scene.claims).toEqual([])
+      expect(scene.backlog[0]?.source.cardReferences).toEqual(row.cardReferences)
+      expect(scene.findings.filter(f => f.kind === 'unverified-conflicting').flatMap(f => f.cardIds).sort()).toEqual([a, b].sort())
+      expect(scene.findings.some(f => f.kind === 'task-execution-gap' || f.kind === 'legitimate-wait-planned')).toBe(false)
+    }
+  })
+
   it('labels human and PM Bot ownership outside execution coverage', () => {
     for (const owner of ['PM Bot', 'Will', 'Human']) {
       expect(findings(snapshot([], [card(a, { Owner: owner })]), 'outside-coverage')).toHaveLength(1)
@@ -261,6 +276,29 @@ describe('arrangement data and rollups', () => {
       expect(new Set(groups.flatMap(g => g.cardIds))).toEqual(new Set([a, b, c]))
       expect(new Set(groups.flatMap(g => g.executionIds))).toEqual(new Set(scene.executions.map(e => e.id)))
     }
+  })
+
+  it('scopes conflicting worker claims to each card initiative while sharing execution membership', () => {
+    const otherRoot = '40950ce6d42280b584d0000b877283da'
+    const worker = task('worker', null, { cardReferences: cardReferences({ notion_page_id: a, title: `card ${b}` }, 'task') })
+    const scene = reconcileScene(snapshot([worker], [
+      card(a, { 'Parent item': [c] }), card(b, { 'Parent item': [otherRoot] }),
+      card(c, { Name: 'X', Status: 'Backlog' }), card(otherRoot, { Name: 'Y', Status: 'Backlog' }),
+    ]), now)
+    for (const [label, child, root] of [['X', a, c], ['Y', b, otherRoot]]) {
+      const group = scene.arrangements.initiative.find(g => g.label === label)!
+      expect(new Set(group.cardIds)).toEqual(new Set([child, root]))
+      expect(group.claimIds).toEqual(scene.claims.filter(claim => claim.cardId === child).map(claim => claim.id))
+      expect(group.executionIds).toEqual(scene.executions.map(execution => execution.id))
+      expect(group.counts).toMatchObject({ cards: 2, claims: 1, workers: 1, attempts: 1 })
+    }
+    for (const arrangement of ['secondMate', 'machine'] as const) {
+      const group = scene.arrangements[arrangement].find(g => g.executionIds.length)!
+      expect(new Set(group.cardIds)).toEqual(new Set([a, b]))
+      expect(new Set(group.claimIds)).toEqual(new Set(scene.claims.map(claim => claim.id)))
+      expect(group.counts).toMatchObject({ cards: 2, claims: 2, workers: 1, attempts: 1 })
+    }
+    expect(scene.counts).toMatchObject({ cards: 4, claims: 2, workers: 1, attempts: 1 })
   })
 
   it('keeps unassigned cards/workers and unreadable homes reachable, including unknown machines', () => {

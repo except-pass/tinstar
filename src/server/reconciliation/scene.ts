@@ -218,19 +218,24 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     // The configured set is not a census of the farm. A card with no known
     // accountable home might be executing on an unconfigured machine. Only
     // explicit attempt/backlog identifiers establish a relevant absence scope.
+    const conflictingBacklog = backlog.filter(entry =>
+      entry.source.cardReferences.some(ref => ref.pageId === card.id) &&
+      new Set(entry.source.cardReferences.map(ref => ref.pageId)).size > 1)
     const accountableHomes = [...new Set([
       ...related.filter(claim => claim.verification === 'confirmed').map(claim => claim.identity.fm_home),
-      ...backlog.filter(entry => entry.source.state === 'in_flight' &&
+      ...backlog.filter(entry => !conflictingBacklog.includes(entry) && entry.source.state === 'in_flight' &&
         entry.source.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')).map(entry => entry.home),
     ])]
-    const waits = backlog.filter(entry => (entry.observation.status === 'fresh' || entry.observation.status === 'partial') &&
+    const waits = backlog.filter(entry => !conflictingBacklog.includes(entry) && (entry.observation.status === 'fresh' || entry.observation.status === 'partial') &&
       entry.source.cardReferences.some(ref => ref.pageId === card.id) &&
       (entry.source.state === 'queued' || !!entry.source.hold_reason || !!entry.source.blocked_by || !!entry.source.hold_until))
     if (card.hierarchyIssues.length) add('unverified-conflicting', [card.id], [], card.hierarchyIssues.join('; '))
     if (card.expectation === 'outside') add('outside-coverage', [card.id], linked.map(e => e.id), card.expectationReason)
     else if (card.expectation === 'wait-planned') add('legitimate-wait-planned', [card.id], linked.map(e => e.id), card.expectationReason)
     else if (card.expectation === 'unknown') add('unverified-conflicting', [card.id], linked.map(e => e.id), card.expectationReason)
-    else if (!live.length && waits.length) {
+    else if (!live.length && conflictingBacklog.length) {
+      add('unverified-conflicting', [card.id], linked.map(e => e.id), 'Contradictory backlog card references; accountability, wait and execution-gap conclusions suppressed')
+    } else if (!live.length && waits.length) {
       const explicit = waits.some(entry => entry.source.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit'))
       add(explicit ? 'legitimate-wait-planned' : 'unverified-conflicting', [card.id], linked.map(e => e.id),
         explicit ? 'First Mate backlog accounts for queued/held work; retain hold reason, blocker and checkpoint in source data'
@@ -291,10 +296,16 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
   for (const card of cards) for (const entry of initiativeGroups(card)) entry.cardIds.push(card.id)
   for (const execution of executions) {
     const related = claims.filter(claim => claim.executionId === execution.id)
-    const initiative = related.flatMap(claim => { const card = byCard.get(claim.cardId); return card ? initiativeGroups(card) : [unassigned('initiative')] })
+    for (const claim of related) {
+      const card = byCard.get(claim.cardId)
+      for (const entry of card ? initiativeGroups(card) : [unassigned('initiative')]) {
+        entry.executionIds.push(execution.id); entry.claimIds.push(claim.id)
+      }
+    }
+    if (!related.length) unassigned('initiative').executionIds.push(execution.id)
     const machine = execution.placement.machine ? group('machine', key('machine', execution.placement.machine), execution.placement.machine) : unassigned('machine')
     machine.placements.push(execution.placement)
-    for (const entry of [...(initiative.length ? initiative : [unassigned('initiative')]), group('secondMate', key('home', execution.home), execution.home), machine]) {
+    for (const entry of [group('secondMate', key('home', execution.home), execution.home), machine]) {
       entry.executionIds.push(execution.id); entry.claimIds.push(...related.map(claim => claim.id)); entry.cardIds.push(...related.map(claim => claim.cardId).filter(id => byCard.has(id)))
     }
   }
