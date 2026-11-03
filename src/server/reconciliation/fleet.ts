@@ -35,6 +35,7 @@ export function fleetObservation(source: FleetSource) {
       endpoint: fields(task.endpoint, ['exists', 'agent_alive', 'status', 'observed_at', 'freshness']),
       paths: { home: text(record(record(task.paths).home).path), worktree: text(record(record(task.paths).worktree).path) },
       last_event: fields(record(record(task.paths).status_log).last_event, ['state', 'note', 'age_seconds']),
+      lastEventText: text(record(task.hints).last_event_text),
       pr: fields(task.pr, ['url', 'source', 'head']),
       backlog: fields(task.backlog, ['id', 'title', 'state', 'hold_reason', 'blocked_by', 'hold_until']),
     }))

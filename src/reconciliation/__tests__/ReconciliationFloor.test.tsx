@@ -44,3 +44,22 @@ it.each(['queued', 'held'])('presents an expected-now card with an explicit %s b
   if (scrollDescriptor) Object.defineProperty(Element.prototype, 'scrollIntoView', scrollDescriptor)
   else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
+
+
+it('shows separate liveness totals in the headline and manager subtree', () => {
+  const sources = fixtureSources()
+  const tasks = sources.fleet[1]!.observation.data!.tasks
+  tasks[0]!.current_state.state = 'unknown'
+  tasks[0]!.lastEventText = 'paused [at=1]: waiting on CI'
+  tasks[1]!.lastEventText = 'done [at=1]: finished but window open'
+  tasks[2]!.endpoint.exists = false
+  tasks[3]!.endpoint.exists = null
+  observed.scene = new SceneReconciler().reconcile(sources)
+  const { container } = render(<ReconciliationFloor workers={[]} />)
+  expect(container.querySelector('.floor-coverage')!.textContent).toContain('1 running · 1 waiting · 1 finished · 1 absent · 1 liveness not observed · 5 task records')
+  const managerCounts = [...container.querySelectorAll('.floor-manager-count')].map(node => node.textContent)
+  expect(managerCounts).toContain('0 running · 1 waiting · 1 finished · 1 absent · 1 liveness not observed')
+  expect([...container.querySelectorAll('.floor-worker')].some(node => node.textContent?.includes('finished'))).toBe(true)
+  fireEvent.click(screen.getAllByRole('button', { name: /Roadmap \/ waits/ })[0]!)
+  expect([...container.querySelectorAll('.floor-worker')].some(node => node.textContent?.includes('waiting'))).toBe(true)
+})

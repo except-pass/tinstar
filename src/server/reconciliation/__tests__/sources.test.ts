@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { reconcileScene } from '../scene'
 import { CachedObservation } from '../observation'
 import { loadReconciliationConfig } from '../config'
 import { fleetObservation } from '../fleet'
@@ -80,6 +81,22 @@ describe('fleet collection', () => {
     expect(result.fleet.map(row => row.observation.status)).toEqual(['unknown', 'unknown'])
     expect(result.fleet[1]?.source).toMatchObject({ machine: 'optimus', machineBasis: 'configured' })
     expect(result.intentions.status).toBe('unknown')
+  })
+
+  it('preserves codex event hints and labels a missing endpoint as liveness not observed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'liveness.json')
+    const raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw, tasks: [
+      { ...raw.tasks[0], id: 'paused-codex', endpoint: { exists: true }, hints: { last_event_text: 'paused [at=1]: waiting on CI' } },
+      { ...raw.tasks[0], id: 'legacy-no-endpoint' },
+      { ...raw.tasks[0], id: 'finished-window', endpoint: { exists: true }, hints: { last_event_text: 'done [at=1]: finished' } },
+    ] }))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const scene = reconcileScene(await sources.snapshot(), Date.parse(timestamp))
+    expect(scene.executions.map(e => e.liveness)).toEqual(['waiting', 'liveness-not-observed', 'finished'])
+    expect(scene.counts).toMatchObject({ running: 0, waiting: 1, finished: 1, absent: 0, 'liveness-not-observed': 1, attempts: 3 })
+    expect(scene.findings.some(f => f.kind === 'untracked-worker' || f.kind === 'task-execution-gap')).toBe(false)
   })
 
   it('marks missing attempt/backlog inventory partial', async () => {

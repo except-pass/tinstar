@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { countLiveness } from '../domain/execution-liveness'
 import type { Claim, Execution, Finding, SceneCard, SceneGroup } from '../server/reconciliation/scene'
 import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
@@ -13,6 +14,7 @@ import { QueuePanel } from './QueuePanel'
 import { useFloorScene } from './useFloorScene'
 import './floor.css'
 
+const livenessSummary = (counts: ReturnType<typeof countLiveness>) => `${counts.running} running · ${counts.waiting} waiting · ${counts.finished} finished · ${counts.absent} absent · ${counts['liveness-not-observed']} liveness not observed`
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const cardTitle = (card: SceneCard) => String(card.source.properties.Name?.value || card.id)
 const status = (card: SceneCard) => String(card.source.properties.Status?.value || 'Unknown status')
@@ -66,9 +68,9 @@ function WorkerNode({ execution, context }: { execution: Execution; context: Con
   const stale = context.readFailed || expired(execution.observation, context.now)
   return <FocusButton context={context} item={target('execution', execution.id)} className="floor-worker">
     <span className="floor-worker-avatar"><AgentIcon seed={execution.identity.task_id ?? execution.id} color="#00f0ff" className="floor-avatar-image" /></span>
-    <span><strong>{execution.identity.task_id ?? 'Unknown worker'}</strong><small>{execution.kind === 'secondmate' ? 'Second Mate · ' : ''}{stale ? 'last-known · ' : ''}{String(execution.source.current_state.state ?? execution.activity)} · {execution.placement.machine ?? 'Unknown machine'}</small>
+    <span><strong>{execution.identity.task_id ?? 'Unknown worker'}</strong><small>{execution.kind === 'secondmate' ? 'Second Mate · ' : ''}{stale ? 'last-known · ' : ''}{execution.liveness.replaceAll('-', ' ')} · {execution.placement.machine ?? 'Unknown machine'}</small>
       <small>{execution.placement.basis} placement · {homeName(execution.home)}</small>
-      <span className="floor-activity">{String(execution.source.last_event.note ?? execution.source.current_state.detail ?? 'No activity detail published')}</span>
+      <span className="floor-activity">{String(execution.source.last_event.note ?? execution.source.lastEventText ?? execution.source.current_state.detail ?? 'No activity detail published')}</span>
       <time dateTime={execution.source.current_state.observed_at ? String(execution.source.current_state.observed_at) : undefined}>State observed {time(typeof execution.source.current_state.observed_at === 'string' ? execution.source.current_state.observed_at : null)}</time>
     </span>
   </FocusButton>
@@ -127,7 +129,7 @@ function Neighborhood({ group, context }: { group: SceneGroup; context: Context 
   return <section className="floor-neighborhood" data-group-id={group.id}>
     <header className="floor-group-header">
       <button className="floor-expand" type="button" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} group ${group.label}`} onClick={() => send({ type: 'set-expanded', target: item, expanded: !open })}>{open ? '−' : '+'}</button>
-      <FocusButton context={context} item={item} className="floor-group-name"><strong>{group.label}</strong><small>{group.counts.cards} cards · {group.counts.workers} unique workers · {group.counts.attempts} attempts · {exceptions.length} findings</small></FocusButton>
+      <FocusButton context={context} item={item} className="floor-group-name"><strong>{group.label}</strong><small>{group.counts.cards} cards · {livenessSummary(group.counts)} · {group.counts.attempts} task records · {exceptions.length} findings</small></FocusButton>
     </header>
     {open && <div className="floor-group-body">
       {current.map(card => <CardRow key={card.id} card={card} group={group} context={context} />)}
@@ -158,8 +160,8 @@ function Hierarchy({ context }: { context: Context }) {
       return <article className="floor-manager" key={id}>
         <div className="floor-manager-heading"><button className="floor-expand" type="button" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} manager ${id}`} onClick={() => send({ type: 'set-expanded', target: target('manager', id), expanded: !open })}>{open ? '−' : '+'}</button>
           <FocusButton context={context} item={target('manager', id)}><strong>{homeName(id)}</strong><small>{home.source.parentHome ? `Second Mate → ${homeName(home.source.parentHome)}` : 'Root home · parent not configured'} · {home.source.machine ?? 'Unknown machine'} ({home.source.machineBasis})</small></FocusButton></div>
-        <span className="floor-manager-count">{workerCount} unique workers in subtree · {executions.length} attempts · {childHomes.length} child homes · {findings.length} findings</span>
-        <span className="floor-manager-count">{executions.filter(e => e.activity === 'executing').length} executing · {executions.filter(e => e.activity === 'waiting').length} waiting · {executions.filter(e => e.activity === 'unknown').length} unknown</span>
+        <span className="floor-manager-count">{workerCount} recorded workers in subtree · {executions.length} task records · {childHomes.length} child homes · {findings.length} findings</span>
+        <span className="floor-manager-count">{livenessSummary(countLiveness(executions))}</span>
         <small>{context.readFailed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage} · observed {time(home.observation.observedAt)}</small>
         {latest && <p className="floor-manager-event">{latest.identity.task_id}: {String(latest.source.last_event.note)}<time>{activityAt(latest) ? `Report time (from source age): ${time(activityAt(latest))}` : 'Report timestamp not published'}</time></p>}
         {home.observation.error && <p className="floor-source-warning">{home.observation.error}</p>}
@@ -201,13 +203,13 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
       {cardUrl && <a href={cardUrl} target="_blank" rel="noopener noreferrer">Read source card ↗</a>}
       {card.parentIds.map(id => <button type="button" key={id} disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : `${id} (unavailable)`}</button>)}
       <button type="button" onClick={() => send({ type: 'open-queue', cardId: card.id })}>Read card context</button><p>Card prose is read on demand; omissions and source failures remain explicit.</p></>}
-    {execution && <><dl><dt>Accountable home</dt><dd>{execution.home}</dd><dt>Parent home</dt><dd>{execution.parentHome ?? 'Not configured'}</dd><dt>Task / attempt</dt><dd>{execution.identity.task_id ?? 'Unknown'} / {execution.identity.spawn_gen ?? 'Unknown'}</dd><dt>Placement</dt><dd>{execution.placement.machine ?? 'Unknown'} · {execution.placement.basis}; configured: {execution.placement.configuredMachine ?? 'unknown'}</dd><dt>State</dt><dd>{String(execution.source.current_state.state ?? 'Unknown')} · activity {execution.activity}</dd><dt>State timestamp</dt><dd>{time(typeof execution.source.current_state.observed_at === 'string' ? execution.source.current_state.observed_at : null)}</dd><dt>Runtime / model</dt><dd>{String(execution.source.harness ?? 'Unknown')} / {String(execution.source.model ?? 'Unknown')}</dd><dt>Branch</dt><dd>{String(execution.source.branch ?? 'Unknown')}</dd></dl>
+    {execution && <><dl><dt>Accountable home</dt><dd>{execution.home}</dd><dt>Parent home</dt><dd>{execution.parentHome ?? 'Not configured'}</dd><dt>Task / attempt</dt><dd>{execution.identity.task_id ?? 'Unknown'} / {execution.identity.spawn_gen ?? 'Unknown'}</dd><dt>Placement</dt><dd>{execution.placement.machine ?? 'Unknown'} · {execution.placement.basis}; configured: {execution.placement.configuredMachine ?? 'unknown'}</dd><dt>State</dt><dd>{String(execution.source.current_state.state ?? 'Unknown')} · liveness {execution.liveness.replaceAll('-', ' ')}</dd><dt>State timestamp</dt><dd>{time(typeof execution.source.current_state.observed_at === 'string' ? execution.source.current_state.observed_at : null)}</dd><dt>Runtime / model</dt><dd>{String(execution.source.harness ?? 'Unknown')} / {String(execution.source.model ?? 'Unknown')}</dd><dt>Branch</dt><dd>{String(execution.source.branch ?? 'Unknown')}</dd></dl>
       <p>{String(execution.source.current_state.detail ?? 'No state detail published')}</p>
       <h3>Latest published report</h3><p>{String(execution.source.last_event.note ?? 'No report published')}</p><time>{activityAt(execution) ? `${time(activityAt(execution))} (derived from source report age)` : 'Report timestamp not published'}</time>
       {workerHref && worker?.terminalAvailable ? <a href={workerHref} target="_blank" rel="noopener noreferrer">Open safe worker / terminal viewer ↗</a> : <p>Terminal route unavailable for this exact observed worker. File-published homes are read-only.</p>}
       <p>Closing the viewer leaves the worker running.</p></>}
     {home && <><h3>Home observation</h3><dl><dt>Home</dt><dd>{home.source.home}</dd><dt>Parent</dt><dd>{home.source.parentHome ?? 'Not configured'}</dd><dt>Coverage</dt><dd>{context.readFailed || expired(home.observation, context.now) ? 'Last-known / unknown' : home.observation.status} / {home.observation.coverage}</dd><dt>Observed</dt><dd>{time(home.observation.observedAt)}</dd><dt>Expires</dt><dd>{time(home.observation.expiresAt)}</dd></dl></>}
-    {group && <p>{group.counts.cards} cards · {group.counts.workers} unique workers · {group.counts.attempts} attempts. Membership can overlap other groups; totals use unions.</p>}
+    {group && <p>{group.counts.cards} cards · {livenessSummary(group.counts)} · {group.counts.attempts} task records. Membership can overlap other groups; totals use unions.</p>}
     {findings.length > 0 && <section><h3>Reconciliation evidence</h3>{findings.map(f => <div key={f.id} className="floor-evidence"><FindingChips findings={[f]} delayed={context.delayed} /><p>{f.reason}</p></div>)}</section>}
     {related.length > 0 && <section><h3>Relationships & observed history</h3><p>{scene.historyScope}</p>{related.map(c => <div key={c.id} className="floor-evidence">
       <FocusButton context={context} item={target('claim', c.id)}><strong>{c.verification} · {c.basis} · {c.state}</strong></FocusButton>
@@ -256,7 +258,7 @@ export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
       <button type="button" onClick={() => send({ type: 'clear-transient' })}>Clear highlights</button>
     </div>
     <div className="floor-coverage" role="status"><strong>{delayed ? 'Unknown / last-known coverage' : 'Configured-source observations'} · whole farm not certified</strong>
-      <span>{scene.counts.cards} cards · {scene.counts.workers} unique workers · {scene.counts.attempts} attempts · {scene.counts.claims} relationships. Counts cover the full configured scene; group memberships can overlap.</span>
+      <span>{scene.counts.cards} cards · {livenessSummary(scene.counts)} · {scene.counts.attempts} task records · {scene.counts.claims} relationships. Counts cover the full configured scene; group memberships can overlap.</span>
       <span>Notion {expired(scene.coverage.intentions, now) ? 'unknown / last-known' : scene.coverage.intentions.status} / {scene.coverage.intentions.coverage} · observed {time(scene.coverage.intentions.observedAt)} · scene {time(scene.generatedAt)}</span>
       {error && <strong>{error}</strong>}{!error && delayed && <strong>Expired or unavailable observations: last-known findings are retained; absence conclusions are suspended.</strong>}
       {scene.warnings.map(warning => <span key={warning}>{warning}</span>)}

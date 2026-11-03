@@ -24,7 +24,7 @@ function task(id: string, page: number | null, home: string, now: number, state 
   return { id, kind: 'ship', spawn_gen: 'attempt-1', harness: 'codex', model: null, branch: 'fixture/example', project: 'fixture/tinstar', backend: 'fixture', remote: null,
     identity: { fm_home: home, task_id: id, spawn_gen: 'attempt-1' }, cardReferences: page === null ? [] : [{ pageId: fixtureId(page), basis: 'explicit', source: 'task.notion_page_id' }],
     current_state: { state, source: 'pane', detail: 'Fixture source state', observed_at: at, freshness: 'fresh' }, endpoint: { exists: true, agent_alive: 'alive', status: 'live', observed_at: at, freshness: 'fresh' },
-    paths: { home: null, worktree: null }, last_event: { state: 'working', note: `Published activity for ${id}`, age_seconds: 12 }, pr: { head: null, source: null, url: null },
+    paths: { home: null, worktree: null }, lastEventText: null, last_event: { state, note: `Published activity for ${id}`, age_seconds: 12 }, pr: { head: null, source: null, url: null },
     backlog: { id: null, title: null, state: null, hold_reason: null, blocked_by: null, hold_until: null } }
 }
 export function fixtureSources({ now = Date.now(), size = 0, unavailable = false }: { now?: number; size?: number; unavailable?: boolean } = {}): SourceSnapshot {
