@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
+import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { QuotaAxiPoller } from './quota/poller'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
 import { ProviderObservationIngestor } from './providers/observation-ingestor'
@@ -65,6 +66,7 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const fleet = new CockpitFleet()
+  const reconciliation = new ReconciliationSources()
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()
@@ -128,6 +130,7 @@ export function startServer(opts: ServerOptions) {
     try {
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
+      if (await handleReconciliationRequest(reconciliation, req, res)) return
       if (await handleScreenshotUpload(req, res, { configRoot: getConfigRoot() })) return
       if (await handleCoreApi(coreApi, req, res)) return
       if (req.url?.startsWith('/api/')) { res.writeHead(404); res.end('Not found'); return }
