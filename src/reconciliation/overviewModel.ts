@@ -20,6 +20,11 @@ const priority = (card: SceneCard) => {
   const numeric = value.match(/(?:^|\b)p?([0-9]+)(?:\b|$)/)?.[1]
   return numeric ? Number(numeric) : ({ urgent: 0, critical: 0, high: 1, medium: 2, normal: 2, low: 3 }[value] ?? 100)
 }
+const workRank = (card: SceneCard) => card.expectation === 'expected-now' ? 0 : card.expectation === 'unknown' ? 1 : card.expectation === 'outside' ? 2 : 3
+export const workerActivity = (worker: Execution) => {
+  const note = String(worker.source.last_event.note ?? '').replace(/^[a-z-]+\s+(?:\[[^\]]+\]\s*)+:?\s*/i, '').trim()
+  return !note || /ask-user\s+findings=|(?:^|\s)\/(?:home|tmp|srv)\/|\b[a-f0-9]{32}\b/.test(note) ? '' : note
+}
 const tie = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id)
 export type Tone = 'linked' | 'gap' | 'orphan' | 'uncertain' | 'quiet'
 export function entityTone(scene: FloorScene, kind: 'card' | 'execution', id: string, now: number, readFailed = false): Tone {
@@ -50,7 +55,7 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
   const workers = scene.executions.filter(e => e.kind !== 'secondmate' &&
     !['finished', 'absent'].includes(e.liveness) && !managerCollapsed(scene, state, e.home))
   const compareWorkers = (a: Execution, b: Execution) => observedAt(b) - observedAt(a) || tie(a, b)
-  const compareCards = (a: SceneCard, b: SceneCard) => priority(a) - priority(b) || cardTitle(a).localeCompare(cardTitle(b)) || tie(a, b)
+  const compareCards = (a: SceneCard, b: SceneCard) => priority(a) - priority(b) || workRank(a) - workRank(b) || cardTitle(a).localeCompare(cardTitle(b)) || tie(a, b)
   const globalWorkers = [...workers].sort(compareWorkers), globalCards = [...scene.cards].sort(compareCards)
   const rankWorker = new Map(globalWorkers.map((e, i) => [e.id, i])), rankCard = new Map(globalCards.map((c, i) => [c.id, i]))
   const relatedRank = (id: string, side: 'worker' | 'card') => Math.min(Infinity, ...scene.claims.filter(c => side === 'worker' ? c.executionId === id : c.cardId === id)
@@ -58,8 +63,8 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
   return scene.arrangements[state.arrangement].map(group => {
     const ws = workers.filter(e => group.executionIds.includes(e.id) && (!state.exceptionsOnly || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
     const cs = scene.cards.filter(c => group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
-    ws.sort(state.sort === 'priority' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
+    ws.sort(state.sort !== 'activity' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
     cs.sort(state.sort === 'activity' ? (a, b) => (relatedRank(a.id, 'card') - relatedRank(b.id, 'card') || compareCards(a, b)) : compareCards)
     return { ...group, label: state.arrangement === 'secondMate' ? managerName(scene, group.homeIds[0] ?? group.label) : group.label, workers: ws, cards: cs }
-  }).filter(group => group.workers.length || group.cards.length)
+  }).filter(group => group.workers.length || group.cards.length).sort((a, b) => Number(a.label === 'Unassigned / unknown') - Number(b.label === 'Unassigned / unknown'))
 }

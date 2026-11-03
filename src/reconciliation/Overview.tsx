@@ -5,7 +5,7 @@ import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
 import { arrangements, semanticId, ancestorHomes, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
-import { cardTitle, cardStatus, workerTitle, workerState, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups } from './overviewModel'
+import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups } from './overviewModel'
 import { useFloorScene } from './useFloorScene'
 import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
@@ -25,13 +25,23 @@ function related(scene: FloorScene, focus: Target | null, item: Target) {
   if (focus.kind === 'group') { const group = Object.values(scene.arrangements).flat().find(g => g.id === focus.id); return !!group && (item.kind === 'card' ? group.cardIds : group.executionIds).includes(item.id) }
   return scene.claims.some(c => (focus.kind === 'claim' ? c.id === focus.id : focus.kind === 'card' ? c.cardId === focus.id : c.executionId === focus.id) && (item.kind === 'card' ? c.cardId === item.id : c.executionId === item.id))
 }
+function flashRelated(view: View, item: Target) {
+  const { scene, state, now } = view
+  if (!state.flash || state.flash.until <= now) return false
+  const ids = state.flash.ids
+  return ids.includes(semanticId(item)) || scene.claims.some(c => ids.includes(semanticId(target('claim', c.id))) &&
+    (item.kind === 'execution' ? c.executionId === item.id : item.kind === 'card' && c.cardId === item.id)) ||
+    Object.values(scene.arrangements).flat().some(g => ids.includes(semanticId(target('group', g.id))) &&
+      (item.kind === 'execution' ? g.executionIds : item.kind === 'card' ? g.cardIds : []).includes(item.id)) ||
+    scene.coverage.homes.some(h => ids.includes(semanticId(target('manager', h.source.home))) && related(scene, target('manager', h.source.home), item))
+}
 function Entity({ view, entity, kind, hover, focus, references }: { view: View; entity: Execution | SceneCard; kind: 'execution' | 'card'; hover: (target: Target | null) => void; focus: Target | null; references: string[] }) {
   const { scene, state, send, now, readFailed } = view, item = target(kind, entity.id)
   const tone = entityTone(scene, kind, entity.id, now, readFailed)
   const worker = kind === 'execution' ? entity as Execution : null, card = kind === 'card' ? entity as SceneCard : null
   const title = worker ? workerTitle(worker) : cardTitle(card!)
-  const flashed = !!state.flash && state.flash.until > now && state.flash.ids.includes(semanticId(item))
-  const meta = worker ? `${worker.placement.machine ?? 'Unknown machine'} · ${workerState(worker, now, readFailed)}` : `${cardStatus(card!)}${tone === 'gap' ? ' · No worker' : card!.expectation === 'outside' ? ' · Outside coverage' : tone === 'uncertain' ? ' · Unverified' : ''}`
+  const flashed = flashRelated(view, item)
+  const meta = worker ? `${worker.placement.machine ?? 'Unknown machine'} · ${workerState(worker, now, readFailed)}${workerActivity(worker) ? ` · ${workerActivity(worker)}` : ''}` : `${cardStatus(card!)}${tone === 'gap' ? ' · No worker' : card!.expectation === 'outside' ? ' · Outside coverage' : tone === 'uncertain' ? ' · Unverified' : ''}`
   return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus ? related(scene, focus, item) ? ' related' : ' dim' : ''}${flashed ? ' flashed' : ''}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} aria-pressed={same(state.selection, item)} title={title}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => send({ type: 'focus', target: item })}>
@@ -79,7 +89,7 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
   }, [scene, ws, cs, collapsed, state.linksVisible, now, readFailed])
   const reference = (kind: 'card' | 'execution', id: string) => allGroups.filter(g => g.id !== group.id && (kind === 'card' ? g.cardIds : g.executionIds).includes(id)).map(g => g.label)
   const gaps = ws.filter(w => entityTone(scene, 'execution', w.id, now, readFailed) === 'orphan').length + cs.filter(c => entityTone(scene, 'card', c.id, now, readFailed) === 'gap').length
-  return <section className="ov-group" data-group-id={group.id}>
+  return <section className={`ov-group${flashRelated(view, target('group', group.id)) ? ' flashed' : ''}`} data-group-id={group.id}>
     <header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${group.label}`} onClick={() => send({ type: 'set-expanded', target: target('group', group.id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button>
       <button type="button" className="ov-group-name" onClick={() => send({ type: 'focus', target: target('group', group.id) })}>{group.label}</button>
       <span>{ws.length} workers{!cs.length && (readFailed || stale(scene.coverage.intentions, now)) ? ' · Notion unavailable' : ` · ${cs.length}${readFailed || stale(scene.coverage.intentions, now) ? ' last known' : ''} cards`}{gaps > 0 && <em> · {gaps} gaps</em>}</span></header>
@@ -87,7 +97,7 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
       <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">No workers in this group</div>}</div>
       <div aria-hidden="true" />
       <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : 'No cards in this group'}</div>}</div>
-      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(scene, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
+      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(scene, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
     </div>}
   </section>
 }
@@ -145,10 +155,11 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
   const notionUnavailable = !!error || stale(scene.coverage.intentions, now)
   const fleetDelayed = !!error || !scene.coverage.homes.length || scene.coverage.homes.some(h => stale(h.observation, now) || h.observation.coverage !== 'complete')
   const rootManager = rootHome(scene)
+  const checksSuspended = notionUnavailable || fleetDelayed || scene.coverage.absenceConclusions === 'suppressed'
   const liveWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !['finished', 'absent'].includes(e.liveness))
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && ['finished', 'absent'].includes(e.liveness))
   return <div ref={root} className="ov" data-arrangement={state.arrangement} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
-    <header className="ov-top"><div><b>TIN STAR</b><small>OVERVIEW</small></div><button type="button" className={notionUnavailable || fleetDelayed ? 'ov-warning' : 'ov-signal'} onClick={() => setDiagnostics(!diagnostics)}>{notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : 'Sources connected'} · Details</button></header>
+    <header className="ov-top"><div><b>TIN STAR</b><small>OVERVIEW</small></div><button type="button" className={checksSuspended ? 'ov-warning' : 'ov-signal'} onClick={() => setDiagnostics(!diagnostics)}>{notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} · Details</button></header>
     <div className="ov-columns"><div className="ov-main">
       <div className="ov-intro"><h1>Overview</h1><span>{liveWorkers.length} workers{!notionUnavailable && <> · {scene.cards.length} Notion cards</>}{gaps.length > 0 && <> · {gaps.length} gaps</>}</span></div>
       <div className="ov-org" aria-label="Managers"><button type="button" className="ov-person" onClick={() => { send({ type: 'open-queue' }); setDeskMobile(true) }}><span className="ov-face">Y</span><span><b>You</b><small>Open your desk</small></span></button><span>→</span><button type="button" className="ov-person" onClick={() => send({ type: 'focus', target: target('firstMate', 'root') })}><span className="ov-face">✦</span><span><b>First Mate</b><small>{rootManager ? `${managerName(scene, rootManager.source.home)} · ${liveWorkers.filter(e => e.home === rootManager.source.home).length} workers` : 'Supervising'}</small></span></button><span>→</span>
@@ -156,17 +167,17 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
           const id = home.source.home, direct = liveWorkers.filter(e => e.home === id), children = scene.coverage.homes.filter(h => h.source.parentHome === id)
           const collapsed = state.collapsed.includes(semanticId(target('manager', id)))
           const count = gaps.filter(t => t.kind === 'execution' && direct.some(e => e.id === t.id)).length
-          return <div className="ov-manager" key={id}><button type="button" aria-label={`Inspect ${managerName(scene, id)}`} onClick={() => send({ type: 'focus', target: target('manager', id) })}><b>{managerName(scene, id)}</b><small>{direct.length} workers{children.length > 0 && ` · ${children.length} managers`}{count > 0 && ` · ${count} gaps`}</small></button><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} manager ${managerName(scene, id)}`} onClick={() => send({ type: 'set-expanded', target: target('manager', id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button></div>
+          return <div className={`ov-manager${flashRelated(view, target('manager', id)) ? ' flashed' : ''}`} key={id}><button type="button" aria-label={`Inspect ${managerName(scene, id)}`} onClick={() => send({ type: 'focus', target: target('manager', id) })}><b>{managerName(scene, id)}</b><small>{direct.length} workers{children.length > 0 && ` · ${children.length} managers`}{count > 0 && ` · ${count} gaps`}</small></button><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} manager ${managerName(scene, id)}`} onClick={() => send({ type: 'set-expanded', target: target('manager', id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button></div>
         })}</div>
       <div className="ov-toolbar"><div className="ov-segments" role="group" aria-label="Group both sides">{Object.entries(arrangements).map(([id, label]) => <button key={id} type="button" aria-pressed={state.arrangement === id} onClick={() => send({ type: 'set-arrangement', arrangement: id as PresentationState['arrangement'] })}>{label}</button>)}</div><div className="ov-filters"><button type="button" aria-pressed={state.exceptionsOnly} onClick={() => send({ type: 'set-exceptions', enabled: !state.exceptionsOnly })}>◇ Gaps only</button><button type="button" disabled={!gaps.length} onClick={() => send({ type: 'flash', targets: gaps })}>✧ Find gaps</button><button type="button" aria-pressed={state.linksVisible !== false} onClick={() => send({ type: 'set-links', visible: state.linksVisible === false })}>Links</button></div></div>
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
       <div className="ov-workspace"><div className="ov-headings"><span>Workers <button type="button" aria-pressed={state.sort === 'activity'} onClick={() => send({ type: 'set-sort', sort: 'activity' })}>↕ activity</button></span><small>LINKS</small><span><button type="button" aria-pressed={state.sort === 'priority'} onClick={() => send({ type: 'set-sort', sort: 'priority' })}>↕ priority</button> Notion cards</span></div>
         {groups.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}
-        {!groups.length && <p className="ov-empty">{state.exceptionsOnly ? notionUnavailable || fleetDelayed ? 'Gap checks suspended while sources are unavailable.' : 'No confirmed gaps in this scope.' : 'No current records observed in this scope.'}</p>}
+        {!groups.length && <p className="ov-empty">{state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : 'No current records observed in this scope.'}</p>}
         {history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e, now, !!error)}</button>)}</details>}
       </div>
     </div><aside className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><h2>Your desk</h2><button type="button" className="ov-mobile-close" onClick={() => setDeskMobile(false)}>Close</button></header>
-      {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{fleetDelayed && <p>Some worker observations are unavailable or incomplete. Last known workers remain visible.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : state.selection ? <Inspector view={view} workers={workers} /> : null}<div hidden={diagnostics || !!state.selection}><QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} requestControls={requestControls} /></div>
+      {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{fleetDelayed && <p>Some worker observations are unavailable or incomplete. Last known workers remain visible.</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : state.selection ? <Inspector view={view} workers={workers} /> : null}<div hidden={diagnostics || !!state.selection}><QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} requestControls={requestControls} /></div>
     </aside></div><button type="button" className="ov-mobile-desk" onClick={() => setDeskMobile(true)}>Your desk</button>
   </div>
 }
