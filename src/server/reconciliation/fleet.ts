@@ -5,6 +5,7 @@ import { CachedObservation } from './observation'
 import type { FleetSource } from './config'
 import { record, text } from './values'
 import { cardReferences } from './references'
+import { queueSignals } from './queueInputs'
 
 const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string | number | boolean | null> => Object.fromEntries(keys.map(key => {
   const item = record(value)[key]
@@ -24,6 +25,7 @@ export function fleetObservation(source: FleetSource) {
       } catch { /* optional change signal; not execution history */ }
     }
     const tasks = snapshot.tasks.map(task => ({
+      ...queueSignals(task),
       ...fields(task, ['id', 'kind', 'harness', 'model', 'branch', 'project', 'spawn_gen', 'backend']),
       remote: task.remote ? fields(task.remote, ['host', 'root']) : null,
       // Identity uses a tuple, never delimiter concatenation or array position.
@@ -49,7 +51,7 @@ export function fleetObservation(source: FleetSource) {
         main_inventory: fields(snapshot.main_inventory, ['valid', 'reason', 'unstructured_current_count']),
         backlogPresent: typeof snapshot.backlog?.present === 'boolean' ? snapshot.backlog.present : null,
         ledger: { role: 'change-signal-only', cursor: ledger, scope: source.snapshotFile ? 'not-collected' : 'local-file-stat' },
-        tasks, backlog: Array.isArray(backlog) ? backlog.map(row => ({ ...fields(row, [
+        tasks, backlog: Array.isArray(backlog) ? backlog.map(row => ({ ...queueSignals(row), ...fields(row, [
           'id', 'title', 'state', 'kind', 'repo', 'hold_reason', 'hold_until', 'blocked_by', 'captain_actionable', 'pr_url',
         ]), cardReferences: cardReferences(row, 'backlog') })) : null,
       },

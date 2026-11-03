@@ -9,6 +9,7 @@ export const notionPageId = (value: unknown): string | null =>
 const PROPERTY_NAMES = [
   'Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item',
   'Link', 'Waiting For', 'Delegated To', 'Next check-in', 'Due Date', 'Start Date', 'Priority', 'Area', 'Sub-area', 'Attention',
+  'Next action', 'Next Action', 'Evidence',
 ]
 
 function property(value: unknown) {
