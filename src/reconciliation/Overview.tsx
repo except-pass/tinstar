@@ -139,6 +139,7 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
   const [deskMobile, setDeskMobile] = useState(false)
   const root = useRef<HTMLDivElement>(null), previousSelection = useRef<string | null>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
+  useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error) : [], [scene, state, now, error])
   useEffect(() => {
     const id = selectedId ?? previousSelection.current
