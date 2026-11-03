@@ -7,6 +7,8 @@ import { fleetObservation } from './fleet'
 import { notionObservation } from './notion'
 import { ageObservation } from './observation'
 import { SceneReconciler } from './scene'
+import { buildQueue } from './queue'
+import { QueuePullReader } from './queuePulls'
 
 export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot']>>
 
@@ -15,6 +17,7 @@ export class ReconciliationSources {
   private fleet
   private notion
   private reconciler = new SceneReconciler()
+  private queuePulls = new QueuePullReader()
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig()) {
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
@@ -40,15 +43,23 @@ export class ReconciliationSources {
   }
 
   async scene() { return this.reconciler.reconcile(await this.snapshot()) }
+
+  async queue() {
+    const snapshot = await this.snapshot()
+    const candidates = buildQueue(snapshot)
+    const urls = candidates.items.filter(item => item.kind === 'merge')
+      .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
+    return buildQueue(snapshot, await this.queuePulls.get(urls))
+  }
 }
 
 export async function handleReconciliationRequest(sources: ReconciliationSources, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  const path = (req.url ?? '').split('?')[0]
-  if (path !== '/api/reconciliation/sources' && path !== '/api/reconciliation/scene') return false
+  const path = (req.url ?? '').split('?')[0] ?? ''
+  if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue'].includes(path)) return false
   const allowlist = currentOriginAllowlist()
   const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Cache-Control': 'no-store' }
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
-  return ok(res, path === '/api/reconciliation/scene' ? await sources.scene() : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene() : await sources.snapshot(), { headers })
 }
