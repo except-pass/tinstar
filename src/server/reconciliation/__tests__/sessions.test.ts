@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { SceneSessions, CONNECTED_MS } from '../sessions'
 import { applyPresentationAction, initialPresentation } from '../../../shared/reconciliationPresentation'
-import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
+import { fixtureScene, fixtureQueue } from '../../../../test-fixtures/reconciliation/scenes'
 
 const scene = fixtureScene()
 describe('window presentation command protocol', () => {
@@ -51,4 +51,31 @@ describe('window presentation command protocol', () => {
     expect(broker.read(a.scene_id).state?.selection).toBeNull()
     expect(broker.read(a.scene_id).state?.arrangement).toBe('machine')
   })
+})
+
+it('navigates ordered readiness without changing the domain queue and excludes future items', () => {
+  const queue = fixtureQueue(), original = JSON.stringify(queue)
+  let state = initialPresentation()
+  const open = applyPresentationAction(state, { type: 'open-queue' }, scene, Date.now(), queue)
+  expect(open.outcome).toBe('applied')
+  state = open.state
+  expect(state.queueItemId).toBe(queue.items[0]!.id)
+  for (let i = 0; i < queue.items.length + 2; i++) state = applyPresentationAction(state, { type: 'navigate-queue', direction: 'next' }, scene, Date.now(), queue).state
+  expect(queue.items.find(item => item.id === state.queueItemId)!.readiness).not.toBe('future-or-conditional')
+  expect(JSON.stringify(queue)).toBe(original)
+  expect(applyPresentationAction(state, { type: 'navigate-queue', direction: 'next' }, scene).outcome).toBe('queue-source-unavailable')
+  const unavailable = applyPresentationAction({ ...state, queueItemId: 'answered' }, { type: 'navigate-queue', direction: 'next' }, scene, Date.now(), queue)
+  expect(unavailable.outcome).toBe('unknown-id')
+})
+
+it('retains a browser commit made before expiry when its acknowledgment arrives later', () => {
+  let now = 1000
+  const broker = new SceneSessions(() => now), state = initialPresentation(), a = broker.register(state)
+  const action = { type: 'set-arrangement' as const, arrangement: 'machine' as const }
+  broker.enqueue({ scene_id: a.scene_id, command_id: 'short', expected_revision: 0, ttl_ms: 500, action }, scene)
+  const applied = applyPresentationAction(state, action, scene, 1200).state
+  now = 1600
+  expect(broker.result(a.scene_id, 'short').outcome).toBe('expired')
+  broker.sync(a.scene_id, applied, [{ scene_id: a.scene_id, command_id: 'short', outcome: 'applied', applied_at: 1200, state: applied, revision: 1 }])
+  expect(broker.result(a.scene_id, 'short').outcome).toBe('applied')
 })

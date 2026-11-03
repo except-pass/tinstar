@@ -7,6 +7,7 @@ import {
   ancestorHomes, managerCollapsed, arrangements, findingLabels, isException, isPlanned, semanticId, targetExists, targetInGroup,
   type FloorScene, type PresentationAction, type PresentationState, type Target,
 } from './presentation'
+import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
 import { QueuePanel } from './QueuePanel'
 import { useFloorScene } from './useFloorScene'
@@ -194,12 +195,12 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
     <h2>{card ? cardTitle(card) : execution?.identity.task_id ?? group?.label ?? home?.source.home ?? (selection.kind === 'you' ? 'Your desk' : selection.kind === 'firstMate' ? 'First Mate' : 'Last-known selection')}</h2>
     {!exists && <p className="floor-source-warning">This ID is absent from the latest scene. Selection is retained; no replacement was guessed.</p>}
     <dl><dt>Semantic ID</dt><dd>{semanticId(selection)}</dd></dl>
-    {selection.kind === 'you' && <p>The executive queue is reserved for S4. Reading and navigating the floor do not approve or complete work.</p>}
+    {selection.kind === 'you' && <p>Reading and navigating your desk do not approve, dismiss or complete work.</p>}
     {selection.kind === 'firstMate' && <p>First Mate owns execution. This floor reads configured homes across machines; whole-farm coverage is not certified.</p>}
     {card && <><p>{waitExplanation(scene, card)}</p><dl><dt>Card ID</dt><dd>{card.id}</dd><dt>Owner</dt><dd>{String(card.source.properties.Owner?.value ?? 'Unknown')}</dd><dt>Status</dt><dd>{status(card)}</dd><dt>Content edited</dt><dd>{time(card.source.last_edited_time)}</dd><dt>Next action / wait</dt><dd>{card.nextAction ?? 'Not collected or published'}</dd><dt>Checkpoint</dt><dd>{card.checkpoint.state} · {time(card.checkpoint.at)}</dd><dt>Progress assessment</dt><dd>Not collected; checkpoints and links do not prove progress</dd></dl>
       {cardUrl && <a href={cardUrl} target="_blank" rel="noopener noreferrer">Read source card ↗</a>}
       {card.parentIds.map(id => <button type="button" key={id} disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : `${id} (unavailable)`}</button>)}
-      <p>Card body and full context are not collected by this source slice.</p></>}
+      <button type="button" onClick={() => send({ type: 'open-queue', cardId: card.id })}>Read card context</button><p>Card prose is read on demand; omissions and source failures remain explicit.</p></>}
     {execution && <><dl><dt>Accountable home</dt><dd>{execution.home}</dd><dt>Parent home</dt><dd>{execution.parentHome ?? 'Not configured'}</dd><dt>Task / attempt</dt><dd>{execution.identity.task_id ?? 'Unknown'} / {execution.identity.spawn_gen ?? 'Unknown'}</dd><dt>Placement</dt><dd>{execution.placement.machine ?? 'Unknown'} · {execution.placement.basis}; configured: {execution.placement.configuredMachine ?? 'unknown'}</dd><dt>State</dt><dd>{String(execution.source.current_state.state ?? 'Unknown')} · activity {execution.activity}</dd><dt>State timestamp</dt><dd>{time(typeof execution.source.current_state.observed_at === 'string' ? execution.source.current_state.observed_at : null)}</dd><dt>Runtime / model</dt><dd>{String(execution.source.harness ?? 'Unknown')} / {String(execution.source.model ?? 'Unknown')}</dd><dt>Branch</dt><dd>{String(execution.source.branch ?? 'Unknown')}</dd></dl>
       <p>{String(execution.source.current_state.detail ?? 'No state detail published')}</p>
       <h3>Latest published report</h3><p>{String(execution.source.last_event.note ?? 'No report published')}</p><time>{activityAt(execution) ? `${time(activityAt(execution))} (derived from source report age)` : 'Report timestamp not published'}</time>
@@ -220,7 +221,8 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
 
 export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
   const { scene, error, now } = useFloorScene()
-  const { state, send, connection, bridgeError } = usePresentation(scene)
+  const { queue, error: queueError } = useDeskQueue()
+  const { state, send, connection, bridgeError } = usePresentation(scene, queue)
   const root = useRef<HTMLDivElement>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   const previousSelection = useRef<string | null>(null)
@@ -262,7 +264,7 @@ export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
     </div>
     {state.assistantChangedView && <div className="floor-assistant-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>Clear cue</button></div>}
     <p className="floor-empty">Conversation view: {connection?.scene_id ?? 'connecting'}{bridgeError ? ' · disconnected; commands await acknowledgment' : ' · private MCP'}</p>
-    <QueuePanel state={state} send={send} />
+    <QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} />
     <Hierarchy context={context} />
     <div className="floor-layout"><div className="floor-scene">
       <div className="floor-scene-caption"><span>{arrangements[state.arrangement]} neighborhoods</span><span>{state.exceptionsOnly ? `${exceptions.length} exception findings in configured scope` : 'Worker ↔ relationship ↔ intention'}</span></div>

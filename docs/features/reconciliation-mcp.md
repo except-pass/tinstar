@@ -39,7 +39,7 @@ Localhost is the default. For a remote client, the operator must explicitly bind
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness from the queue source, or `queue-source-unavailable` |
 | `present_view(...)` | Enqueue a semantic action for one explicit window and wait up to two seconds for its acknowledgment |
-| `next_queue_item(...)` | Queue navigation; `queue-source-unavailable` until S4 is integrated in this checkout |
+| `next_queue_item(...)` | Navigate the real S4 ordered ready / verification queue with the same acknowledgment protocol |
 | `get_command(scene_id, command_id)` | Query a prior command outcome without applying it again |
 
 Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `group`, `you` and `firstMate`. Use IDs returned by reads, never title matching. Executions retain First Mate home/task/attempt identity. Claims distinguish confirmed, textual, inferred and conflicting relationships.
@@ -52,7 +52,8 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 {type:"focus", target:{kind,id}}
 {type:"set-exceptions", enabled:boolean}
 {type:"set-roadmap", expanded:boolean}
-{type:"open-queue", cardId?:string}
+{type:"open-queue", cardId?:string, itemId?:string}
+{type:"navigate-queue", direction:"next"|"previous"}
 {type:"close-queue"}
 {type:"flash", targets:[{kind,id},...], durationMs?:0..4000}
 {type:"clear-transient"}
@@ -61,7 +62,7 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 
 Focus reveals ancestors/roadmap and clears the exception filter. Arrangement preserves selection. Flash accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
 
-Card context reads only IDs already on the configured authorized board. Context is cached for 60 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported/transcript-like blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
+Card context reads only IDs already on the configured authorized board. Context is cached for 60 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
 
 ## Delivery and acknowledgment
 
@@ -71,7 +72,7 @@ The registry keeps at most 64 windows and 256 command receipts per window. Windo
 
 - `queued`: accepted for delivery, **not** applied. Query `get_command` or retry the identical `present_view` input.
 - `applied`: the UI dispatched the shared reducer, React committed the resulting view, and the browser returned its resulting revision/state. Server acceptance alone cannot yield this result.
-- `expired`: the bounded lifetime elapsed without an applied acknowledgment; no late delivery is scheduled.
+- `expired`: the bounded lifetime elapsed without an applied acknowledgment; no late delivery is scheduled. If a browser committed before expiry and its acknowledgment arrives late (within ten seconds), the receipt is corrected to applied with that commit timestamp.
 - `disconnected`: the known window is offline/stale. Reconnect/open it and obtain its current ID/revision.
 - `unknown-id`: no recognized window, target or retained receipt. Reads never invent a missing item.
 - `unauthorized`: wrong/missing install token (HTTP 401), wrong browser key or foreign browser origin (HTTP 403). No secret is returned.
@@ -124,4 +125,4 @@ TINSTAR_MCP_PROOF=/absolute/proof-directory npx playwright test --config playwri
 
 The MCP Playwright test uses an official SDK client and actual browser pages; source records are explicitly controlled fixtures. The separate live development proof uses Hulk’s actual First Mate snapshot and authenticated Notion reads with the discovery helper retaining its credential. Neither is a production whole-farm deployment. Task evidence is saved outside the repository at `/home/farm/fm-home/data/tinstar-recon-s5/` (transcripts, screenshots, failed-start logs and final-head receipts).
 
-**Current slice limitation:** S4 is absent from this checkout. The queue/next-item tools and desk explicitly report `queue-source-unavailable`; a real next-ready-item proof is consequently unmet here. Opening a specific authorized card and reading its context work independently. Integrate S4’s documented ordered readiness contract before claiming next-item acceptance. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3.
+The desk uses the [S4 queue API](reconciliation-queue.md): readiness, deduplication, PR checks, source coverage and ordering come from that shared read model. It shows one item and the next few, with next/previous navigation through ready and verification candidates. Future/conditional items remain in a separate context section, never promoted to immediate work. Navigation mutates only presentation. An answered item removed by a fresh source read stays explicitly unavailable if selected; it is never silently replaced or restored. Queue read failure retains labeled last-known candidates and downgrades displayed readiness; an empty queue is never an all-clear. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3. The live proof’s discovery bridge is development evidence, not a production credential deployment.

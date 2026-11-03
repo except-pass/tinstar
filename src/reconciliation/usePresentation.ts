@@ -1,28 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import { applyPresentationAction, initialPresentation, type FloorScene, type PresentationAction } from './presentation'
+import type { DeskQueue } from '../shared/reconciliationQueue'
 import type { CommandResult, ViewCommand } from '../shared/reconciliationCommands'
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null) {
   const [state, setState] = useState(initialPresentation)
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
-  const current = useRef(state), latestScene = useRef(scene)
+  const current = useRef(state), latestScene = useRef(scene), latestQueue = useRef(queue)
   const pending = useRef<CommandResult[]>([]), ready = useRef<CommandResult[]>([])
   const seen = useRef(new Map<string, CommandResult>())
   latestScene.current = scene
+  latestQueue.current = queue
   const send = useCallback((action: PresentationAction) => {
     if (!latestScene.current) return
-    const applied = applyPresentationAction(current.current, action, latestScene.current)
+    const applied = applyPresentationAction(current.current, action, latestScene.current, Date.now(), latestQueue.current)
     current.current = applied.state
     setState(applied.state)
     return applied
   }, [])
   useEffect(() => {
     current.current = state
-    ready.current.push(...pending.current.filter(ack => (ack.revision ?? 0) <= state.revision))
+    ready.current.push(...pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).map(ack => ({ ...ack, applied_at: Date.now() })))
     pending.current = pending.current.filter(ack => (ack.revision ?? 0) > state.revision)
   }, [state])
   useEffect(() => {
@@ -30,10 +32,11 @@ export function usePresentation(scene: FloorScene | null) {
     let credentials: { scene_id: string; key: string } | null = null
     let controller: AbortController | null = null
     async function post(payload: unknown, keepalive = false) {
-      controller = new AbortController()
-      const timeout = setTimeout(() => controller?.abort(), 5000)
+      const requestController = new AbortController()
+      controller = requestController
+      const timeout = setTimeout(() => requestController.abort(), 5000)
       try {
-        const res = await apiFetch('/api/reconciliation/ui', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify(payload), signal: controller.signal, keepalive })
+        const res = await apiFetch('/api/reconciliation/ui', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify(payload), signal: requestController.signal, keepalive })
         if (!res.ok) throw new Error(String(res.status))
         const body = await res.json()
         if (!body.ok) throw new Error('UI sync unavailable')

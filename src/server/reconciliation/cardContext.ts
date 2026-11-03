@@ -1,7 +1,7 @@
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
 
-/** Read card prose only. Code, files, embeds and transcript-like blocks are not
+/** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
   private cache = new Map<string, { until: number; value: Promise<unknown> }>()

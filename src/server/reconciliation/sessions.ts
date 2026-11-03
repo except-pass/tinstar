@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { applyPresentationAction, targetExists, type FloorScene, type PresentationAction, type PresentationState } from '../../shared/reconciliationPresentation'
+import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { CommandResult, ViewCommand } from '../../shared/reconciliationCommands'
 
 export const CONNECTED_MS = 10_000
@@ -50,14 +51,19 @@ export class SceneSessions {
     if (state.revision >= session.state.revision) session.state = state
     for (const ack of acknowledgments) {
       const row = session.commands.get(ack.command_id)
-      if (!row || row.result.outcome !== 'queued' || ack.scene_id !== id) continue
-      if (!['applied', 'unknown-id', 'stale-revision', 'expired'].includes(ack.outcome)) continue
+      if (!row || ack.scene_id !== id) continue
+      // A short-lived command can commit before its deadline while its ack is
+      // still in flight. Preserve that observed application instead of reporting
+      // a false expiry. A late browser may not newly apply an expired command.
+      const delayedCommit = row.result.outcome === 'expired' && ack.outcome === 'applied' && typeof ack.applied_at === 'number' && ack.applied_at <= row.command.expires_at && this.clock() <= row.command.expires_at + CONNECTED_MS
+      if (row.result.outcome !== 'queued' && !delayedCommit) continue
+      if (!['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable'].includes(ack.outcome)) continue
       if (ack.outcome === 'applied' && (!ack.state || ack.revision !== row.command.expected_revision + 1 || ack.state.revision !== ack.revision || state.revision < ack.revision)) continue
       row.result = { ...ack, scene_id: id }
     }
     return [...session.commands.values()].filter(row => row.result.outcome === 'queued').map(row => row.command).slice(0, 1)
   }
-  enqueue(input: { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }, scene: FloorScene): CommandResult {
+  enqueue(input: { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }, scene: FloorScene, queue?: QueueRead): CommandResult {
     this.sweep()
     const { scene_id, command_id } = input
     const base = { scene_id, command_id }
@@ -71,7 +77,10 @@ export class SceneSessions {
     if (this.clock() - session.lastSeen >= CONNECTED_MS) outcome = 'disconnected'
     else if (input.expected_revision !== session.state.revision) outcome = 'stale-revision'
     else if (input.action.type === 'open-queue' && input.action.cardId && !targetExists(scene, { kind: 'card', id: input.action.cardId })) outcome = 'unknown-id'
-    else outcome = applyPresentationAction(session.state, { ...input.action, expectedRevision: input.expected_revision }, scene, this.clock()).outcome === 'unknown-id' ? 'unknown-id' : 'queued'
+    else {
+      const check = applyPresentationAction(session.state, { ...input.action, expectedRevision: input.expected_revision }, scene, this.clock(), queue).outcome
+      outcome = check === 'applied' ? 'queued' : check
+    }
     const command: ViewCommand = { scene_id, command_id, expected_revision: input.expected_revision, action: { ...input.action, origin: 'assistant', expectedRevision: input.expected_revision }, expires_at: this.clock() + input.ttl_ms }
     const result: CommandResult = { ...base, outcome, revision: session.state.revision }
     session.commands.set(command_id, { command, fingerprint, result, created: this.clock() })

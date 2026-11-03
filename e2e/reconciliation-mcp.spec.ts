@@ -7,11 +7,12 @@ import { join, extname } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
-import { fixtureScene } from '../test-fixtures/reconciliation/scenes'
+import { fixtureScene, fixtureQueue } from '../test-fixtures/reconciliation/scenes'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 
 let server: Server, root: string, base: string, client: Client
 const scene = fixtureScene()
+const queue = fixtureQueue()
 const transcript: unknown[] = []
 async function call(name: string, args: Record<string, unknown>) {
   const raw = await client.callTool({ name, arguments: args })
@@ -33,11 +34,12 @@ async function present(page: Page, action: unknown, command_id: string) {
 }
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-browser-'))
-  const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [{ id: 'context', text: 'Controlled card prose' }] }), queue: async () => ({ outcome: 'queue-source-unavailable' }) }, root)
+  const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [{ id: 'context', text: 'Controlled card prose' }] }), queue: async () => queue }, root)
   server = createServer(async (req, res) => {
     if (await mcp.handle(req, res)) return
     const path = (req.url ?? '/').split('?')[0]!
     if (path === '/api/reconciliation/scene') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, data: scene })); return }
+    if (path === '/api/reconciliation/queue') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, data: queue })); return }
     if (path === '/api/fleet') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, data: { ready: true, workers: [], attention: [], errors: [] } })); return }
     if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
     const file = path.startsWith('/assets/') && !path.includes('..') ? join(process.cwd(), 'dist/client', path) : join(process.cwd(), 'dist/client/index.html')
@@ -79,9 +81,16 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   await present(page, { type: 'flash', targets: [{ kind: 'card', id: scene.cards[0]!.id }], durationMs: 4000 }, 'flash')
   await expect(page.locator('.is-flashed').first()).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: 'Assistant changed this view' })).toBeVisible()
+  await present(page, { type: 'open-queue' }, 'open-desk')
+  const beforeNext = await call('get_scene', { scene_id: first })
+  expect(beforeNext.state.queueItemId).toBe(queue.items[0]!.id)
+  let nextAck = await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: beforeNext.state.revision })
+  if (nextAck.outcome === 'queued') await expect.poll(async () => { nextAck = await call('get_command', { scene_id: first, command_id: 'next' }); return nextAck.outcome }).toBe('applied')
+  expect(nextAck.outcome).toBe('applied')
+  await expect(page.getByLabel('Your desk')).toHaveAttribute('data-queue-item-id', queue.items[1]!.id)
+  expect((await call('get_queue', { scene_id: first })).items[0].readiness).toBe('ready-now')
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
-  expect((await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: revision })).outcome).toBe('queue-source-unavailable')
   // Hold command delivery; a direct click occurs after enqueue and before receipt.
   let resume: (() => void) | undefined
   let held = false

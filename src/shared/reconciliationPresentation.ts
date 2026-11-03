@@ -1,3 +1,4 @@
+import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
 export type FloorScene = ReturnType<SceneReconciler['reconcile']>
@@ -24,6 +25,7 @@ export interface PresentationState {
   assistantChangedView: boolean
   queueOpen?: boolean
   queueCardId?: string | null
+  queueItemId?: string | null
 }
 export const initialPresentation = (): PresentationState => ({
   revision: 0, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: false, flash: null, assistantChangedView: false,
@@ -37,7 +39,8 @@ type Change =
   | { type: 'flash'; targets: Target[]; durationMs?: number }
   | { type: 'clear-transient' }
   | { type: 'clear-selection' }
-  | { type: 'open-queue'; cardId?: string }
+  | { type: 'open-queue'; cardId?: string; itemId?: string }
+  | { type: 'navigate-queue'; direction: 'next' | 'previous' }
   | { type: 'close-queue' }
 export type PresentationAction = Change & { origin?: 'manual' | 'assistant'; expectedRevision?: number }
 
@@ -79,10 +82,13 @@ export function managerCollapsed(scene: FloorScene, state: PresentationState, ho
 }
 
 /** Shared click/MCP transition boundary. No effects or domain writes. */
-export function applyPresentationAction(state: PresentationState, action: PresentationAction, scene: FloorScene, now = Date.now()): {
-  state: PresentationState; outcome: 'applied' | 'unknown-id' | 'stale-revision'
+export function applyPresentationAction(state: PresentationState, action: PresentationAction, scene: FloorScene, now = Date.now(), queue?: QueueRead | null): {
+  state: PresentationState; outcome: 'applied' | 'unknown-id' | 'stale-revision' | 'queue-source-unavailable'
 } {
   if (action.expectedRevision !== undefined && action.expectedRevision !== state.revision) return { state, outcome: 'stale-revision' }
+  const needsQueue = action.type === 'navigate-queue' || action.type === 'open-queue' && !action.cardId
+  if (needsQueue && !hasQueue(queue)) return { state, outcome: 'queue-source-unavailable' }
+  if (action.type === 'open-queue' && action.itemId && hasQueue(queue) && !queue.items.some(item => item.id === action.itemId)) return { state, outcome: 'unknown-id' }
   if (action.type === 'open-queue' && action.cardId && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
   const targets = action.type === 'focus' || action.type === 'set-expanded' ? [action.target] : action.type === 'flash' ? action.targets : []
   if (targets.some(target => !targetExists(scene, target))) return { state, outcome: 'unknown-id' }
@@ -100,7 +106,18 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'flash': next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)) }; break
     case 'clear-transient': next.flash = null; next.assistantChangedView = false; break
     case 'close-queue': next.queueOpen = false; break
-    case 'open-queue': next.queueOpen = true; next.queueCardId = action.cardId ?? null; break
+    case 'open-queue':
+      next.queueOpen = true; next.queueCardId = action.cardId ?? null
+      next.queueItemId = action.cardId ? null : action.itemId ?? (hasQueue(queue) ? decisionItems(queue)[0]?.id : null) ?? null
+      break
+    case 'navigate-queue': {
+      const items = hasQueue(queue) ? decisionItems(queue) : []
+      const index = items.findIndex(item => item.id === state.queueItemId)
+      if (state.queueItemId && index < 0 && hasQueue(queue) && !queue.items.some(item => item.id === state.queueItemId)) return { state, outcome: 'unknown-id' }
+      next.queueOpen = true; next.queueCardId = null
+      next.queueItemId = items.length ? items[Math.max(0, Math.min(items.length - 1, index + (action.direction === 'next' ? 1 : -1)))]!.id : null
+      break
+    }
     case 'clear-selection': next.selection = null; break
   }
   // Regrouping/focus reveal the selected item without changing its identity.

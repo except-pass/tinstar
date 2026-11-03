@@ -10,6 +10,7 @@ import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../../shared/reconciliationCommands'
+import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
 
@@ -50,10 +51,10 @@ const commandInput = {
 export interface PresentationReaders {
   scene(): Promise<FloorScene>
   card(id: string): Promise<unknown>
-  queue(): Promise<unknown>
+  queue(): Promise<QueueRead>
 }
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
-const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired']), revision: z.number().int().nonnegative().optional(), state: stateSchema.optional() }).strict()
+const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), state: stateSchema.optional() }).strict()
 
 export class ReconciliationMcp {
   readonly sessions = new SceneSessions()
@@ -92,13 +93,11 @@ export class ReconciliationMcp {
       const scene = await this.readers.scene(), card = scene.cards.find(c => c.id === card_id)
       return result(card ? { card, context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
     })
-    server.registerTool('get_queue', { description: 'Read ordered desk readiness. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue()))
+    server.registerTool('get_queue', { description: 'Read ordered desk readiness. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Queue source read failed' }))))
     server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
-      if (input.action.type === 'open-queue' && !input.action.cardId) {
-        const queue = await this.readers.queue() as { outcome?: string }
-        if (queue.outcome === 'queue-source-unavailable') return result({ scene_id: input.scene_id, command_id: input.command_id, outcome: 'queue-source-unavailable' })
-      }
-      const queued = this.sessions.enqueue(input, await this.readers.scene())
+      const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
+      const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
+      const queued = this.sessions.enqueue(input, await this.readers.scene(), queue)
       if (queued.outcome !== 'queued') return result(queued)
       // Short bounded wait is convenient for clients; retries/query preserve IDs.
       for (let i = 0; i < 20; i++) {
@@ -108,7 +107,17 @@ export class ReconciliationMcp {
       }
       return result(this.sessions.result(input.scene_id, input.command_id))
     })
-    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered desk item using S4 readiness. Navigation never approves or dismisses. Reports queue-source-unavailable when no queue source is installed.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => result({ ...input, outcome: this.sessions.read(input.scene_id).outcome === 'unknown-id' ? 'unknown-id' : 'queue-source-unavailable' }))
+    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered ready/verification desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
+      const queue = await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' }))
+      const queued = this.sessions.enqueue({ ...input, action: { type: 'navigate-queue', direction: 'next' } }, await this.readers.scene(), queue)
+      if (queued.outcome !== 'queued') return result(queued)
+      for (let i = 0; i < 20; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        const current = this.sessions.result(input.scene_id, input.command_id)
+        if (current.outcome !== 'queued') return result(current)
+      }
+      return result(this.sessions.result(input.scene_id, input.command_id))
+    })
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
     return server
   }

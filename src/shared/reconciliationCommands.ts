@@ -9,7 +9,8 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('set-exceptions'), enabled: z.boolean() }).strict(),
   z.object({ type: z.literal('set-roadmap'), expanded: z.boolean() }).strict(),
   z.object({ type: z.literal('flash'), targets: z.array(targetSchema).min(1).max(100), durationMs: z.number().int().min(0).max(4000).optional() }).strict(),
-  z.object({ type: z.literal('open-queue'), cardId: z.string().min(1).max(64).optional() }).strict(),
+  z.object({ type: z.literal('open-queue'), cardId: z.string().min(1).max(64).optional(), itemId: z.string().min(1).max(4096).optional() }).strict(),
+  z.object({ type: z.literal('navigate-queue'), direction: z.enum(['next', 'previous']) }).strict(),
   z.object({ type: z.literal('close-queue') }).strict(),
   z.object({ type: z.literal('clear-transient') }).strict(),
   z.object({ type: z.literal('clear-selection') }).strict(),
@@ -17,8 +18,8 @@ export const actionSchema = z.discriminatedUnion('type', [
 export const stateSchema = z.object({
   revision: z.number().int().nonnegative(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), selection: targetSchema.nullable(),
   collapsed: z.array(z.string().max(2048)).max(4096), exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(),
-  flash: z.object({ ids: z.array(z.string().max(2048)).max(100), until: z.number() }).nullable(), assistantChangedView: z.boolean(),
-  queueOpen: z.boolean().optional(), queueCardId: z.string().nullable().optional(),
+  flash: z.object({ ids: z.array(z.string().max(2048)).max(4096), until: z.number() }).nullable(), assistantChangedView: z.boolean(),
+  queueOpen: z.boolean().optional(), queueCardId: z.string().nullable().optional(), queueItemId: z.string().max(4096).nullable().optional(),
 }).strict()
 export type CommandOutcome = 'queued' | 'applied' | 'expired' | 'disconnected' | 'unknown-id' | 'unauthorized' | 'stale-revision' | 'conflict' | 'queue-source-unavailable'
 export interface ViewCommand {
@@ -33,5 +34,6 @@ export interface CommandResult {
   scene_id: string
   outcome: CommandOutcome
   revision?: number
+  applied_at?: number
   state?: PresentationState
 }

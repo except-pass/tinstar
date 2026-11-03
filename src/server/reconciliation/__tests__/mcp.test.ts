@@ -16,7 +16,7 @@ describe('authenticated real MCP transport', () => {
   it('uses private per-install auth and exposes only scoped reads/presentation', async () => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-'))
     const scene = fixtureScene()
-    const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [] }), queue: async () => ({ outcome: 'queue-source-unavailable' }) }, root)
+    const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [] }), queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Explicit unavailable source test' }) }, root)
     server = createServer((req, res) => { void mcp.handle(req, res) })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
