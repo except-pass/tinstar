@@ -142,7 +142,14 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
   const [hovered, setHovered] = useState<Target | null>(null), [diagnostics, setDiagnostics] = useState(false)
   const [deskMobile, setDeskMobile] = useState(false)
   const root = useRef<HTMLDivElement>(null), previousSelection = useRef<string | null>(null)
+  const deskPanel = useRef<HTMLElement>(null), previousDeskOpen = useRef(false)
   const selectedId = state.selection ? semanticId(state.selection) : null
+  useEffect(() => {
+    const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width:850px)').matches
+    if (mobile && deskMobile && !previousDeskOpen.current) deskPanel.current?.querySelector<HTMLButtonElement>('.ov-mobile-close')?.focus({ preventScroll: true })
+    if (mobile && !deskMobile && previousDeskOpen.current && !selectedId) root.current?.querySelector<HTMLButtonElement>('.ov-mobile-desk')?.focus({ preventScroll: true })
+    previousDeskOpen.current = deskMobile
+  }, [deskMobile, selectedId])
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error) : [], [scene, state, now, error])
   useEffect(() => {
@@ -181,7 +188,7 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
         {!groups.length && <p className="ov-empty">{state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : 'No current records observed in this scope.'}</p>}
         {history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e, now, !!error)}</button>)}</details>}
       </div>
-    </div><aside className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><h2>Your desk</h2><button type="button" className="ov-mobile-close" onClick={() => { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); setDeskMobile(false) }}>Close</button></header>
+    </div><aside ref={deskPanel} className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><h2>Your desk</h2><button type="button" className="ov-mobile-close" onClick={() => { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); setDeskMobile(false) }}>Close</button></header>
       {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{fleetDelayed && <p>Some worker observations are unavailable or incomplete. Last known workers remain visible.</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : state.selection ? <Inspector view={view} workers={workers} /> : null}<div hidden={diagnostics || !!state.selection}><QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} requestControls={requestControls} /></div>
     </aside></div><button type="button" className="ov-mobile-desk" onClick={() => { setDiagnostics(false); send({ type: 'open-queue' }); setDeskMobile(true) }}>Your desk</button>
   </div>
