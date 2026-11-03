@@ -1,9 +1,9 @@
-# Reconciliation Floor: sources and claim model (S1–S2)
+# Reconciliation Floor (S1–S3)
 
-This reference covers the first two slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
+This reference covers the first three slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
-S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. The cockpit UI still uses its existing routes. Floor UI, desk readiness, authenticated conversational MCP and browser acceptance belong to subsequent slices. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
+S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). Desk readiness and authenticated conversational MCP belong to subsequent slices; the existing cockpit worker routes remain available. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
 
 ## Observed First Mate contract
 
@@ -212,3 +212,38 @@ Evidence and rerunnable discovery proof: `/home/farm/fm-home/data/tinstar-recon-
 At 2026-11-03T18:43:17Z, the normalized fleet reader returned the real S1 task with fresh, complete home metadata/backlog coverage. The Notion reader retrieved 854 authorized pages across pagination (`hasMore: false`) and found the real card. It correctly reported **partial** coverage: Sub-item relations on pages `3fb50ce6d422812ea3fbfe3a4b2fae58` and `3f850ce6d4228145bf16d59da8ce4a3c` were truncated. No schema properties were missing. These are observed sample counts, not static product data.
 
 Proof artifacts are `/home/farm/fm-home/data/tinstar-recon-s1/live-proof.ts` and `live-proof.json`. Notion requests in this development proof used an injected fetch bridge to the authorized discovery helper: the helper authenticated the actual GET/POST queries while retaining its own credential. This proves normalization of live source reads, **not** a configured production Notion deployment. The shipped default fetch transport uses only the operator's Tin Star configuration token.
+
+## Floor UI (S3)
+
+Start the existing web app with `npm run build:all && node bin/tinstar.js --no-open`, then open `http://127.0.0.1:5273/?view=floor` (use the actual port printed by the CLI). Desktop uses the same component and `apiFetch` transport. Configure the live fleet and Notion sources as above; no demo records are substituted when configuration or reads fail. Whole-farm publication routes and Notion credentials are operator prerequisites, not implied by a successful local read. The desk is a labeled S4 slot; there is no MCP transport in S3.
+
+The floor polls `GET /api/reconciliation/scene` sequentially, 20 seconds after the preceding read completes, with a 60-second request deadline and cancellation on unmount. Failed reads retain the last scene and suspend absence conclusions. Source expiration also labels retained observations and findings as last-known. Partial coverage remains visible. There is no all-clear indicator.
+
+Initiative is the initial arrangement; Initiative, Second Mate and Machine use S2's actual group membership. Unassigned groups remain visible, including roadmap cards without workers. Headline counts are S2's union counts, never sums of overlapping groups. Root-home and child-home manager summaries use configured parent relationships, deduplicate workers by home/task, retain attempt and exception counts, and show actual published state/report timestamps. Parent relationships not configured stay labeled as such. Collapsing a home also collapses its descendant workers; rows say attempts are hidden, rather than claiming execution is missing.
+
+Worker ↔ claim ↔ intention rows retain multiple attempts/workers per card. Dashed amber execution sockets, double pink untracked sockets, violet uncertainty and quiet waits have text and shape cues. **Exceptions Only** counts findings in the full configured scene (not workers or just currently expanded rows). **Flash gaps** counts unique card/execution records and reveals their groups/managers; unavailable observations disable absence-based flashing. Roadmap/wait sections include cards with a reconciled legitimate wait even when their Notion expectation is expected-now. Their empty sockets say **No worker required now**; the socket and inspector retain the reconciled reason and explicitly linked queued/held backlog details (`hold_reason`, `blocked_by`, `hold_until`) when supplied. These sections expand together without changing domain priority. Selecting any row opens an inspector with IDs, source fields, observation times, checkpoint and expectation separately, current relationships and bounded observed relationship history. It explicitly discloses that full card bodies/progress assessments and complete event history are unavailable.
+
+The inspector links eligible exact home/task identities to the existing guarded worker/terminal page in a separate tab. File-published homes do not acquire terminal access. Ambiguous basename routes are withheld to avoid opening the wrong home. Closing this page uses the existing viewer lifecycle and never stops the worker. No new domain-write route, orchestration, approval or claim repair is added.
+
+All floor arrangement, expansion, focus, roadmap, filter, flash and clear changes pass through `src/reconciliation/presentation.ts`. `applyPresentationAction` returns the next revision and an applied/unknown-id/stale-revision result; it is pure and has no source writes. Focus/regroup reveal relevant ancestors and preserve selection. Historical or removed IDs remain selected with explicit unavailable labeling. Flash lasts at most four seconds; reduced motion retains a static outline. Optional assistant origin supplies a subtle clearable cue. This is the reducer boundary for S5, not a claim of MCP authentication, command delivery or applied browser acknowledgment.
+
+### Click acceptance and controlled browser proof
+
+1. Open **Floor**, check configured-home/Notion coverage and source times, then select a real card or worker to inspect its relationship basis. A textual relationship stays unverified.
+2. Switch Initiative → Second Mate → Machine. Selection stays in the inspector, membership really changes, totals remain deduplicated and unassigned work stays reachable.
+3. Collapse a manager: verified observed subtree counts, latest report and exceptions remain. Expand or focus a row to reveal its workers. Open the safe worker viewer when available, then close its tab.
+4. Toggle **Exceptions Only**, use **Flash gaps**, clear highlights, and expand **Roadmap / waits**. None of these approve, complete, send, dismiss or reorder domain work.
+5. At mobile width, operate buttons with keyboard, open/close the inspector with Escape, and enable reduced motion. Colors also have textual/shape cues.
+
+Shared scene fixtures live in `test-fixtures/reconciliation/scenes.ts`; individual tests also construct controlled variations. They cover gap, untracked worker, inferred claim, wait, backlog, outside ownership, multiple workers/machines, 857 cards/85 workers, and an unavailable home. They are imported only by tests, never the production UI. Browser tests use an isolated empty First Mate config and intercept only the read-only scene API; no production incident or source write is manufactured.
+
+Run on Hulk:
+
+```bash
+npm run typecheck
+npm run build:all
+npx vitest run src/reconciliation/__tests__ src/server/reconciliation/__tests__ --exclude='e2e/**'
+TINSTAR_FLOOR_SCREENSHOTS=/home/farm/fm-home/data/tinstar-recon-s3/screenshots npx playwright test --config playwright.cockpit.config.ts e2e/reconciliation-floor.spec.ts
+```
+
+Screenshots include all three arrangements, exceptions, roadmap, mobile/reduced motion, large unavailable coverage and failed-refresh retention. Existing cockpit browser regressions continue to test message, terminal and viewer-window survival separately. Real read-through UI evidence requires the configured operator source credentials/routes; controlled fixtures do not certify whole-farm deployment.

@@ -1,0 +1,57 @@
+/** Explicit synthetic data for UI/reducer acceptance. Never imported by production. */
+import type { Worker } from '../../src/cockpit/shell/types'
+import type { SourceSnapshot } from '../../src/server/reconciliation'
+import type { Observation } from '../../src/server/reconciliation/observation'
+import { SceneReconciler } from '../../src/server/reconciliation/scene'
+
+type FleetData = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>
+type Card = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
+type Task = FleetData['tasks'][number]
+export const fixtureId = (n: number) => n.toString(16).padStart(32, '0')
+export const fixtureHomes = ['/fixture/mac', '/fixture/hulk', '/fixture/bandit']
+export const fixtureNames = { linked: 'Build live reconciliation', gap: 'Authorized execution gap', inferred: 'Candidate relationship', wait: 'Waiting for input', backlog: 'Roadmap: planned integration' }
+function observation<T>(data: T, now: number): Observation<T> {
+  const at = new Date(now).toISOString()
+  return { data, status: 'fresh', coverage: 'complete', observedAt: at, attemptedAt: at, expiresAt: new Date(now + 60_000).toISOString(), error: null }
+}
+function card(id: number, name: string, now: number, values: Record<string, unknown> = {}): Card {
+  return { id: fixtureId(id), url: `https://www.notion.so/${fixtureId(id)}`, last_edited_time: new Date(now).toISOString(), archived: false, in_trash: false,
+    properties: Object.fromEntries(Object.entries({ Name: name, Owner: 'Firstmate', Status: 'In Progress', 'Parent item': [fixtureId(100)], ...values }).map(([key, value]) => [key, { id: key, type: key === 'Parent item' ? 'relation' : 'select', value, hasMore: false }])) }
+}
+function task(id: string, page: number | null, home: string, now: number, state = 'working'): Task {
+  const at = new Date(now).toISOString()
+  return { id, kind: 'ship', spawn_gen: 'attempt-1', harness: 'codex', model: null, branch: 'fixture/example', project: 'fixture/tinstar', backend: 'fixture', remote: null,
+    identity: { fm_home: home, task_id: id, spawn_gen: 'attempt-1' }, cardReferences: page === null ? [] : [{ pageId: fixtureId(page), basis: 'explicit', source: 'task.notion_page_id' }],
+    current_state: { state, source: 'pane', detail: 'Fixture source state', observed_at: at, freshness: 'fresh' }, endpoint: { exists: true, agent_alive: 'alive', status: 'live', observed_at: at, freshness: 'fresh' },
+    paths: { home: null, worktree: null }, last_event: { state: 'working', note: `Published activity for ${id}`, age_seconds: 12 }, pr: { head: null, source: null, url: null },
+    backlog: { id: null, title: null, state: null, hold_reason: null, blocked_by: null, hold_until: null } }
+}
+export function fixtureSources({ now = Date.now(), size = 0, unavailable = false }: { now?: number; size?: number; unavailable?: boolean } = {}): SourceSnapshot {
+  const homes = fixtureHomes.map((home, index) => ({ source: { home, machine: ['Mac', 'Hulk', 'Bandit'][index]!, machineBasis: 'configured', ...(index ? { parentHome: fixtureHomes[0] } : {}) }, observation: observation<FleetData>({
+    fm_home: home, schema: 'fm-fleet-snapshot.v1', generated: new Date(now).toISOString(), coverageScope: 'fixture', main_inventory: { valid: true, reason: null, unstructured_current_count: 0 },
+    backlogPresent: true, ledger: { role: 'change-signal-only', cursor: null, scope: 'not-collected' }, tasks: [], backlog: [],
+  }, now) }))
+  homes[1]!.observation.data!.tasks = [task('linked-worker', 1, fixtureHomes[1]!, now), task('untracked-worker', null, fixtureHomes[1]!, now), task('candidate-worker', null, fixtureHomes[1]!, now), task('blocked-worker', 4, fixtureHomes[1]!, now, 'blocked')]
+  homes[1]!.observation.data!.tasks[2]!.backlog.title = fixtureNames.inferred
+  homes[2]!.observation.data!.tasks = [task('helper-worker', 1, fixtureHomes[2]!, now)]
+  homes[1]!.observation.data!.backlog = [{ id: 'gap', title: fixtureNames.gap, state: 'in_flight', kind: 'ship', repo: null, hold_reason: null, hold_until: null, blocked_by: null, captain_actionable: null, pr_url: null,
+    cardReferences: [{ pageId: fixtureId(2), basis: 'explicit', source: 'backlog.notion_page_id' }] }]
+  const cards = [card(100, 'Reconciliation initiative', now, { Status: 'Planned', 'Parent item': [] }), card(1, fixtureNames.linked, now), card(2, fixtureNames.gap, now), card(3, fixtureNames.inferred, now),
+    card(4, fixtureNames.wait, now, { Status: 'Waiting For', 'Waiting For': 'Input from reviewer', 'Next check-in': { start: new Date(now + 3600_000).toISOString() } }),
+    card(5, fixtureNames.backlog, now, { Status: 'Backlog', 'Parent item': [] }), card(6, 'Human-owned work', now, { Owner: 'Will', 'Parent item': [] })]
+  for (let i = 0; i < size; i++) {
+    cards.push(card(1000 + i, `Roadmap fixture ${i + 1}`, now, { Status: i % 7 === 0 ? 'In Progress' : 'Backlog', 'Parent item': i % 3 ? [fixtureId(100)] : [] }))
+    if (i < 80) homes[1 + i % 2]!.observation.data!.tasks.push(task(`fleet-worker-${i}`, 1000 + i, fixtureHomes[1 + i % 2]!, now, i % 5 ? 'working' : 'waiting'))
+  }
+  if (unavailable) homes[2]!.observation = { ...homes[2]!.observation, status: 'stale', coverage: 'unknown', error: 'Fixture: home publication unavailable' }
+  return { generatedAt: new Date(now).toISOString(), scope: 'configured-homes-only', warnings: ['Explicit controlled fixture — not production incidents'], fleet: homes,
+    intentions: observation({ dataSourceId: fixtureId(999), schema: {}, cards, hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'fixture' }, now) }
+}
+export const fixtureScene = (options: Parameters<typeof fixtureSources>[0] = {}) => new SceneReconciler().reconcile(fixtureSources(options), options.now ?? Date.now())
+
+/** Matching cockpit record for verifying the existing safe viewer route. */
+export function fixtureViewerWorkers(): Worker[] {
+  return [{ key: 'fixture-linked-worker', id: 'linked-worker', home: fixtureHomes[1]!, kind: 'ship', state: 'working', detail: 'Fixture state',
+    observedAt: new Date().toISOString(), freshness: 'fresh', objective: fixtureNames.linked, project: 'fixture/tinstar', direct: false,
+    worktree: '/fixture/worktree', branch: 'fixture/example', prUrl: null, terminalAvailable: true, terminalPid: 1 }]
+}

@@ -109,7 +109,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
       const barBox = bar.getBoundingClientRect()
       const lines = Array.from(bar.querySelectorAll('.cockpit-activity-line'))
       const words = lines.map(line => line.textContent)
-      return words.join(' ') === 'Overview Needs You Messages Workers' && lines.every(line => {
+      return words.join(' ') === 'Overview Floor Needs You Messages Workers' && lines.every(line => {
         const box = line.getBoundingClientRect()
         return box.width > 8 && box.left >= barBox.left - 1 && box.right <= barBox.right + 1
       })

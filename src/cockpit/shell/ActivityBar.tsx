@@ -9,7 +9,9 @@ const tools: Array<{ mode: PanelTool; label: string; lines: string[]; icon: stri
   { mode: 'workers', label: 'Workers', lines: ['Workers'], icon: 'groups' },
 ]
 
-export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect }: {
+export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect, onFloor, floorActive = false }: {
+  onFloor?: () => void
+  floorActive?: boolean
   overviewActive: boolean
   panelMode: ContextPanelMode
   counts: Record<PanelTool, number>
@@ -24,6 +26,10 @@ export function ActivityBar({ overviewActive, panelMode, counts, messageAttentio
       <span className="material-symbols-outlined" aria-hidden="true">dashboard</span>
       <span className="cockpit-activity-label"><span className="cockpit-activity-line">Overview</span></span>
     </button>
+    {onFloor && <button type="button" className={`cockpit-activity-button${floorActive ? ' is-panel' : ''}`} aria-current={floorActive ? 'page' : undefined} title="Reconciliation Floor" onClick={onFloor}>
+      <span className="material-symbols-outlined" aria-hidden="true">account_tree</span>
+      <span className="cockpit-activity-label"><span className="cockpit-activity-line">Floor</span></span>
+    </button>}
     {tools.map(tool => {
       const total = counts[tool.mode]
       const alert = tool.mode === 'needs' || (tool.mode === 'messages' && messageAttention > 0)
