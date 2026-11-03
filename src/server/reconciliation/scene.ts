@@ -118,7 +118,7 @@ function executionLiveness(task: SourceTask, observation: Observation<unknown>):
   if (event === 'done' || event === 'landed') return 'finished'
   if (task.endpoint.exists === false || task.endpoint.agent_alive === 'dead' || task.endpoint.status === 'dead') return 'absent'
   if (task.endpoint.exists !== true) {
-    if (task.current_state.freshness !== 'fresh') return 'liveness-not-observed'
+    if (task.current_state.freshness !== 'fresh' || task.current_state.source !== 'pane') return 'liveness-not-observed'
     if (state === 'working') return 'running'
     if (['waiting', 'parked', 'blocked', 'needs-decision'].includes(state)) return 'waiting'
     return 'liveness-not-observed'

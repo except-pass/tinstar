@@ -393,13 +393,20 @@ describe('execution liveness', () => {
     }
   })
 
-  it.each(['working', 'waiting', 'parked', 'blocked', 'needs-decision', 'unknown'])('uses only fresh state %s without endpoint evidence', state => {
+  it.each(['working', 'waiting', 'parked', 'blocked', 'needs-decision', 'unknown'])('requires fresh directly observed state %s without endpoint evidence', state => {
     for (const freshness of ['fresh', 'stale', null]) {
-      const scene = reconcileScene(snapshot([task('unobserved', a, {
-        endpoint: endpoint(null), current_state: { state, freshness }, lastEventText: 'working [at=1]: old report',
-      })]), now)
-      expect(scene.executions[0]?.liveness).toBe(freshness !== 'fresh' || state === 'unknown'
-        ? 'liveness-not-observed' : state === 'working' ? 'running' : 'waiting')
+      for (const source of ['pane', 'status-log', 'none', 'unknown', null]) {
+        const scene = reconcileScene(snapshot([task('unobserved', a, {
+          endpoint: endpoint(null), current_state: { state, freshness, source }, lastEventText: 'working [at=1]: old report',
+        })]), now)
+        const expected = freshness !== 'fresh' || source !== 'pane' || state === 'unknown'
+          ? 'liveness-not-observed' : state === 'working' ? 'running' : 'waiting'
+        expect(scene.executions[0]?.liveness).toBe(expected)
+        expect(scene.counts[expected]).toBe(1)
+        if (expected === 'liveness-not-observed') {
+          expect(scene.findings.some(f => f.kind === 'task-execution-gap' || f.kind === 'untracked-worker')).toBe(false)
+        }
+      }
     }
   })
 
