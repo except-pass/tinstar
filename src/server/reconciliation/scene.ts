@@ -1,3 +1,5 @@
+import { childOutcomeVerb } from '../fleet/workerState'
+import { countLiveness, type ExecutionLiveness, type LivenessCounts } from '../../domain/execution-liveness'
 import type { SourceSnapshot } from './index'
 import { ageObservation, type Observation } from './observation'
 import type { CardReference } from './references'
@@ -30,6 +32,7 @@ export interface Claim {
   accountability: { home: string; parentHome: string | null; owner: string | null }
 }
 export interface Placement { machine: string | null; basis: 'observed' | 'configured' | 'unknown'; configuredMachine: string | null }
+
 export interface Execution {
   id: string
   identity: SourceTask['identity']
@@ -37,6 +40,7 @@ export interface Execution {
   parentHome: string | null
   kind: string | null
   placement: Placement
+  liveness: ExecutionLiveness
   activity: 'executing' | 'waiting' | 'inactive' | 'unknown'
   source: SourceTask
   observation: Omit<Observation<unknown>, 'data'>
@@ -63,7 +67,7 @@ export interface SceneGroup {
   claimIds: string[]
   homeIds: string[]
   placements: Placement[]
-  counts: { cards: number; workers: number; attempts: number; claims: number; exceptions: number }
+  counts: LivenessCounts & { cards: number; workers: number; attempts: number; claims: number; exceptions: number }
 }
 
 const key = (...parts: unknown[]) => JSON.stringify(parts)
@@ -102,16 +106,31 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
   return { ...common, expectation: 'unknown', expectationReason: `Status ${word(card, 'Status')} has no execution expectation rule` }
 }
 
-function activity(task: SourceTask, observation: Observation<unknown>, now: number): Execution['activity'] {
-  if (!fresh(observation) || !task.identity.task_id || !task.identity.spawn_gen) return 'unknown'
-  const stateAt = Date.parse(String(task.current_state.observed_at))
-  if (task.current_state.freshness !== 'fresh' || !Number.isFinite(stateAt) || stateAt > now + 60_000 || now - stateAt > 60_000 ||
-    task.endpoint.exists === false || task.endpoint.agent_alive === 'dead' || task.endpoint.status === 'dead') return 'unknown'
-  const state = task.current_state.state
-  if (['working', 'running', 'executing'].includes(String(state))) return 'executing'
-  if (['blocked', 'waiting', 'paused', 'parked', 'needs-decision'].includes(String(state))) return 'waiting'
-  if (['done', 'failed', 'idle'].includes(String(state))) return 'inactive'
-  return 'unknown'
+function executionLiveness(task: SourceTask, observation: Observation<unknown>): ExecutionLiveness {
+  if (!fresh(observation) || !task.identity.task_id || !task.identity.spawn_gen) return 'liveness-not-observed'
+  // Status events describe intent even when the harness cannot report codex state.
+  // Read only the event verb: prose mentioning “working” is not a working event.
+  const child = childOutcomeVerb({ kind: task.kind, paths: { status_log: { last_event: { raw: task.lastEventText ?? task.last_event.raw } } } })
+  const reportedEvent = task.lastEventText?.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase() ?? text(task.last_event.state)?.toLowerCase()
+  const event = child ? null : reportedEvent
+  const reportedState = String(task.current_state.state).toLowerCase()
+  const state = child === reportedState && (!task.current_state.source || task.current_state.source === 'status-log') ? 'unknown' : reportedState
+  if (event === 'done' || event === 'landed') return 'finished'
+  if (task.endpoint.exists === false || task.endpoint.agent_alive === 'dead' || task.endpoint.status === 'dead') return 'absent'
+  if (task.endpoint.exists !== true) {
+    if (task.current_state.freshness !== 'fresh' || task.current_state.source !== 'pane') return 'liveness-not-observed'
+    if (state === 'working') return 'running'
+    if (['waiting', 'parked', 'blocked', 'needs-decision'].includes(state)) return 'waiting'
+    return 'liveness-not-observed'
+  }
+  if (['paused', 'needs-decision', 'blocked', 'parked', 'held', 'waiting'].includes(event ?? '')) return 'waiting'
+  if (event === 'working' || event === 'resolved-to-working') return 'running'
+  // A resolution closes a blocker, rather than claiming completion of the task.
+  if (event === 'resolved') return 'running'
+  if (['paused', 'needs-decision', 'blocked', 'parked', 'held', 'waiting'].includes(state)) return 'waiting'
+  if (['working', 'running', 'executing'].includes(state)) return 'running'
+  if (['done', 'landed'].includes(state)) return 'finished'
+  return 'liveness-not-observed'
 }
 
 /** Pure projection of observations. No source edits, scheduler, or title-confirmed links. */
@@ -160,10 +179,11 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         add('unverified-conflicting', [], [id], 'Duplicate execution identity in source snapshot'); continue
       }
       const observedMachine = text(task.remote?.host)
+      const liveness = executionLiveness(task, observation)
       const execution: Execution = { id, identity: task.identity, home: home.source.home, parentHome: home.source.parentHome ?? null,
         kind: text(task.kind), placement: { machine: observedMachine ?? home.source.machine ?? null,
           basis: observedMachine ? 'observed' : home.source.machine ? 'configured' : 'unknown', configuredMachine: home.source.machine ?? null },
-        activity: activity(task, observation, now), source: task, observation: metadata(observation) }
+        liveness, activity: liveness === 'running' ? 'executing' : liveness === 'waiting' ? 'waiting' : liveness === 'finished' || liveness === 'absent' ? 'inactive' : 'unknown', source: task, observation: metadata(observation) }
       executions.push(execution)
       const taskBacklog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
       const refs: Array<CardReference | { pageId: string; basis: 'inferred'; source: string }> = [
@@ -263,10 +283,10 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       const cardIds = cards.filter(child => child.id === card.id || child.ancestry.includes(card.id)).map(child => child.id)
       const relationships = claims.filter(claim => cardIds.includes(claim.cardId))
       const attempts = executions.filter(execution => relationships.some(claim => claim.executionId === execution.id))
-      return { cardId: card.id, cardIds, executionIds: attempts.map(e => e.id), counts: { cards: cardIds.length, attempts: attempts.length,
+      return { cardId: card.id, cardIds, executionIds: attempts.map(e => e.id), counts: { ...countLiveness(attempts), cards: cardIds.length, attempts: attempts.length,
         workers: new Set(attempts.filter(e => e.kind !== 'secondmate').map(e => key(e.home, e.identity.task_id))).size, claims: relationships.length } }
     }),
-    counts: { cards: cards.length, workers: new Set(executions.filter(e => e.kind !== 'secondmate').map(e => key(e.home, e.identity.task_id))).size,
+    counts: { ...countLiveness(executions), cards: cards.length, workers: new Set(executions.filter(e => e.kind !== 'secondmate').map(e => key(e.home, e.identity.task_id))).size,
       attempts: executions.length, claims: claims.length, exceptions: findings.filter(exception).length },
     // There is intentionally no green/all-clear flag: scope is configured homes,
     // not independently discovered whole-farm coverage.
@@ -277,7 +297,7 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
   const arrangements = { initiative: new Map<string, SceneGroup>(), secondMate: new Map<string, SceneGroup>(), machine: new Map<string, SceneGroup>() }
   const group = (arrangement: keyof typeof arrangements, id: string, label: string) => {
     let entry = arrangements[arrangement].get(id)
-    if (!entry) { entry = { id, label, cardIds: [], executionIds: [], claimIds: [], homeIds: [], placements: [], counts: { cards: 0, workers: 0, attempts: 0, claims: 0, exceptions: 0 } }; arrangements[arrangement].set(id, entry) }
+    if (!entry) { entry = { id, label, cardIds: [], executionIds: [], claimIds: [], homeIds: [], placements: [], counts: { ...countLiveness([]), cards: 0, workers: 0, attempts: 0, claims: 0, exceptions: 0 } }; arrangements[arrangement].set(id, entry) }
     return entry
   }
   const unassigned = (arrangement: keyof typeof arrangements) => group(arrangement, key(arrangement, 'unassigned'), 'Unassigned / unknown')
@@ -319,7 +339,7 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
     entry.claimIds = [...new Set(entry.claimIds)]; entry.homeIds = [...new Set(entry.homeIds)]
     entry.placements = [...new Map(entry.placements.map(placement => [JSON.stringify(placement), placement])).values()]
     const members = executions.filter(execution => entry.executionIds.includes(execution.id))
-    entry.counts = { cards: entry.cardIds.length, attempts: members.length, claims: entry.claimIds.length,
+    entry.counts = { ...countLiveness(members), cards: entry.cardIds.length, attempts: members.length, claims: entry.claimIds.length,
       workers: new Set(members.filter(e => e.kind !== 'secondmate').map(e => key(e.home, e.identity.task_id))).size,
       exceptions: findings.filter(f => exception(f) && (f.cardIds.some(id => entry.cardIds.includes(id)) || f.executionIds.some(id => entry.executionIds.includes(id)) || f.homeIds.some(id => entry.homeIds.includes(id)))).length }
     return entry

@@ -27,7 +27,7 @@ function task(id = 'worker', pageId: string | null = a, overrides: TaskOverrides
     identity: { fm_home: '/farm/hulk', task_id: id, spawn_gen: 'attempt-1' },
     cardReferences: pageId ? [{ pageId, basis: 'explicit', source: 'task.notion_page_id' }] : [], remote: null,
     endpoint: { exists: true, agent_alive: null, status: null, observed_at: at, freshness: 'fresh' },
-    paths: { home: null, worktree: null }, last_event: { note: null, state: null, age_seconds: null }, pr: { head: null, source: null, url: null }, ...overrides,
+    paths: { home: null, worktree: null }, lastEventText: null, last_event: { raw: null, note: null, state: null, age_seconds: null }, pr: { head: null, source: null, url: null }, ...overrides,
     current_state: { state: 'working', freshness: 'fresh', source: 'pane', observed_at: at, detail: null, ...overrides.current_state },
     backlog: { id: null, title: null, state: null, hold_reason: null, blocked_by: null, hold_until: null, ...overrides.backlog } }
 }
@@ -351,5 +351,94 @@ describe('arrangement data and rollups', () => {
     const cycle = reconcileScene(snapshot([], [card(a, { 'Parent item': [b] }), card(b, { 'Parent item': [a] })]), now)
     expect(cycle.cards.every(card => card.hierarchyIssues.some(issue => issue.includes('Cyclic')))).toBe(true)
     expect(new Set(cycle.arrangements.initiative.flatMap(g => g.cardIds))).toEqual(new Set([a, b]))
+  })
+})
+
+
+describe('execution liveness', () => {
+  const endpoint = (exists: boolean | null): Task['endpoint'] => ({ exists, agent_alive: null, status: null, observed_at: at, freshness: 'fresh' })
+  it.each([
+    ['running', true, 'working', null],
+    ['running', true, 'unknown', 'working [at=1]: building'],
+    ['running', true, 'unknown', 'resolved-to-working [at=1]: resumed'],
+    ['running', true, 'unknown', 'resolved [at=1]: blocker cleared'],
+    ['waiting', true, 'unknown', 'paused [at=1]: awaiting CI'],
+    ['waiting', true, 'working', 'needs-decision [at=1]: review'],
+    ['waiting', true, 'unknown', 'blocked [at=1]: input'],
+    ['waiting', true, 'parked', null],
+    ['waiting', true, 'unknown', 'held [at=1]: review'],
+    ['finished', true, 'working', 'done [at=1]: completed with window open'],
+    ['finished', false, 'unknown', 'landed [at=1]: merged'],
+    ['finished', null, 'unknown', 'done [at=1]: completed'],
+    ['absent', false, 'working', 'working [at=1]: old status'],
+    ['running', null, 'working', 'working [at=1]: no endpoint observation'],
+    ['liveness-not-observed', true, 'unknown', 'pausedness is not a status verb'],
+  ] as const)('classifies %s from endpoint=%s state=%s event=%s', (expected, exists, state, event) => {
+    const scene = reconcileScene(snapshot([task('codex-worker', null, { harness: 'codex', endpoint: endpoint(exists), current_state: { state }, lastEventText: event })]), now)
+    expect(scene.executions[0]?.liveness).toBe(expected)
+    expect(scene.counts[expected]).toBe(1)
+    expect(scene.counts.running).toBe(expected === 'running' ? 1 : 0)
+    expect(scene.findings.some(f => f.kind === 'untracked-worker')).toBe(expected === 'running')
+    for (const groups of Object.values(scene.arrangements)) expect(groups.find(g => g.executionIds.length)?.counts[expected]).toBe(1)
+  })
+
+  it.each(['agent_alive', 'status'] as const)('rejects dead %s across event and state paths', field => {
+    for (const event of ['working', 'resolved', 'resolved-to-working', 'waiting', 'blocked', null]) {
+      for (const state of ['unknown', 'working', 'waiting']) {
+        const scene = reconcileScene(snapshot([task('dead', a, {
+          endpoint: { ...endpoint(true), [field]: 'dead' }, current_state: { state }, lastEventText: event,
+        })]), now)
+        expect(scene.executions[0]?.liveness).toBe('absent')
+      }
+    }
+  })
+
+  it.each(['working', 'waiting', 'parked', 'blocked', 'needs-decision', 'unknown'])('requires fresh directly observed state %s without endpoint evidence', state => {
+    for (const freshness of ['fresh', 'stale', null]) {
+      for (const source of ['pane', 'status-log', 'none', 'unknown', null]) {
+        const scene = reconcileScene(snapshot([task('unobserved', a, {
+          endpoint: endpoint(null), current_state: { state, freshness, source }, lastEventText: 'working [at=1]: old report',
+        })]), now)
+        const expected = freshness !== 'fresh' || source !== 'pane' || state === 'unknown'
+          ? 'liveness-not-observed' : state === 'working' ? 'running' : 'waiting'
+        expect(scene.executions[0]?.liveness).toBe(expected)
+        expect(scene.counts[expected]).toBe(1)
+        if (expected === 'liveness-not-observed') {
+          expect(scene.findings.some(f => f.kind === 'task-execution-gap' || f.kind === 'untracked-worker')).toBe(false)
+        }
+      }
+    }
+  })
+
+  it.each([
+    'done [key=child-outcome-child-done-05b032a1] [at=1]: child child done: complete',
+    'done [key=inactive-outcome-mate-child-done] [at=1]: inactive terminal child=child fingerprint=abc',
+  ])('does not finish a manager reporting %s', raw => {
+    for (const hint of [raw, null]) {
+      for (const [state, source, expected] of [['working', 'pane', 'running'], ['waiting', 'pane', 'waiting'], ['done', 'status-log', 'liveness-not-observed']] as const) {
+        const scene = reconcileScene(snapshot([task('mate', a, {
+          kind: 'secondmate', current_state: { state, source }, lastEventText: hint,
+          last_event: { raw, state: 'done', note: 'child complete', age_seconds: 1 },
+        })]), now)
+        expect(scene.executions[0]?.liveness).toBe(expected)
+      }
+    }
+  })
+
+  it('uses structured status events when the text hint is absent', () => {
+    const scene = reconcileScene(snapshot([task('codex', a, { current_state: { state: 'unknown' }, last_event: { raw: null, state: 'paused', note: 'working later', age_seconds: 3 } })]), now)
+    expect(scene.executions[0]?.liveness).toBe('waiting')
+    expect(scene.findings.some(f => f.kind === 'legitimate-wait-planned')).toBe(true)
+  })
+
+  it('does not treat finished records as live execution or unknown liveness as an evidenced gap', () => {
+    const finished = task('finished', a, { lastEventText: 'done [at=1]: complete' })
+    const completed = reconcileScene(snapshot([finished]), now)
+    expect(completed.findings.some(f => f.kind === 'task-execution-gap')).toBe(true)
+    expect(completed.counts).toMatchObject({ running: 0, waiting: 0, finished: 1 })
+    const unknown = task('unknown', a, { endpoint: endpoint(null), current_state: { freshness: 'stale' } })
+    const unobserved = reconcileScene(snapshot([unknown]), now)
+    expect(unobserved.findings.some(f => f.kind === 'task-execution-gap' || f.kind === 'untracked-worker')).toBe(false)
+    expect(unobserved.coverage.absenceConclusions).toBe('suppressed')
   })
 })

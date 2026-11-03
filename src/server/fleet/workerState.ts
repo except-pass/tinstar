@@ -46,7 +46,7 @@ function lastReport(task: MateSnapshot): { state: string; detail: string } | nul
 }
 
 /** A child-outcome line is another task finishing or failing, not the mate's own outcome. */
-function childOutcomeVerb(task: MateSnapshot): string | null {
+export function childOutcomeVerb(task: MateSnapshot): string | null {
   if (text(task.kind) !== 'secondmate') return null
   return CHILD_OUTCOME.exec(text(task.paths?.status_log?.last_event?.raw))?.[1] ?? null
 }
