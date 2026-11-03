@@ -1,0 +1,64 @@
+import type { ReconciliationConfig } from './config'
+import { record } from './values'
+
+/** Read card prose only. Code, files, embeds and transcript-like blocks are not
+ * exported to conversational clients. Nested/truncated context is explicit. */
+export class CardContextReader {
+  private cache = new Map<string, { until: number; value: Promise<unknown> }>()
+  constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
+  get(id: string) {
+    const cached = this.cache.get(id)
+    if (cached && cached.until > Date.now()) return cached.value
+    if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
+    const value = this.read(id).catch(() => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
+    this.cache.set(id, { until: Date.now() + 60_000, value })
+    return value
+  }
+  private async read(id: string) {
+    if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
+    const signal = AbortSignal.timeout(20_000)
+    const blocks: Array<{ id: string; type: string; text: string }> = []
+    let requests = 0, bytes = 0, partial = false
+    const safeTypes = new Set(['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'to_do', 'toggle', 'quote', 'callout', 'table_row'])
+    const visit = async (blockId: string, depth: number) => {
+      let cursor: string | undefined
+      do {
+        if (++requests > 10 || depth > 4) { partial = true; return }
+        const url = new URL(`https://api.notion.com/v1/blocks/${blockId}/children`)
+        url.searchParams.set('page_size', '100')
+        if (cursor) url.searchParams.set('start_cursor', cursor)
+        const res = await this.fetcher(url, { signal, redirect: 'error', headers: { Authorization: `Bearer ${this.config!.token}`, 'Notion-Version': '2025-09-03' } })
+        if (!res.ok || !res.body) throw new Error('context unavailable')
+        const reader = res.body.getReader(), chunks: Uint8Array[] = []
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            bytes += value.length
+            if (bytes > 2 * 1024 * 1024) throw new Error('context too large')
+            chunks.push(value)
+          }
+        } finally { await reader.cancel().catch(() => {}) }
+        const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        if (!Array.isArray(body.results)) throw new Error('invalid context')
+        for (const item of body.results) {
+          const b = record(item), type = String(b.type), data = record(b[type])
+          if (safeTypes.has(type)) {
+            const rich = type === 'table_row' && Array.isArray(data.cells) ? data.cells.flat() : data.rich_text
+            const text = Array.isArray(rich) ? rich.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('') : ''
+            // Avoid forwarding common credential literals embedded in prose.
+            blocks.push({ id: String(b.id), type, text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+          } else partial = true
+          if (b.has_children === true) {
+            if (safeTypes.has(type) || type === 'table' || type === 'column_list' || type === 'column') await visit(String(b.id), depth + 1)
+            else partial = true
+          }
+        }
+        cursor = body.has_more === true && typeof body.next_cursor === 'string' ? body.next_cursor : undefined
+        if (body.has_more === true && !cursor) partial = true
+      } while (cursor)
+    }
+    await visit(id, 0)
+    return { outcome: partial ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
+  }
+}

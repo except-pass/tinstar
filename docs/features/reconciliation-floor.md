@@ -1,9 +1,9 @@
-# Reconciliation Floor (S1–S3)
+# Reconciliation Floor (S1–S3, S5)
 
 This reference covers the first three slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
-S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). S4 adds the [read-only desk queue and readiness API](reconciliation-queue.md). Authenticated conversational MCP belongs to a subsequent slice; the existing cockpit worker routes remain available. The sources endpoint makes no reconciliation judgments; these endpoints supply no orchestration or Notion-write actions.
+S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. S3 adds the live floor at `?view=floor` (or **Floor** in the activity strip). S4 adds the [read-only desk queue and readiness API](reconciliation-queue.md). S5 adds [authenticated conversational MCP](reconciliation-mcp.md); the existing cockpit worker routes remain available. These endpoints supply no orchestration or Notion-write actions.
 
 ## Observed First Mate contract
 
@@ -215,7 +215,7 @@ Proof artifacts are `/home/farm/fm-home/data/tinstar-recon-s1/live-proof.ts` and
 
 ## Floor UI (S3)
 
-Start the existing web app with `npm run build:all && node bin/tinstar.js --no-open`, then open `http://127.0.0.1:5273/?view=floor` (use the actual port printed by the CLI). Desktop uses the same component and `apiFetch` transport. Configure the live fleet and Notion sources as above; no demo records are substituted when configuration or reads fail. Whole-farm publication routes and Notion credentials are operator prerequisites, not implied by a successful local read. The desk is a labeled S4 slot; there is no MCP transport in S3.
+Start the existing web app with `npm run build:all && node bin/tinstar.js --no-open`, then open `http://127.0.0.1:5273/?view=floor` (use the actual port printed by the CLI). Desktop uses the same component and `apiFetch` transport. Configure the live fleet and Notion sources as above; no demo records are substituted when configuration or reads fail. Whole-farm publication routes and Notion credentials are operator prerequisites, not implied by a successful local read. The desk retains an explicit unavailable state until S4 is installed. S5 adds [authenticated MCP and browser acknowledgments](reconciliation-mcp.md).
 
 The floor polls `GET /api/reconciliation/scene` sequentially, 20 seconds after the preceding read completes, with a 60-second request deadline and cancellation on unmount. Failed reads retain the last scene and suspend absence conclusions. Source expiration also labels retained observations and findings as last-known. Partial coverage remains visible. There is no all-clear indicator.
 

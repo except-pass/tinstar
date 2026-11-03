@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { Claim, Execution, Finding, SceneCard, SceneGroup } from '../server/reconciliation/scene'
 import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
 import {
-  ancestorHomes, managerCollapsed, applyPresentationAction, arrangements, findingLabels, initialPresentation, isException, isPlanned, semanticId, targetExists, targetInGroup,
+  ancestorHomes, managerCollapsed, arrangements, findingLabels, isException, isPlanned, semanticId, targetExists, targetInGroup,
   type FloorScene, type PresentationAction, type PresentationState, type Target,
 } from './presentation'
+import { usePresentation } from './usePresentation'
+import { QueuePanel } from './QueuePanel'
 import { useFloorScene } from './useFloorScene'
 import './floor.css'
 
@@ -53,7 +55,7 @@ function FocusButton({ context, item, className = '', children }: { context: Con
   const selected = context.state.selection && semanticId(context.state.selection) === id
   const flashed = context.state.flash && context.state.flash.until > context.now && context.state.flash.ids.includes(id)
   return <button type="button" className={`floor-focus ${className}${selected ? ' is-selected' : ''}${flashed ? ' is-flashed' : ''}`} data-semantic-id={id}
-    aria-pressed={!!selected} onClick={() => context.send({ type: 'focus', target: item })}>{children}</button>
+    aria-pressed={!!selected} onClick={() => context.send(item.kind === 'you' ? { type: 'open-queue' } : { type: 'focus', target: item })}>{children}</button>
 }
 function FindingChips({ findings, delayed = false }: { findings: Finding[]; delayed?: boolean }) {
   return <span className="floor-findings">{unique(findings.map(f => f.kind)).map(kind => <span key={kind} className={`floor-chip floor-${tone(findings.filter(f => f.kind === kind))}`}>
@@ -141,7 +143,7 @@ function Hierarchy({ context }: { context: Context }) {
   return <section className="floor-hierarchy" aria-label="Accountability hierarchy">
     <div className="floor-command-chain"><FocusButton context={context} item={target('you', 'root')}><span className="floor-avatar">Y</span><strong>You</strong><small>Management</small></FocusButton><span aria-hidden="true">→</span>
       <FocusButton context={context} item={target('firstMate', 'root')}><span className="floor-avatar">FM</span><strong>First Mate</strong><small>Execution authority</small></FocusButton><span className="floor-chain-caption">→ observed homes / Second Mates</span>
-      <div className="floor-desk-slot" data-slot="desk-queue"><strong>Your desk</strong><small>Decision queue not connected</small></div>
+      <button type="button" className="floor-desk-slot" data-slot="desk-queue" onClick={() => send({ type: 'open-queue' })}><strong>Your desk</strong><small>Open queue</small></button>
     </div>
     <div className="floor-managers">{scene.coverage.homes.filter(home => !ancestorHomes(scene, home.source.home).slice(1).some(id => state.collapsed.includes(semanticId(target('manager', id))))).map(home => {
       const id = home.source.home
@@ -218,7 +220,7 @@ function Inspector({ context, workers }: { context: Context; workers: Worker[] }
 
 export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
   const { scene, error, now } = useFloorScene()
-  const [state, send] = useReducer((previous: PresentationState, action: PresentationAction) => scene ? applyPresentationAction(previous, action, scene).state : previous, undefined, initialPresentation)
+  const { state, send, connection, bridgeError } = usePresentation(scene)
   const root = useRef<HTMLDivElement>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   const previousSelection = useRef<string | null>(null)
@@ -241,7 +243,7 @@ export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
   const context: Context = { scene, state, send, now, delayed, readFailed: !!error }
   const exceptions = scene.findings.filter(isException)
   const sourceFindings = exceptions.filter(f => !f.cardIds.length && !f.executionIds.length)
-  return <div className="floor" ref={root} data-arrangement={state.arrangement} data-revision={state.revision} onKeyDown={event => {
+  return <div className="floor" ref={root} data-arrangement={state.arrangement} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={event => {
     if (event.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'clear-transient' }) }
   }}>
     <header className="floor-header"><div><span className="cockpit-eyebrow">TIN STAR / TWO SOURCES · ONE SCENE</span><h1>Reconciliation Floor</h1><p>Intentions ↔ execution across the farm</p></div>
@@ -259,6 +261,8 @@ export function ReconciliationFloor({ workers }: { workers: Worker[] }) {
       {scene.coverage.intentions.error && <span>{scene.coverage.intentions.error}</span>}
     </div>
     {state.assistantChangedView && <div className="floor-assistant-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>Clear cue</button></div>}
+    <p className="floor-empty">Conversation view: {connection?.scene_id ?? 'connecting'}{bridgeError ? ' · disconnected; commands await acknowledgment' : ' · private MCP'}</p>
+    <QueuePanel state={state} send={send} />
     <Hierarchy context={context} />
     <div className="floor-layout"><div className="floor-scene">
       <div className="floor-scene-caption"><span>{arrangements[state.arrangement]} neighborhoods</span><span>{state.exceptionsOnly ? `${exceptions.length} exception findings in configured scope` : 'Worker ↔ relationship ↔ intention'}</span></div>
