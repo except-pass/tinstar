@@ -111,6 +111,16 @@ describe('desk queue correctness', () => {
     }
   })
 
+  it('does not route an unrelated worker question through card ownership', () => {
+    const worker = task([{ key: 'formatter', verb: 'needs-decision', summary: 'Choose the formatter' }])
+    worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
+    const result = build(snapshot([card({ Owner: 'Will', 'Next action': 'Review proposal' })], [worker]))
+    expect(result.items.find(item => item.decisionKeys.includes('formatter'))).toMatchObject({
+      action: 'Choose the formatter', readiness: 'needs-readiness-verification', oneTouch: false,
+    })
+    expect(result.items.find(item => item.action === 'Review proposal')?.readiness).toBe('ready-now')
+  })
+
   it('honors hold timing, blockers, completion, and disappearance of answered keys', () => {
     expect(build(snapshot([], [], [hold({ hold_until: '2026-12-01' })])).items[0]?.readiness).toBe('future-or-conditional')
     expect(build(snapshot([], [], [hold({ blocked_by: 'release' })])).items[0]?.readiness).toBe('future-or-conditional')

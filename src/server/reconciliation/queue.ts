@@ -175,11 +175,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
       const keyed = !!call.decisionKey && task?.queue?.decisions.some(decision => decision.key === call.decisionKey && decision.verb === 'needs-decision' && !!decision.summary?.trim())
-      // A worker's keyed question is addressed to its supervisor by default.
-      // Require published owner routing before promoting it to Will's Desk;
-      // otherwise routine manager decisions would masquerade as owner work.
-      const ownerRouted = hold?.captain_actionable === true || explicitRelationship && known.some(card =>
-        normalize(word(card, 'Owner') ?? '') === 'will' && !!(word(card, 'Next action') ?? word(card, 'Next Action')))
+      const ownerRouted = hold?.captain_actionable === true
       if (!ownerRouted) lower(item, 'needs-readiness-verification', 'No published owner-only routing; a keyed worker question may belong to its manager')
       if (call.type === 'blocked' || !item.action || (!keyed && hold?.captain_actionable !== true)) {
         lower(item, 'needs-readiness-verification', 'Blocked/held state alone does not identify an owner-only decision')
