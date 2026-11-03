@@ -244,6 +244,58 @@ describe('desk queue correctness', () => {
       .toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
   })
 
+  it.each(['Next action', 'Next Action'])('preserves linked %s restrictions without a Notion queue candidate', field => {
+    for (const route of ['task', 'hold'] as const) {
+      const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = pull
+      const held = hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })
+      const refs = [{ pageId: a, basis: 'explicit' as const, source: 'notion_page_id' }]
+      if (route === 'task') worker.cardReferences = refs
+      else held.cardReferences = refs
+      const linked = card({ [field]: 'Merge after release' })
+      const s = snapshot([linked], route === 'task' ? [worker] : [], route === 'hold' ? [held] : [])
+      expect(build(s, new Map([[pull, readyPull()]])).items).toEqual([
+        expect.objectContaining({ readiness: 'future-or-conditional', oneTouch: false, cardIds: [a] }),
+      ])
+      linked.properties[field]!.value = 'Review then merge'
+      expect(build(s, new Map([[pull, readyPull()]])).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+      linked.properties[field]!.value = 'Merge this PR'
+      expect(build(s, new Map([[pull, readyPull()]])).items[0]).toMatchObject({ readiness: 'ready-now', oneTouch: true })
+    }
+  })
+
+  it('preserves restrictions when both next-action properties are published', () => {
+    const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = pull
+    worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
+    for (const Owner of ['Will', 'Firstmate']) {
+      const linked = card({ Owner, 'Next action': 'Merge this PR', 'Next Action': 'Merge after release', Link: pull })
+      expect(build(snapshot([linked], [worker]), new Map([[pull, readyPull()]])).items).toEqual([
+        expect.objectContaining({ readiness: 'future-or-conditional', oneTouch: false }),
+      ])
+    }
+  })
+
+  it.each(['keyed', 'unkeyed', 'blocked', 'hold'] as const)('preserves task backlog restrictions for %s calls', route => {
+    const worker = task(route === 'unkeyed' || route === 'hold' ? [] : [{ key: 'merge', verb: route === 'blocked' ? 'blocked' : 'needs-decision', summary: 'Merge this PR' }])
+    worker.pr.url = pull; worker.backlog.hold_reason = 'Merge after release'
+    if (route === 'unkeyed') { worker.current_state.state = 'needs-decision'; worker.current_state.detail = 'Merge this PR' }
+    const held = hold({ id: 'worker', hold_reason: 'Merge this PR', pr_url: pull })
+    const s = snapshot([], [worker], route === 'hold' ? [held] : [])
+    expect(build(s, new Map([[pull, readyPull()]])).items).toEqual([
+      expect.objectContaining({ readiness: 'future-or-conditional', oneTouch: false }),
+    ])
+  })
+
+  it.each(['textual', 'conflicting'] as const)('does not apply linked action restrictions through %s references', relationship => {
+    const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = pull
+    worker.cardReferences = relationship === 'textual'
+      ? [{ pageId: a, basis: 'textual', source: 'task.backlog.raw' }]
+      : [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }, { pageId: b, basis: 'explicit', source: 'backlog.notion_page_id' }]
+    const s = snapshot([card({ 'Next action': 'Merge after release' }), card({}, b)], [worker])
+    expect(build(s, new Map([[pull, readyPull()]])).items).toEqual([
+      expect.objectContaining({ readiness: 'needs-readiness-verification', oneTouch: false, cardIds: [] }),
+    ])
+  })
+
   it('does not deduplicate separate decisions sharing a card, PR or title', () => {
     const first = task(); first.pr.url = pull; first.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
     const second = task([{ key: 'other', verb: 'needs-decision', summary: 'Choose C or D' }], 'other'); second.cardReferences = first.cardReferences; second.pr.url = pull

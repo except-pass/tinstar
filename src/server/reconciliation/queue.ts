@@ -74,6 +74,7 @@ function restrictAction(item: QueueItem, value: string | null): boolean {
   return restricted
 }
 function context(item: QueueItem, card: Card, observation: SourceSnapshot['intentions'], now: number) {
+  for (const name of ['Next action', 'Next Action']) restrictAction(item, word(card, name))
   item.cardIds.push(card.id)
   item.sources.push(source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', observation))
   link(item, card.url ?? `https://www.notion.so/${card.id}`, 'card')
@@ -159,6 +160,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
       restrictAction(item, text(hold?.hold_reason))
+      restrictAction(item, text(task?.backlog.hold_reason))
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (call.decisionKey) item.decisionKeys.push(call.decisionKey)
