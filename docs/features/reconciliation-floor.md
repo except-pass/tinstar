@@ -1,6 +1,6 @@
 # Reconciliation Floor: sources and claim model (S1–S2)
 
-This is the first slice of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
+This reference covers the first two slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
 
 S1 provides **live, read-only source collection** at `GET /api/reconciliation/sources`. S2 adds the server-side claim model and arrangement data at `GET /api/reconciliation/scene`, described below. The cockpit UI still uses its existing routes. Floor UI, desk readiness, authenticated conversational MCP and browser acceptance belong to subsequent slices. The sources endpoint makes no reconciliation judgments; neither endpoint supplies orchestration or Notion-write actions.
@@ -181,9 +181,9 @@ Finding rules:
 | Confirmed link | Explicit structured ID, recognized card, complete attempt identity, no contradictory references/status/ownership; freshness is separately labeled. |
 | Task execution gap | Firstmate-owned In Progress work with no published wait/future start; explicit home accountability from a confirmed attempt or in-flight structured backlog reference; fresh complete configured sources and known runtime states; no execution, wait or unverified candidate accounting for it. Missing home accountability suppresses the conclusion because work could run elsewhere in the farm. The reason names the accountable home and configured scope. |
 | Untracked worker | Observed executing worker with complete identity/known placement, no recognized reference or inferred candidate, and complete fresh configured fleet/Notion reads. Missing/unavailable/partial sources suppress this conclusion. |
-| Unverified/conflicting | Textual/inferred/missing/contradictory IDs, unknown expectations, hierarchy issues, or a textual backlog wait. No automatic repair. |
+| Unverified/conflicting | Textual/inferred/missing/contradictory IDs, unknown expectations, hierarchy issues, or a textual backlog wait. Contradictory standalone backlog references cannot establish home accountability or a legitimate wait and suppress execution-gap conclusions. No automatic repair. |
 | Unknown/stale source | Partial, unavailable, expired, permission-limited observations, unknown runtime or insufficient accountability coverage. Last-known records remain labeled and absence conclusions are suppressed. |
-| Legitimate wait/planned | Backlog, Todo, Queued, planned, review, waiting, completed/archived status, future Start Date or published Waiting For; observed worker wait; or structured queued/held backlog reference. Source wait detail and card checkpoint remain available. |
+| Legitimate wait/planned | Backlog, Todo, Queued, planned, review, waiting, completed/archived status, future Start Date or published Waiting For; observed worker wait through a current confirmed claim; or noncontradictory structured queued/held backlog reference. Inferred, textual or conflicting worker relationships remain unverified and suppress execution-gap conclusions; the worker's waiting activity remains visible independently. Source wait detail and card checkpoint remain available. |
 | Outside coverage | Owner other than Firstmate (including PM Bot and humans). No missing-First-Mate-worker assertion. |
 
 An overdue/missing checkpoint is independent accountability data. It does not imply a crashed worker; a future checkpoint does not excuse an otherwise evidenced execution gap. S2 does not assess PR readiness, delivery or the executive queue.
