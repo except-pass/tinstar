@@ -409,6 +409,52 @@ describe('bounded cached PR reads', () => {
     expect(later[8]).toBe('/repos/except-pass/tinstar/pulls/4')
   })
 
+  it.each([69, 73])('rotates through %s persistent PRs across cache eviction', async count => {
+    let clock = now
+    let active = 0
+    let peak = 0
+    const attempts: string[] = []
+    const read = vi.fn(async (path: string) => {
+      attempts.push(path)
+      active++
+      peak = Math.max(peak, active)
+      await Promise.resolve()
+      active--
+      return { ...info, state: 'closed' }
+    })
+    const reader = new QueuePullReader(read, () => clock)
+    const urls = Array.from({ length: count }, (_, i) => `https://github.com/except-pass/tinstar/pull/${i + 1}`)
+    for (let window = 0; window < Math.ceil(count / 4) * 2; window++) {
+      const before = attempts.length
+      const [first, concurrent] = await Promise.all([reader.get(urls), reader.get(urls)])
+      expect(attempts.length - before).toBe(4)
+      for (const path of attempts.slice(before)) {
+        const url = `https://github.com/except-pass/tinstar/pull/${path.split('/').at(-1)}`
+        expect(first.get(url)?.status).toBe('fresh')
+        expect(concurrent.get(url)).toEqual(first.get(url))
+      }
+      clock += 61_000
+    }
+    expect(peak).toBe(4)
+    for (let id = 1; id <= count; id++) {
+      expect(attempts.filter(path => path === `/repos/except-pass/tinstar/pulls/${id}`).length).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('retains only 64 cached PRs while rotation handles changing and empty candidates', async () => {
+    const read = vi.fn(async () => ({ ...info, state: 'closed' }))
+    const reader = new QueuePullReader(read, () => now)
+    const urls = Array.from({ length: 69 }, (_, i) => `https://github.com/except-pass/tinstar/pull/${i + 1}`)
+    for (let window = 0; window < 18; window++) await reader.get(urls)
+    expect(read).toHaveBeenCalledTimes(72)
+    expect(await reader.get([])).toEqual(new Map())
+    expect(await reader.get(['https://example.com/unsupported'])).toEqual(new Map())
+    await reader.get(urls.slice(8))
+    expect(read).toHaveBeenCalledTimes(72)
+    await reader.get([urls[3]!])
+    expect(read).toHaveBeenCalledTimes(73)
+  })
+
   it('does not mistake no CI, truncated checks, pending or failed checks for readiness', async () => {
     for (const [check, expected] of [
       [{ total: 0, returned: 0, pending: 0, failed: 0 }, 'unknown'],

@@ -56,20 +56,23 @@ async function readPull(url: string, read = github): Promise<Omit<PullReadiness,
 export class QueuePullReader {
   private cache = new Map<string, { value: PullReadiness; retryAt: number }>()
   private pending = new Map<string, Promise<PullReadiness>>()
+  private cursor = 0
   constructor(private readonly read = github, private readonly now = Date.now) {}
 
   async get(urls: string[]): Promise<Map<string, PullReadiness>> {
     const result = new Map<string, PullReadiness>()
     let budget = 4
     const work: Promise<void>[] = []
-    const ordered = [...new Set(urls)].sort((a, b) =>
-      (this.cache.get(a)?.retryAt ?? -Infinity) - (this.cache.get(b)?.retryAt ?? -Infinity))
-    for (const url of ordered) {
-      if (!parsePullUrl(url)) continue
+    const candidates = [...new Set(urls)].filter(url => parsePullUrl(url))
+    const start = this.cursor % candidates.length
+    for (let offset = 0; offset < candidates.length; offset++) {
+      const index = (start + offset) % candidates.length
+      const url = candidates[index]!
       const cached = this.cache.get(url)
       let pending = this.pending.get(url)
       if (!pending && (!cached || this.now() >= cached.retryAt) && budget > 0 && this.pending.size < 4) {
         budget--
+        this.cursor = (index + 1) % candidates.length
         pending = this.refresh(url).finally(() => { this.pending.delete(url) })
         this.pending.set(url, pending)
       }
