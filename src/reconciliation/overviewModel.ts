@@ -4,6 +4,10 @@ import { managerCollapsed, type FloorScene, type PresentationState, type Target 
 
 export const cardTitle = (card: SceneCard) => String(card.source.properties.Name?.value || 'Untitled card')
 export const cardStatus = (card: SceneCard) => String(card.source.properties.Status?.value || 'Status unknown')
+export const visibleOverviewCard = (card: SceneCard) => {
+  const status = String(card.source.properties.Status?.value ?? '').trim().toLowerCase()
+  return !card.source.archived && !card.source.in_trash && status !== '' && status !== 'archived' && status !== 'unknown'
+}
 export const workerTitle = (worker: Execution) => String(worker.source.backlog.title || worker.identity.task_id?.replace(/[-_]/g, ' ') || 'Unknown worker')
 export const managerName = (scene: FloorScene, home: string) => homeLabel(scene.coverage.homes.find(h => h.source.home === home)?.source ?? { home })
 export const rootHome = (scene: FloorScene) => scene.coverage.homes.find(h => !h.source.parentHome && (h.source.label === 'main' || scene.coverage.homes.some(child => child.source.parentHome === h.source.home)))
@@ -50,15 +54,14 @@ export function entityTone(scene: FloorScene, kind: 'card' | 'execution', id: st
 export function gapTargets(scene: FloorScene, now: number, readFailed = false): Target[] {
   return [
     ...scene.executions.filter(e => e.kind !== 'secondmate' && entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan').map(e => ({ kind: 'execution' as const, id: e.id })),
-    ...scene.cards.filter(c => entityTone(scene, 'card', c.id, now, readFailed) === 'gap').map(c => ({ kind: 'card' as const, id: c.id })),
+    ...scene.cards.filter(c => visibleOverviewCard(c) && entityTone(scene, 'card', c.id, now, readFailed) === 'gap').map(c => ({ kind: 'card' as const, id: c.id })),
   ]
 }
-/** Membership comes from each independent source. Relationships only coordinate
- * ordering, never decide whether an entity exists. Repeated memberships refer to
- * one stable identity, with cross-group references explicitly exposed in the UI. */
+/** Presentation membership and visibility follow docs/features/overview.md.
+ * Repeated memberships retain one stable identity across groups. */
 export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false) {
-  const workers = scene.executions.filter(e => e.kind !== 'secondmate' &&
-    !historyRecord(e) && !managerCollapsed(scene, state, e.home))
+  const currentWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e))
+  const workers = currentWorkers.filter(e => !managerCollapsed(scene, state, e.home))
   const compareWorkers = (a: Execution, b: Execution) => observedAt(b) - observedAt(a) || tie(a, b)
   const compareCards = (a: SceneCard, b: SceneCard) => priority(a) - priority(b) || workRank(a) - workRank(b) || cardTitle(a).localeCompare(cardTitle(b)) || tie(a, b)
   const globalWorkers = [...workers].sort(compareWorkers), globalCards = [...scene.cards].sort(compareCards)
@@ -67,9 +70,14 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
     .map(c => (side === 'worker' ? rankCard.get(c.cardId) : rankWorker.get(c.executionId)) ?? Infinity))
   return scene.arrangements[state.arrangement].map(group => {
     const ws = workers.filter(e => group.executionIds.includes(e.id) && (!state.exceptionsOnly || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
-    const cs = scene.cards.filter(c => group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
+    const unaffiliated = state.arrangement === 'secondMate' && group.label === 'Unassigned / unknown'
+    const cardIds = state.arrangement === 'secondMate'
+      ? currentWorkers.filter(e => group.homeIds.includes(e.home) && ['running', 'waiting'].includes(e.liveness)).flatMap(e => e.source.cardReferences.map(ref => ref.pageId))
+      : group.cardIds
+    const cs = unaffiliated ? [] : scene.cards.filter(c => visibleOverviewCard(c) && cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
     ws.sort(state.sort !== 'activity' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
     cs.sort(state.sort === 'activity' ? (a, b) => (relatedRank(a.id, 'card') - relatedRank(b.id, 'card') || compareCards(a, b)) : compareCards)
-    return { ...group, label: state.arrangement === 'secondMate' ? managerName(scene, group.homeIds[0] ?? group.label) : group.label, workers: ws, cards: cs }
+    const label = state.arrangement === 'secondMate' && group.homeIds[0] ? managerName(scene, group.homeIds[0]) : group.label
+    return { ...group, cardIds: cs.map(card => card.id), label, workers: ws, cards: cs }
   }).filter(group => group.workers.length || group.cards.length).sort((a, b) => Number(a.label === 'Unassigned / unknown') - Number(b.label === 'Unassigned / unknown'))
 }

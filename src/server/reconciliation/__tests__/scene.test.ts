@@ -351,6 +351,17 @@ describe('arrangement data and rollups', () => {
     expect(scene.counts).toMatchObject({ cards: 4, claims: 2, workers: 1, attempts: 1 })
   })
 
+  it('does not file a card under a manager just because a backlog row mentions it', () => {
+    const source = snapshot([task('untracked', null)], [card(a), card(b)])
+    source.fleet[0]!.observation.data!.backlog = [{ id: 'held', title: 'Held', state: 'queued', kind: 'ship', repo: null,
+      hold_reason: null, hold_until: null, blocked_by: null, captain_actionable: null, pr_url: null,
+      cardReferences: [{ pageId: b, basis: 'textual', source: 'backlog.body_excerpt' }] }]
+    const scene = reconcileScene(source, now)
+    const hulk = scene.arrangements.secondMate.find(g => g.label === 'hulk')
+    expect(hulk?.cardIds ?? []).not.toContain(b)
+    expect(scene.arrangements.secondMate.find(g => g.label === 'Unassigned / unknown')?.cardIds).toEqual(expect.arrayContaining([a, b]))
+  })
+
   it('keeps unassigned cards/workers and unreadable homes reachable, including unknown machines', () => {
     const source = snapshot([task('untracked', null)], [card(a, { Status: 'Backlog' })])
     source.fleet[0]!.source.machine = undefined

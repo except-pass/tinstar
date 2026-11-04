@@ -14,6 +14,13 @@ function pageIdFromNotionUrl(url: string): string | null {
   return notionPageId(new URL(url).pathname.match(PAGE_ID_AT_END)?.[1])
 }
 
+/** Brief text is evidence only. The text itself is never returned. */
+function textual(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) && value.every(item => typeof item === 'string')) return value.join('\n')
+  return null
+}
+
 /** A work_item confirms a card only when the whole value is a page id or a Notion page URL. */
 function explicitWorkItem(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -31,9 +38,9 @@ export function cardReferences(row: Record<string, unknown>, prefix: string): Ca
   if (explicit) refs.push({ pageId: explicit, basis: 'explicit', source: `${prefix}.notion_page_id` })
   const workItem = explicitWorkItem(row.work_item)
   if (workItem) refs.push({ pageId: workItem, basis: 'explicit', source: `${prefix}.work_item` })
-  for (const field of ['title', 'raw']) {
-    if (typeof row[field] !== 'string') continue
-    const value = row[field]
+  for (const field of ['title', 'raw', 'body_excerpt', 'body_lines']) {
+    const value = textual(row[field])
+    if (!value) continue
     const patterns = [
       /\bcard\s+([a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})(?![a-f\d-])/gi,
       new RegExp(NOTION_URL.source, NOTION_URL.flags),

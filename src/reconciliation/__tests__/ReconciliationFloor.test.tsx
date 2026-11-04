@@ -77,11 +77,14 @@ it('reports unavailable workers with a readable Notion feed', () => {
   expect(container.textContent).not.toContain('0 workers')
   expect(container.textContent).not.toContain('No workers')
 })
-it('labels collapsed manager workers as hidden', () => {
+it('keeps the manager card the same width text when collapsed', () => {
   observed.scene = fixtureScene()
   const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const card = screen.getByRole('button', { name: /Inspect Hulk/i })
+  expect(card.textContent).toContain('4 workers')
   fireEvent.click(screen.getByRole('button', { name: /Collapse manager Hulk/i }))
-  expect(container.textContent).toContain('4 hidden')
+  expect(card.textContent).toContain('4 workers')
+  expect(card.textContent).not.toContain('hidden')
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(1)
   expect(container.textContent).not.toContain('No workers in this group')
 })
