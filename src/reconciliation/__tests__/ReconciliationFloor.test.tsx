@@ -19,7 +19,7 @@ it.each(['queued', 'held'])('retains independently visible %s cards and keeps wa
   Object.assign(sources.fleet[1]!.observation.data!.backlog![0]!, { state, hold_reason: 'Awaiting review capacity', blocked_by: 'review-task', hold_until: '2026-11-05T12:00:00Z' })
   const scene = new SceneReconciler().reconcile(sources)
   observed.scene = scene
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   const card = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
   expect(card.getAttribute('data-tone')).toBe('quiet')
   expect(container.querySelectorAll('.ov-worker-stack .ov-execution')).toHaveLength(5)
@@ -32,7 +32,7 @@ it.each(['queued', 'held'])('retains independently visible %s cards and keeps wa
 })
 it('keeps both source lists useful with connectors hidden and exposes both gaps', () => {
   observed.scene = fixtureScene()
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   fireEvent.click(screen.getByRole('button', { name: 'Links' }))
   expect(container.querySelectorAll('.ov-connections')).toHaveLength(0)
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(5)
@@ -46,7 +46,7 @@ it('keeps both source lists useful with connectors hidden and exposes both gaps'
 it('retains last known lists while suspending expired gap conclusions', () => {
   observed.scene = fixtureScene()
   observed.error = 'Read failed'
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   expect(screen.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(5)
   expect(container.querySelectorAll('.ov-card')).toHaveLength(7)
@@ -61,7 +61,7 @@ it('places finished and absent records in history rather than the current worker
   tasks[1]!.lastEventText = 'done [at=1]: finished but window open'
   tasks[2]!.endpoint.exists = false
   observed.scene = new SceneReconciler().reconcile(sources)
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(3)
   expect(container.querySelector('.ov-history')?.textContent).toContain('Worker history · 2')
   expect(container.querySelector('.ov-history')?.textContent).toContain('Finished')
@@ -71,7 +71,7 @@ it('reports unavailable workers with a readable Notion feed', () => {
   const sources = fixtureSources()
   for (const home of sources.fleet) home.observation = { ...home.observation, data: null, status: 'unknown', coverage: 'unknown' }
   observed.scene = new SceneReconciler().reconcile(sources)
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   expect(container.querySelectorAll('.ov-card').length).toBeGreaterThan(0)
   expect(container.textContent).toContain('Workers unavailable')
   expect(container.textContent).not.toContain('0 workers')
@@ -79,7 +79,7 @@ it('reports unavailable workers with a readable Notion feed', () => {
 })
 it('labels collapsed manager workers as hidden', () => {
   observed.scene = fixtureScene()
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   fireEvent.click(screen.getByRole('button', { name: /Collapse manager Hulk/i }))
   expect(container.textContent).toContain('4 hidden')
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(1)
@@ -88,7 +88,7 @@ it('labels collapsed manager workers as hidden', () => {
 it('clears mobile source diagnostics on close and subsequent worker selection', () => {
   observed.scene = fixtureScene()
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
-  const { container } = render(<Overview workers={[]} />)
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
   expect(screen.getByText('Source health')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))
@@ -116,7 +116,7 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
     return new Response(JSON.stringify({ ok: true, data: { commands } }))
   })
   try {
-    render(<Overview workers={[]} />)
+    render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
     fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
     expect(screen.getByText('Source health')).toBeTruthy()
     command = { scene_id: 'test-ui', command_id: type, expires_at: Date.now() + 10_000,

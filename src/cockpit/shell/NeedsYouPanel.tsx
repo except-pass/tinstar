@@ -14,7 +14,7 @@ export function sameDismiss(card: AttentionCard, message: OutboxMessage): boolea
   return message.kind === 'answer' && message.home === card.home && message.text === dismissNote(card) && message.taskId === card.taskId && message.decisionKey === card.decisionKey
 }
 
-function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
+export function SlideToDismiss({ onConfirm }: { onConfirm: () => void }) {
   const track = useRef<HTMLDivElement>(null)
   const knob = useRef<HTMLSpanElement>(null)
   const pos = useRef(0)

@@ -14,6 +14,7 @@ import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
+import { sourceRequests } from './requests'
 import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
 import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './marks'
@@ -32,7 +33,7 @@ interface SnapshotTask extends AttentionTask {
   current_state?: { state?: unknown; source?: unknown; detail?: unknown; observed_at?: unknown; freshness?: unknown }
   endpoint?: { target?: unknown; exists?: unknown; agent_alive?: unknown; status?: unknown }
   pr?: { url?: unknown }
-  backlog?: { title?: unknown }
+  backlog?: { title?: unknown; state?: unknown }
 }
 
 export interface CockpitWorker {
@@ -64,6 +65,8 @@ export function objectiveFromBrief(text: string): string | null {
 export class CockpitFleet {
   private workers: CockpitWorker[] = []
   private attention: AttentionCard[] = []
+  private deskRequests: AttentionCard[] = []
+  private deskResponseKeys = new Set<string>()
   private targets = new Map<string, { id: string; target: string | null }>()
   private watchers: LedgerWatcher[] = []
   private timer: ReturnType<typeof setInterval> | null = null
@@ -110,20 +113,21 @@ export class CockpitFleet {
   portOf(key: string): number | null { return this.views.portOf(key) }
 
   messages() {
-    return this.outbox.list(this.homes, message => this.attention.some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
+    return this.outbox.list(this.homes, message => (message.sourceAnchor ? this.deskRequests : this.attention).some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
   }
 
   private sameCall(card: AttentionCard, message: OutboxMessage): boolean {
+    if (message.sourceAnchor) return card.key === message.sourceAnchor && this.homes[card.homeIndex] === message.home
     return this.homes[card.homeIndex] === message.home &&
       ((message.holdId !== null && card.holdId === message.holdId) ||
         (card.type === message.cardType && card.taskId === message.taskId && card.decisionKey === message.decisionKey))
   }
 
-  private describe(message: OutboxMessage, card = this.attention.find(item => this.sameCall(item, message))): string {
+  private describe(message: OutboxMessage, card = [...this.deskRequests, ...this.attention].find(item => this.sameCall(item, message))): string {
     const worker = this.workers.find(item => item.home === message.home && item.id === message.taskId)
     const target = [message.taskId ? `task ${message.taskId}` : 'First Mate backlog',
       message.decisionKey ? `decision ${message.decisionKey}` : message.cardType && `${message.cardType} card`,
-      message.holdId && message.holdId !== message.decisionKey && `hold ${message.holdId}`].filter(Boolean).join(', ')
+      message.holdId && `hold ${message.holdId}`].filter(Boolean).join(', ')
     return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
   }
 
@@ -136,17 +140,20 @@ export class CockpitFleet {
       (kind !== 'answer' && kind !== 'message')) return null
     const previous = await this.outbox.get(requestId)
     if (previous) {
+      if (typeof anchorKey === 'string' && previous.sourceAnchor && anchorKey !== previous.sourceAnchor) return null
       if (previous.kind !== kind || previous.text !== text.trim() || !this.homes.includes(previous.home)) return null
       return this.outbox.submit(previous, this.describe(previous))
     }
     if (typeof anchorKey !== 'string') return null
-    const card = this.attention.find(item => item.key === anchorKey)
+    if (anchorKey.startsWith('desk-source:') && !this.deskResponseKeys.has(anchorKey)) return null
+    const card = [...this.deskRequests, ...this.attention].find(item => item.key === anchorKey)
     const worker = this.workers.find(item => item.key === anchorKey)
     if (kind === 'answer' && card?.type !== 'decision') return null
     const home = card ? this.homes[card.homeIndex] : worker?.home
     if (!home || !this.homes.includes(home)) return null
     const message: OutboxMessage = {
       requestId, home, kind, text: text.trim(),
+      ...(anchorKey.startsWith('desk-source:') ? { sourceAnchor: anchorKey } : {}),
       taskId: card ? card.taskId : worker!.id,
       decisionKey: card?.decisionKey ?? null,
       holdId: card?.holdId ?? null,
@@ -157,7 +164,8 @@ export class CockpitFleet {
 
   /** Closes a classified decision here. An unclassified decision stays on the inbox-note path. */
   async dismiss(key: string): Promise<{ dismissed: true } | { dismissed: false; fallback: true } | { dismissed: false; error: string } | null> {
-    const card = this.attention.find(item => item.key === key)
+    if (key.startsWith('desk-source:') && !this.deskResponseKeys.has(key)) return null
+    const card = [...this.deskRequests, ...this.attention].find(item => item.key === key)
     const home = card ? this.homes[card.homeIndex] : undefined
     if (!card || !home || !this.homes.includes(home)) return null
     if ((card.dismissal === 'captain-hold' && card.holdId) || (card.dismissal === 'resolve-key' && card.taskId && card.decisionKey)) {
@@ -241,6 +249,9 @@ export class CockpitFleet {
         const rows = await Promise.all(this.homes.map((home, index) => this.readHome(home, index)))
         const workers = rows.flatMap(row => row.workers)
         const attention = rows.flatMap(row => row.attention)
+        // Failed reads retain display data, but never retain a Desk write route.
+        this.deskRequests = rows.flatMap(row => row.requests.map(entry => entry.card))
+        this.deskResponseKeys = new Set(rows.flatMap(row => row.requests.filter(entry => entry.ownerReady && entry.request.id).map(entry => entry.card.key)))
         const targets = new Map(rows.flatMap(row => [...row.targets]))
         const errors = rows.flatMap(row => row.error ? [row.error] : [])
         // Preserve a home's last known workers if a transient snapshot read fails.
@@ -297,6 +308,7 @@ export class CockpitFleet {
   private async readHome(home: string, index: number): Promise<{
     workers: CockpitWorker[]
     attention: AttentionCard[]
+    requests: ReturnType<typeof sourceRequests>
     targets: Map<string, { id: string; target: string | null }>
     error: string | null
   }> {
@@ -337,9 +349,10 @@ export class CockpitFleet {
       const pullUrls = [...new Set(presentWorkers.map(worker => worker.prUrl).filter((url): url is string => !!url))]
       const reviewStatuses = new Map(pullUrls.map(url => [url, this.reviewStatus(url)] as const))
       const attention = buildAttentionCards(index, snapshot.tasks, backlog, presentWorkers, reviewStatuses)
-      return { workers: presentWorkers, attention, targets, error: null }
+      const requests = sourceRequests(home, index, snapshot.tasks, backlog, presentWorkers)
+      return { workers: presentWorkers, attention, requests, targets, error: null }
     } catch (err) {
-      return { workers: [], attention: [], targets, error: `${home}: ${(err as Error).message}` }
+      return { workers: [], attention: [], requests: [], targets, error: `${home}: ${(err as Error).message}` }
     }
   }
 

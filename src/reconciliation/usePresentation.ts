@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import { applyPresentationAction, initialPresentation, type FloorScene, type PresentationAction } from './presentation'
-import type { DeskQueue } from '../shared/reconciliationQueue'
+import { retainedQueueItemId, type DeskQueue } from '../shared/reconciliationQueue'
 import type { CommandResult, ViewCommand } from '../shared/reconciliationCommands'
 
 /** Clicks and assistant commands synchronously enter the same transition. The
@@ -16,6 +16,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
   const pending = useRef<CommandResult[]>([]), ready = useRef<CommandResult[]>([])
   const seen = useRef(new Map<string, CommandResult>())
   latestScene.current = scene
+  const previousQueue = useRef(queue)
   latestQueue.current = queue
   const send = useCallback((action: PresentationAction) => {
     if (!latestScene.current) return
@@ -29,6 +30,17 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     ready.current.push(...pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).map(ack => ({ ...ack, applied_at: Date.now() })))
     pending.current = pending.current.filter(ack => (ack.revision ?? 0) > state.revision)
   }, [state])
+  useEffect(() => {
+    if (queue) {
+      const queueItemId = retainedQueueItemId(previousQueue.current, queue, current.current.queueItemId ?? null)
+      if (queueItemId !== current.current.queueItemId) {
+        const next = { ...current.current, queueItemId, revision: current.current.revision + 1 }
+        current.current = next
+        setState(next)
+      }
+      previousQueue.current = queue
+    }
+  }, [queue])
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout>
     let credentials: { scene_id: string; key: string } | null = null

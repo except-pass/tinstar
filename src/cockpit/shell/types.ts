@@ -9,6 +9,7 @@ export interface Worker {
 export type AttentionCard = FleetAttentionCard & { home: string | null }
 
 export interface OutboxMessage {
+  sourceAnchor?: string
   requestId: string; home: string; taskId: string | null; decisionKey: string | null
   kind: 'answer' | 'message'; text: string
   state: 'unknown' | 'sending' | 'saved' | 'acknowledged' | 'done'

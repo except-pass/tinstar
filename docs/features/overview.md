@@ -18,7 +18,7 @@ Finished and offline worker records move to expandable history, including last-k
 One contextual Desk shows the current verified request and the next few. Secondary
 requests remain in Later & needs verification. Inspecting and regrouping retain
 the queue identity. The [queue reference](reconciliation-queue.md) owns readiness, source identity
-and the read-only Desk contract. Card context, evidence, raw source identities and diagnostics are read
+and per-source response controls. Card context, evidence, raw source identities and diagnostics are read
 on demand in the same panel. Worker terminal links retain the existing exact-home
 resolver and open the safe viewer separately.
 
