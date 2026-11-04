@@ -67,7 +67,7 @@ describe('independent Overview stacks', () => {
     const tasks = sources.fleet[1]!.observation.data!.tasks
     tasks[0]!.current_state.state = 'done'
     tasks[0]!.last_event.state = 'done'
-    sources.fleet[1]!.observation.data!.backlog[0]!.id = 'untracked-worker'
+    sources.fleet[1]!.observation.data!.backlog![0]!.id = 'untracked-worker'
     tasks[1]!.cardReferences.push({ pageId: fixtureId(5), basis: 'textual', source: 'task.title' })
     const scene = new SceneReconciler().reconcile(sources)
     const state = { ...initialPresentation(), arrangement: 'secondMate' as const }
