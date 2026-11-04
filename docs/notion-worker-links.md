@@ -9,7 +9,7 @@ workers. Independent/ad hoc workers may have no card.
 
 ## Property format
 
-The existing board property is named exactly **First Mate tasks**, with type
+The board property to be created is named exactly **First Mate tasks**, with type
 **rich text**. The responsible First Mate coordinator is the only routine writer.
 The page ID is implicit in the owning card. This illustrative record is not a
 real assignment:
@@ -105,17 +105,58 @@ database: older relationships expire after 24 hours/2,000 prior claims and reset
 on server restart. Notion declarations survive restart, including unavailable
 workers. Tin Star cannot certify whole-farm absence from configured sources.
 
-First Mate pickup/dispatch/check-in/completion instructions must preserve existing
-board rules and serialize writes per card. Use fresh read–merge–write–readback;
-retain all other worker entries and unrelated properties, bound retries and
-surface conflicts. Do not claim atomic compare-and-swap guarantees from that
-sequence. Link maintenance is not progress: it must not reset Next check-in,
-clear overdue commitments, or create Will-action tags.
+## First Mate workflow
 
-Slice A requires an operator-owned real property/link write and a sanitized
-readback plus a screenshot of a confirmed gutter edge after ordinary source
-refresh. The owner/PM Bot creates the property; First Mate writes and verifies
-the real active worker reference. Tin Star performs neither operation. Fixture
-proof and automated tests do not substitute for that real integration evidence.
+Only the responsible First Mate coordinator writes the field, serializing edits
+per card. Second mates report changes through their supervision channel to that
+coordinator. PM Bot may nudge for accountability but does not own worker linkage.
+
+1. **Pickup:** Read the canonical Notion page, verify current Owner/Status and
+   identify the responsible First Mate home. Plan the primary card association
+   for Notion-originated work before dispatch; confirm the property and snapshot
+   identity contract.
+2. **Dispatch:** As soon as the real worker exists, obtain its exact home, task ID
+   and generation from the authorized snapshot. Immediately merge its identity
+   into the versioned First Mate tasks record and read back to confirm all entries.
+   Do not wait for scheduled check-in or use the PR/Jira Link field. Each worker
+   has at most one primary card; a card may contain several workers.
+3. **Relaunch/handoff:** Verify continuity from First Mate durable evidence before
+   maintaining or correcting the association. Preserve same-logical-task links;
+   change home/task references only for proven moves. Missing snapshots do not
+   mean retirement. Investigate reused IDs, competing cards and different spawn
+   evidence; never refresh an anchor just to clear a diagnostic. Preserve the
+   verified disposition in durable records and the Notion audit trail.
+4. **Scheduled check-in:** During the existing substantive card check-in, compare
+   declarations with actual assignments as a backstop. Repair only proven
+   divergence and record ambiguities. Keep progress/outcome assessment separate.
+   Retain the four-working-hour / next-business-morning ceiling and meaningful
+   evidence rules. Link maintenance never advances Next check-in, clears overdue
+   commitments or erases missed checkpoints.
+5. **Completion:** Record outcome/status under existing board rules and retain
+   historical links, even when finished workers leave the active floor. Change or
+   remove declarations only for verified reassignment or duplicate error, with a
+   meaningful audit explanation. Done/archived status or Owner changes alone do
+   not invalidate identity.
+6. **Ad hoc work:** Intentionally independent work may have no primary card.
+   Escalate an omitted association only with positive evidence of Notion origin.
+
+Use fresh read–merge–write–readback, validating the complete property and merging
+by exact `(fm_home, task_id)`. Preserve every unrelated worker entry and Notion
+property. Missing/unreadable/truncated text is unknown; never replace it as empty.
+If readback differs, reconcile the competing writer before a bounded retry, then
+surface unresolved conflicts. Never let multiple homes race to rewrite a card.
+This sequence does not provide atomic compare-and-swap guarantees. Link creation,
+reconciliation, nudge delivery, worker activity and routine edits are not milestone
+completion and must not create Will-action tags.
+
+## Deferred live integration evidence
+
+The property does not exist yet. Under the approved Slice A scope exception,
+owner/PM Bot creates it outside this PR; the responsible First Mate writes and
+verifies the real active worker references after merge. First Mate then posts
+live property feasibility/round-trip evidence, sanitized Notion readback and a
+screenshot of a confirmed gutter edge after ordinary source refresh on the card.
+Tin Star performs neither property creation nor link writes. This PR does not
+claim live proof; fixture proof and automated tests do not substitute for it.
 The local nudge bridge, broad backfill, and optional decision model are later
 slices and are not implemented here.

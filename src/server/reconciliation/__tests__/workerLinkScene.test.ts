@@ -118,6 +118,36 @@ describe('Notion authoritative observation table', () => {
     expect(scene.claims.every(c => c.verification !== 'confirmed')).toBe(true)
     expect(scene.findings.some(f => ['task-execution-gap', 'untracked-worker'].includes(f.kind))).toBe(false)
   })
+  it.each(['competing cards', 'different generation', 'multiple attempts'] as const)(
+    'preserves %s conflicts with incomplete Notion pagination', conflict => {
+      const input = source(); declare(input)
+      Object.assign(input.intentions, { status: 'partial', coverage: 'partial' })
+      input.intentions.data!.hasMore = true
+      const tasks = input.fleet[1]!.observation.data!.tasks
+      if (conflict === 'competing cards') declare(input, fixtureId(5))
+      else if (conflict === 'different generation') tasks[0]!.identity.spawn_gen = 'replacement'
+      else {
+        tasks.push({ ...tasks[0]!, identity: { ...tasks[0]!.identity, spawn_gen: 'replacement' } })
+        Object.assign(input.fleet[1]!.observation, { status: 'partial', coverage: 'partial' })
+      }
+      const scene = reconcile(input)
+      expect(scene.claims).toHaveLength(2 - Number(conflict === 'different generation'))
+      expect(scene.claims.every(c => c.verification === 'conflicting' && c.state === 'last-known')).toBe(true)
+      expect(scene.findings.filter(f => f.kind === 'unverified-conflicting' && f.reason.includes('First Mate must investigate')))
+        .toHaveLength(scene.claims.length)
+      expect(scene.findings.some(f => ['confirmed-link', 'task-execution-gap', 'untracked-worker'].includes(f.kind))).toBe(false)
+    },
+  )
+  it('keeps an absent declared worker unknown with incomplete Notion pagination', () => {
+    const input = source(); declare(input)
+    Object.assign(input.intentions, { status: 'partial', coverage: 'partial' })
+    input.intentions.data!.hasMore = true
+    input.fleet[1]!.observation.data!.tasks = []
+    const scene = reconcile(input)
+    expect(scene.claims[0]).toMatchObject({ verification: 'unverified', state: 'last-known' })
+    expect(scene.findings.some(f => f.reason.includes('Declared worker not observed'))).toBe(false)
+    expect(scene.findings.some(f => ['confirmed-link', 'task-execution-gap', 'untracked-worker'].includes(f.kind))).toBe(false)
+  })
   it('does not infer missing declarations when any card property is unknown', () => {
     const input = source()
     delete input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]

@@ -228,7 +228,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const homeAvailable = !!home && sufficient(home.observation)
     const homeObserved = !!home && fresh(home.observation)
     const available = homeAvailable && notionAvailable
-    const conflict = notionAvailable && (new Set(competing.map(d => d.card.id)).size > 1 || homeObserved &&
+    const conflict = fresh(intentions) && (new Set(competing.map(d => d.card.id)).size > 1 || homeObserved &&
       (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen)))
     const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
       ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? '')
