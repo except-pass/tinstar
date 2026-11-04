@@ -6,8 +6,10 @@ import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ReconciliationMcp, privatePeer } from '../mcp'
-import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
-import { initialPresentation } from '../../../shared/reconciliationPresentation'
+import { fixtureScene, fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
+import { buildQueue } from '../queue'
+import { queueSignals } from '../queueInputs'
+import { applyPresentationAction, initialPresentation } from '../../../shared/reconciliationPresentation'
 import { seedOriginAllowlist } from '../../api/originAllowlist'
 let root = '', server: Server | undefined, client: Client | undefined
 const parse = (value: unknown) => JSON.parse((value as { content: Array<{ text: string }> }).content[0]!.text)
@@ -47,6 +49,43 @@ describe('authenticated real MCP transport', () => {
     expect(wrong.status).toBe(403)
     mcp.sessions.disconnect(identity.scene_id)
     expect(parse(await client.callTool({ name: 'present_view', arguments: { scene_id: identity.scene_id, command_id: 'disconnected', expected_revision: 0, action: { type: 'set-arrangement', arrangement: 'machine' } } })).outcome).toBe('disconnected')
+  })
+  it('reports exact queue sources over real MCP and retains acknowledged next navigation', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-desk-mcp-'))
+    const sources = fixtureSources(), home = sources.fleet[1]!, task = home.observation.data!.tasks[0]!
+    task.queue = queueSignals({ hints: { open_decisions: [{ key: 'choose', verb: 'needs-decision', summary: 'Choose A or B' }] } }).queue
+    home.observation.data!.backlog!.push({ id: 'choose', title: 'Choose A or B', state: 'held', kind: 'ship', repo: null,
+      hold_reason: 'Choose A or B', hold_until: null, blocked_by: null, captain_actionable: true, pr_url: null, cardReferences: [],
+      ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: linked-worker'] }) })
+    const queue = buildQueue(sources), scene = fixtureScene(), original = JSON.stringify(queue)
+    const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({}), queue: async () => queue }, root)
+    server = createServer((req, res) => { void mcp.handle(req, res) })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+    client = new Client({ name: 'desk-source-test', version: '1' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const state = initialPresentation(), identity = mcp.sessions.register(state)
+    const read = parse(await client.callTool({ name: 'get_queue', arguments: { scene_id: identity.scene_id } }))
+    const ready = read.items.find((item: { readiness: string }) => item.readiness === 'ready-now')
+    expect(ready.sources.map((source: { request?: unknown }) => source.request)).toEqual(expect.arrayContaining([
+      { home: home.source.home, taskId: task.id, id: 'choose', kind: 'decision' },
+      { home: home.source.home, taskId: task.id, id: 'choose', kind: 'hold' },
+    ]))
+    expect(ready.sources.filter((source: { request?: unknown }) => source.request).every((source: { readiness: string; responseAnchor?: string }) => source.readiness === 'ready-now' && source.responseAnchor)).toBe(true)
+    const args = { scene_id: identity.scene_id, command_id: 'next-exact-sources', expected_revision: 0 }
+    const pending = client.callTool({ name: 'next_queue_item', arguments: args })
+    let commands = mcp.sessions.sync(identity.scene_id, state, [])
+    for (let i = 0; i < 20 && !commands.length; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      commands = mcp.sessions.sync(identity.scene_id, state, [])
+    }
+    expect(commands).toHaveLength(1)
+    const applied = applyPresentationAction(state, commands[0]!.action, scene, Date.now(), queue)
+    mcp.sessions.sync(identity.scene_id, applied.state, [{ scene_id: identity.scene_id, command_id: args.command_id, outcome: applied.outcome, state: applied.state, revision: applied.state.revision, applied_at: Date.now() }])
+    expect(parse(await pending).outcome).toBe('applied')
+    expect(parse(await client.callTool({ name: 'next_queue_item', arguments: args })).outcome).toBe('applied')
+    expect(JSON.stringify(queue)).toBe(original)
   })
   it('restricts peers to loopback and tailnet ranges', () => {
     for (const ip of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '100.64.1.2', '100.127.2.1', 'fd7a:115c:a1e0::1']) expect(privatePeer(ip)).toBe(true)

@@ -8,6 +8,7 @@ import type { AttentionType } from './attention'
 
 export interface OutboxMessage {
   requestId: string
+  sourceAnchor?: string
   home: string
   kind: 'answer' | 'message'
   taskId: string | null

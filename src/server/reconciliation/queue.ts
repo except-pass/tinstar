@@ -1,5 +1,7 @@
 import type { SourceSnapshot } from './index'
-import { buildAttentionCards, parsePullUrl } from '../fleet/attention'
+import { parsePullUrl } from '../fleet/attention'
+import { sourceRequests } from '../fleet/requests'
+import { requestAnchor, type FirstMateRequest } from '../../shared/deskSource'
 import { ageObservation, type Observation } from './observation'
 import { reconcileScene } from './scene'
 import { record, text } from './values'
@@ -7,7 +9,12 @@ import type { PullReadiness } from './queuePulls'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
-  request?: { home: string; taskId: string | null; id: string | null; kind: 'hold' | 'decision' }
+  request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
+  /** Readiness and response belong to this source, never inherited from another source. */
+  readiness?: QueueReadiness
+  action?: string | null
+  reasons?: string[]
+  responseAnchor?: string
   kind: 'notion' | 'firstmate' | 'github'
   id: string
   field: string
@@ -34,7 +41,6 @@ export interface QueueItem {
   oneTouch: boolean
 }
 
-type Backlog = NonNullable<NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['backlog']>[number]
 type Card = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 const prop = (card: Card, name: string) => card.properties[name]?.value
 const word = (card: Card, name: string) => text(prop(card, name))?.trim() || null
@@ -78,7 +84,6 @@ function restrictAction(item: QueueItem, value: string | null): boolean {
 function context(item: QueueItem, card: Card, observation: SourceSnapshot['intentions'], now: number) {
   for (const name of ['Next action', 'Next Action']) restrictAction(item, word(card, name))
   item.cardIds.push(card.id)
-  item.sources.push(source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', observation))
   link(item, card.url ?? `https://www.notion.so/${card.id}`, 'card')
   link(item, word(card, 'Link')); link(item, word(card, 'Evidence'))
   item.checkpoint = date(card, 'Next check-in')
@@ -95,10 +100,6 @@ function context(item: QueueItem, card: Card, observation: SourceSnapshot['inten
   }
 }
 
-function ownerRequest(requestId: string | null, holds: Backlog[]) {
-  return requestId ? holds.find(hold => hold.id === requestId && hold.captain_actionable === true) : undefined
-}
-
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */
 export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now()) {
   const intentions = ageObservation(input.intentions, now)
@@ -107,6 +108,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const cards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const candidates: QueueItem[] = []
   const tagOnlyCandidates = new Set<QueueItem>()
+  const identities = new Map<QueueItem, string[]>()
+  const explicitPulls = new Map<QueueItem, string[]>()
+  const pullIds = (values: Array<string | null>) => unique(values.flatMap(value => {
+    const pull = value && parsePullUrl(value)
+    return pull ? [`pr:https://github.com/${pull.repository}/pull/${pull.number}`] : []
+  }))
   const blank = (id: string, title: string, action: string | null, kind: QueueItem['kind']): QueueItem => ({
     id, title, action, kind, readiness: 'ready-now', reasons: [], cardIds: [], executionIds: [], homeIds: [], decisionKeys: [], evidence: [], sources: [], checkpoint: null, oneTouch: false,
   })
@@ -121,8 +128,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     if (owner !== 'will' && !tags.length && !waitingForWill) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
-    const item = blank(JSON.stringify(['card', card.id, action ? normalize(action) : 'verify-action']), word(card, 'Name') ?? card.id, action, merge ? 'merge' : 'decision')
+    const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, action, merge ? 'merge' : 'decision')
     context(item, card, intentions, now)
+    item.sources.push({ ...source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
+      request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
+    identities.set(item, [item.id])
+    explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (owner !== 'will' || !action) {
       if (item.readiness === 'ready-now') tagOnlyCandidates.add(item)
       lower(item, 'needs-readiness-verification', 'A Will action tag/owner alone does not establish a concrete owner-only next action')
@@ -141,47 +152,49 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const backlog = observation.data?.backlog ?? []
     const workers = tasks.map(task => ({ key: JSON.stringify(task.identity), id: String(task.id), objective: String(task.backlog.title ?? task.id),
       state: String(task.current_state.state), detail: String(task.current_state.detail ?? ''), prUrl: null }))
-    const taskCalls = buildAttentionCards(homeIndex,
-      tasks.map(task => ({ id: task.id, hints: { open_decisions: task.queue?.decisions ?? [] } })), [], workers, new Map())
-      .filter(call => call.type === 'decision' || call.type === 'blocked')
-    const holdCalls = buildAttentionCards(homeIndex, [],
-      backlog.map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
-        body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })), workers, new Map())
-      .filter(call => call.type === 'decision')
-    const attention = [...taskCalls, ...holdCalls]
+    const requests = sourceRequests(home.source.home, homeIndex,
+      tasks.map(task => ({ ...task, completed: task.queue?.completed,
+        hints: { open_decisions: task.queue?.decisions ?? [] } })),
+      backlog.map(row => ({ ...row, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
+        body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })), workers, fresh(observation))
     for (const task of tasks) {
-      if (!['needs-decision', 'held'].includes(String(task.current_state.state)) || attention.some(call => call.taskId === task.id)) continue
-      attention.push({ key: JSON.stringify([home.source.home, task.id, 'unkeyed']), homeIndex, taskId: text(task.id),
-        decisionKey: null, holdId: null, dismissal: null, type: 'decision', headline: text(task.current_state.detail) ?? `${task.id} needs decision context`,
-        detail: '', workerKey: null, workerId: text(task.id), ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown' })
+      if (!['needs-decision', 'held'].includes(String(task.current_state.state)) || task.queue?.decisions.length || task.queue?.completed || requests.some(entry => entry.request.taskId === task.id)) continue
+      requests.push({ request: { home: home.source.home, taskId: text(task.id), id: null, kind: 'decision' }, ownerReady: false, matchedHoldId: null,
+        card: { key: JSON.stringify([home.source.home, task.id, 'unkeyed']), homeIndex, taskId: text(task.id),
+          decisionKey: null, holdId: null, dismissal: null, type: 'decision', headline: text(task.current_state.detail) ?? 'Read the source request',
+          detail: '', workerKey: null, workerId: text(task.id), ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown' } })
     }
-    const representedHolds = new Set<string>()
-    for (const call of attention) {
-      if (call.holdId && representedHolds.has(call.holdId)) continue
-      const task = tasks.find(task => task.id === call.taskId)
-      const requestId = call.holdId ?? (call.decisionKey === 'default' && (!task?.queue?.decisions.some(decision => decision.key === 'default') || task.queue.decisions.some(decision => !decision.key)) ? null : call.decisionKey)
-      const hold = backlog.find(row => row.id === requestId)
-      // A completed decision still represents its hold; do not resurrect the
-      // same request through the separate hold call after skipping it below.
-      if (!call.holdId && call.type === 'decision' && hold && requestId) representedHolds.add(requestId)
-      if (fresh(observation) && (task?.queue?.completed || hold?.queue?.completed || complete(hold?.state) || complete(task?.backlog.state) ||
-        (task?.current_state.freshness === 'fresh' && complete(task.current_state.state)))) continue
+    for (const entry of requests) {
+      const { card: call, request } = entry
+      const task = tasks.find(task => task.id === request.taskId)
+      const requestId = request.id
+      const hold = backlog.find(row => row.id === entry.matchedHoldId)
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
       const refs = unique([...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].map(ref => ref.pageId))
       const known = refs.map(id => cards.get(id)).filter((card): card is Card => !!card)
       const explicitRelationship = refs.length === 1 && known.length === 1 &&
         [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
       if (fresh(intentions) && explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
-      const item = blank(JSON.stringify(['firstmate', home.source.home, call.taskId, call.type === 'blocked' ? call.key.replace(/^attention-\d+:/, '') : call.decisionKey ?? call.holdId ?? 'blocked']), call.headline,
+      const item = blank(call.key, call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
       restrictAction(item, text(hold?.hold_reason))
       restrictAction(item, text(task?.backlog.hold_reason))
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
-      if (requestId) item.decisionKeys.push(requestId)
-      item.sources.push({ ...source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation),
-        request: { home: home.source.home, taskId: call.taskId, id: requestId, kind: call.holdId ? 'hold' : 'decision' } })
+      if (requestId && call.type !== 'blocked') item.decisionKeys.push(requestId)
+      item.sources.push({ ...source('firstmate', call.key, request.kind === 'decision' ? 'hints.open_decisions' : 'backlog.hold', observation), request,
+        ...(entry.ownerReady && request.id ? { responseAnchor: requestAnchor(request) } : {}) })
+      // Readiness also depends on the Notion feed staying fresh enough to
+      // verify that this request has not already been answered in its context.
+      item.sources.push(source('notion', intentions.data?.dataSourceId ?? 'configured-source', 'request-readiness-context', intentions))
+      // Request ids are scoped. A shared bare key on two workers is never identity.
+      identities.set(item, [call.key, ...(entry.matchedHoldId ? [JSON.stringify(['hold', request.home, entry.matchedHoldId])] : [])])
       link(item, text(task?.pr.url)); link(item, text(hold?.pr_url))
+      // Task PR/card membership remains evidence, never request identity. Only
+      // this request's own hold field or a URL in its question can unify it.
+      const questionLinks = (call.headline.match(/https:\/\/[^\s<>"']+/g) ?? []).map(url => url.replace(/[),.;!?]+$/, '')).filter(url => parsePullUrl(url))
+      for (const url of questionLinks) link(item, url)
+      explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
       if (explicitRelationship) for (const card of known) context(item, card, intentions, now)
       if (explicitRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
@@ -190,7 +203,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         lower(item, 'needs-readiness-verification', 'Card relationship is textual, conflicting or outside the readable source; verify context')
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
-      if (call.type === 'blocked' || !item.action || !ownerRequest(requestId, backlog)) {
+      if (call.type === 'blocked' || !item.action || !entry.ownerReady) {
         lower(item, 'needs-readiness-verification', 'No owner-actionable record explicitly matches this request ID')
       }
       if (future(text(hold?.hold_until), now) || future(text(task?.backlog.hold_until), now) || text(hold?.blocked_by) || text(task?.backlog.blocked_by)) {
@@ -204,39 +217,14 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     }
   })
 
-  const result = new Map<string, QueueItem>()
-  for (const item of candidates) {
-    if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
-    const urls = pulls(item)
-    // Exact PR identity unifies merge requests only. Other decisions on the same
-    // card/PR remain independent; title similarity never collapses decisions.
-    const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
-    if (merge) item.kind = 'merge'
-    const duplicateKey = merge && urls.length === 1 ? `merge:${urls[0]}` : item.kind !== 'blocked' && item.cardIds.length === 1 && item.action
-      ? JSON.stringify(['decision', item.cardIds[0], normalize(item.action)]) : item.id
-    const existing = result.get(duplicateKey)
-    if (existing) {
-      // An incomplete tag may be corroborated by a current explicit First Mate
-      // request. Stale/conflicting context and published dependencies still win.
-      if (tagOnlyCandidates.has(existing) && item.readiness === 'ready-now') existing.readiness = 'ready-now'
-      else if (!(tagOnlyCandidates.has(item) && existing.readiness === 'ready-now')) lower(existing, item.readiness, 'Same decision observed in multiple sources')
-      if (!tagOnlyCandidates.has(item)) tagOnlyCandidates.delete(existing)
-      existing.action ??= item.action
-      existing.reasons.push(...item.reasons)
-      existing.cardIds = unique([...existing.cardIds, ...item.cardIds]); existing.executionIds = unique([...existing.executionIds, ...item.executionIds])
-      existing.homeIds = unique([...existing.homeIds, ...item.homeIds]); existing.decisionKeys = unique([...existing.decisionKeys, ...item.decisionKeys])
-      existing.sources.push(...item.sources)
-      for (const evidence of item.evidence) if (!existing.evidence.some(e => e.url === evidence.url)) existing.evidence.push(evidence)
-    } else { item.id = duplicateKey; result.set(duplicateKey, item) }
-  }
-  const items = [...result.values()].filter(item => {
+  const verifyPull = (item: QueueItem) => {
     const urls = pulls(item)
     if (item.kind === 'merge') {
       if (urls.length !== 1) lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
       else {
         const observed = pullStates.get(urls[0]!)
         const pr = observed?.expiresAt && Date.parse(observed.expiresAt) <= now ? { ...observed, status: 'stale' as const } : observed
-        if (pr) item.sources.push({ kind: 'github', id: urls[0]!, field: 'pull/head/checks/mergeability', observedAt: pr.observedAt,
+        if (pr && !item.sources.some(source => source.kind === 'github' && source.id === urls[0])) item.sources.push({ kind: 'github', id: urls[0]!, field: 'pull/head/checks/mergeability', observedAt: pr.observedAt,
           expiresAt: pr.expiresAt, status: pr.status, coverage: pr.status === 'fresh' ? 'complete' : 'unknown' })
         if (pr?.status === 'fresh' && (pr.state === 'merged' || pr.state === 'closed')) return false
         if (pr?.status !== 'fresh') lower(item, 'needs-readiness-verification', 'PR state/checks are unavailable or stale')
@@ -249,6 +237,52 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         else item.reasons.push('Current PR is open, ready for merge, with passing checks on its observed head; this does not prove delivery')
       }
     }
+    return true
+  }
+  // Snapshot source-local readiness BEFORE combining identities. A ready card
+  // cannot promote an unverified worker question into an actionable response.
+  const retained: QueueItem[] = []
+  for (const item of candidates) {
+    if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
+    const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
+    if (merge) item.kind = 'merge'
+    if (!verifyPull(item)) continue
+    for (const source of item.sources) if (source.request) Object.assign(source, { readiness: item.readiness, action: item.action, reasons: [...item.reasons] })
+    retained.push(item)
+    // An explicitly published PR URL is identity. Contextual card membership is not.
+    identities.get(item)!.push(...(explicitPulls.get(item) ?? []))
+  }
+  // Connected components also cover a bridge source sharing a request id with
+  // one item and a PR URL with another. Arrival order never loses a source.
+  const groups: Array<{ items: QueueItem[]; ids: Set<string> }> = []
+  for (const item of retained) {
+    const ids = identities.get(item)!
+    const matches = groups.filter(group => ids.some(id => group.ids.has(id)))
+    const group = { items: [item, ...matches.flatMap(group => group.items)], ids: new Set([...ids, ...matches.flatMap(group => [...group.ids])]) }
+    for (const match of matches) groups.splice(groups.indexOf(match), 1)
+    groups.push(group)
+  }
+  const result = groups.map(group => {
+    const members = group.items.sort((a, b) => a.id.localeCompare(b.id))
+    const item = members[0]!
+    const substantive = members.filter(member => !tagOnlyCandidates.has(member))
+    const readiness = (substantive.length ? substantive : members).reduce<QueueReadiness>((value, member) => rank[member.readiness] > rank[value] ? member.readiness : value, 'ready-now')
+    const preferred = members.find(member => member.readiness === readiness && member.action) ?? members.find(member => member.action)
+    item.id = [...group.ids].sort()[0]!
+    item.readiness = readiness
+    item.action = preferred?.action ?? null
+    item.kind = members.some(member => member.kind === 'merge') ? 'merge' : item.kind
+    item.sources = [...new Map(members.flatMap(member => member.sources).map(source => [JSON.stringify([source.kind, source.id, source.field]), source])).values()]
+    item.reasons = members.flatMap(member => member.reasons)
+    item.cardIds = unique(members.flatMap(member => member.cardIds))
+    item.executionIds = unique(members.flatMap(member => member.executionIds))
+    item.homeIds = unique(members.flatMap(member => member.homeIds))
+    item.decisionKeys = unique(members.flatMap(member => member.decisionKeys))
+    item.evidence = [...new Map(members.flatMap(member => member.evidence).map(evidence => [evidence.url, evidence])).values()]
+    return item
+  })
+  const items = result.filter(item => {
+    if (!verifyPull(item)) return false
     item.oneTouch = item.readiness === 'ready-now' && !!item.action
     item.reasons = unique(item.reasons)
     return true

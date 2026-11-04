@@ -9,3 +9,4 @@
 .ov-group-head .ov-planned-toggle{flex:none;border:1px solid #334650;background:none;color:#8aa6b3;padding:3px 5px;font:8px var(--ov-mono)}
 
 .ov-orphan .ov-port{border-radius:0;transform:translateY(-50%) rotate(45deg)}
+.ov-source-actions textarea{display:block;width:100%;min-height:80px;background:#0c1a21;border:1px solid #35505b;color:var(--ov-ink);padding:8px;font:12px/1.5 inherit;resize:vertical}.ov-source-actions label{font-size:11px;color:var(--ov-low)}.ov-source-actions .cockpit-composer button{margin-top:8px}.ov-source-actions{border:0;border-top:1px solid #263b45;padding:4px 0 0;margin:8px 0;min-width:0}
