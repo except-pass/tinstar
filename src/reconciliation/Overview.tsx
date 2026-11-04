@@ -145,13 +145,18 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
       <strong className="ov-group-name">{displayLabel}</strong><span>{ws.length} W · {cs.length} T</span></header>
     {!collapsed && <div className="ov-group-body" ref={body}>
       {rows.map((row, index) => {
-        const hiddenTask = !row.cards.length && row.workers.some(w => scene.claims.some(c => c.executionId === w.id && c.state !== 'historical'))
-        const outsideWorker = !row.workers.length && row.cards.some(card => scene.claims.some(c => c.cardId === card.id && c.state !== 'historical'))
-        const leftEmpty = outsideWorker ? 'Linked worker outside this view' : workersUnavailable ? 'Workers unavailable' : 'No linked worker'
-        const rightEmpty = hiddenTask ? 'Linked task outside this view' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'
+        const workerClaims = scene.claims.filter(c => c.state !== 'historical' && row.workers.some(w => w.id === c.executionId))
+        const taskClaims = scene.claims.filter(c => c.state !== 'historical' && row.cards.some(card => card.id === c.cardId))
+        const confirmed = (claim: typeof scene.claims[number]) => claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current'
+        const hiddenTask = !row.cards.length && workerClaims.some(confirmed)
+        const outsideWorker = !row.workers.length && taskClaims.some(confirmed)
+        const workerCandidate = !row.workers.length && taskClaims.length > 0 && !outsideWorker
+        const taskCandidate = !row.cards.length && workerClaims.length > 0 && !hiddenTask
+        const leftEmpty = outsideWorker ? 'Linked worker outside this view' : workerCandidate ? 'Worker link unverified' : workersUnavailable ? 'Workers unavailable' : 'No linked worker'
+        const rightEmpty = hiddenTask ? 'Linked task outside this view' : taskCandidate ? 'Task link unverified' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'
         return <div className="ov-pair" key={row.cards[0]?.id ?? row.workers[0]?.id ?? index}>
           <div className="ov-worker-stack">{row.workers.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!row.workers.length && <div className="ov-empty-col">{leftEmpty}</div>}</div>
-          <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length || !row.cards.length) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workersUnavailable ? 'unknown worker' : 'no worker' : hiddenTask ? 'outside view' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
+          <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length || !row.cards.length) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workerCandidate ? 'unverified' : workersUnavailable ? 'unknown worker' : 'no worker' : hiddenTask ? 'outside view' : taskCandidate ? 'unverified' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
           <div className="ov-card-stack">{row.cards.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!row.cards.length && <div className="ov-empty-col">{rightEmpty}</div>}</div>
         </div>
       })}
