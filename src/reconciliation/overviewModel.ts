@@ -72,9 +72,13 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
     .map(c => (side === 'worker' ? rankCard.get(c.cardId) : rankWorker.get(c.executionId)) ?? Infinity))
   return scene.arrangements[state.arrangement].map(group => {
     const ws = workers.filter(e => group.executionIds.includes(e.id) && (!state.exceptionsOnly || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
-    const cs = scene.cards.filter(c => visibleOverviewCard(c) && group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
+    // Manager rows show only cards that home accounts for. The slash in
+    // "Unassigned / unknown" must not be read as a home path.
+    const unaffiliated = state.arrangement === 'secondMate' && group.label === 'Unassigned / unknown'
+    const cs = unaffiliated ? [] : scene.cards.filter(c => visibleOverviewCard(c) && group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
     ws.sort(state.sort !== 'activity' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
     cs.sort(state.sort === 'activity' ? (a, b) => (relatedRank(a.id, 'card') - relatedRank(b.id, 'card') || compareCards(a, b)) : compareCards)
-    return { ...group, cardIds: cs.map(card => card.id), label: state.arrangement === 'secondMate' ? managerName(scene, group.homeIds[0] ?? group.label) : group.label, workers: ws, cards: cs }
+    const label = state.arrangement === 'secondMate' && group.homeIds[0] ? managerName(scene, group.homeIds[0]) : group.label
+    return { ...group, cardIds: cs.map(card => card.id), label, workers: ws, cards: cs }
   }).filter(group => group.workers.length || group.cards.length).sort((a, b) => Number(a.label === 'Unassigned / unknown') - Number(b.label === 'Unassigned / unknown'))
 }
