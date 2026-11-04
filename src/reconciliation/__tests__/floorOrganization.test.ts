@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
+import { notionObservation } from '../../server/reconciliation/notion'
+import { resolveFloorGroup } from '../../shared/floorOrganization'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import { dateBucket, dateTimestamp, defaultOrganizer, organizedGroups, type Organizer } from '../../shared/floorOrganization'
 import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
@@ -10,6 +12,50 @@ import { loadPresentationPreferences, preferencesKey, savePresentationPreference
 const now = Date.parse('2026-11-04T17:00:00Z')
 const stateFor = (organizer: Partial<Organizer> = {}) => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), ...organizer } })
 describe('shared organization of independent endpoints', () => {
+  it.each(['initiative', 'epic'] as const)('uses only explicit %s properties from Notion', async field => {
+    const name = field === 'initiative' ? 'Initiative' : 'Epic'
+    for (const property of [undefined,
+      { type: 'relation', relation: [{ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }, { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }] },
+      { type: 'select', select: { name: 'Delivery' } },
+      { type: 'rich_text', rich_text: [{ plain_text: 'Delivery' }] },
+    ]) {
+      const fetcher = (async (_url, init) => new Response(JSON.stringify(init?.method === 'POST'
+        ? { results: [{ object: 'page', id: fixtureId(1), last_edited_time: new Date(now).toISOString(), properties: property ? { [name]: property } : {} }], has_more: false }
+        : { object: 'data_source', properties: {} }))) as typeof fetch
+      const observation = await notionObservation({ token: 'fixture', dataSourceId: fixtureId(1) }, fetcher).get()
+      const scene = fixtureScene({ now })
+      const card = scene.cards.find(c => c.id === fixtureId(1))!
+      Object.assign(card.source.properties, observation.data!.cards[0]!.properties)
+      const organizer = { ...defaultOrganizer(), outer: field, order: field }
+      expect(actionSchema.safeParse({ type: 'set-organizer', organizer }).success).toBe(true)
+      const groups = organizedGroups(scene, { ...initialPresentation(), organizer }, now)
+      expect(groups.filter(g => g.cardIds.includes(card.id)).map(g => g.label).sort()).toEqual(
+        !property ? ['Unassigned / Unknown'] : property.type === 'relation'
+          ? ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'] : ['Delivery'])
+      if (!property) expect(groups).toHaveLength(1)
+    }
+  })
+  it('resolves generated group members and reveals claim and manager ancestors', () => {
+    const scene = fixtureScene({ now }), state = stateFor({ outer: 'machine', inner: 'status' })
+    const claim = scene.claims.find(c => c.cardId === fixtureId(1))!
+    const groups = organizedGroups(scene, state, now)
+    for (const group of groups) {
+      expect(resolveFloorGroup(scene, state, group.id, now)?.cardIds).toEqual(group.cardIds)
+      expect(resolveFloorGroup(scene, state, group.outerId, now)?.executionIds).toEqual(
+        [...new Set(groups.filter(g => g.outerId === group.outerId).flatMap(g => g.executionIds))])
+    }
+    for (const target of [{ kind: 'claim', id: claim.id }, { kind: 'manager', id: claim.accountability.home }] as const) {
+      for (const type of ['focus', 'flash'] as const) {
+        const collapsed = groups.flatMap(g => [semanticId({ kind: 'group', id: g.id }), semanticId({ kind: 'group', id: g.outerId })])
+        const result = applyPresentationAction({ ...state, collapsed }, type === 'focus' ? { type, target } : { type, targets: [target] }, scene, now)
+        expect(result.outcome).toBe('applied')
+        for (const group of groups.filter(g => g.executionIds.includes(claim.executionId))) {
+          expect(result.state.collapsed).not.toContain(semanticId({ kind: 'group', id: group.id }))
+          expect(result.state.collapsed).not.toContain(semanticId({ kind: 'group', id: group.outerId }))
+        }
+      }
+    }
+  })
   it('carries both linked workers under a task field and keeps independent endpoints visible', () => {
     const scene = fixtureScene({ now }), before = JSON.stringify(scene)
     const groups = overviewGroups(scene, stateFor(), now)

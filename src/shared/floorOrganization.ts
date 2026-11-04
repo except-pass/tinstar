@@ -7,6 +7,8 @@ export const floorFields = [
   { id: 'machine', label: 'Machine', source: 'worker', kind: 'category' },
   { id: 'workerStatus', label: 'Worker status', source: 'worker', kind: 'category' },
   { id: 'activity', label: 'Last activity', source: 'worker', kind: 'date' },
+  { id: 'initiative', label: 'Initiative', source: 'task', kind: 'category' },
+  { id: 'epic', label: 'Epic', source: 'task', kind: 'category' },
   { id: 'status', label: 'Task Status', source: 'task', kind: 'category' },
   { id: 'owner', label: 'Task Owner', source: 'task', kind: 'category' },
   { id: 'priority', label: 'Priority', source: 'task', kind: 'priority' },
@@ -63,6 +65,10 @@ function values(scene: FloorScene, pair: Pair, id: FloorField): string[] {
     case 'activity': {
       const observed = Date.parse(w?.observation.observedAt ?? ''), age = w?.source.last_event.age_seconds
       raw = w && Number.isFinite(observed) && typeof age === 'number' && Number.isFinite(age) ? new Date(observed - age * 1000).toISOString() : null; break
+    }
+    case 'initiative': case 'epic': {
+      const property = c?.source.properties[id === 'initiative' ? 'Initiative' : 'Epic']
+      raw = property && ['relation', 'select', 'rich_text'].includes(property.type ?? '') ? property.value : null; break
     }
     case 'edited': raw = c?.source.last_edited_time; break
     default: raw = c?.source.properties[({ status: 'Status', owner: 'Owner', priority: 'Priority', checkIn: 'Next check-in', due: 'Due Date', area: 'Area', subArea: 'Sub-area' } as const)[id]]?.value
@@ -132,4 +138,17 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     group.homeIds = [...new Set(group.homeIds)]
   }
   return [...groups.values()].sort((a, b) => compareGroup(a.outerLabel, b.outerLabel, organizer.outer) || compareGroup(a.innerLabel, b.innerLabel, organizer.inner))
+}
+
+export function resolveFloorGroup(scene: FloorScene, state: PresentationState, id: string, now: number) {
+  const groups = organizedGroups(scene, state, now)
+  const inner = groups.find(g => g.id === id)
+  if (inner) return inner
+  const children = groups.filter(g => g.outerId === id)
+  if (children.length) return {
+    id, label: children[0]!.outerLabel,
+    cardIds: [...new Set(children.flatMap(g => g.cardIds))],
+    executionIds: [...new Set(children.flatMap(g => g.executionIds))],
+  }
+  return Object.values(scene.arrangements).flat().find(g => g.id === id)
 }

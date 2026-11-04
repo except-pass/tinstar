@@ -64,7 +64,7 @@ export function targetExists(scene: FloorScene, target: Target, state?: Presenta
     case 'you': case 'firstMate': return target.id === 'root'
   }
 }
-export function targetInGroup(scene: FloorScene, group: SceneGroup, target: Target): boolean {
+export function targetInGroup(scene: FloorScene, group: Pick<SceneGroup, 'id' | 'cardIds' | 'executionIds' | 'claimIds' | 'homeIds'> & { outerId?: string }, target: Target): boolean {
   switch (target.kind) {
     case 'card': return group.cardIds.includes(target.id)
     case 'execution': return group.executionIds.includes(target.id)
@@ -72,8 +72,8 @@ export function targetInGroup(scene: FloorScene, group: SceneGroup, target: Targ
       const claim = [...scene.claims, ...scene.claimHistory].find(claim => claim.id === target.id)
       return group.claimIds.includes(target.id) || !!claim && (group.cardIds.includes(claim.cardId) || group.executionIds.includes(claim.executionId))
     }
-    case 'manager': return group.homeIds.includes(target.id) || scene.executions.some(e => e.home === target.id && group.executionIds.includes(e.id))
-    case 'group': return group.id === target.id
+    case 'manager': return group.homeIds.some(home => ancestorHomes(scene, home).includes(target.id)) || scene.executions.some(e => ancestorHomes(scene, e.home).includes(target.id) && group.executionIds.includes(e.id))
+    case 'group': return group.id === target.id || group.outerId === target.id
     default: return false
   }
 }
@@ -141,8 +141,8 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   for (const target of revealTargets) {
     const selectedCardIds = target.kind === 'card' ? [target.id] : [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'claim' ? c.id === target.id : target.kind === 'execution' && c.executionId === target.id).map(c => c.cardId)
     if (scene.cards.some(c => selectedCardIds.includes(c.id) && isPlanned(scene, c))) next.roadmapExpanded = true
-    const organized = organizedGroups(scene, next, now).filter(g => target.kind === 'group' ? g.id === target.id || g.outerId === target.id : target.kind === 'card' ? g.cardIds.includes(target.id) : target.kind === 'execution' ? g.executionIds.includes(target.id) : false)
-    const reveal = scene.arrangements[next.arrangement].filter(group => targetInGroup(scene, group, target)).map(group => semanticId({ kind: 'group', id: group.id }))
+    const organized = organizedGroups(scene, next, now).filter(g => targetInGroup(scene, g, target))
+    const reveal: string[] = []
     const claims = [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'claim' && c.id === target.id)
     const executions = scene.executions.filter(e => target.kind === 'execution' ? e.id === target.id : claims.some(c => c.executionId === e.id))
     reveal.push(...organized.flatMap(g => [semanticId({ kind: 'group', id: g.id }), semanticId({ kind: 'group', id: g.outerId })]))

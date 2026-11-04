@@ -10,6 +10,7 @@ import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
 import { QueuePanel } from './QueuePanel'
 import { FloorToolbar } from './FloorToolbar'
+import { resolveFloorGroup } from '../shared/floorOrganization'
 import './overview.css'
 
 type Dispatch = (action: PresentationAction) => void
@@ -23,12 +24,13 @@ function workerCount(scene: FloorScene, now: number, readFailed: boolean, worker
   if (unavailable) return workers.length ? `${workers.length} last known workers` : 'Workers unavailable'
   return `${workers.length} workers${visible < workers.length ? ` · ${workers.length - visible} hidden` : ''}`
 }
-function related(scene: FloorScene, focus: Target | null, item: Target) {
+function related(view: View, focus: Target | null, item: Target) {
+  const { scene, state, now } = view
   if (!focus) return false
   if (same(focus, item)) return true
   if (focus.kind === 'manager') return item.kind === 'execution' ? scene.executions.some(e => e.id === item.id && ancestorHomes(scene, e.home).includes(focus.id)) :
     scene.claims.some(c => c.cardId === item.id && ancestorHomes(scene, c.accountability.home).includes(focus.id))
-  if (focus.kind === 'group') { const group = Object.values(scene.arrangements).flat().find(g => g.id === focus.id); return !!group && (item.kind === 'card' ? group.cardIds : group.executionIds).includes(item.id) }
+  if (focus.kind === 'group') { const group = resolveFloorGroup(scene, state, focus.id, now); return !!group && (item.kind === 'card' ? group.cardIds : group.executionIds).includes(item.id) }
   return scene.claims.some(c => (focus.kind === 'claim' ? c.id === focus.id : focus.kind === 'card' ? c.cardId === focus.id : c.executionId === focus.id) && (item.kind === 'card' ? c.cardId === item.id : c.executionId === item.id))
 }
 function flashRelated(view: View, item: Target) {
@@ -37,9 +39,11 @@ function flashRelated(view: View, item: Target) {
   const ids = state.flash.ids
   return ids.includes(semanticId(item)) || scene.claims.some(c => ids.includes(semanticId(target('claim', c.id))) &&
     (item.kind === 'execution' ? c.executionId === item.id : item.kind === 'card' && c.cardId === item.id)) ||
-    Object.values(scene.arrangements).flat().some(g => ids.includes(semanticId(target('group', g.id))) &&
-      (item.kind === 'execution' ? g.executionIds : item.kind === 'card' ? g.cardIds : []).includes(item.id)) ||
-    scene.coverage.homes.some(h => ids.includes(semanticId(target('manager', h.source.home))) && related(scene, target('manager', h.source.home), item))
+    ids.filter(id => id.startsWith('group:')).some(id => {
+      const group = resolveFloorGroup(scene, state, id.slice('group:'.length), now)
+      return !!group && (item.kind === 'execution' ? group.executionIds : item.kind === 'card' ? group.cardIds : []).includes(item.id)
+    }) ||
+    scene.coverage.homes.some(h => ids.includes(semanticId(target('manager', h.source.home))) && related(view, target('manager', h.source.home), item))
 }
 function Entity({ view, entity, kind, hover, focus, references }: { view: View; entity: Execution | SceneCard; kind: 'execution' | 'card'; hover: (target: Target | null) => void; focus: Target | null; references: string[] }) {
   const { scene, state, send, now, readFailed } = view, item = target(kind, entity.id)
@@ -48,7 +52,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const title = worker ? workerTitle(worker) : cardTitle(card!)
   const flashed = flashRelated(view, item)
   const meta = worker ? `${worker.placement.machine ?? 'Unknown machine'} · ${tone === 'orphan' ? 'No card · ' : ''}${workerState(worker, now, readFailed)}${workerActivity(worker) ? ` · ${workerActivity(worker)}` : ''}` : `${cardStatus(card!)}${tone === 'gap' ? ' · No worker' : card!.expectation === 'outside' ? ' · Outside coverage' : tone === 'uncertain' ? ' · Unverified' : ''}`
-  return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus ? related(scene, focus, item) ? ' related' : ' dim' : ''}${flashed ? ' flashed' : ''}`}
+  return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus ? related(view, focus, item) ? ' related' : ' dim' : ''}${flashed ? ' flashed' : ''}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} aria-pressed={same(state.selection, item)} aria-label={`${title}. ${meta}${tone === 'uncertain' ? '. Link unverified' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => send({ type: 'focus', target: item })}>
     {worker && <span className="ov-face"><AgentIcon seed={worker.identity.task_id ?? worker.id} color="#00f0ff" className="ov-avatar" /></span>}
@@ -108,7 +112,7 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
       <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{workersLabel === '0 workers' ? 'No workers in this group' : workersLabel}</div>}</div>
       <div aria-hidden="true" />
       <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : cards.length ? 'Waiting & planned hidden' : 'No cards in this group'}</div>}</div>
-      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(scene, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
+      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
     </div>}
   </section>
 }
@@ -121,7 +125,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const execution = scene.executions.find(e => e.id === (claim?.executionId ?? (selection.kind === 'execution' ? selection.id : '')))
   const card = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
   const home = scene.coverage.homes.find(h => h.source.home === (selection.kind === 'manager' ? selection.id : execution?.home))
-  const group = Object.values(scene.arrangements).flat().find(g => selection.kind === 'group' && g.id === selection.id)
+  const group = selection.kind === 'group' ? resolveFloorGroup(scene, state, selection.id, now) : undefined
   const matches = workers.filter(w => w.home === execution?.home && w.id === execution?.identity.task_id)
   const worker = matches.length === 1 ? matches[0] : null
   const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
@@ -137,7 +141,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     {card && <><p>{cardStatus(card)}</p><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{safeUrl(card.source.url) && <a href={safeUrl(card.source.url)!} target="_blank" rel="noreferrer">Open Notion card ↗</a>}<button type="button" onClick={() => send({ type: 'open-queue', cardId: card.id })}>Read full card</button>
       {card.parentIds.map(id => <button key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{workerCount(scene, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && e.home === home.source.home), state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 0 : undefined, home.source.home)} · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
-    {group && <><p>{group.counts.cards} cards · {workerCount(scene, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id)))}</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
+    {group && <><p>{group.cardIds.length} cards · {workerCount(scene, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id)))}</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
     {selection.kind === 'firstMate' && <><p>Supervising the configured managers.</p>{scene.coverage.homes.map(h => <div key={h.source.home} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('manager', h.source.home) })}>{managerName(scene, h.source.home)}</button></div>)}</>}
     {claims.length > 0 && <><h4>Connections & history</h4>{claims.map(c => <div className="ov-related" key={c.id}><small>{c.state === 'historical' ? 'History' : c.verification === 'confirmed' && c.state === 'current' ? 'Linked' : 'Unverified'}</small><button type="button" disabled={!scene.cards.some(card => card.id === c.cardId)} onClick={() => send({ type: 'focus', target: target('card', c.cardId) })}>{scene.cards.find(card => card.id === c.cardId) ? cardTitle(scene.cards.find(card => card.id === c.cardId)!) : 'Card unavailable'}</button><button type="button" disabled={!scene.executions.some(e => e.id === c.executionId)} onClick={() => send({ type: 'focus', target: target('execution', c.executionId) })}>{scene.executions.find(e => e.id === c.executionId) ? workerTitle(scene.executions.find(e => e.id === c.executionId)!) : 'Worker history'}</button></div>)}</>}
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>

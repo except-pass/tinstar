@@ -17,9 +17,11 @@ with links in the gutter. A compact toolbar controls both columns:
   keyboard-accessible toolbar selects. Reset restores the default view.
 
 Available Worker fields are Manager, Machine, Worker status and Last activity.
-Work fields are Task Status, Task Owner, Priority, Next check-in, Due Date,
-Last edited, Area and Sub-area. Initiative and Epic are unavailable until the
-board has explicit properties; parent chains never establish either.
+Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-in,
+Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
+Notion properties named exactly Initiative and Epic: canonical IDs for relations,
+option values for select, and text for rich_text. Missing properties place tasks
+in Unassigned / Unknown; parent chains never establish either.
 The initial organizer uses Task Status, no Inner, and Next check-in ascending.
 
 Only explicit, non-conflicting canonical page-ID links carry endpoints between

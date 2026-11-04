@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { PresentationAction, PresentationState } from './reconciliationPresentation'
 
-export const fieldSchema = z.enum(['manager', 'machine', 'workerStatus', 'activity', 'status', 'owner', 'priority', 'checkIn', 'due', 'edited', 'area', 'subArea'])
+export const fieldSchema = z.enum(['manager', 'machine', 'workerStatus', 'activity', 'initiative', 'epic', 'status', 'owner', 'priority', 'checkIn', 'due', 'edited', 'area', 'subArea'])
 export const organizerSchema = z.object({ outer: z.union([fieldSchema, z.literal('none')]), inner: z.union([fieldSchema, z.literal('none')]), order: fieldSchema, direction: z.enum(['asc', 'desc']) }).strict()
 export const statusFilterSchema = z.object({ preset: z.enum(['operational', 'all', 'custom']), statuses: z.array(z.string().max(256)).max(256) }).strict()
 
