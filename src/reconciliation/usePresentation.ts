@@ -32,7 +32,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
   }, [state])
   useEffect(() => {
     if (queue) {
-      const queueItemId = retainedQueueItemId(previousQueue.current, queue, current.current.queueItemId)
+      const queueItemId = retainedQueueItemId(previousQueue.current, queue, current.current.queueItemId ?? null)
       if (queueItemId !== current.current.queueItemId) {
         const next = { ...current.current, queueItemId, revision: current.current.revision + 1 }
         current.current = next
