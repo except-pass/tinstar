@@ -126,7 +126,7 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
       <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{workersLabel === '0 workers' ? 'No workers in this group' : workersLabel}</div>}</div>
       <div aria-hidden="true" />
       <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : cards.length ? 'Waiting & planned hidden' : 'No cards in this group'}</div>}</div>
-      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
+      {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${(!state.navigation || state.navigation.cardId !== p.card || p.tone === 'linked') && state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
     </div>}
   </section>
 }
@@ -186,7 +186,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   useEffect(() => {
     const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width:850px)').matches
     if (mobile && deskMobile && !previousDeskOpen.current) deskPanel.current?.querySelector<HTMLButtonElement>('.ov-mobile-close')?.focus({ preventScroll: true })
-    if (mobile && !deskMobile && previousDeskOpen.current && !selectedId) root.current?.querySelector<HTMLButtonElement>('.ov-mobile-desk')?.focus({ preventScroll: true })
+    if (mobile && !deskMobile && previousDeskOpen.current && !selectedId && !root.current?.querySelector('.ov-card:focus')) root.current?.querySelector<HTMLButtonElement>('.ov-mobile-desk')?.focus({ preventScroll: true })
     previousDeskOpen.current = deskMobile
   }, [deskMobile, selectedId])
   useEffect(() => { setHovered(null) }, [state.revision])
@@ -205,8 +205,9 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
     const element = [...root.current?.querySelectorAll<HTMLElement>('.ov-card') ?? []].find(el => el.dataset.entityId === state.navigation?.cardId)
     if (!element) return
     setDeskMobile(false)
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    element.scrollIntoView({ block: 'center', behavior: reduce ? 'instant' : 'smooth' })
+    // Expand and reveal have committed. Land immediately so a second input or
+    // Desk focus restoration cannot interrupt an in-flight native scroll.
+    element.scrollIntoView({ block: 'center', behavior: 'instant' })
     element.focus({ preventScroll: true })
   }, [state.navigation])
   if (!scene) return <section className="ov-loading"><h1>Overview</h1><p role="status">{error ? 'Sources unavailable · Retrying' : 'Reading workers and Notion cards…'}</p></section>
