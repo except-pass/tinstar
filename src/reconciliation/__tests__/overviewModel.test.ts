@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { gapTargets, overviewGroups, entityTone, managerName, rootHome } from '../overviewModel'
+import { gapTargets, overviewGroups, entityTone, managerName, rootHome, visibleOverviewCard } from '../overviewModel'
 import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
 
 describe('independent Overview stacks', () => {
@@ -54,6 +54,21 @@ describe('independent Overview stacks', () => {
     expect(entityTone(scene, 'card', fixtureId(1), Date.now())).toBe('linked')
     expect(gapTargets(scene, Date.now())).toHaveLength(2)
     expect(overviewGroups(scene, { ...state, exceptionsOnly: true }, Date.now()).flatMap(g => g.cards).map(c => c.id)).toEqual([fixtureId(2)])
+  })
+  it('leaves archived and unknown cards out of the overview', () => {
+    const sources = fixtureSources()
+    const cards = sources.intentions.data!.cards
+    cards.find(c => c.id === fixtureId(5))!.properties.Status!.value = 'Archived'
+    const unknown = cards.find(c => c.id === fixtureId(3))!
+    unknown.properties.Status!.value = 'Unknown'
+    cards.find(c => c.id === fixtureId(6))!.archived = true
+    const scene = new SceneReconciler().reconcile(sources)
+    const shown = overviewGroups(scene, initialPresentation(), Date.now()).flatMap(g => g.cards.map(c => c.id))
+    expect(shown).not.toContain(fixtureId(5))
+    expect(shown).not.toContain(fixtureId(3))
+    expect(shown).not.toContain(fixtureId(6))
+    expect(shown).toContain(fixtureId(1))
+    expect(new Set(shown)).toEqual(new Set(scene.cards.filter(visibleOverviewCard).map(c => c.id)))
   })
   it('keeps published final reports in history when the source expires', () => {
     const now = Date.now(), sources = fixtureSources({ now })

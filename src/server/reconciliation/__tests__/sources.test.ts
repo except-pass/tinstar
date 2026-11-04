@@ -165,12 +165,14 @@ describe('fleet collection', () => {
     const dir = await temp(); const file = join(dir, 'references.json')
     const raw = snapshot()
     await writeFile(file, JSON.stringify({ ...raw,
-      tasks: [{ ...raw.tasks[0], notion_page_id: '40d50ce6-d422-814a-a741-c102cd00aaae', backlog: { raw: `private body (card ${id})` } }],
+      tasks: [{ ...raw.tasks[0], notion_page_id: '40d50ce6-d422-814a-a741-c102cd00aaae', backlog: { raw: `private body (card ${id})`, body_excerpt: `private excerpt https://www.notion.so/${id}`, body_lines: ['private line'] } }],
       backlog: { records: [{ id: 'same-task', notion_page_id: id, title: `Work (card ${id})`, raw: 'private standalone body' }] },
     }))
     const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
     expect(result.data?.tasks[0]?.cardReferences).toEqual([
-      { pageId: id, basis: 'explicit', source: 'task.notion_page_id' }, { pageId: id, basis: 'textual', source: 'task.backlog.raw' },
+      { pageId: id, basis: 'explicit', source: 'task.notion_page_id' },
+      { pageId: id, basis: 'textual', source: 'task.backlog.raw' },
+      { pageId: id, basis: 'textual', source: 'task.backlog.body_excerpt' },
     ])
     expect(result.data?.backlog?.[0]?.cardReferences).toEqual([
       { pageId: id, basis: 'explicit', source: 'backlog.notion_page_id' }, { pageId: id, basis: 'textual', source: 'backlog.title' },

@@ -46,6 +46,17 @@ describe('cardReferences work_item', () => {
     expect(cardReferences({ work_item: workItem }, 'task')).toEqual([])
   })
 
+  it('reads a card id from the brief body without treating the body as an explicit work item', () => {
+    expect(cardReferences({
+      body_excerpt: `see https://www.notion.so/Build-${bare}`,
+      body_lines: [`card ${dashed}`, 'no id here'],
+    }, 'task.backlog')).toEqual([
+      { pageId: bare, basis: 'textual', source: 'task.backlog.body_excerpt' },
+      { pageId: bare, basis: 'textual', source: 'task.backlog.body_lines' },
+    ])
+    expect(cardReferences({ body_lines: ['no card here', 12] }, 'task.backlog')).toEqual([])
+  })
+
   it('adds nothing when work_item is absent and leaves prior references unchanged', () => {
     const row = {
       title: `Build (card ${bare})`,

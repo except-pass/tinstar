@@ -4,7 +4,7 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
 import { arrangements, semanticId, ancestorHomes, isPlanned, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
-import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, historyRecord, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups } from './overviewModel'
+import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, historyRecord, managerName, rootHome, stale, entityTone, gapTargets, overviewGroups, visibleOverviewCard } from './overviewModel'
 import { useFloorScene } from './useFloorScene'
 import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
@@ -182,7 +182,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   return <div ref={root} className="ov" data-arrangement={state.arrangement} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
     <header className="ov-top"><div><b>TIN STAR</b><small>OVERVIEW</small></div><button type="button" className={checksSuspended ? 'ov-warning' : 'ov-signal'} onClick={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }}>{notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} · Details</button></header>
     <div className="ov-columns"><div className="ov-main">
-      <div className="ov-intro"><h1>Overview</h1><span>{workerCount(scene, now, !!error, liveWorkers, new Set(groups.flatMap(g => g.workers.map(w => w.id))).size)}{!notionUnavailable && <> · {scene.cards.length} Notion cards</>}{gaps.length > 0 && <> · {gaps.length} gaps</>}</span></div>
+      <div className="ov-intro"><h1>Overview</h1><span>{workerCount(scene, now, !!error, liveWorkers, new Set(groups.flatMap(g => g.workers.map(w => w.id))).size)}{!notionUnavailable && <> · {scene.cards.filter(visibleOverviewCard).length} Notion cards</>}{gaps.length > 0 && <> · {gaps.length} gaps</>}</span></div>
       <div className="ov-org" aria-label="Managers"><button type="button" className="ov-person" onClick={() => { send({ type: 'open-queue' }); setDeskMobile(true) }}><span className="ov-face">Y</span><span><b>You</b><small>Open your desk</small></span></button><span>→</span><button type="button" className="ov-person" onClick={() => send({ type: 'focus', target: target('firstMate', 'root') })}><span className="ov-face">✦</span><span><b>First Mate</b><small>{rootManager ? `${managerName(scene, rootManager.source.home)} · ${workerCount(scene, now, !!error, liveWorkers.filter(e => e.home === rootManager.source.home), undefined, rootManager.source.home)}` : 'Supervising'}</small></span></button><span>→</span>
         {scene.coverage.homes.filter(h => h.source.home !== rootManager?.source.home).map(home => {
           const id = home.source.home, direct = liveWorkers.filter(e => e.home === id), children = scene.coverage.homes.filter(h => h.source.parentHome === id)
