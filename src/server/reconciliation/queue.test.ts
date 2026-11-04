@@ -121,6 +121,30 @@ describe('desk queue correctness', () => {
     expect(result.items.find(item => item.action === 'Review proposal')?.readiness).toBe('ready-now')
   })
 
+  it.each(['worker', 'worker-decision-formatter', 'origin-hold'])('does not route formatter through unrelated hold %s', id => {
+    const worker = task([{ key: 'formatter', verb: 'needs-decision', summary: 'Choose the formatter' }])
+    const held = hold({ id, hold_reason: 'Review proposal', ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: worker'] }) })
+    const result = build(snapshot([], [worker], [held]))
+    expect(result.items.find(item => item.decisionKeys.includes('formatter'))).toMatchObject({
+      action: 'Choose the formatter', readiness: 'needs-readiness-verification', oneTouch: false,
+    })
+    expect(result.items.find(item => item.decisionKeys.includes(id))).toMatchObject({ action: 'Review proposal', readiness: 'ready-now' })
+  })
+
+  it('requires exact request identity even when a same-task hold has identical text', () => {
+    const result = build(snapshot([], [task()], [hold({ id: 'worker' })]))
+    expect(result.items.find(item => item.decisionKeys.includes('choose'))).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+    expect(result.items).toHaveLength(2)
+  })
+
+  it('routes a keyed decision only through its exact owner-actionable hold', () => {
+    for (const captain_actionable of [true, false]) {
+      const result = build(snapshot([], [task()], [hold({ id: 'choose', captain_actionable })]))
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]).toMatchObject({ decisionKeys: ['choose'], readiness: captain_actionable ? 'ready-now' : 'needs-readiness-verification', oneTouch: captain_actionable })
+    }
+  })
+
   it('honors hold timing, blockers, completion, and disappearance of answered keys', () => {
     expect(build(snapshot([], [], [hold({ hold_until: '2026-12-01' })])).items[0]?.readiness).toBe('future-or-conditional')
     expect(build(snapshot([], [], [hold({ blocked_by: 'release' })])).items[0]?.readiness).toBe('future-or-conditional')
@@ -136,13 +160,13 @@ describe('desk queue correctness', () => {
     const worker = task([{ key: 'hold', verb: 'needs-decision', summary: 'Choose A or B' }])
     expect(build(snapshot([], [worker], [hold()])).items).toHaveLength(1)
     const origin = hold({ id: 'origin-hold', ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: worker'] }) })
-    expect(build(snapshot([], [task()], [origin])).items).toHaveLength(1)
+    expect(build(snapshot([], [task()], [origin])).items).toHaveLength(2)
   })
 
   it('deduplicates a Notion and First Mate merge request by canonical PR identity', () => {
     const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = `${pull}/`
     worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
-    const result = build(snapshot([mergeCard()], [worker]), new Map([[pull, readyPull()]]))
+    const result = build(snapshot([mergeCard()], [worker], [hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })]), new Map([[pull, readyPull()]]))
     expect(result.items).toHaveLength(1)
     expect(result.items[0]).toMatchObject({ readiness: 'ready-now', cardIds: [a], homeIds: ['/farm/hulk'], decisionKeys: ['merge'] })
     expect(result.items[0]?.sources.map(s => s.kind)).toEqual(expect.arrayContaining(['firstmate', 'notion', 'github']))
@@ -248,7 +272,7 @@ describe('desk queue correctness', () => {
       ...queueSignals({ hold_kind: 'captain', body_lines: route === 'origin-text' ? ['Origin: worker'] : [] }) })
     const result = build(snapshot([], [worker], [held]), new Map([[pull, readyPull()]]))
     expect(result.items).toHaveLength(1)
-    expect(result.items[0]).toMatchObject({ decisionKeys: [key], readiness: 'future-or-conditional', oneTouch: false })
+    expect(result.items[0]).toMatchObject({ decisionKeys: expect.arrayContaining([key]), readiness: 'future-or-conditional', oneTouch: false })
     held.hold_reason = summary === 'Merge this PR' ? 'Review then merge' : summary
     if (summary === 'Merge this PR') expect(build(snapshot([], [worker], [held]), new Map([[pull, readyPull()]])).items[0])
       .toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
