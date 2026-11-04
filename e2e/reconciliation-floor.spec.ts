@@ -98,6 +98,17 @@ test('independent columns, cross-group relationships, two-sided gaps and one per
   await expect(page.locator('.ov')).toHaveAttribute('data-arrangement', 'machine')
   await page.locator('.ov-card').first().click()
   await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
+  const drawer = page.locator('.ov-desk.mobile-open')
+  const railBounds = await page.locator('.cockpit-activity').boundingBox()
+  const drawerBounds = await drawer.boundingBox()
+  expect(drawerBounds!.x).toBeGreaterThanOrEqual(railBounds!.x + railBounds!.width)
+  for (const target of [drawer.getByRole('heading', { name: 'Your desk' }), drawer.locator('.ov-back'), drawer.locator('.ov-mobile-close')]) {
+    await expect(target).toBeVisible()
+    expect(await target.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return element.contains(document.elementFromPoint(bounds.left + 1, bounds.top + bounds.height / 2))
+    })).toBe(true)
+  }
   await screenshot(page, 'overview-mobile-reduced-motion')
   await page.keyboard.press('Escape')
   await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
