@@ -1,3 +1,4 @@
+import { retainedQueueItemId } from '../../shared/reconciliationQueue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -634,4 +635,19 @@ it('serves queue through the same read-only HTTP boundary and never calls domain
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+it('retains canonical PR selection as corroborating sources join and leave', () => {
+  const worker = task([{ key: 'choose', verb: 'needs-decision', summary: `Review ${pull}` }])
+  const alone = build(snapshot([], [worker]))
+  const combined = build(snapshot([mergeCard()], [worker]))
+  const cardOnly = build(snapshot([mergeCard()]))
+  expect(alone.items[0]!.id).toBe(`pr:${pull}`)
+  expect(combined.items[0]!.id).toBe(alone.items[0]!.id)
+  expect(cardOnly.items[0]!.id).toBe(alone.items[0]!.id)
+  const withoutPull = build(snapshot([card({ Owner: 'Will', 'Next action': 'Choose color' })]))
+  expect(retainedQueueItemId(combined, withoutPull, combined.items[0]!.id)).toBe(withoutPull.items[0]!.id)
+  expect(retainedQueueItemId(withoutPull, combined, withoutPull.items[0]!.id)).toBe(combined.items[0]!.id)
+  const unrelated = build(snapshot([card({ Owner: 'Will', 'Next action': 'Choose color' }, b)]))
+  expect(retainedQueueItemId(withoutPull, unrelated, withoutPull.items[0]!.id)).toBe(withoutPull.items[0]!.id)
 })

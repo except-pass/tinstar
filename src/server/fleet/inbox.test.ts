@@ -61,6 +61,16 @@ elif command == 'ready':
   expect(await first.list([home], () => true)).toEqual([])
   expect(await first.submit(message, target)).toEqual({ saved: true, error: null, canReceive: false })
   expect((await first.submit(message, target)).saved).toBe(true)
+  for (const [index, kind] of ['decision', 'hold'].entries()) {
+    const sourceAnchor = `desk-source:${JSON.stringify([home, 'alpha', kind, 'choose'])}`
+    const bound = { ...message, requestId: `tinstar-00000000-0000-4000-8000-00000000001${index}`, sourceAnchor, decisionKey: 'choose', holdId: kind === 'hold' ? 'choose' : null }
+    const isolated = new FleetOutbox()
+    await isolated.submit(bound, target)
+    await isolated.submit(bound, target)
+    expect(JSON.parse(readFileSync(join(home, 'state', `${bound.requestId}.json`), 'utf8')).body).toBe(`${target}:\nSource: ${sourceAnchor}\n${bound.text}`)
+    rmSync(join(home, 'state', `${bound.requestId}.json`))
+  }
+  writeFileSync(outboxFile, JSON.stringify([{ ...message, sentAt: Date.now() }]))
   const files = readFileSync(join(home, 'state', `${message.requestId}.json`), 'utf8')
   expect(JSON.parse(files).body).toBe('Answer for task alpha, decision choice (Choose a rollout order):\nUse option A.')
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toMatchObject([{ ...message, sentAt: expect.any(Number) }])

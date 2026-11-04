@@ -127,7 +127,7 @@ export class CockpitFleet {
     const worker = this.workers.find(item => item.home === message.home && item.id === message.taskId)
     const target = [message.taskId ? `task ${message.taskId}` : 'First Mate backlog',
       message.decisionKey ? `decision ${message.decisionKey}` : message.cardType && `${message.cardType} card`,
-      message.holdId && message.holdId !== message.decisionKey && `hold ${message.holdId}`].filter(Boolean).join(', ')
+      message.holdId && `hold ${message.holdId}`].filter(Boolean).join(', ')
     return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
   }
 

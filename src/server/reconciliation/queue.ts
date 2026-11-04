@@ -24,6 +24,7 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  identities?: string[]
   id: string
   title: string
   action: string | null
@@ -268,7 +269,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const substantive = members.filter(member => !tagOnlyCandidates.has(member))
     const readiness = (substantive.length ? substantive : members).reduce<QueueReadiness>((value, member) => rank[member.readiness] > rank[value] ? member.readiness : value, 'ready-now')
     const preferred = members.find(member => member.readiness === readiness && member.action) ?? members.find(member => member.action)
-    item.id = [...group.ids].sort()[0]!
+    item.identities = [...group.ids].sort()
+    item.id = item.identities.find(id => id.startsWith('pr:')) ?? item.identities[0]!
     item.readiness = readiness
     item.action = preferred?.action ?? null
     item.kind = members.some(member => member.kind === 'merge') ? 'merge' : item.kind

@@ -1,6 +1,7 @@
+import { usePresentation } from '../usePresentation'
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { fixtureQueue, fixtureViewerWorkers } from '../../../test-fixtures/reconciliation/scenes'
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
+import { fixtureQueue, fixtureScene, fixtureViewerWorkers } from '../../../test-fixtures/reconciliation/scenes'
 import { initialPresentation } from '../presentation'
 import { QueuePanel } from '../QueuePanel'
 afterEach(cleanup)
@@ -121,4 +122,23 @@ it('retains a saved answer after returning to its source without hiding another 
   expect(screen.getByText('Answer saved. See Receipts for delivery.')).toBeTruthy()
   expect(screen.getByText('Answer', { selector: 'summary' })).toBeTruthy()
   expect(screen.getByLabelText('Request inspector').querySelectorAll('textarea')).toHaveLength(1)
+})
+
+it('reconciles selected source membership for rendering and subsequent navigation', () => {
+  const queue = fixtureQueue(), scene = fixtureScene(), selected = queue.items[0]!
+  selected.identities = ['desk-source:exact-source']
+  const fetcher = vi.fn().mockImplementation(() => new Promise(() => {}))
+  vi.stubGlobal('fetch', fetcher)
+  try {
+    const { result, rerender, unmount } = renderHook(({ queue }) => usePresentation(scene, queue), { initialProps: { queue } })
+    act(() => { result.current.send({ type: 'open-queue', itemId: selected.id }) })
+    const joined = { ...queue, items: queue.items.map(item => item === selected ? { ...item, id: 'pr:canonical', identities: [...selected.identities!, 'pr:canonical'] } : item) }
+    rerender({ queue: joined })
+    expect(result.current.state.queueItemId).toBe('pr:canonical')
+    rerender({ queue })
+    expect(result.current.state.queueItemId).toBe(selected.id)
+    act(() => { result.current.send({ type: 'navigate-queue', direction: 'next' }) })
+    expect(result.current.state.queueItemId).not.toBe('pr:canonical')
+    unmount()
+  } finally { vi.unstubAllGlobals() }
 })

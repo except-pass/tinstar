@@ -153,7 +153,7 @@ export class FleetOutbox {
         this.messages = next
       }
       try {
-        const result = await inbox(message.home, ['note', '--request-id', message.requestId, '--json', '-'], `${target}:\n${message.text}`)
+        const result = await inbox(message.home, ['note', '--request-id', message.requestId, '--json', '-'], `${target}:${message.sourceAnchor ? `\nSource: ${message.sourceAnchor}` : ''}\n${message.text}`)
         if (result.code !== 0 && result.code !== 3) return { saved: false, error: result.stderr.trim() || 'First Mate did not save the message', canReceive: 'unknown' }
         const note = JSON.parse(result.stdout) as { saved?: boolean }
         if (!note.saved) return { saved: false, error: result.stderr.trim() || 'First Mate did not save the message', canReceive: 'unknown' }
