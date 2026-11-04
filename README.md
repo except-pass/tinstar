@@ -8,7 +8,7 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 Overview is the primary home: independent Workers and Notion cards share Initiative, Manager or Machine groups, with relationships between the columns and one contextual **Your desk** panel. Grouping, sorting, **Gaps only** and **Find gaps** change presentation only. Source health opens diagnostics; unavailable sources retain last-known records rather than asserting an empty fleet or board. See the [Overview reference](docs/features/overview.md) for detailed presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
-The Desk is read-only; use each First Mate source's inspector to open its existing terminal when available. Answering from the Desk is a follow-up. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
+Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
 The activity strip provides **Overview**, **Receipts** and **Workers**. Receipts and the worker switcher open in a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. Choose a worker in **Workers**, whose search narrows the list by id or project (Enter opens the first match), or use **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
@@ -27,7 +27,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-**Receipts** shows whether existing messages were saved, acknowledged or resolved; saving a message does not claim First Mate has acted on it. The retained inbox and dismissal APIs are described in the [integration reference](docs/features/firstmate-observer.md); Overview and the Desk expose no answer or dismiss controls.
+**Receipts** shows whether existing messages were saved, acknowledged or resolved; saving a message does not claim First Mate has acted on it. The retained inbox and dismissal APIs are described in the [integration reference](docs/features/firstmate-observer.md).
 
 ## Quick start
 
