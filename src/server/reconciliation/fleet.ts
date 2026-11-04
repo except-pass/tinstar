@@ -13,6 +13,8 @@ const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string |
 })) as Record<K, string | number | boolean | null>
 
 export function fleetObservation(source: FleetSource) {
+  // File publication includes snapshot generation and transport between homes.
+  const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
   return new CachedObservation(async () => {
     const snapshot = await readFleetSnapshot(source.home, source.snapshotFile)
     // A wrong publisher/path must not silently move work between homes.
@@ -57,5 +59,5 @@ export function fleetObservation(source: FleetSource) {
         ]), cardReferences: cardReferences(row, 'backlog') })) : null,
       },
     }
-  }, 20_000, 60_000, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source')
+  }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source')
 }
