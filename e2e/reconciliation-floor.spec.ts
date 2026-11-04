@@ -321,7 +321,11 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
   await page.setViewportSize({ width: 1396, height: 1039 })
   const now = Date.parse('2026-11-04T17:00:00Z')
   await page.clock.install({ time: now })
-  const scene = fixtureScene({ now })
+  const sources = fixtureSources({ now })
+  // Exercise a genuinely independent worker for the empty-task placeholder;
+  // positive legacy references now correctly produce an unverified candidate.
+  sources.fleet[1]!.observation.data!.tasks.find(task => task.identity.task_id === 'untracked-worker')!.cardReferences = []
+  const scene = new SceneReconciler().reconcile(sources, now)
   for (const card of scene.cards) {
     card.source.properties.Initiative = { id: 'initiative', type: 'select', hasMore: false, value: 'Delivery' }
     card.source.properties.Epic = { id: 'epic', type: 'select', hasMore: false, value: 'Readability' }
