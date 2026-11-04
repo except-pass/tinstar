@@ -71,7 +71,13 @@ export function compactCheckIn(card: SceneCard, now: number): string {
     const elapsed = now - dateTimestamp(propertyDate(card, 'Next check-in')!)
     return `Overdue ${elapsed < 3600000 ? `${Math.max(1, Math.floor(elapsed / 60000))}m` : elapsed < 86400000 ? `${Math.floor(elapsed / 3600000)}h` : `${Math.floor(elapsed / 86400000)}d`}`
   }
-  if (check.state === 'upcoming') return `Check-in ${dateLabel(propertyDate(card, 'Next check-in'))}`
+  if (check.state === 'upcoming') {
+    const value = propertyDate(card, 'Next check-in')!
+    const label = value.length > 10 && dateBucket(value, now, true) === 'Today'
+      ? new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }).format(dateTimestamp(value)).replace(' AM', 'a').replace(' PM', 'p')
+      : dateLabel(value)
+    return `Check-in ${label}`
+  }
   if (cardStatus(card) === 'Ready for Review' && check.state === 'missing') return 'Review requested'
   return check.label
 }

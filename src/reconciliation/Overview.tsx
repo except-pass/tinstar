@@ -55,6 +55,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const title = worker ? workerTitle(worker) : cardTitle(card!)
   const flashed = flashRelated(view, item)
   const status = worker ? workerState(worker) : cardStatus(card!)
+  const priority = card ? propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '') : ''
   const lastKnown = worker && (readFailed || stale(worker.observation, now))
   const deskRelated = state.navigation && (card ? card.id === state.navigation.cardId : scene.claims.some(c => c.cardId === state.navigation?.cardId && c.executionId === worker?.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current'))
   return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}`}
@@ -67,7 +68,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
       <span className="ov-worker-meta">▣ {worker.placement.machine ?? 'Unknown'} · <span className="ov-home-tag">{managerName(scene, worker.home)}</span></span>
       <span className="ov-record-foot"><span className="ov-activity" title={workerActivity(worker)}>⌁ {workerActivity(worker) || 'No activity published'}</span><span className="ov-age">{lastKnown && <span className="ov-freshness" title="Last known observation" aria-label="Last known observation">◌ </span>}{ageLabel(observedAt(worker), now)}</span></span>
     </> : <>
-      <span className="ov-record-top"><span className="ov-breadcrumb">{workBreadcrumb(scene, card!)}</span><span className={`ov-priority priority-${propertyText(card!, 'Priority').replace(/[^a-z]/gi, '').toLowerCase()}`}>{propertyText(card!, 'Priority')}</span></span>
+      <span className="ov-record-top"><span className="ov-breadcrumb">{workBreadcrumb(scene, card!)}</span><span className={`ov-priority priority-${priority.replace(/[^a-z]/gi, '').toLowerCase()}`} title={propertyText(card!, 'Priority')}>{priority}</span></span>
       <strong>{title}</strong>
       <span className="ov-task-meta"><span className={`ov-task-status task-${status.toLowerCase().replace(/[^a-z]/g, '-')}`}><i />{status}</span><span className="ov-owner">♙ {propertyText(card!, 'Owner') || 'Unassigned'}</span></span>
       <span className="ov-record-foot"><span className={`ov-check check-${checkIn(card!, now).state}`} title={`Next check-in: ${checkIn(card!, now).label}`}>◷ {compactCheckIn(card!, now)}</span><span className="ov-age" title={`Last touched by ${propertyText(card!, 'Last touched by') || 'Unknown'}`}>Edited {ageLabel(Date.parse(card!.source.last_edited_time), now)}</span></span>
