@@ -57,9 +57,8 @@ export function gapTargets(scene: FloorScene, now: number, readFailed = false): 
     ...scene.cards.filter(c => visibleOverviewCard(c) && entityTone(scene, 'card', c.id, now, readFailed) === 'gap').map(c => ({ kind: 'card' as const, id: c.id })),
   ]
 }
-/** Membership comes from each independent source. Relationships only coordinate
- * ordering, never decide whether an entity exists. Repeated memberships refer to
- * one stable identity, with cross-group references explicitly exposed in the UI. */
+/** Presentation membership and visibility follow docs/features/overview.md.
+ * Repeated memberships retain one stable identity across groups. */
 export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false) {
   const currentWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e))
   const workers = currentWorkers.filter(e => !managerCollapsed(scene, state, e.home))
