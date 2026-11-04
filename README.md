@@ -8,6 +8,8 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 Overview is the primary home: independent Workers and Notion cards share groups controlled by a compact Outer / Inner / Order toolbar, with relationships between the columns and one contextual **Your desk** panel. Operational is the default status view; use All cards or Custom to change visibility. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
+For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.
+
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
 The activity strip provides **Overview**, **Receipts** and **Workers**. Receipts and the worker switcher open in a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. Choose a worker in **Workers**, whose search narrows the list by id or project (Enter opens the first match), or use **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.

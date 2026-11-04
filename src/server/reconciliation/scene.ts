@@ -5,6 +5,7 @@ import type { SourceSnapshot } from './index'
 import { ageObservation, type Observation } from './observation'
 import type { CardReference } from './references'
 import { record, text } from './values'
+import { FIRST_MATE_TASKS, parseWorkerLinks } from './workerLinks'
 
 type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
@@ -74,6 +75,10 @@ export interface SceneGroup {
 const key = (...parts: unknown[]) => JSON.stringify(parts)
 const property = (card: SourceCard, name: string) => card.properties[name]?.value
 const word = (card: SourceCard, name: string) => text(property(card, name))
+const declaredLinks = (card: SourceCard) => {
+  const p = card.properties[FIRST_MATE_TASKS]
+  return p?.workerLinks ?? parseWorkerLinks(p?.type === 'rich_text' && !p.hasMore ? p.value : undefined)
+}
 const ids = (card: SourceCard, name: string) => {
   const value = property(card, name)
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
@@ -142,6 +147,23 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       ...expectation(card, now), progressAssessment: null }
   })
   const byCard = new Map(cards.map(card => [card.id, card]))
+  const linkRecords = new Map(cards.map(card => [card.id, declaredLinks(card.source)]))
+  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid')
+  const declarations = cards.flatMap(card => {
+    const parsed = linkRecords.get(card.id)!
+    if (parsed.status !== 'valid') {
+      add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`)
+      return []
+    }
+    return parsed.tasks.map(link => ({ card, link }))
+  })
+  const declarationsByWorker = new Map<string, typeof declarations>()
+  for (const declaration of declarations) {
+    const id = key(declaration.link.fm_home, declaration.link.task_id)
+    const entries = declarationsByWorker.get(id) ?? []
+    entries.push(declaration); declarationsByWorker.set(id, entries)
+  }
+  const declaredFor = (home: string, task: string | null) => declarationsByWorker.get(key(home, task)) ?? []
   const executions: Execution[] = []
   const claims: Claim[] = []
   const backlog = fleet.flatMap(home => (home.observation.data?.backlog ?? []).map(row => ({
@@ -181,35 +203,72 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         const card = byCard.get(cardId)
         const evidence = refs.filter(ref => ref.pageId === cardId)
         const basis = evidence.some(ref => ref.basis === 'explicit') ? 'explicit' : evidence.some(ref => ref.basis === 'textual') ? 'textual' : 'inferred'
-        const conflict = referenced.length > 1 || !task.identity.task_id || !task.identity.spawn_gen ||
-          !!card && (card.source.archived || card.source.in_trash || card.expectation === 'outside' || ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? ''))
-        const verification = conflict ? 'conflicting' : basis === 'explicit' && card && !card.source.archived && !card.source.in_trash ? 'confirmed' : 'unverified'
+        // Worker-side metadata is candidate/corroborating evidence only. A
+        // declared Notion relationship below owns confirmation and identity.
+        if (declaredFor(home.source.home, task.identity.task_id).some(d => d.card.id === cardId)) continue
+        const conflict = referenced.length > 1 || !task.identity.task_id || !task.identity.spawn_gen
+        const verification = conflict ? 'conflicting' : 'unverified'
         const claim: Claim = { id: key(cardId, id, basis), cardId, executionId: id, identity: task.identity, basis,
           sources: [...new Set(evidence.map(ref => ref.source))], observedAt: observation.observedAt, firstObservedAt: observation.observedAt, endedAt: null,
           state: fresh(observation) && fresh(intentions) ? 'current' : 'last-known', verification,
           accountability: { home: home.source.home, parentHome: home.source.parentHome ?? null, owner: card ? word(card.source, 'Owner') : null } }
         claims.push(claim)
-        // Keep the notion_page_id wording when that field is present; name work_item only when it is the explicit source.
-        const explicitField = evidence.some(ref => ref.source.endsWith('notion_page_id')) ? 'notion_page_id' : 'work_item'
-        add(verification === 'confirmed' ? 'confirmed-link' : 'unverified-conflicting', [cardId], [id], verification === 'confirmed'
-          ? `Explicit ${explicitField} links this attempt to the card; this does not establish progress or delivery`
-          : `Link is ${verification} (${basis})${!card ? '; card not observed in authorized source' : ''}; no automatic repair`)
+        add('unverified-conflicting', [cardId], [id], `Legacy candidate (${basis}); Notion declaration required; no automatic repair`)
       }
       if (execution.activity === 'unknown') add('unknown-stale-source', referenced, [id], 'Runtime state or execution identity is unknown; a fresh metadata snapshot alone is insufficient')
-      if (!referenced.length && execution.kind !== 'secondmate') {
-        if (execution.activity === 'executing' && execution.placement.machine && fleet.every(home => sufficient(home.observation)) && sufficient(intentions)) {
-          add('untracked-worker', [], [id], 'Fresh observed executing worker has no recognized card after reconciliation of complete configured sources')
-        } else if (execution.activity === 'executing') {
-          add('unknown-stale-source', [], [id], 'Cannot establish untracked execution with incomplete or stale source coverage')
-        } else add('unverified-conflicting', [], [id], 'No recognized card ID; this is not an observed untracked executing worker')
-      }
+    }
+  }
+  for (const { card, link } of declarations) {
+    const home = fleet.find(home => home.source.home === link.fm_home)
+    const matches = executions.filter(e => e.home === link.fm_home && e.identity.task_id === link.task_id)
+    const competing = declaredFor(link.fm_home, link.task_id)
+    // Unrelated truncated Notion relations do not invalidate a fully read
+    // declaration. Incomplete card pagination cannot establish uniqueness.
+    const notionAvailable = fresh(intentions) && !intentions.data?.hasMore
+    const homeAvailable = !!home && sufficient(home.observation)
+    const homeObserved = !!home && fresh(home.observation)
+    const available = homeAvailable && notionAvailable
+    const conflict = fresh(intentions) && (new Set(competing.map(d => d.card.id)).size > 1 || homeObserved &&
+      (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen)))
+    const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
+      ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? '')
+    const identity = { fm_home: link.fm_home, task_id: link.task_id, spawn_gen: link.first_observed_spawn_gen }
+    // A declaration with no observed worker remains visible in diagnostics; it
+    // does not manufacture a worker, liveness, or a filesystem lookup.
+    const targets = matches.length ? matches : [null]
+    for (const execution of targets) {
+      const id = execution?.id ?? key(identity.fm_home, identity.task_id, identity.spawn_gen)
+      const verification = conflict ? 'conflicting' : available && execution ? 'confirmed' : 'unverified'
+      const state = historical ? 'historical' : available && execution ? 'current' : 'last-known'
+      const corroboration = execution?.source.cardReferences.filter(ref => ref.pageId === card.id).map(ref => ref.source) ?? []
+      claims.push({ id: key(card.id, id, 'explicit'), cardId: card.id, executionId: id,
+        identity: execution?.identity ?? identity, basis: 'explicit', sources: [`notion.${FIRST_MATE_TASKS}`, ...corroboration],
+        observedAt: intentions.observedAt, firstObservedAt: intentions.observedAt, endedAt: null, state, verification,
+        accountability: { home: link.fm_home, parentHome: home?.source.parentHome ?? null, owner: word(card.source, 'Owner') } })
+      add(conflict ? 'unverified-conflicting' : !available ? 'unknown-stale-source' : execution ? 'confirmed-link' : historical ? 'outside-coverage' : 'unverified-conflicting',
+        [card.id], execution ? [id] : [], conflict
+          ? 'Competing Notion declarations or different spawn evidence; First Mate must investigate continuity or ID reuse; never auto-switch'
+          : !available ? 'Declared relationship is last-known; Notion or worker home unavailable, stale or partial'
+            : execution ? 'Notion First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery'
+              : historical ? 'Historical Notion relationship retained; worker is not currently observed'
+                : 'Declared worker not observed in a complete fresh home; First Mate must investigate', [link.fm_home])
+    }
+  }
+  // Independent/ad hoc workers are legitimate. Only positive source evidence
+  // of Notion origin can make a missing declaration a mismatch candidate.
+  for (const execution of executions) {
+    if (execution.kind === 'secondmate' || declaredFor(execution.home, execution.identity.task_id).length) continue
+    const refs = execution.source.cardReferences
+    if (execution.activity === 'executing' && refs.length && sufficient(intentions) && declarationsReadable && sufficient({ ...execution.observation, data: execution.source }) && fleet.every(home => sufficient(home.observation))) {
+      add('untracked-worker', [...new Set(refs.map(ref => ref.pageId))], [execution.id],
+        'Worker metadata indicates Notion-originated work without a matching Notion declaration; First Mate investigates')
     }
   }
   if (!sufficient(intentions)) add('unknown-stale-source', [], [], `Notion: ${intentions.status}/${intentions.coverage}; absence conclusions suppressed`)
   if (!fleet.length) add('unknown-stale-source', [], [], 'No configured homes; fleet coverage is unknown')
   // Unknown runtime state anywhere in the configured pool can hide an unlinked
   // execution. Do not turn metadata completeness into a false execution gap.
-  const absenceCovered = sufficient(intentions) && fleet.length > 0 && fleet.every(home => sufficient(home.observation)) &&
+  const absenceCovered = sufficient(intentions) && declarationsReadable && fleet.length > 0 && fleet.every(home => sufficient(home.observation)) &&
     executions.every(execution => execution.activity !== 'unknown')
   for (const card of cards) {
     const related = claims.filter(claim => claim.cardId === card.id)
@@ -343,8 +402,11 @@ export class SceneReconciler {
       if (current.has(id)) continue
       const home = scene.coverage.homes.find(home => home.source.home === previous.identity.fm_home)
       const replacement = scene.executions.find(execution => execution.id === previous.executionId)
-      const retired = home?.observation.status === 'fresh' && home.observation.coverage === 'complete' &&
-        (!replacement || scene.claims.some(claim => claim.executionId === replacement.id && claim.basis === 'explicit' && claim.state === 'current'))
+      const card = scene.cards.find(card => card.id === previous.cardId)
+      const notionKnown = ['fresh', 'partial'].includes(scene.coverage.intentions.status) &&
+        !input.intentions.data?.hasMore && card && declaredLinks(card.source).status === 'valid'
+      const retired = notionKnown && home?.observation.status === 'fresh' && home.observation.coverage === 'complete' &&
+        (!replacement || scene.claims.some(claim => claim.executionId === replacement.id && claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current'))
       this.known.set(id, { ...previous, state: retired || previous.endedAt ? 'historical' : 'last-known',
         endedAt: previous.endedAt ?? (retired ? home.observation.observedAt : null) })
     }

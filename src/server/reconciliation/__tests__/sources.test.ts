@@ -264,6 +264,26 @@ describe('Notion reader', () => {
   })
 })
 
+describe('First Mate tasks source property', () => {
+  it('reads concatenated rich text into the source model without requiring worker metadata', async () => {
+    const payload = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [
+      { fm_home: '/farm/hulk', task_id: 'one', first_observed_spawn_gen: 'g1' },
+      { fm_home: '/farm/hulk', task_id: 'two', first_observed_spawn_gen: 'g2' },
+    ] })
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema)).mockResolvedValueOnce(response({
+      results: [{ ...page, properties: { ...page.properties, 'First Mate tasks': { type: 'rich_text', rich_text: [
+        { plain_text: payload.slice(0, 80) }, { text: { content: payload.slice(80) } },
+      ] } } }], has_more: false,
+    }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result.data!.cards[0]!.properties['First Mate tasks']).toMatchObject({ type: 'rich_text', value: payload,
+      workerLinks: { status: 'valid', tasks: [
+        { fm_home: '/farm/hulk', task_id: 'one', first_observed_spawn_gen: 'g1' },
+        { fm_home: '/farm/hulk', task_id: 'two', first_observed_spawn_gen: 'g2' },
+      ] } })
+  })
+})
+
 describe('config and HTTP boundary', () => {
   it('honors the config root, falls back to existing homes, and reports invalid source config', async () => {
     const root = await temp()

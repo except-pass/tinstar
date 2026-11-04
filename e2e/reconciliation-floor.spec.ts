@@ -321,7 +321,11 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
   await page.setViewportSize({ width: 1396, height: 1039 })
   const now = Date.parse('2026-11-04T17:00:00Z')
   await page.clock.install({ time: now })
-  const scene = fixtureScene({ now })
+  const sources = fixtureSources({ now })
+  // Exercise a genuinely independent worker for the empty-task placeholder;
+  // positive legacy references now correctly produce an unverified candidate.
+  sources.fleet[1]!.observation.data!.tasks.find(task => task.identity.task_id === 'untracked-worker')!.cardReferences = []
+  const scene = new SceneReconciler().reconcile(sources, now)
   for (const card of scene.cards) {
     card.source.properties.Initiative = { id: 'initiative', type: 'select', hasMore: false, value: 'Delivery' }
     card.source.properties.Epic = { id: 'epic', type: 'select', hasMore: false, value: 'Readability' }
@@ -405,4 +409,26 @@ test('independent endpoint order survives many-to-many relationships in both dir
     }
   }
   await screenshot(page, 'independent-endpoint-order')
+})
+
+test('Notion declarations draw confirmed edges without worker-side assignment metadata', async ({ page }) => {
+  const now = Date.now(), input = fixtureSources({ now })
+  for (const home of input.fleet) for (const task of home.observation.data!.tasks) task.cardReferences = []
+  const scene = new SceneReconciler().reconcile(input, now)
+  const linked = scene.claims.filter(c => c.cardId === fixtureId(1) && c.verification === 'confirmed')
+  expect(linked).toHaveLength(2)
+  expect(linked.every(c => c.sources.length === 1 && c.sources[0] === 'notion.First Mate tasks')).toBe(true)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { items: [], sources: [] } } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
+  await expect(page.locator('.ov-group').filter({ has: card }).locator('.ov-line.ov-linked')).toHaveCount(2)
+  await expect(card).not.toContainText('First Mate tasks')
+  await card.click()
+  await expect(page.getByLabel('Inspector')).toContainText('Connections & history')
+  await page.getByText('Evidence & diagnostics', { exact: true }).click()
+  await expect(page.getByLabel('Inspector')).toContainText('notion.First Mate tasks')
+  await screenshot(page, 'notion-owned-confirmed-links-fixture')
 })

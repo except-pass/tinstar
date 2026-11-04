@@ -94,7 +94,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
   const workerMap = new Map(workers.map(w => [w.id, w])), cardMap = new Map(scene.cards.map(c => [c.id, c]))
   const pairs: Pair[] = [], linkedWorkers = new Set<string>(), linkedCards = new Set<string>()
   for (const claim of scene.claims) {
-    if (claim.basis !== 'explicit' || claim.verification === 'conflicting' || claim.state === 'historical') continue
+    if (claim.basis !== 'explicit' || claim.verification !== 'confirmed' || claim.state === 'historical') continue
     const worker = workerMap.get(claim.executionId), card = cardMap.get(claim.cardId)
     if (worker && card) { pairs.push({ worker, card }); linkedWorkers.add(worker.id); linkedCards.add(card.id) }
   }

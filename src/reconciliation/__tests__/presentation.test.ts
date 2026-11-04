@@ -83,7 +83,7 @@ describe('shared semantic presentation transitions', () => {
     const sources = fixtureSources({ now })
     const reconciler = new SceneReconciler()
     const first = reconciler.reconcile(sources, now)
-    const claim = first.claims[0]!
+    const claim = first.claims.find(c => c.verification === 'confirmed' && c.identity.task_id === 'linked-worker')!
     const state = applyPresentationAction(initialPresentation(), { type: 'focus', target: { kind: 'claim', id: claim.id } }, first).state
     const execution = sources.fleet[1]!.observation.data!.tasks[0]!
     execution.identity.spawn_gen = 'attempt-2'
