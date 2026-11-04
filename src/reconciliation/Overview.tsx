@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
-import type { QueueItem } from '../server/reconciliation/queue'
 import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { AgentIcon } from '../components/agentIcon'
@@ -144,7 +143,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </section>
 }
-export function Overview({ workers, requestControls }: { workers: Worker[]; requestControls?: (request: QueueItem, actionable: boolean) => React.ReactNode }) {
+export function Overview({ workers }: { workers: Worker[] }) {
   const { scene, error, now } = useFloorScene(), { queue, error: queueError } = useDeskQueue()
   const { state, send, connection, bridgeError } = usePresentation(scene, queue, !!error)
   const [hovered, setHovered] = useState<Target | null>(null), [diagnosticsRevision, setDiagnosticsRevision] = useState<number | null>(null)
@@ -199,7 +198,7 @@ export function Overview({ workers, requestControls }: { workers: Worker[]; requ
         {history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e, now, !!error)}</button>)}</details>}
       </div>
     </div><aside ref={deskPanel} className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><h2>Your desk</h2><button type="button" className="ov-mobile-close" onClick={() => { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); setDiagnostics(false); setDeskMobile(false) }}>Close</button></header>
-      {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{fleetDelayed && <p>Some worker observations are unavailable or incomplete. Last known workers remain visible.</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : state.selection ? <Inspector view={view} workers={workers} /> : null}<div hidden={diagnostics || !!state.selection}><QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} requestControls={requestControls} /></div>
+      {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{fleetDelayed && <p>Some worker observations are unavailable or incomplete. Last known workers remain visible.</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : state.selection ? <Inspector view={view} workers={workers} /> : null}<div hidden={diagnostics || !!state.selection}><QueuePanel state={state} send={send} queue={queue} error={queueError} now={now} /></div>
     </aside></div><button type="button" className="ov-mobile-desk" onClick={() => { setDiagnostics(false); send({ type: 'open-queue' }); setDeskMobile(true) }}>Your desk</button>
   </div>
 }

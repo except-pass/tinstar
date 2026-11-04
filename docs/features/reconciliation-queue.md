@@ -4,7 +4,7 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-The default Desk and Next navigation show verified ready requests. Verification and conditional requests remain secondary context. A worker's keyed question alone does not establish Will as next actor; an owner-actionable hold whose ID exactly equals the decision key is required. Task IDs, legacy aliases, origin links, matching text and card ownership do not route worker decisions to Will. Existing response controls appear only while readiness remains current; context, receipts and safe worker navigation remain available otherwise.
+The default Desk and Next navigation show verified ready requests. Verification and conditional requests remain secondary context. A worker's keyed question alone does not establish Will as next actor; an owner-actionable hold whose ID exactly equals the decision key is required. Task IDs, legacy aliases, origin links, matching text and card ownership do not route worker decisions to Will. The Desk is read-only. Each First Mate source has its own inspector and existing worker terminal link; readiness controls presentation only. Answering from the Desk is a follow-up.
 
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
@@ -20,7 +20,7 @@ Worker decisions and captain holds share request identity only when the decision
 
 ## Source limits and prerequisites
 
-The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls are unchanged.
+The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls remain available outside the Desk.
 
 Notion's existing property reader additionally retains optional `Next action` / `Next Action` and `Evidence` properties **if already present**. It creates no properties or planning hierarchy. In the observed board these properties are absent: actions/evidence written only in page bodies remain uncollected by S4. Owner/Will-action/Waiting-For candidates therefore need verification unless corroborated by a current explicit First Mate request. That is an observed interface gap, not permission to infer readiness from a Merge tag. The response always discloses `cardBodies: not-collected`; on-demand card prose is available separately through [S5 card context](reconciliation-mcp.md#tools-and-authority) and does not feed queue readiness. PM Bot/human-owned card context cannot establish a ready First Mate request automatically.
 

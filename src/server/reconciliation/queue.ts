@@ -7,6 +7,7 @@ import type { PullReadiness } from './queuePulls'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  request?: { home: string; taskId: string | null; id: string | null; kind: 'hold' | 'decision' }
   kind: 'notion' | 'firstmate' | 'github'
   id: string
   field: string
@@ -174,7 +175,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (requestId) item.decisionKeys.push(requestId)
-      item.sources.push(source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation))
+      item.sources.push({ ...source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation),
+        request: { home: home.source.home, taskId: call.taskId, id: requestId, kind: call.holdId ? 'hold' : 'decision' } })
       link(item, text(task?.pr.url)); link(item, text(hold?.pr_url))
       if (explicitRelationship) for (const card of known) context(item, card, intentions, now)
       if (explicitRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {

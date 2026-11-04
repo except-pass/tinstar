@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
+import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { NeedsYouPanel } from './NeedsYouPanel'
 import { WorkerSwitcherPanel } from './WorkerSwitcherPanel'
 import { defaultPanelMode, initialPanelMode, type AttentionCard, type Worker } from './types'
@@ -53,6 +54,28 @@ describe('Overview shell and retained terminal navigation', () => {
     expect(defaultPanelMode(null)).toBeNull()
     expect(initialPanelMode('alpha', false)).toBeNull()
     expect(initialPanelMode(null, true)).toBeNull()
+  })
+  it('never mounts response controls for a ready Desk request', async () => {
+    const queue = fixtureQueue(), item = queue.items[0]!
+    item.decisionKeys = ['go']
+    item.sources = [{ kind: 'firstmate', id: JSON.stringify([worker.home, worker.id]), field: 'hints.open_decisions:go',
+      request: { home: worker.home, taskId: worker.id, id: 'go', kind: 'decision' },
+      observedAt: new Date().toISOString(), expiresAt: null, status: 'fresh', coverage: 'complete' }]
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    vi.stubGlobal('fetch', (input: RequestInfo) => {
+      const url = String(input)
+      if (url.endsWith('/api/reconciliation/scene')) return Promise.resolve(json({ ok: true, data: fixtureScene() }))
+      if (url.endsWith('/api/reconciliation/queue')) return Promise.resolve(json({ ok: true, data: queue }))
+      if (url.endsWith('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [decision], errors: [] } }))
+      if (url.endsWith('/api/fleet/messages')) return Promise.resolve(json({ ok: true, data: [] }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    const { container } = render(<App />)
+    await screen.findByRole('button', { name: 'Workers, 1' })
+    await screen.findByLabelText('Request inspector')
+    expect(container.querySelector('.cockpit-attention-card')).toBeNull()
+    expect(screen.queryByText('Respond through First Mate')).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
   })
   it('retains worker cycling, receipts and a closed panel on return to Overview', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')

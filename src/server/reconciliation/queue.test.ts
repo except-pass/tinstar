@@ -145,6 +145,16 @@ describe('desk queue correctness', () => {
     }
   })
 
+  it('retains separate source targets for an identical question and same-task hold', () => {
+    const result = build(snapshot([], [task()], [hold({ id: 'worker' })]))
+    expect(result.items).toHaveLength(2)
+    const requests = result.items.flatMap(item => item.sources.flatMap(source => source.request ? [source.request] : []))
+    expect(requests).toEqual(expect.arrayContaining([
+      { home: '/farm/hulk', taskId: 'worker', id: 'choose', kind: 'decision' },
+      { home: '/farm/hulk', taskId: 'worker', id: 'worker', kind: 'hold' },
+    ]))
+  })
+
   it('honors hold timing, blockers, completion, and disappearance of answered keys', () => {
     expect(build(snapshot([], [], [hold({ hold_until: '2026-12-01' })])).items[0]?.readiness).toBe('future-or-conditional')
     expect(build(snapshot([], [], [hold({ blocked_by: 'release' })])).items[0]?.readiness).toBe('future-or-conditional')

@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
+import { homeName } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { decisionItems, type DeskQueue } from '../shared/reconciliationQueue'
 import type { QueueItem } from '../server/reconciliation/queue'
 import type { PresentationAction, PresentationState } from './presentation'
 
-export function QueuePanel({ state, send, queue, error, now, requestControls }: { state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number; requestControls?: (request: QueueItem, actionable: boolean) => ReactNode }) {
+export function QueuePanel({ state, send, queue, error, now }: { state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number }) {
   const ready = (item: QueueItem) => !error && item.readiness === 'ready-now' && item.sources.every(s => ['fresh', 'partial'].includes(s.status) && (!s.expiresAt || Date.parse(s.expiresAt) > now))
   const items = queue ? decisionItems(queue, now) : []
   const actionable = items.filter(ready)
@@ -31,7 +32,14 @@ export function QueuePanel({ state, send, queue, error, now, requestControls }: 
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
         {selected.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Read pull request' : e.kind === 'card' ? 'Read card' : 'Read evidence'} ↗</a>)}
         <div className="ov-queue-actions"><button type="button" disabled={index <= 0} onClick={() => send({ type: 'navigate-queue', direction: 'previous' })}>← Previous</button><button type="button" disabled={index >= items.length - 1} onClick={() => send({ type: 'navigate-queue', direction: 'next' })}>Next →</button></div>
-        {requestControls?.(selected, ready(selected))}
+        <section aria-label="Request inspector">{selected.sources.filter(source => source.kind === 'firstmate').map((source, index) => {
+          const request = source.request
+          const href = request?.taskId ? `?${new URLSearchParams({ worker: request.taskId, home: homeName(request.home) })}` : null
+          return <details key={`${source.id}:${source.field}:${index}`}><summary>First Mate {request?.kind === 'hold' ? 'hold' : 'request'} · {index + 1}</summary>
+            {href ? <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a> : <p>Source terminal unavailable</p>}
+            <pre>{JSON.stringify(source, null, 2)}</pre>
+          </details>
+        })}</section>
         <details><summary>Request sources & readiness</summary><pre>{JSON.stringify(selected, null, 2)}</pre></details>
       </> : <><h3>{!queue || error ? 'Desk unavailable' : state.queueItemId ? 'Selected request unavailable' : 'No verified request ready'}</h3><p>{!queue || error ? 'Last known requests stay available below.' : state.queueItemId ? 'Choose another request below.' : 'Requests that need verification or a prerequisite are available below.'}</p></>}
       {next.length > 0 && <><h4>Coming up</h4>{next.map(item => <button className="ov-queue-next" key={item.id} type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}<small>{item.kind === 'merge' ? 'Review' : 'Decision'}</small></button>)}</>}
