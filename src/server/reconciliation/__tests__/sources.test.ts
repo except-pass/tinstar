@@ -239,6 +239,15 @@ describe('Notion reader', () => {
     expect(JSON.stringify(result)).not.toMatch(/test-secret|raw_transcript/)
   })
 
+  it.each(['status', 'select'])('retains unpopulated %s options for presentation filters', async type => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({ ...schema, properties: { ...schema.properties,
+      Status: { id: 'status', type, [type]: { options: [{ name: 'In review' }, { name: 'Queued' }] } },
+    } })).mockResolvedValueOnce(response({ results: [page], has_more: false }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result.data!.schema.Status!.options).toEqual(['In review', 'Queued'])
+    expect(result.data!.cards[0]!.properties.Status!.value).toBe('Backlog')
+  })
+
   it('bounds pagination and reports truncated relations as partial', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => init?.method === 'GET' ? response(schema)
       : response({ results: [{ ...page, properties: { ...page.properties, 'Parent item': { type: 'relation', relation: [], has_more: true } } }], has_more: true, next_cursor: `cursor-${fetcher.mock.calls.length}` }))

@@ -72,7 +72,10 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
     const schemaProperties = record(schema.properties)
     const properties = Object.fromEntries(Object.entries(schemaProperties).map(([name, value]) => {
       const p = record(value)
-      return [name, { id: text(p.id), type: text(p.type), relation: p.type === 'relation'
+      const sourceOptions = record(p[String(p.type)]).options
+      const options = ['select', 'status'].includes(String(p.type)) && Array.isArray(sourceOptions)
+        ? sourceOptions.map(option => text(record(option).name)).filter((name): name is string => !!name) : []
+      return [name, { id: text(p.id), type: text(p.type), options, relation: p.type === 'relation'
         ? { data_source_id: notionPageId(record(p.relation).data_source_id), database_id: notionPageId(record(p.relation).database_id) } : null }]
     }))
     const cards = new Map<string, ReturnType<typeof card>>()

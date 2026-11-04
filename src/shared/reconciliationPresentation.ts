@@ -1,3 +1,4 @@
+import { defaultOrganizer, defaultStatusFilter, organizedGroups, type Organizer, type StatusFilter } from './floorOrganization'
 import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
@@ -16,6 +17,8 @@ export const findingLabels: Record<Finding['kind'], string> = {
 }
 export interface PresentationState {
   revision: number
+  organizer?: Organizer
+  statusFilter?: StatusFilter
   sort?: 'activity' | 'priority'
   linksVisible?: boolean
   arrangement: Arrangement
@@ -30,9 +33,12 @@ export interface PresentationState {
   queueItemId?: string | null
 }
 export const initialPresentation = (): PresentationState => ({
-  revision: 0, sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
+  revision: 0, organizer: defaultOrganizer(), statusFilter: defaultStatusFilter(), sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
 })
 type Change =
+  | { type: 'set-organizer'; organizer: Organizer }
+  | { type: 'set-status-filter'; filter: StatusFilter }
+  | { type: 'reset-floor' }
   | { type: 'set-arrangement'; arrangement: Arrangement }
   | { type: 'set-sort'; sort: 'activity' | 'priority' }
   | { type: 'set-links'; visible: boolean }
@@ -48,13 +54,13 @@ type Change =
   | { type: 'close-queue' }
 export type PresentationAction = Change & { origin?: 'manual' | 'assistant'; expectedRevision?: number }
 
-export function targetExists(scene: FloorScene, target: Target): boolean {
+export function targetExists(scene: FloorScene, target: Target, state?: PresentationState, now = Date.now()): boolean {
   switch (target.kind) {
     case 'card': return scene.cards.some(card => card.id === target.id)
     case 'execution': return scene.executions.some(execution => execution.id === target.id)
     case 'claim': return [...scene.claims, ...scene.claimHistory].some(claim => claim.id === target.id)
     case 'manager': return scene.coverage.homes.some(home => home.source.home === target.id)
-    case 'group': return Object.values(scene.arrangements).some(groups => groups.some(group => group.id === target.id))
+    case 'group': return Object.values(scene.arrangements).some(groups => groups.some(group => group.id === target.id)) || !!state && organizedGroups(scene, state, now).some(g => g.id === target.id || g.outerId === target.id)
     case 'you': case 'firstMate': return target.id === 'root'
   }
 }
@@ -95,11 +101,14 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   if (action.type === 'open-queue' && action.itemId && hasQueue(queue) && !queue.items.some(item => item.id === action.itemId)) return { state, outcome: 'unknown-id' }
   if (action.type === 'open-queue' && action.cardId && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
   const targets = action.type === 'focus' || action.type === 'set-expanded' ? [action.target] : action.type === 'flash' ? action.targets : []
-  if (targets.some(target => !targetExists(scene, target))) return { state, outcome: 'unknown-id' }
+  if (targets.some(target => !targetExists(scene, target, state, now))) return { state, outcome: 'unknown-id' }
   let next = { ...state, queueItemId: state.queueItemId ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null }
   switch (action.type) {
-    case 'set-arrangement': next.arrangement = action.arrangement; break
-    case 'set-sort': next.sort = action.sort; break
+    case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
+    case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
+    case 'reset-floor': next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
+    case 'set-arrangement': next.arrangement = action.arrangement; next.organizer = { ...(state.organizer ?? defaultOrganizer()), outer: action.arrangement === 'secondMate' ? 'manager' : action.arrangement === 'machine' ? 'machine' : 'none', inner: 'none' }; break
+    case 'set-sort': next.sort = action.sort; next.organizer = { ...(state.organizer ?? defaultOrganizer()), order: action.sort === 'activity' ? 'activity' : 'priority', direction: action.sort === 'activity' ? 'desc' : 'asc' }; break
     case 'set-links': next.linksVisible = action.visible; break
     case 'set-expanded': {
       const id = semanticId(action.target)
@@ -132,9 +141,11 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   for (const target of revealTargets) {
     const selectedCardIds = target.kind === 'card' ? [target.id] : [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'claim' ? c.id === target.id : target.kind === 'execution' && c.executionId === target.id).map(c => c.cardId)
     if (scene.cards.some(c => selectedCardIds.includes(c.id) && isPlanned(scene, c))) next.roadmapExpanded = true
+    const organized = organizedGroups(scene, next, now).filter(g => target.kind === 'group' ? g.id === target.id || g.outerId === target.id : target.kind === 'card' ? g.cardIds.includes(target.id) : target.kind === 'execution' ? g.executionIds.includes(target.id) : false)
     const reveal = scene.arrangements[next.arrangement].filter(group => targetInGroup(scene, group, target)).map(group => semanticId({ kind: 'group', id: group.id }))
     const claims = [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'claim' && c.id === target.id)
     const executions = scene.executions.filter(e => target.kind === 'execution' ? e.id === target.id : claims.some(c => c.executionId === e.id))
+    reveal.push(...organized.flatMap(g => [semanticId({ kind: 'group', id: g.id }), semanticId({ kind: 'group', id: g.outerId })]))
     reveal.push(...executions.flatMap(e => ancestorHomes(scene, e.home).map(id => semanticId({ kind: 'manager', id }))))
     if (target.kind === 'manager') reveal.push(...ancestorHomes(scene, target.id).map(id => semanticId({ kind: 'manager', id })))
     next.collapsed = next.collapsed.filter(id => !reveal.includes(id))

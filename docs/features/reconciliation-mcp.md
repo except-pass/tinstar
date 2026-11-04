@@ -36,7 +36,7 @@ Localhost is the default. For a remote client, the operator must explicitly bind
 | Tool | Result |
 | --- | --- |
 | `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
-| `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes and actual arrangements |
+| `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors (read only), or `queue-source-unavailable` |
@@ -49,6 +49,9 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 `present_view` requires `scene_id`, `command_id`, `expected_revision`, and `action`; optional `ttl_ms` is 500–15000 (default 8000). Actions:
 
 ```text
+{type:"set-organizer", organizer:{outer:field|"none", inner:field|"none", order:field, direction:"asc"|"desc"}}
+{type:"set-status-filter", filter:{preset:"operational"|"all"|"custom", statuses:string[]}}
+{type:"reset-floor"}
 {type:"set-sort", sort:"activity"|"priority"}
 {type:"set-links", visible:boolean}
 {type:"set-arrangement", arrangement:"initiative"|"secondMate"|"machine"}
@@ -64,7 +67,18 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 {type:"clear-selection"}
 ```
 
-Focus and flash reveal relevant ancestors/roadmap and clear the exception filter so valid targets become visible. Arrangement preserves selection. Flash preserves selection, accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
+Fields are `manager`, `machine`, `workerStatus`, `activity`, `status`, `owner`,
+`priority`, `checkIn`, `due`, `edited`, `area` and `subArea`. `get_scene` returns
+`records.groups` computed for this window's organizer and filters; group IDs and
+outer IDs are valid expansion/focus targets. `read_record` accepts both. Status
+options come from the source schema and observed cards. Organizer/status choices
+persist browser-locally after React commits, including assistant changes.
+Legacy `set-arrangement` maps `secondMate` to Manager, `machine` to Machine and
+`initiative` to one group, without inferring Initiative from parents. Legacy
+`set-sort` maps activity to Last activity descending and priority to Priority
+ascending. New clients should use `set-organizer`.
+
+Focus and flash reveal relevant ancestors/roadmap and clear the exception filter. Status filters remain unchanged; temporary Desk reveal/navigation is a later slice. Arrangement preserves selection. Flash preserves selection, accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
 
 Card context reads only IDs already on the configured authorized board. Context is cached for 60 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
 

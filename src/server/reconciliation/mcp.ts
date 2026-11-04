@@ -1,3 +1,4 @@
+import { organizedGroups } from '../../shared/floorOrganization'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
@@ -72,7 +73,7 @@ export class ReconciliationMcp {
       const window = this.sessions.read(scene_id)
       if (window.outcome === 'unknown-id') return result(window)
       const scene = await this.readers.scene()
-      return result({ ...window, freshness: scene.coverage, counts: scene.counts, warnings: scene.warnings, records: { cards: scene.cards.map(c => ({ id: c.id, title: c.source.properties.Name?.value, expectation: c.expectation })), actors: scene.executions.map(e => ({ id: e.id, identity: e.identity, activity: e.activity, placement: e.placement })), claims: scene.claims.map(c => ({ id: c.id, cardId: c.cardId, executionId: c.executionId, verification: c.verification })), arrangements: scene.arrangements } })
+      return result({ ...window, freshness: scene.coverage, counts: scene.counts, warnings: scene.warnings, records: { cards: scene.cards.map(c => ({ id: c.id, title: c.source.properties.Name?.value, expectation: c.expectation })), actors: scene.executions.map(e => ({ id: e.id, identity: e.identity, activity: e.activity, placement: e.placement })), claims: scene.claims.map(c => ({ id: c.id, cardId: c.cardId, executionId: c.executionId, verification: c.verification })), arrangements: scene.arrangements, groups: window.state ? organizedGroups(scene, window.state, Date.now()) : [] } })
     })
     server.registerTool('read_record', { description: 'Read an actor (execution/manager), card, claim, group or evidence and its source identity. Evidence is the claim’s bounded source references, never a terminal transcript.', inputSchema: { scene_id: z.string().uuid(), target: targetSchema, evidence: z.boolean().default(false) }, annotations: readAnnotations }, async ({ scene_id, target, evidence }) => {
       if (this.sessions.read(scene_id).outcome === 'unknown-id') return result({ outcome: 'unknown-id' })
@@ -83,7 +84,11 @@ export class ReconciliationMcp {
         case 'execution': record = scene.executions.find(x => x.id === target.id); break
         case 'claim': record = [...scene.claims, ...scene.claimHistory].find(x => x.id === target.id); break
         case 'manager': record = scene.coverage.homes.find(x => x.source.home === target.id); break
-        case 'group': record = Object.values(scene.arrangements).flat().find(x => x.id === target.id); break
+        case 'group': {
+          const state = this.sessions.read(scene_id).state
+          const groups = state ? organizedGroups(scene, state, Date.now()) : []
+          record = groups.find(x => x.id === target.id) ?? (groups.some(x => x.outerId === target.id) ? { id: target.id, groups: groups.filter(x => x.outerId === target.id) } : Object.values(scene.arrangements).flat().find(x => x.id === target.id)); break
+        }
         case 'you': case 'firstMate': record = target.id === 'root' ? { role: target.kind } : undefined; break
       }
       const claims = evidence ? [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'execution' ? c.executionId === target.id : c.id === target.id) : undefined

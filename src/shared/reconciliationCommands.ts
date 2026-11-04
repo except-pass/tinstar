@@ -1,8 +1,15 @@
 import { z } from 'zod'
 import type { PresentationAction, PresentationState } from './reconciliationPresentation'
 
+export const fieldSchema = z.enum(['manager', 'machine', 'workerStatus', 'activity', 'status', 'owner', 'priority', 'checkIn', 'due', 'edited', 'area', 'subArea'])
+export const organizerSchema = z.object({ outer: z.union([fieldSchema, z.literal('none')]), inner: z.union([fieldSchema, z.literal('none')]), order: fieldSchema, direction: z.enum(['asc', 'desc']) }).strict()
+export const statusFilterSchema = z.object({ preset: z.enum(['operational', 'all', 'custom']), statuses: z.array(z.string().max(256)).max(256) }).strict()
+
 export const targetSchema = z.object({ kind: z.enum(['card', 'execution', 'claim', 'manager', 'group', 'you', 'firstMate']), id: z.string().min(1).max(2048) }).strict()
 export const actionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('set-organizer'), organizer: organizerSchema }).strict(),
+  z.object({ type: z.literal('set-status-filter'), filter: statusFilterSchema }).strict(),
+  z.object({ type: z.literal('reset-floor') }).strict(),
   z.object({ type: z.literal('set-sort'), sort: z.enum(['activity', 'priority']) }).strict(),
   z.object({ type: z.literal('set-links'), visible: z.boolean() }).strict(),
   z.object({ type: z.literal('set-arrangement'), arrangement: z.enum(['initiative', 'secondMate', 'machine']) }).strict(),
@@ -18,6 +25,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clear-selection') }).strict(),
 ])
 export const stateSchema = z.object({
+  organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),
   revision: z.number().int().nonnegative(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), selection: targetSchema.nullable(),
   collapsed: z.array(z.string().max(2048)).max(4096), exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(),
