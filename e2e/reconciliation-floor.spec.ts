@@ -358,9 +358,19 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
     await expect(placeholder).toHaveCSS('border-top-style', 'dashed')
     expect((await rect(placeholder)).height).toBeGreaterThanOrEqual(108)
   }
-  // Multiple workers share one canonical card within this connected band.
   await expect(task).toHaveCount(1)
-  await expect(task.locator('..').locator('..').locator('.ov-execution')).toHaveCount(2)
+  const band = outer.locator('.ov-group').filter({ has: page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`) })
+  await expect(band).toHaveCount(1)
+  const linkedWorkers = ['linked-worker', 'helper-worker'].map(id => scene.executions.find(execution => execution.identity.task_id === id)!)
+  for (const execution of linkedWorkers) {
+    const endpoint = band.locator(`.ov-execution[data-entity-id="${execution.id}"]`)
+    await expect(endpoint).toHaveCount(1)
+    await endpoint.hover()
+    await expect(band.locator('.ov-line.hot.ov-linked')).toHaveCount(1)
+  }
+  await task.hover()
+  await expect(band.locator('.ov-execution.related')).toHaveCount(2)
+  await expect(band.locator('.ov-line.hot.ov-linked')).toHaveCount(2)
   await outer.locator(':scope > header > button').click()
   await expect(task).toHaveCount(0)
   await outer.locator(':scope > header > button').click()
