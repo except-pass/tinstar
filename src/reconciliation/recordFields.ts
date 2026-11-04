@@ -1,7 +1,7 @@
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene } from './presentation'
 import { cardStatus, cardTitle } from './overviewModel'
-import { dateTimestamp } from '../shared/floorOrganization'
+import { dateBucket, dateTimestamp } from '../shared/floorOrganization'
 
 export function propertyText(card: SceneCard, name: string): string {
   const value = card.source.properties[name]?.value
@@ -39,8 +39,9 @@ export function checkIn(card: SceneCard, now: number): { state: string; label: s
   if (['done', 'archived', 'backlog', 'todo', 'not started', 'planned', 'spare tokens'].includes(status)) return { state: 'not-applicable', label: 'Not applicable' }
   const at = propertyDate(card, 'Next check-in')
   if (!at) return { state: 'missing', label: 'Not scheduled' }
-  const time = dateTimestamp(at)
-  return { state: Number.isFinite(time) ? time < now ? 'overdue' : 'upcoming' : 'unknown', label: `${time < now ? 'Overdue · ' : ''}${dateLabel(at)}` }
+  const bucket = dateBucket(at, now, true)
+  const overdue = bucket === 'Overdue'
+  return { state: bucket === 'Unknown' ? 'unknown' : overdue ? 'overdue' : 'upcoming', label: `${overdue ? 'Overdue · ' : ''}${dateLabel(at)}` }
 }
 /** Stable order for compact cards and complete Inspector metadata. */
 export function taskFields(card: SceneCard, now: number, actionable = true) {
