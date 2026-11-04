@@ -85,6 +85,11 @@ describe('Notion authoritative observation table', () => {
     expect(reconcile(input).claims[0]?.verification).toBe('conflicting')
     input.fleet[1]!.observation.data!.tasks.push({ ...input.fleet[1]!.observation.data!.tasks[0]!, identity: { ...link, spawn_gen: 'attempt-1' } })
     expect(reconcile(input).claims.every(c => c.verification === 'conflicting')).toBe(true)
+    // Fleet collection marks duplicate task IDs partial; positive conflicting
+    // attempt evidence must still surface rather than becoming an absence claim.
+    input.fleet[1]!.observation.status = 'partial'
+    input.fleet[1]!.observation.coverage = 'partial'
+    expect(reconcile(input).claims.every(c => c.verification === 'conflicting' && c.state === 'last-known')).toBe(true)
   })
   it('never transfers an association to another home with the same task ID', () => {
     const input = source(); declare(input)
@@ -141,6 +146,13 @@ describe('Notion authoritative observation table', () => {
     const input = source(); declare(input); declare(input, fixtureId(5))
     input.fleet[1]!.observation = { ...input.fleet[1]!.observation, status: 'unknown', coverage: 'unknown', data: null }
     expect(reconcile(input).claims.every(c => c.verification === 'conflicting' && c.state === 'last-known')).toBe(true)
+  })
+
+  it('treats a missing generation in a partial home as unknown evidence', () => {
+    const input = source(); declare(input)
+    input.fleet[1]!.observation.data!.tasks[0]!.identity.spawn_gen = null
+    Object.assign(input.fleet[1]!.observation, { status: 'partial', coverage: 'partial' })
+    expect(reconcile(input).claims[0]).toMatchObject({ verification: 'unverified', state: 'last-known' })
   })
 
 })

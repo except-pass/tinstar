@@ -66,7 +66,10 @@ All configured source cards participate before any display filter. Only a fresh,
 complete home snapshot establishes a currently observed match. Notion reads must
 be current with complete card pagination; an unrelated truncated Parent/Sub-item
 relation can suppress absence checks without invalidating a fully read positive
-worker declaration. All findings remain scoped to configured sources.
+worker declaration. All findings remain scoped to configured sources. Positive contradictions (such
+as two primary declarations or multiple freshly observed attempts) still surface
+for investigation when absence coverage is incomplete; missing generation evidence
+alone stays unknown.
 
 | Observation | Tin Star result |
 | --- | --- |
