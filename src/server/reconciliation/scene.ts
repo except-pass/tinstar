@@ -275,7 +275,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   }
   const arrangements = groupScene(cards, executions, claims, findings, fleet.map(home => ({
     home: home.source.home, label: home.source.label, machine: home.source.machine ?? null,
-  })), backlog)
+  })))
   return {
     generatedAt: new Date(now).toISOString(), scope: input.scope, warnings: input.warnings,
     coverage: { absenceConclusions: absenceCovered ? 'sufficient-configured-sources' : 'suppressed',
@@ -296,7 +296,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   }
 }
 
-function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[], findings: Finding[], homes: Array<{ home: string; label?: string; machine: string | null }>, backlog: Array<{ home: string; source: { cardReferences: Array<{ pageId: string }> } }> = []) {
+function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[], findings: Finding[], homes: Array<{ home: string; label?: string; machine: string | null }>) {
   const arrangements = { initiative: new Map<string, SceneGroup>(), secondMate: new Map<string, SceneGroup>(), machine: new Map<string, SceneGroup>() }
   const group = (arrangement: keyof typeof arrangements, id: string, label: string) => {
     let entry = arrangements[arrangement].get(id)
@@ -333,11 +333,6 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
     for (const entry of [group('secondMate', key('home', execution.home), homeLabel(homes.find(home => home.home === execution.home) ?? { home: execution.home })), machine]) {
       entry.executionIds.push(execution.id); entry.claimIds.push(...related.map(claim => claim.id)); entry.cardIds.push(...related.map(claim => claim.cardId).filter(id => byCard.has(id)))
     }
-  }
-  for (const entry of backlog) {
-    const homeGroup = arrangements.secondMate.get(key('home', entry.home))
-    if (!homeGroup) continue
-    for (const ref of entry.source.cardReferences) if (byCard.has(ref.pageId)) homeGroup.cardIds.push(ref.pageId)
   }
   for (const arrangement of ['secondMate', 'machine'] as const) for (const card of cards) {
     if (![...arrangements[arrangement].values()].some(group => group.cardIds.includes(card.id))) unassigned(arrangement).cardIds.push(card.id)

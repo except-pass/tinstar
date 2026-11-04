@@ -72,8 +72,8 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
     .map(c => (side === 'worker' ? rankCard.get(c.cardId) : rankWorker.get(c.executionId)) ?? Infinity))
   return scene.arrangements[state.arrangement].map(group => {
     const ws = workers.filter(e => group.executionIds.includes(e.id) && (!state.exceptionsOnly || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
-    // Manager rows show only cards that home accounts for. The slash in
-    // "Unassigned / unknown" must not be read as a home path.
+    // A manager row lists cards only when one of its workers names that card.
+    // "Unassigned / unknown" is not a home, so its slash must not become a name.
     const unaffiliated = state.arrangement === 'secondMate' && group.label === 'Unassigned / unknown'
     const cs = unaffiliated ? [] : scene.cards.filter(c => visibleOverviewCard(c) && group.cardIds.includes(c.id) && (!state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap'))
     ws.sort(state.sort !== 'activity' ? (a, b) => (relatedRank(a.id, 'worker') - relatedRank(b.id, 'worker') || compareWorkers(a, b)) : compareWorkers)
