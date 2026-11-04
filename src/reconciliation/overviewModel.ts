@@ -19,7 +19,21 @@ export const stale = (observation: { status: string; expiresAt: string | null },
 export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
   /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
   ['done', 'landed'].includes(String(worker.source.last_event.state))
-export const workerState = (worker: Execution, now: number, readFailed = false) => readFailed || stale(worker.observation, now) ? 'Last known' : ({ running: 'Running', waiting: 'Waiting', finished: 'Finished', absent: 'Offline', 'liveness-not-observed': 'State unknown' })[worker.liveness]
+/** Execution status and observation freshness are independent signals. */
+export const workerState = (worker: Execution, now = Date.now(), readFailed = false) => {
+  // Retained source state describes the last observation, not present liveness.
+  // Freshness is labelled separately on the card and in the Inspector.
+  if (worker.liveness === 'liveness-not-observed' && (readFailed || stale(worker.observation, now)) && worker.identity.task_id && worker.identity.spawn_gen) {
+    const reported = String(worker.source.current_state.state)
+    if (reported === 'blocked') return 'Blocked'
+    if (['working', 'running', 'executing'].includes(reported)) return 'Running'
+    if (['waiting', 'paused', 'parked', 'needs-decision', 'held'].includes(reported)) return 'Waiting'
+    if (['done', 'landed'].includes(reported)) return 'Finished'
+  }
+  return worker.liveness === 'waiting' && worker.source.current_state.state === 'blocked' ? 'Blocked' :
+    ({ running: 'Running', waiting: 'Waiting', finished: 'Finished', absent: 'Finished', 'liveness-not-observed': 'Unknown' })[worker.liveness]
+}
+
 export const observedAt = (worker: Execution) => {
   const time = Date.parse(worker.observation.observedAt ?? '')
   const age = worker.source.last_event.age_seconds

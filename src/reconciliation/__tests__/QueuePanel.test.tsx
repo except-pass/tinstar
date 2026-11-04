@@ -25,7 +25,7 @@ it('retains a disappeared selection while offering the remaining ready request',
   expect(screen.getByText('Selected request unavailable')).toBeTruthy()
   expect(screen.queryByText('No verified request ready')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: new RegExp(ready[1]!.title) }))
-  expect(send).toHaveBeenCalledWith({ type: 'open-queue', itemId: ready[1]!.id })
+  expect(send).toHaveBeenCalledWith({ type: 'navigate-card', cardId: ready[1]!.cardIds[0] })
   expect(state.queueItemId).toBe(ready[0]!.id)
 })
 

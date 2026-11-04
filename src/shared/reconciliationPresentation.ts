@@ -17,6 +17,7 @@ export const findingLabels: Record<Finding['kind'], string> = {
 }
 export interface PresentationState {
   revision: number
+  navigation?: { cardId: string; revision: number } | null
   organizer?: Organizer
   statusFilter?: StatusFilter
   sort?: 'activity' | 'priority'
@@ -44,6 +45,7 @@ type Change =
   | { type: 'set-links'; visible: boolean }
   | { type: 'set-expanded'; target: Target; expanded: boolean }
   | { type: 'focus'; target: Target }
+  | { type: 'navigate-card'; cardId: string }
   | { type: 'set-exceptions'; enabled: boolean }
   | { type: 'set-roadmap'; expanded: boolean }
   | { type: 'flash'; targets: Target[]; durationMs?: number }
@@ -100,19 +102,28 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   if (needsQueue && !hasQueue(queue)) return { state, outcome: 'queue-source-unavailable' }
   if (action.type === 'open-queue' && action.itemId && hasQueue(queue) && !queue.items.some(item => item.id === action.itemId)) return { state, outcome: 'unknown-id' }
   if (action.type === 'open-queue' && action.cardId && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
+  if (action.type === 'navigate-card' && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
   const targets = action.type === 'focus' || action.type === 'set-expanded' ? [action.target] : action.type === 'flash' ? action.targets : []
   if (targets.some(target => !targetExists(scene, target, state, now))) return { state, outcome: 'unknown-id' }
   let next = { ...state, queueItemId: state.queueItemId ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null }
   switch (action.type) {
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
-    case 'reset-floor': next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
+    case 'reset-floor': next.navigation = null; next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
     case 'set-arrangement': next.arrangement = action.arrangement; next.organizer = { ...(state.organizer ?? defaultOrganizer()), outer: action.arrangement === 'secondMate' ? 'manager' : action.arrangement === 'machine' ? 'machine' : 'none', inner: 'none' }; break
     case 'set-sort': next.sort = action.sort; next.organizer = { ...(state.organizer ?? defaultOrganizer()), order: action.sort === 'activity' ? 'activity' : 'priority', direction: action.sort === 'activity' ? 'desc' : 'asc' }; break
     case 'set-links': next.linksVisible = action.visible; break
     case 'set-expanded': {
       const id = semanticId(action.target)
       next.collapsed = action.expanded ? state.collapsed.filter(value => value !== id) : [...new Set([...state.collapsed, id])]
+      break
+    }
+    case 'navigate-card': {
+      next.selection = null
+      next.navigation = { cardId: action.cardId, revision: state.revision + 1 }
+      next.exceptionsOnly = false; next.roadmapExpanded = true
+      const claims = scene.claims.filter(c => c.cardId === action.cardId && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
+      next.flash = { ids: [semanticId({ kind: 'card', id: action.cardId }), ...claims.map(c => semanticId({ kind: 'claim', id: c.id }))], until: now + 1850 }
       break
     }
     case 'focus': next.selection = action.target; next.exceptionsOnly = false; break
@@ -137,7 +148,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'clear-selection': next.selection = null; break
   }
   // Regrouping/focus reveal the selected item without changing its identity.
-  const revealTargets = action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []
+  const revealTargets = action.type === 'navigate-card' ? [{ kind: 'card' as const, id: action.cardId }] : action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []
   for (const target of revealTargets) {
     const selectedCardIds = target.kind === 'card' ? [target.id] : [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'claim' ? c.id === target.id : target.kind === 'execution' && c.executionId === target.id).map(c => c.cardId)
     if (scene.cards.some(c => selectedCardIds.includes(c.id) && isPlanned(scene, c))) next.roadmapExpanded = true

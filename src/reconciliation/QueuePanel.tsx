@@ -5,11 +5,12 @@ import { apiFetch } from '../apiClient'
 import { decisionItems, type DeskQueue } from '../shared/reconciliationQueue'
 import { Composer } from '../cockpit/shell/present'
 import { SlideToDismiss } from '../cockpit/shell/NeedsYouPanel'
+import { cardTitle, cardStatus } from './overviewModel'
 import { requestAnchor } from '../shared/deskSource'
 import type { QueueSource, QueueItem } from '../server/reconciliation/queue'
-import type { PresentationAction, PresentationState } from './presentation'
+import type { FloorScene, PresentationAction, PresentationState } from './presentation'
 
-export function QueuePanel({ state, send, queue, error, now, workers, submit, messages }: { messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; workers: Worker[]; state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number }) {
+export function QueuePanel({ scene, state, send, queue, error, now, workers, submit, messages }: { scene?: FloorScene; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; workers: Worker[]; state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number }) {
   const ready = (item: QueueItem) => !error && item.readiness === 'ready-now' && item.sources.every(s => ['fresh', 'partial'].includes(s.status) && (!s.expiresAt || Date.parse(s.expiresAt) > now))
   const items = queue ? decisionItems(queue, now) : []
   const actionable = items.filter(ready)
@@ -27,12 +28,21 @@ export function QueuePanel({ state, send, queue, error, now, workers, submit, me
       .catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()
   }, [cardId])
+  const [unavailable, setUnavailable] = useState(false)
+  const deskCards = (item: QueueItem, focused = false) => item.cardIds.length ? item.cardIds.map(id => {
+    const card = scene?.cards.find(card => card.id === id)
+    return <button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
+      if (scene && !card) { setUnavailable(true); return }
+      setUnavailable(false); send({ type: 'navigate-card', cardId: id })
+    }}><small>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small>{cardStatus(card)}</small>}</button>
+  }) : <h3>{requestText(item.title)}</h3>
   const readyIndex = actionable.findIndex(item => item.id === selected?.id)
   const next = actionable.slice(readyIndex + 1, readyIndex + 4)
   const secondary = queue?.items.filter(item => !ready(item)) ?? []
   return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>
+    {unavailable && <p role="status">Card unavailable on the floor. Use the source card link below.</p>}
     {cardId ? <><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}</> : <>
-      {selected ? <><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small><h3>{requestText(selected.title)}</h3><p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
+      {selected ? <><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
         {selected.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Read pull request' : e.kind === 'card' ? 'Read card' : 'Read evidence'} ↗</a>)}
         <div className="ov-queue-actions"><button type="button" disabled={index <= 0} onClick={() => send({ type: 'navigate-queue', direction: 'previous' })}>← Previous</button><button type="button" disabled={index >= items.length - 1} onClick={() => send({ type: 'navigate-queue', direction: 'next' })}>Next →</button></div>
@@ -55,8 +65,8 @@ export function QueuePanel({ state, send, queue, error, now, workers, submit, me
         })}</section>
         <details><summary>Request sources & readiness</summary><pre>{JSON.stringify(selected, null, 2)}</pre></details>
       </> : <><h3>{!queue || error ? 'Desk unavailable' : state.queueItemId ? 'Selected request unavailable' : 'No verified request ready'}</h3><p>{!queue || error ? 'Last known requests stay available below.' : state.queueItemId ? 'Choose another request below.' : 'Requests that need verification or a prerequisite are available below.'}</p></>}
-      {next.length > 0 && <><h4>Coming up</h4>{next.map(item => <button className="ov-queue-next" key={item.id} type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}<small>{item.kind === 'merge' ? 'Review' : 'Decision'}</small></button>)}</>}
-      {secondary.length > 0 && <details><summary>Later & needs verification · {secondary.length}</summary>{secondary.map(item => <button type="button" className="ov-queue-next" key={item.id} onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}<small>{item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small></button>)}</details>}
+      {next.length > 0 && <><h4>Coming up</h4>{next.map(item => <div key={item.id}>{item.cardIds.length ? deskCards(item) : <button className="ov-queue-next" type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}</button>}</div>)}</>}
+      {secondary.length > 0 && <details><summary>Later & needs verification · {secondary.length}</summary>{secondary.map(item => <div key={item.id}>{item.cardIds.length ? deskCards(item) : <button type="button" className="ov-queue-next" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}<small>Needs verification</small></button>}</div>)}</details>}
     </>}
   </section>
 }
