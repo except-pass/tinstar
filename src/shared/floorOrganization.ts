@@ -90,7 +90,7 @@ export interface FloorGroup {
 export function organizedGroups(scene: FloorScene, state: PresentationState, now: number): FloorGroup[] {
   const organizer = state.organizer ?? defaultOrganizer(), filter = state.statusFilter ?? defaultStatusFilter()
   const workers = scene.executions.filter(activeWorker)
-  const cards = scene.cards.filter(c => !c.source.archived && !c.source.in_trash && (matchesStatus(c, filter) || state.navigation?.cardId === c.id || state.selection?.kind === 'card' && state.selection.id === c.id || state.flash?.ids.includes(`card:${c.id}`)))
+  const cards = scene.cards.filter(c => !c.source.archived && !c.source.in_trash && (matchesStatus(c, filter) || state.navigation?.cardId === c.id || state.selection?.kind === 'card' && state.selection.id === c.id || state.flash && state.flash.until > now && state.flash.ids.includes(`card:${c.id}`)))
   const workerMap = new Map(workers.map(w => [w.id, w])), cardMap = new Map(scene.cards.map(c => [c.id, c]))
   const pairs: Pair[] = [], linkedWorkers = new Set<string>(), linkedCards = new Set<string>()
   for (const claim of scene.claims) {
