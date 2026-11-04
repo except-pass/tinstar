@@ -18,8 +18,8 @@ function observation<T>(data: T): Observation<T> {
 }
 function card(id = a, values: Record<string, unknown> = {}): Card {
   return { id, url: `https://notion.so/${id}`, last_edited_time: at, archived: false, in_trash: false,
-    properties: Object.fromEntries(Object.entries({ Name: 'Build reconciliation', Status: 'In Progress', Owner: 'Firstmate', 'Parent item': [], ...values })
-      .map(([name, value]) => [name, { id: name, type: name === 'Parent item' ? 'relation' : 'select', value, hasMore: false }])) }
+    properties: Object.fromEntries(Object.entries({ Name: 'Build reconciliation', Status: 'In Progress', Owner: 'Firstmate', 'Parent item': [], 'First Mate tasks': JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] }), ...values })
+      .map(([name, value]) => [name, { id: name, type: name === 'Parent item' ? 'relation' : name === 'First Mate tasks' ? 'rich_text' : 'select', value, hasMore: false }])) }
 }
 type TaskOverrides = Omit<Partial<Task>, 'current_state' | 'backlog'> & { current_state?: Partial<Task['current_state']>; backlog?: Partial<Task['backlog']> }
 function task(id = 'worker', pageId: string | null = a, overrides: TaskOverrides = {}): Task {
@@ -38,6 +38,11 @@ function home(tasks: Task[] = [], path = '/farm/hulk', machine: string | undefin
   }) }
 }
 function snapshot(tasks: Task[] = [], cards: Card[] = [card()]): SourceSnapshot {
+  for (const card of cards) card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks:
+    tasks.filter(task => task.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')).map(task => ({
+      fm_home: task.identity.fm_home, task_id: task.identity.task_id, first_observed_spawn_gen: task.identity.spawn_gen,
+    })),
+  })
   return { generatedAt: at, scope: 'configured-homes-only', warnings: [], fleet: [home(tasks)], intentions: observation({
     dataSourceId: b, schema: {}, cards, hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'configured-source',
   }) }
@@ -69,10 +74,10 @@ describe('claim evidence and stable identity', () => {
     expect(rollup?.executionIds).toContain(worker.id)
     expect(rollup?.counts.workers).toBe(1)
     expect(scene.claims.filter(claim => claim.executionId === worker.id)).toEqual([
-      expect.objectContaining({ cardId: a, basis: 'explicit', verification: 'confirmed', sources: ['task.work_item'] }),
+      expect.objectContaining({ cardId: a, basis: 'explicit', verification: 'confirmed', sources: ['notion.First Mate tasks', 'task.work_item'] }),
     ])
     expect(scene.findings.find(finding => finding.kind === 'confirmed-link' && finding.executionIds.includes(worker.id) && finding.cardIds.includes(a))?.reason)
-      .toBe('Explicit work_item links this attempt to the card; this does not establish progress or delivery')
+      .toBe('Notion First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery')
 
     const unlinked = reconcileScene(snapshot([task('worker', null, {
       cardReferences: cardReferences({ work_item: 'https://github.com/org/repo/issues/1' }, 'task'),
@@ -93,7 +98,7 @@ describe('claim evidence and stable identity', () => {
     expect(cardReferences({ title: `unrelated UUID ${a}`, notion_page_id: '-'.repeat(32) }, 'task')).toEqual([])
     const source = snapshot([task('worker', null, { cardReferences: refs.filter(ref => ref.pageId === b) })], [card(b)])
     expect(reconcileScene(source, now).claims[0]).toMatchObject({ basis: 'textual', verification: 'unverified' })
-    expect(findings(source, 'untracked-worker')).toHaveLength(0)
+    expect(findings(source, 'untracked-worker')).toHaveLength(1)
     expect(findings(source, 'task-execution-gap')).toHaveLength(0)
   })
 
@@ -102,17 +107,18 @@ describe('claim evidence and stable identity', () => {
     expect(reconcileScene(source, now).claims[0]).toMatchObject({ basis: 'inferred', verification: 'unverified' })
     expect(findings(source, 'untracked-worker')).toHaveLength(0)
     source.fleet[0]!.observation.data!.tasks[0]!.backlog.title = 'Different work'
-    expect(findings(source, 'untracked-worker')).toHaveLength(1)
+    expect(findings(source, 'untracked-worker')).toHaveLength(0)
   })
 
-  it('marks contradictory IDs, completed cards and outside ownership conflicting', () => {
+  it('keeps legacy candidates unverified and completed or owner-changed declarations historical', () => {
     const worker = task('worker', a, { cardReferences: [
       { pageId: a, basis: 'explicit', source: 'task.notion_page_id' }, { pageId: b, basis: 'textual', source: 'task.backlog.title' },
     ] })
     const scene = reconcileScene(snapshot([worker], [card(a), card(b)]), now)
-    expect(scene.claims.every(c => c.verification === 'conflicting')).toBe(true)
+    expect(scene.claims.find(c => c.cardId === a)?.verification).toBe('confirmed')
+    expect(scene.claims.find(c => c.cardId === b)?.verification).not.toBe('confirmed')
     for (const values of [{ Status: 'Done' }, { Owner: 'PM Bot' }]) {
-      expect(reconcileScene(snapshot([task()], [card(a, values)]), now).claims[0]?.verification).toBe('conflicting')
+      expect(reconcileScene(snapshot([task()], [card(a, values)]), now).claims[0]).toMatchObject({ state: 'historical', verification: 'confirmed' })
     }
   })
 
@@ -142,6 +148,8 @@ describe('claim evidence and stable identity', () => {
     const same = reconciler.reconcile(source, now + 1000)
     expect(same.claims[0]?.id).toBe(first.claims[0]?.id)
     source.fleet[0]!.observation.data!.tasks[0] = task('worker', b)
+    source.intentions.data!.cards[1]!.properties['First Mate tasks']!.value = source.intentions.data!.cards[0]!.properties['First Mate tasks']!.value
+    source.intentions.data!.cards[0]!.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] })
     const reassigned = reconciler.reconcile(source, now + 2000)
     expect(reassigned.claims.map(c => c.cardId)).toEqual([b])
     expect(reassigned.claimHistory[0]).toMatchObject({ cardId: a, state: 'historical', endedAt: at })
@@ -157,10 +165,10 @@ describe('claim evidence and stable identity', () => {
     const source = snapshot([task()]); model.reconcile(source, now)
     source.fleet[0]!.observation = { ...source.fleet[0]!.observation, status: 'unknown', coverage: 'unknown', data: null }
     const scene = model.reconcile(source, now + 1000)
-    expect(scene.claimHistory[0]).toMatchObject({ state: 'last-known', endedAt: null })
+    expect(scene.claims[0]).toMatchObject({ state: 'last-known', endedAt: null })
     expect(scene.findings.some(f => f.kind === 'task-execution-gap')).toBe(false)
     expect(model.reconcile(source, now + 86_400_001).claimHistory).toEqual([])
-    expect(new SceneReconciler().reconcile(source, now + 1000).claimHistory).toEqual([])
+    expect(new SceneReconciler().reconcile(source, now + 1000).claims[0]?.state).toBe('last-known')
   })
 })
 
@@ -203,7 +211,9 @@ describe('truthful reconciliation findings', () => {
       task('candidate', null, { current_state: waiting, cardReferences: cardReferences({ notion_page_id: a, title: `card ${b}` }, 'task') }),
     ]
     for (const worker of candidates) {
-      const scene = reconcileScene(expectedHome(snapshot([worker], [card(a), card(b)])), now)
+      const source = expectedHome(snapshot([worker], [card(a), card(b)]))
+      for (const card of source.intentions.data!.cards) card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] })
+      const scene = reconcileScene(source, now)
       expect(scene.executions[0]?.activity).toBe('waiting')
       expect(scene.claims.length).toBeGreaterThan(0)
       expect(scene.claims.every(claim => claim.verification !== 'confirmed')).toBe(true)
@@ -258,7 +268,7 @@ describe('truthful reconciliation findings', () => {
   })
 
   it('only labels observed executing workers untracked after complete reads', () => {
-    expect(findings(snapshot([task('untracked', null)]), 'untracked-worker')).toHaveLength(1)
+    expect(findings(snapshot([task('untracked', null)]), 'untracked-worker')).toHaveLength(0)
     for (const state of ['unknown', 'done', 'idle', 'blocked', 'failed']) {
       const worker = task('untracked', null, { current_state: { state, freshness: 'fresh', observed_at: at } })
       expect(findings(snapshot([worker]), 'untracked-worker')).toHaveLength(0)
@@ -303,7 +313,7 @@ describe('truthful reconciliation findings', () => {
   it('does not confirm IDs missing from Notion or execution identity', () => {
     const source = snapshot([task('worker', b)])
     expect(reconcileScene(source, now).claims[0]).toMatchObject({ verification: 'unverified' })
-    expect(findings(source, 'untracked-worker')).toHaveLength(0)
+    expect(findings(source, 'untracked-worker')).toHaveLength(1)
     source.fleet[0]!.observation.data!.tasks[0]!.identity.spawn_gen = null
     expect(reconcileScene(source, now).claims[0]?.verification).toBe('conflicting')
     expect(findings(source, 'task-execution-gap')).toHaveLength(0)
@@ -413,7 +423,7 @@ describe('execution liveness', () => {
     expect(scene.executions[0]?.liveness).toBe(expected)
     expect(scene.counts[expected]).toBe(1)
     expect(scene.counts.running).toBe(expected === 'running' ? 1 : 0)
-    expect(scene.findings.some(f => f.kind === 'untracked-worker')).toBe(expected === 'running')
+    expect(scene.findings.some(f => f.kind === 'untracked-worker')).toBe(false)
     for (const groups of Object.values(scene.arrangements)) expect(groups.find(g => g.executionIds.length)?.counts[expected]).toBe(1)
   })
 

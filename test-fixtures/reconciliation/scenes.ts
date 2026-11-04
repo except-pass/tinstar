@@ -17,7 +17,7 @@ function observation<T>(data: T, now: number): Observation<T> {
 }
 function card(id: number, name: string, now: number, values: Record<string, unknown> = {}): Card {
   return { id: fixtureId(id), url: `https://www.notion.so/${fixtureId(id)}`, last_edited_time: new Date(now).toISOString(), archived: false, in_trash: false,
-    properties: Object.fromEntries(Object.entries({ Name: name, Owner: 'Firstmate', Status: 'In Progress', 'Parent item': [fixtureId(100)], ...values }).map(([key, value]) => [key, { id: key, type: key === 'Parent item' ? 'relation' : 'select', value, hasMore: false }])) }
+    properties: Object.fromEntries(Object.entries({ Name: name, Owner: 'Firstmate', Status: 'In Progress', 'First Mate tasks': JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] }), 'Parent item': [fixtureId(100)], ...values }).map(([key, value]) => [key, { id: key, type: key === 'Parent item' ? 'relation' : key === 'First Mate tasks' ? 'rich_text' : 'select', value, hasMore: false }])) }
 }
 function task(id: string, page: number | null, home: string, now: number, state = 'working'): Task {
   const at = new Date(now).toISOString()
@@ -32,7 +32,7 @@ export function fixtureSources({ now = Date.now(), size = 0, unavailable = false
     fm_home: home, schema: 'fm-fleet-snapshot.v1', generated: new Date(now).toISOString(), coverageScope: 'fixture', main_inventory: { valid: true, reason: null, unstructured_current_count: 0 },
     backlogPresent: true, ledger: { role: 'change-signal-only', cursor: null, scope: 'not-collected' }, tasks: [], backlog: [],
   }, now) }))
-  homes[1]!.observation.data!.tasks = [task('linked-worker', 1, fixtureHomes[1]!, now), task('untracked-worker', null, fixtureHomes[1]!, now), task('candidate-worker', null, fixtureHomes[1]!, now), task('blocked-worker', 4, fixtureHomes[1]!, now, 'blocked')]
+  homes[1]!.observation.data!.tasks = [task('linked-worker', 1, fixtureHomes[1]!, now), task('untracked-worker', 900, fixtureHomes[1]!, now), task('candidate-worker', null, fixtureHomes[1]!, now), task('blocked-worker', 4, fixtureHomes[1]!, now, 'blocked')]
   homes[1]!.observation.data!.tasks[2]!.backlog.title = fixtureNames.inferred
   homes[2]!.observation.data!.tasks = [task('helper-worker', 1, fixtureHomes[2]!, now)]
   homes[1]!.observation.data!.backlog = [{ id: 'gap', title: fixtureNames.gap, state: 'in_flight', kind: 'ship', repo: null, hold_reason: null, hold_until: null, blocked_by: null, captain_actionable: null, pr_url: null,
@@ -43,6 +43,14 @@ export function fixtureSources({ now = Date.now(), size = 0, unavailable = false
   for (let i = 0; i < size; i++) {
     cards.push(card(1000 + i, `Roadmap fixture ${i + 1}`, now, { Status: i % 7 === 0 ? 'In Progress' : 'Backlog', 'Parent item': i % 3 ? [fixtureId(100)] : [] }))
     if (i < 80) homes[1 + i % 2]!.observation.data!.tasks.push(task(`fleet-worker-${i}`, 1000 + i, fixtureHomes[1 + i % 2]!, now, i % 5 ? 'working' : 'waiting'))
+  }
+  // Fixture declarations belong to Notion. Candidate and intentionally omitted
+  // worker records keep testing the independent source stacks.
+  for (const card of cards) {
+    const tasks = homes.flatMap(home => home.observation.data!.tasks)
+      .filter(task => task.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit'))
+      .map(task => ({ fm_home: task.identity.fm_home, task_id: task.identity.task_id, first_observed_spawn_gen: task.identity.spawn_gen }))
+    card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks })
   }
   if (unavailable) homes[2]!.observation = { ...homes[2]!.observation, status: 'stale', coverage: 'unknown', error: 'Fixture: home publication unavailable' }
   return { generatedAt: new Date(now).toISOString(), scope: 'configured-homes-only', warnings: ['Explicit controlled fixture — not production incidents'], fleet: homes,
