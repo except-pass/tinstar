@@ -11,7 +11,7 @@ import { entityTone, overviewGroups } from '../overviewModel'
 import { loadPresentationPreferences, preferencesKey, savePresentationPreferences } from '../presentationPreferences'
 
 const now = Date.parse('2026-11-04T17:00:00Z')
-const stateFor = (organizer: Partial<Organizer> = {}) => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), inner: 'none', ...organizer } })
+const stateFor = (organizer: Partial<Organizer> = {}): ReturnType<typeof initialPresentation> => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), inner: 'none', ...organizer } })
 describe('shared organization of independent endpoints', () => {
   it.each(['initiative', 'epic'] as const)('uses only explicit %s properties from Notion', async field => {
     const name = field === 'initiative' ? 'Initiative' : 'Epic'
