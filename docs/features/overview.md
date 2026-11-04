@@ -11,21 +11,18 @@ counts are deduplicated. Activity and priority sorting coordinate both stacks,
 with deterministic ties. Links may be hidden without removing either list.
 Gaps only uses confirmed execution gaps on both sides, never filter-created
 absence. Expired/failed reads retain last-known data and suppress gap coloring.
+Worker counts show unavailable or last-known observations when coverage is insufficient,
+and identify workers hidden by collapse or filtering rather than asserting absence.
 Finished and offline worker records move to expandable history, including last-known final reports after expiry. Waiting and planned cards can be collapsed using the compact Planned control; selecting a hidden counterpart reveals it without changing gap classification.
 
 One contextual Desk shows the current verified request and the next few. Secondary
 requests remain in Later & needs verification. Inspecting and regrouping retain
-the queue identity. Existing exact First Mate decision identities reconnect to
-its authorized response UI and receipts; presentation actions never submit a
-response. Card context, evidence, raw source identities and diagnostics are read
+the queue identity. The [queue reference](reconciliation-queue.md) owns readiness, source identity
+and the read-only Desk contract. Card context, evidence, raw source identities and diagnostics are read
 on demand in the same panel. Worker terminal links retain the existing exact-home
 resolver and open the safe viewer separately.
 
-Clicks and authenticated MCP use the same reducer. `set-sort` accepts `activity`
-or `priority`; `set-links` accepts `visible`. Existing arrangements retain their
-wire names (`initiative`, `secondMate`, `machine`), with Manager as the UI label.
-The existing targeted window, revision, expiry, idempotency and post-commit
-acknowledgment protocol remains in place. No domain-write tool is added.
+Clicks and authenticated MCP use the same reducer. The [MCP reference](reconciliation-mcp.md#tools-and-authority) owns semantic action names, wire values, targeting and acknowledgments. No domain-write tool is added.
 
 Development preview (two terminals):
 
@@ -39,9 +36,6 @@ Use a private `TINSTAR_CONFIG_HOME` containing an authorized config; never commi
 credentials. A Notion access failure leaves the worker column usable. Sharing the
 configured board with its integration is an owner prerequisite, not an empty board.
 
-Fleet entries accept an optional `label`, for example `{ "home": "/absolute/home",
-"label": "hulk", "parentHome": "/absolute/root" }`. Labels only affect display.
-Fallback is the home basename without a leading `fm-`; stable IDs and authorized
-routing continue to use the complete home path. The configured root appears as
-First Mate in the command strip, with its own worker count, rather than as a
-duplicate manager card.
+Display labels and full-home routing identities are configured in the
+[source reference](reconciliation-floor.md#run-and-configure). The configured root
+appears as First Mate in the command strip rather than a duplicate manager card.
