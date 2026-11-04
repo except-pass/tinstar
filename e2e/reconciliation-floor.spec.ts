@@ -252,7 +252,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   const saved = await page.evaluate(() => localStorage.getItem('tinstar.floor.preferences'))
   await page.locator('.ov-workspace').evaluate(el => { el.scrollTop = el.scrollHeight })
   if (mobile) await page.locator('.ov-mobile-desk').click()
-  const desk = page.getByRole('complementary', { name: 'Your desk' })
+  const desk = page.getByRole('complementary', { name: 'Your desk', includeHidden: true })
   const queueId = await desk.locator('.ov-queue').getAttribute('data-queue-item-id')
   const deskCard = desk.locator(`[data-desk-card-id="${fixtureId(1)}"]`).first()
   await deskCard.focus()
