@@ -137,7 +137,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'clear-selection': next.selection = null; break
   }
   // Regrouping/focus reveal the selected item without changing its identity.
-  const revealTargets = action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement') ? [next.selection] : []
+  const revealTargets = action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []
   for (const target of revealTargets) {
     const selectedCardIds = target.kind === 'card' ? [target.id] : [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'claim' ? c.id === target.id : target.kind === 'execution' && c.executionId === target.id).map(c => c.cardId)
     if (scene.cards.some(c => selectedCardIds.includes(c.id) && isPlanned(scene, c))) next.roadmapExpanded = true
