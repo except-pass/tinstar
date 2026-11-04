@@ -185,7 +185,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   const workers = scene.executions.filter(e => e.kind !== 'secondmate')
   workers[0]!.liveness = 'running'
   workers[1]!.liveness = 'waiting'; workers[1]!.source.current_state.state = 'waiting'
-  workers[2]!.liveness = 'liveness-not-observed'; workers[2]!.source.current_state.state = 'unknown'
+  workers[2]!.liveness = 'liveness-not-observed'; workers[2]!.source.current_state.state = 'unknown'; workers[2]!.source.last_event.state = 'unknown'
   const card = scene.cards.find(c => c.id === fixtureId(1))!
   for (const [name, value] of Object.entries({ Priority: 'High', 'Last touched by': 'Will', 'Due Date': { start: '2026-11-07' }, 'Next check-in': { start: '2026-11-04T10:00:00-05:00' } })) card.source.properties[name] = { id: name, type: 'rich_text', hasMore: false, value }
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
