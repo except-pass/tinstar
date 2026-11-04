@@ -7,6 +7,7 @@ import type { PullReadiness } from './queuePulls'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  request?: { home: string; taskId: string | null; id: string | null; kind: 'hold' | 'decision' }
   kind: 'notion' | 'firstmate' | 'github'
   id: string
   field: string
@@ -33,6 +34,7 @@ export interface QueueItem {
   oneTouch: boolean
 }
 
+type Backlog = NonNullable<NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['backlog']>[number]
 type Card = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 const prop = (card: Card, name: string) => card.properties[name]?.value
 const word = (card: Card, name: string) => text(prop(card, name))?.trim() || null
@@ -93,6 +95,10 @@ function context(item: QueueItem, card: Card, observation: SourceSnapshot['inten
   }
 }
 
+function ownerRequest(requestId: string | null, holds: Backlog[]) {
+  return requestId ? holds.find(hold => hold.id === requestId && hold.captain_actionable === true) : undefined
+}
+
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */
 export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now()) {
   const intentions = ageObservation(input.intentions, now)
@@ -133,22 +139,31 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const observation = home.observation
     const tasks = observation.data?.tasks ?? []
     const backlog = observation.data?.backlog ?? []
-    const attention = buildAttentionCards(homeIndex,
-      tasks.map(task => ({ id: task.id, hints: { open_decisions: task.queue?.decisions ?? [] } })),
-      backlog.map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
-        body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })),
-      tasks.map(task => ({ key: JSON.stringify(task.identity), id: String(task.id), objective: String(task.backlog.title ?? task.id),
-        state: String(task.current_state.state), detail: String(task.current_state.detail ?? ''), prUrl: null })), new Map())
+    const workers = tasks.map(task => ({ key: JSON.stringify(task.identity), id: String(task.id), objective: String(task.backlog.title ?? task.id),
+      state: String(task.current_state.state), detail: String(task.current_state.detail ?? ''), prUrl: null }))
+    const taskCalls = buildAttentionCards(homeIndex,
+      tasks.map(task => ({ id: task.id, hints: { open_decisions: task.queue?.decisions ?? [] } })), [], workers, new Map())
       .filter(call => call.type === 'decision' || call.type === 'blocked')
+    const holdCalls = buildAttentionCards(homeIndex, [],
+      backlog.map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
+        body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })), workers, new Map())
+      .filter(call => call.type === 'decision')
+    const attention = [...taskCalls, ...holdCalls]
     for (const task of tasks) {
       if (!['needs-decision', 'held'].includes(String(task.current_state.state)) || attention.some(call => call.taskId === task.id)) continue
       attention.push({ key: JSON.stringify([home.source.home, task.id, 'unkeyed']), homeIndex, taskId: text(task.id),
         decisionKey: null, holdId: null, dismissal: null, type: 'decision', headline: text(task.current_state.detail) ?? `${task.id} needs decision context`,
         detail: '', workerKey: null, workerId: text(task.id), ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown' })
     }
+    const representedHolds = new Set<string>()
     for (const call of attention) {
+      if (call.holdId && representedHolds.has(call.holdId)) continue
       const task = tasks.find(task => task.id === call.taskId)
-      const hold = backlog.find(row => row.id === (call.holdId ?? call.taskId))
+      const requestId = call.holdId ?? (call.decisionKey === 'default' && (!task?.queue?.decisions.some(decision => decision.key === 'default') || task.queue.decisions.some(decision => !decision.key)) ? null : call.decisionKey)
+      const hold = backlog.find(row => row.id === requestId)
+      // A completed decision still represents its hold; do not resurrect the
+      // same request through the separate hold call after skipping it below.
+      if (!call.holdId && call.type === 'decision' && hold && requestId) representedHolds.add(requestId)
       if (fresh(observation) && (task?.queue?.completed || hold?.queue?.completed || complete(hold?.state) || complete(task?.backlog.state) ||
         (task?.current_state.freshness === 'fresh' && complete(task.current_state.state)))) continue
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
@@ -163,8 +178,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       restrictAction(item, text(task?.backlog.hold_reason))
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
-      if (call.decisionKey) item.decisionKeys.push(call.decisionKey)
-      item.sources.push(source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation))
+      if (requestId) item.decisionKeys.push(requestId)
+      item.sources.push({ ...source('firstmate', JSON.stringify([home.source.home, call.taskId]), call.decisionKey ? `hints.open_decisions:${call.decisionKey}` : 'backlog.hold/current_state', observation),
+        request: { home: home.source.home, taskId: call.taskId, id: requestId, kind: call.holdId ? 'hold' : 'decision' } })
       link(item, text(task?.pr.url)); link(item, text(hold?.pr_url))
       if (explicitRelationship) for (const card of known) context(item, card, intentions, now)
       if (explicitRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
@@ -174,9 +190,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         lower(item, 'needs-readiness-verification', 'Card relationship is textual, conflicting or outside the readable source; verify context')
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
-      const keyed = !!call.decisionKey && task?.queue?.decisions.some(decision => decision.key === call.decisionKey && decision.verb === 'needs-decision' && !!decision.summary?.trim())
-      if (call.type === 'blocked' || !item.action || (!keyed && hold?.captain_actionable !== true)) {
-        lower(item, 'needs-readiness-verification', 'Blocked/held state alone does not identify an owner-only decision')
+      if (call.type === 'blocked' || !item.action || !ownerRequest(requestId, backlog)) {
+        lower(item, 'needs-readiness-verification', 'No owner-actionable record explicitly matches this request ID')
       }
       if (future(text(hold?.hold_until), now) || future(text(task?.backlog.hold_until), now) || text(hold?.blocked_by) || text(task?.backlog.blocked_by)) {
         lower(item, 'future-or-conditional', 'Published hold/dependency must clear before the decision is immediate')
@@ -184,7 +199,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       for (const timing of [hold?.hold_until, task?.backlog.hold_until]) {
         if (timing && !Number.isFinite(Date.parse(String(timing)))) lower(item, 'needs-readiness-verification', 'Hold timing is not a verifiable date')
       }
-      if (item.readiness === 'ready-now') item.reasons.push('First Mate publishes an open keyed owner decision or an explicitly captain-actionable hold')
+      if (item.readiness === 'ready-now') item.reasons.push('First Mate publishes an owner-routed keyed decision or an explicitly captain-actionable hold')
       candidates.push(item)
     }
   })

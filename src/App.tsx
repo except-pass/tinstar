@@ -1,20 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
-import { filterWorkers, findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
-import {
-  applyGroupChoice, browserGroupStorage, directLabel, groupDimensionLabels, groupDimensions, groupWorkers,
-  readGroupChoice, writeGroupChoice, type GroupDimension,
-} from './cockpit/groupWorkers'
+import { findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
+import { directLabel } from './cockpit/groupWorkers'
 import { ActivityBar } from './cockpit/shell/ActivityBar'
 import { ContextPanel } from './cockpit/shell/ContextPanel'
 import { MessagesPanel } from './cockpit/shell/MessagesPanel'
-import { NeedsYouPanel, attentionIcons, attentionLabels, dismissNote, sameDismiss } from './cockpit/shell/NeedsYouPanel'
-import { Composer, Face, MateBadge, StateChip, identityColor, mintRequestId } from './cockpit/shell/present'
+import { Composer, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
-import { DRAWER_MEDIA, initialPanelMode, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
+import { DRAWER_MEDIA, isDrawerLayout, messageNeedsAttention, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
-import { ReconciliationFloor } from './reconciliation/ReconciliationFloor'
+import { Overview } from './reconciliation/Overview'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
@@ -31,50 +27,26 @@ function DirectControl({ worker, disabled, onChange }: { worker: Worker; disable
   >{label}</button>
 }
 
-function GroupHeading({ dimension, value, count }: { dimension: GroupDimension; value: string; count: number }) {
-  return <div className="cockpit-group-heading">
-    {dimension === 'status' ? <StateChip state={value} /> : <span className="cockpit-group-label" title={value}>{value}</span>}
-    <span className="cockpit-group-count">{count} {count === 1 ? 'worker' : 'workers'}</span>
-  </div>
-}
-
-function WorkerCard({ worker, busy, onOpen, onDirect }: { worker: Worker; busy: boolean; onOpen: () => void; onDirect: (direct: boolean) => void }) {
-  return <article className="cockpit-card" style={{ '--worker-color': identityColor(worker.id) } as React.CSSProperties}>
-    <div className="cockpit-card-top">
-      <button type="button" className="cockpit-card-id" onClick={onOpen}><Face worker={worker} size={46} /><div><strong>{worker.id}</strong><span className="cockpit-card-project">{worker.project}</span></div></button>
-      <DirectControl worker={worker} disabled={busy} onChange={onDirect} />
-      <button type="button" className="cockpit-card-arrow" aria-label={`Open ${worker.id}`} onClick={onOpen}><span className="material-symbols-outlined">arrow_forward</span></button>
-    </div>
-    <button type="button" className="cockpit-card-body" onClick={onOpen}><MateBadge kind={worker.kind} /><p>{worker.objective}</p><small>{worker.detail}</small></button>
-  </article>
-}
-
 function displayTime(value: string | null): string {
   if (!value) return 'unknown'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-type DismissResult = { dismissed: boolean; fallback?: boolean; error?: string | null }
-
 export default function App() {
-  const [floorActive, setFloorActive] = useState(() => new URLSearchParams(window.location.search).get('view') === 'floor')
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(true)
-  const [loading, setLoading] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
   const [drawer, setDrawer] = useState(isDrawerLayout)
-  const [panelMode, setPanelMode] = useState<ContextPanelMode>(() => new URLSearchParams(window.location.search).get('view') === 'floor' ? null : initialPanelMode(readOverviewSearch(window.location.search).worker))
+  const [panelMode, setPanelMode] = useState<ContextPanelMode>(null)
   const drawerRef = useRef(drawer)
   drawerRef.current = drawer
-  const [selectedAttention, setSelectedAttention] = useState<string | null>(null)
   const [jumpText, setJumpText] = useState('')
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
   const [opening, setOpening] = useState<Record<string, boolean>>({})
   const [messages, setMessages] = useState<OutboxMessage[]>([])
   const [messageError, setMessageError] = useState<string | null>(null)
-  const [groupBy, setGroupBy] = useState(() => readGroupChoice(browserGroupStorage()))
   const [directBusy, setDirectBusy] = useState<Record<string, boolean>>({})
   const pendingDirect = useRef(new Map<string, { direct: boolean; after: number | null }>())
   const fleetRequests = useRef(0)
@@ -82,13 +54,6 @@ export default function App() {
   const messagesInFlight = useRef(false)
   const overviewRef = useRef(overviewLocation)
   overviewRef.current = overviewLocation
-  const dismissIds = useRef<Record<string, string>>({})
-  const dismissBusy = useRef(new Set<string>())
-  const dismissedNow = useRef(new Set<string>())
-  const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({})
-  const [dismissed, setDismissed] = useState<Record<string, true>>({})
-  const [dismissInFlight, setDismissInFlight] = useState<Record<string, true>>({})
-
   const refresh = useCallback(async () => {
     const started = ++fleetRequests.current
     try {
@@ -113,7 +78,7 @@ export default function App() {
       else throw new Error('Fleet service did not return workers')
     } catch (err) {
       setFleet(previous => ({ ...previous, errors: [(err as Error).message] }))
-    } finally { setLoading(false) }
+    }
   }, [])
 
   const refreshMessages = useCallback(async () => {
@@ -139,67 +104,6 @@ export default function App() {
     void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
       .catch(error => setMessageError((error as Error).message))
   }, [submit])
-
-  const dismiss = useCallback((card: AttentionCard) => {
-    if (dismissBusy.current.has(card.key) || dismissedNow.current.has(card.key)) return
-    const text = dismissNote(card)
-    const existing = messages.find(message => sameDismiss(card, message) && message.state === 'sending')
-    const requestId = dismissIds.current[card.key] ?? existing?.requestId ?? mintRequestId()
-    dismissIds.current[card.key] = requestId
-    dismissBusy.current.add(card.key)
-    setDismissInFlight(previous => ({ ...previous, [card.key]: true }))
-    const settle = () => {
-      dismissBusy.current.delete(card.key)
-      setDismissInFlight(previous => {
-        const next = { ...previous }
-        delete next[card.key]
-        return next
-      })
-    }
-    setDismissErrors(previous => {
-      if (!previous[card.key]) return previous
-      const next = { ...previous }
-      delete next[card.key]
-      return next
-    })
-    const showError = (message: string) => {
-      settle()
-      setDismissErrors(previous => ({ ...previous, [card.key]: message }))
-    }
-    const sendNote = () => {
-      void submit({ requestId, anchorKey: card.key, kind: 'answer', text }).then(result => {
-        if (result.saved) { dismissBusy.current.delete(card.key); return }
-        settle()
-        setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'Could not confirm the message was saved. Retry with the same request ID.' }))
-      }).catch(error => showError((error as Error).message))
-    }
-    if (card.dismissal !== 'captain-hold' && card.dismissal !== 'resolve-key') {
-      sendNote()
-      return
-    }
-    void apiFetch('/api/fleet/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: card.key }) })
-      .then(async response => {
-        const body = await response.json() as { ok: boolean; data?: DismissResult; error?: { message: string } }
-        if (!body.ok || !body.data) throw new Error(body.error?.message ?? 'Could not dismiss the decision')
-        return body.data
-      })
-      .then(result => {
-        if (result.fallback) { sendNote(); return }
-        if (result.dismissed) {
-          dismissedNow.current.add(card.key)
-          settle()
-          setDismissed(previous => ({ ...previous, [card.key]: true }))
-          void refresh()
-          return
-        }
-        settle()
-        setDismissErrors(previous => ({ ...previous, [card.key]: result.error ?? 'The decision was not closed.' }))
-      })
-      .catch(error => showError((error as Error).message))
-  }, [messages, refresh, submit])
-
-  const dismissHeld = useCallback((card: AttentionCard) =>
-    messages.some(message => sameDismiss(card, message) && message.state !== 'sending' && message.state !== 'done'), [messages])
 
   const directLocks = useRef(new Set<string>())
   const setDirect = useCallback(async (worker: Worker, direct: boolean) => {
@@ -236,34 +140,7 @@ export default function App() {
   }, [refresh, refreshMessages])
 
   const workers = fleet.workers
-  const waiting = loading || !fleet.ready
   const attention = fleet.attention ?? []
-  useEffect(() => {
-    if (!fleet.ready) return
-    const openKeys = new Set(attention.map(card => card.key))
-    const held = new Set(attention.filter(dismissHeld).map(card => card.key))
-    for (const key of Object.keys(dismissIds.current)) if (!openKeys.has(key) || held.has(key)) delete dismissIds.current[key]
-    for (const key of dismissedNow.current) if (!openKeys.has(key)) dismissedNow.current.delete(key)
-    setDismissed(previous => {
-      let changed = false
-      const next: Record<string, true> = {}
-      for (const key of Object.keys(previous)) {
-        if (openKeys.has(key)) next[key] = true
-        else changed = true
-      }
-      return changed ? next : previous
-    })
-    setDismissInFlight(previous => {
-      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => dismissBusy.current.has(key) || (openKeys.has(key) && !held.has(key))))
-      return Object.keys(next).length === Object.keys(previous).length ? previous : next
-    })
-    if (fleet.errors.length > 0) return
-    setDismissErrors(previous => {
-      const next = Object.fromEntries(Object.entries(previous).filter(([key]) => openKeys.has(key) && !held.has(key)))
-      return Object.keys(next).length === Object.keys(previous).length ? previous : next
-    })
-  }, [fleet.ready, attention, dismissHeld])
-  const activeAttention = attention.find(card => card.key === selectedAttention) ?? null
   const current = findLinkedWorker(workers, overviewLocation)
 
   const applyOverviewLocation = useCallback((next: OverviewLocation, mode: 'push' | 'replace') => {
@@ -284,7 +161,6 @@ export default function App() {
   const openWorker = useCallback((key: string, mode: 'push' | 'replace' = 'push') => {
     const worker = workers.find(item => item.key === key)
     if (!worker) return
-    setSelectedAttention(null)
     if (mode === 'push') {
       if (drawerRef.current) setPanelMode(null)
       else if (!overviewRef.current.worker) setPanelMode(current => current && 'workers')
@@ -293,8 +169,7 @@ export default function App() {
   }, [workers, applyOverviewLocation])
 
   const openOverview = useCallback(() => {
-    setSelectedAttention(null)
-    if (drawerRef.current) setPanelMode(null)
+    setPanelMode(null)
     applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q }, 'push')
   }, [applyOverviewLocation])
 
@@ -345,7 +220,6 @@ export default function App() {
   useEffect(() => {
     const onPop = () => {
       setOverviewLocation(readOverviewSearch(window.location.search))
-      setFloorActive(new URLSearchParams(window.location.search).get('view') === 'floor')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -413,27 +287,18 @@ export default function App() {
     frame.contentWindow?.postMessage({ type: 'terminal-reveal-prompt', sessionName: currentKey }, origin)
   }, [currentKey])
 
-  // Filter before grouping so the two-level groups contain only matches.
-  const visibleWorkers = useMemo(() => filterWorkers(workers, overviewLocation.q), [workers, overviewLocation.q])
-  const grouped = useMemo(() => groupWorkers(visibleWorkers, groupBy.primary, groupBy.secondary), [visibleWorkers, groupBy])
-  useEffect(() => { writeGroupChoice(browserGroupStorage(), groupBy) }, [groupBy])
-  const chooseGroup = (which: 'primary' | 'secondary', value: string) => {
-    const dimension = groupDimensions.find(item => item === value)
-    if (!dimension) return
-    setGroupBy(current => applyGroupChoice(current, which, dimension))
-  }
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker && !floorActive} floorActive={floorActive && !overviewLocation.worker} onFloor={() => { openOverview(); setFloorActive(true); setPanelMode(null); const url = new URL(window.location.href); url.searchParams.set('view', 'floor'); window.history.replaceState(null, '', url) }} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={() => { setFloorActive(false); openOverview(); const url = new URL(window.location.href); url.searchParams.delete('view'); window.history.replaceState(null, '', url) }} onSelect={selectPanel} />
+    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
-      <div hidden={panelMode !== 'needs'}><NeedsYouPanel cards={attention} workers={workers} errors={fleet.errors} waiting={waiting} submit={submit} dismissing={card => dismissInFlight[card.key] === true || (card.dismissal === null && dismissHeld(card))} dismissed={card => dismissed[card.key] === true} dismissError={card => dismissErrors[card.key] ?? null} onOpen={card => setSelectedAttention(card.key)} onDismiss={dismiss} /></div>
+
       <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {!current && !overviewLocation.worker && floorActive ? <ReconciliationFloor workers={workers} /> : current ? <>
+      {!current && !overviewLocation.worker ? <Overview workers={workers} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {
@@ -471,38 +336,9 @@ export default function App() {
         {fleet.ready
           ? <header className="cockpit-main-header"><h1>No such worker</h1></header>
           : !fleet.errors.length && <p className="cockpit-empty">Loading workers…</p>}
-      </> : <>
-        <header className="cockpit-main-header"><span className="cockpit-eyebrow">FLEET / OVERVIEW</span><h1>Workers</h1><p>Live work across your First Mate homes</p>
-          <input className="cockpit-filter" type="search" aria-label="Filter workers" placeholder="Filter by name or objective" value={overviewLocation.q} onChange={event => applyOverviewLocation({ ...overviewLocation, q: event.target.value }, 'replace')} onKeyDown={event => {
-            if (event.key !== 'Escape' || !overviewLocation.q) return
-            event.preventDefault()
-            applyOverviewLocation({ ...overviewLocation, q: '' }, 'replace')
-          }} />
-          <div className="cockpit-group-controls">
-            <label>Group by <select value={groupBy.primary} onChange={event => chooseGroup('primary', event.target.value)}>{groupDimensions.map(dimension => <option key={dimension} value={dimension}>{groupDimensionLabels[dimension]}</option>)}</select></label>
-            <label>then by <select value={groupBy.secondary} onChange={event => chooseGroup('secondary', event.target.value)}>{groupDimensions.map(dimension => <option key={dimension} value={dimension}>{groupDimensionLabels[dimension]}</option>)}</select></label>
-          </div>
-        </header>
-        {fleet.errors.length > 0 && <div className="cockpit-error" role="alert">Fleet update delayed: {fleet.errors.join('; ')}</div>}
-        {waiting && !fleet.errors.length ? <p className="cockpit-empty">Loading workers…</p> : workers.length === 0 ? <p className="cockpit-empty">{fleet.errors.length ? 'Waiting for the fleet service to reconnect…' : 'No workers found. Configure a First Mate home to see its fleet.'}</p> : visibleWorkers.length === 0 ? <p className="cockpit-empty">No workers match.</p> : <div className="cockpit-groups">
-          {grouped.map(group => <section key={group.value} className="cockpit-group">
-            <GroupHeading dimension={groupBy.primary} value={group.value} count={group.workers.length} />
-            {group.groups.map(inner => <section key={inner.value} className="cockpit-subgroup">
-              <GroupHeading dimension={groupBy.secondary} value={inner.value} count={inner.workers.length} />
-              <div className="cockpit-card-grid">{inner.workers.map(worker => <WorkerCard key={worker.key} worker={worker} busy={!!directBusy[worker.key]} onOpen={() => openWorker(worker.key)} onDirect={direct => void setDirect(worker, direct)} />)}</div>
-            </section>)}
-          </section>)}
-        </div>}
-      </>}
+      </> : null}
+
     </main>
-    {activeAttention && <div className="cockpit-attention-scrim" onClick={() => setSelectedAttention(null)}>
-      <section className={`cockpit-attention-detail cockpit-attention-${activeAttention.type}`} role="dialog" aria-modal="true" aria-label={attentionLabels[activeAttention.type]} onClick={event => event.stopPropagation()}>
-        <div className="cockpit-attention-detail-top"><span className="material-symbols-outlined">{attentionIcons[activeAttention.type]}</span><strong>{attentionLabels[activeAttention.type]}</strong><button aria-label="Close details" onClick={() => setSelectedAttention(null)}>×</button></div>
-        <h2>{activeAttention.headline}</h2>{activeAttention.detail && <p>{activeAttention.detail}</p>}
-        <div className="cockpit-attention-detail-facts"><span>Origin</span><strong>{activeAttention.workerId ?? 'First Mate backlog'}</strong><span>Age</span><strong>{activeAttention.ageDays === null ? 'unknown' : `${activeAttention.ageDays} days`}</strong></div>
-        <Composer key={`${activeAttention.key}:message`} anchorKey={activeAttention.key} kind="message" submit={submit} />
-        {activeAttention.workerKey && <button className="cockpit-attention-view-worker" onClick={() => openWorker(activeAttention.workerKey!)}>View worker →</button>}
-      </section>
-    </div>}
+
   </div>
 }

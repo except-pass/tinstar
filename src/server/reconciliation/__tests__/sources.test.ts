@@ -227,6 +227,14 @@ describe('config and HTTP boundary', () => {
     expect(loadReconciliationConfig(root)).toMatchObject({ fleet: [], warnings: [expect.any(String)] })
   })
 
+  it('preserves optional display labels without changing stable home identities', async () => {
+    const root = await temp()
+    await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [{ home: '/farm/fm-home', label: 'hulk' }, { home: '/farm/fm-fleet', label: '' }] } }))
+    const config = loadReconciliationConfig(root)
+    expect(config.fleet).toEqual([{ home: '/farm/fm-home', label: 'hulk' }, { home: '/farm/fm-fleet', label: '' }])
+    expect(config.warnings).toEqual([])
+  })
+
   it('serves the envelope and unknown coverage, rejects writes and foreign origins', async () => {
     const sources = new ReconciliationSources({ fleet: [], warnings: [] })
     const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })

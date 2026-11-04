@@ -6,6 +6,7 @@ import { getConfigRoot } from '../configRoot'
 const absolutePath = z.string().refine(isAbsolute, 'expected an absolute path')
 const fleetSource = z.object({
   home: absolutePath,
+  label: z.string().optional(),
   machine: z.string().min(1).optional(),
   parentHome: absolutePath.optional(),
   snapshotFile: absolutePath.optional(),

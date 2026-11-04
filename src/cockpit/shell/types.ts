@@ -26,9 +26,9 @@ export type SubmitResult = { saved: boolean; error: string | null; canReceive: b
 /** `null` is the collapsed context panel. It is not part of the page URL. */
 export type ContextPanelMode = 'needs' | 'messages' | 'workers' | null
 
-/** Overview opens Needs You. A worker route opens the switcher. */
-export function defaultPanelMode(worker: string | null): Exclude<ContextPanelMode, null> {
-  return worker ? 'workers' : 'needs'
+/** Overview owns the Desk; auxiliary panels start closed on every route. */
+export function defaultPanelMode(_worker: string | null): ContextPanelMode {
+  return null
 }
 
 /** Below this width the context panel is a drawer and starts closed. */
@@ -38,7 +38,7 @@ export function isDrawerLayout(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia(DRAWER_MEDIA).matches
 }
 
-/** A narrow window starts with the canvas clear. Wide desktop opens the matching panel. */
+/** Keep the canvas clear until an auxiliary panel is explicitly opened. */
 export function initialPanelMode(worker: string | null, drawer = isDrawerLayout()): ContextPanelMode {
   return drawer ? null : defaultPanelMode(worker)
 }

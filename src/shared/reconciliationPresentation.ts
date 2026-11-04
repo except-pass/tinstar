@@ -8,7 +8,7 @@ export interface Target { kind: TargetKind; id: string }
 export const semanticId = (target: Target) => `${target.kind}:${target.id}`
 export const isException = (finding: Finding) => !['confirmed-link', 'legitimate-wait-planned', 'outside-coverage'].includes(finding.kind)
 export const isPlanned = (scene: FloorScene, card: SceneCard) => card.expectation === 'wait-planned' || scene.findings.some(f => f.kind === 'legitimate-wait-planned' && f.cardIds.includes(card.id))
-export const arrangements: Record<Arrangement, string> = { initiative: 'Initiative', secondMate: 'Second Mate', machine: 'Machine' }
+export const arrangements: Record<Arrangement, string> = { initiative: 'Initiative', secondMate: 'Manager', machine: 'Machine' }
 export const findingLabels: Record<Finding['kind'], string> = {
   'confirmed-link': 'Confirmed link', 'task-execution-gap': '△ Execution gap', 'untracked-worker': '◇ Untracked execution',
   'unverified-conflicting': '◈ Unverified / conflicting', 'unknown-stale-source': '? Unknown / stale',
@@ -16,6 +16,8 @@ export const findingLabels: Record<Finding['kind'], string> = {
 }
 export interface PresentationState {
   revision: number
+  sort?: 'activity' | 'priority'
+  linksVisible?: boolean
   arrangement: Arrangement
   selection: Target | null
   collapsed: string[]
@@ -28,10 +30,12 @@ export interface PresentationState {
   queueItemId?: string | null
 }
 export const initialPresentation = (): PresentationState => ({
-  revision: 0, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: false, flash: null, assistantChangedView: false,
+  revision: 0, sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
 })
 type Change =
   | { type: 'set-arrangement'; arrangement: Arrangement }
+  | { type: 'set-sort'; sort: 'activity' | 'priority' }
+  | { type: 'set-links'; visible: boolean }
   | { type: 'set-expanded'; target: Target; expanded: boolean }
   | { type: 'focus'; target: Target }
   | { type: 'set-exceptions'; enabled: boolean }
@@ -92,9 +96,11 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   if (action.type === 'open-queue' && action.cardId && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
   const targets = action.type === 'focus' || action.type === 'set-expanded' ? [action.target] : action.type === 'flash' ? action.targets : []
   if (targets.some(target => !targetExists(scene, target))) return { state, outcome: 'unknown-id' }
-  let next = { ...state }
+  let next = { ...state, queueItemId: state.queueItemId ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null }
   switch (action.type) {
     case 'set-arrangement': next.arrangement = action.arrangement; break
+    case 'set-sort': next.sort = action.sort; break
+    case 'set-links': next.linksVisible = action.visible; break
     case 'set-expanded': {
       const id = semanticId(action.target)
       next.collapsed = action.expanded ? state.collapsed.filter(value => value !== id) : [...new Set([...state.collapsed, id])]
@@ -105,16 +111,17 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'set-roadmap': next.roadmapExpanded = action.expanded; break
     case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)) }; break
     case 'clear-transient': next.flash = null; next.assistantChangedView = false; break
-    case 'close-queue': next.queueOpen = false; break
+    case 'close-queue': next.queueOpen = false; next.queueCardId = null; break
     case 'open-queue':
+      next.selection = null
       next.queueOpen = true; next.queueCardId = action.cardId ?? null
-      next.queueItemId = action.cardId ? null : action.itemId ?? (hasQueue(queue) ? decisionItems(queue)[0]?.id : null) ?? null
+      next.queueItemId = action.cardId ? state.queueItemId ?? null : action.itemId ?? (hasQueue(queue) && queue.items.some(item => item.id === state.queueItemId) ? state.queueItemId : null) ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null
       break
     case 'navigate-queue': {
-      const items = hasQueue(queue) ? decisionItems(queue) : []
-      const index = items.findIndex(item => item.id === state.queueItemId)
+      const items = hasQueue(queue) ? decisionItems(queue, now) : []
+      const index = items.findIndex(item => item.id === next.queueItemId)
       if (state.queueItemId && index < 0 && hasQueue(queue) && !queue.items.some(item => item.id === state.queueItemId)) return { state, outcome: 'unknown-id' }
-      next.queueOpen = true; next.queueCardId = null
+      next.queueOpen = true; next.selection = null; next.queueCardId = null
       next.queueItemId = items.length ? items[Math.max(0, Math.min(items.length - 1, index + (action.direction === 'next' ? 1 : -1)))]!.id : null
       break
     }

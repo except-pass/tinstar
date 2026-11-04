@@ -13,7 +13,7 @@ export interface OverviewLocation {
   home: string | null
   /** Per-home worker key chosen in the cockpit. Never written to the URL. */
   key: string | null
-  /** Overview filter text. Empty means every worker. */
+  /** Legacy overview filter text retained in URLs; the two-column Overview does not apply it. */
   q: string
 }
 

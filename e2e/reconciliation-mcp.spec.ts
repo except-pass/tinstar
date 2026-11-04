@@ -20,7 +20,7 @@ async function call(name: string, args: Record<string, unknown>) {
   transcript.push({ name, arguments: args, response: value })
   return value
 }
-async function windowId(page: Page) { await expect(page.locator('.floor[data-scene-id]')).toBeVisible(); return (await page.locator('.floor').getAttribute('data-scene-id'))! }
+async function windowId(page: Page) { await expect(page.locator('.ov[data-scene-id]')).toBeVisible(); return (await page.locator('.ov').getAttribute('data-scene-id'))! }
 async function present(page: Page, action: unknown, command_id: string) {
   const scene_id = await windowId(page)
   const current = await call('get_scene', { scene_id })
@@ -72,22 +72,31 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   const card = await call('get_card_context', { scene_id: first, card_id: scene.cards[0]!.id })
   expect(card.context.blocks[0].text).toBe('Controlled card prose')
   const regroup = await present(page, { type: 'set-arrangement', arrangement: 'machine' }, 'regroup')
-  await expect(page.locator('.floor')).toHaveAttribute('data-arrangement', 'machine')
-  await expect(secondPage.locator('.floor')).toHaveAttribute('data-arrangement', 'initiative')
+  await expect(page.locator('.ov')).toHaveAttribute('data-arrangement', 'machine')
+  await expect(secondPage.locator('.ov')).toHaveAttribute('data-arrangement', 'initiative')
   const retry = await call('present_view', regroup.args)
   expect(retry).toEqual(regroup.ack)
+  await present(page, { type: 'set-sort', sort: 'activity' }, 'sort-activity')
+  await present(page, { type: 'set-sort', sort: 'priority' }, 'sort-priority')
+  await present(page, { type: 'set-links', visible: false }, 'hide-links')
+  await expect(page.locator('.ov-connections')).toHaveCount(0)
+  await present(page, { type: 'set-links', visible: true }, 'show-links')
   await present(page, { type: 'focus', target: { kind: 'card', id: scene.cards[0]!.id } }, 'focus')
-  await expect(page.getByLabel('Scene inspector')).toContainText(scene.cards[0]!.id)
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText(scene.cards[0]!.id)
   const linkedCardId = fixtureId(1)
   const linkedClaim = scene.claims.find(c => c.cardId === linkedCardId && c.verification === 'confirmed')!
   await present(page, { type: 'set-exceptions', enabled: true }, 'exceptions-before-flash')
-  await expect(page.locator(`[data-card-id="${linkedCardId}"]`)).toHaveCount(0)
+  await expect(page.locator(`[data-entity-id="${linkedCardId}"]`)).toHaveCount(0)
   const flashed = await present(page, { type: 'flash', targets: [{ kind: 'card', id: linkedCardId }, { kind: 'execution', id: linkedClaim.executionId }, { kind: 'claim', id: linkedClaim.id }], durationMs: 4000 }, 'flash')
   expect(flashed.ack.state.exceptionsOnly).toBe(false)
   expect(flashed.ack.state.selection).toEqual({ kind: 'card', id: scene.cards[0]!.id })
-  const linkedRow = page.locator(`[data-card-id="${linkedCardId}"]`).first()
+  const linkedRow = page.locator(`[data-entity-id="${linkedCardId}"]`).first()
   await expect(linkedRow).toBeVisible()
-  await expect(linkedRow.locator('.is-flashed')).toHaveCount(3)
+  await expect(page.locator('.ov-card.flashed').first()).toBeVisible()
+  // Horizontal SVG paths have a zero-height box despite a visible stroke.
+  const flashedLine = page.locator('.ov-line.flashed').first()
+  await expect(flashedLine).toBeAttached()
+  expect(await flashedLine.evaluate(node => { const style = getComputedStyle(node); return style.stroke !== 'none' && Number(style.strokeWidth.replace('px', '')) > 0 && style.visibility === 'visible' })).toBe(true)
   await expect(page.getByRole('status').filter({ hasText: 'Assistant changed this view' })).toBeVisible()
   await present(page, { type: 'open-queue' }, 'open-desk')
   const beforeNext = await call('get_scene', { scene_id: first })
@@ -95,7 +104,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   let nextAck = await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: beforeNext.state.revision })
   if (nextAck.outcome === 'queued') await expect.poll(async () => { nextAck = await call('get_command', { scene_id: first, command_id: 'next' }); return nextAck.outcome }).toBe('applied')
   expect(nextAck.outcome).toBe('applied')
-  await expect(page.getByLabel('Your desk')).toHaveAttribute('data-queue-item-id', queue.items[1]!.id)
+  await expect(page.getByLabel('Desk queue')).toHaveAttribute('data-queue-item-id', queue.items[1]!.id)
   expect((await call('get_queue', { scene_id: first })).items[0].readiness).toBe('ready-now')
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
@@ -108,12 +117,12 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   })
   await expect.poll(() => held).toBe(true)
   const competing = call('present_view', { scene_id: first, command_id: 'competing', expected_revision: revision, action: { type: 'set-arrangement', arrangement: 'initiative' } })
-  await page.getByRole('button', { name: 'Second Mate', exact: true }).click()
+  await page.getByRole('button', { name: 'Manager', exact: true }).click()
   resume!()
   let competingAck = await competing
   if (competingAck.outcome === 'queued') await expect.poll(async () => { competingAck = await call('get_command', { scene_id: first, command_id: 'competing' }); return competingAck.outcome }).toBe('stale-revision')
   expect(competingAck.outcome).toBe('stale-revision')
-  await expect(page.locator('.floor')).toHaveAttribute('data-arrangement', 'secondMate')
+  await expect(page.locator('.ov')).toHaveAttribute('data-arrangement', 'secondMate')
   await page.unroute('**/api/reconciliation/ui')
   // A command which never reaches the UI expires, rather than claiming applied.
   await page.route('**/api/reconciliation/ui', route => route.abort())
