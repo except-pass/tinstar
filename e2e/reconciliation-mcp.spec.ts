@@ -82,7 +82,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   await expect(page.locator('.ov-connections')).toHaveCount(0)
   await present(page, { type: 'set-links', visible: true }, 'show-links')
   await present(page, { type: 'focus', target: { kind: 'card', id: scene.cards[0]!.id } }, 'focus')
-  await expect(page.getByLabel('Inspector')).toContainText(scene.cards[0]!.id)
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText(scene.cards[0]!.id)
   const linkedCardId = fixtureId(1)
   const linkedClaim = scene.claims.find(c => c.cardId === linkedCardId && c.verification === 'confirmed')!
   await present(page, { type: 'set-exceptions', enabled: true }, 'exceptions-before-flash')
@@ -93,7 +93,10 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   const linkedRow = page.locator(`[data-entity-id="${linkedCardId}"]`).first()
   await expect(linkedRow).toBeVisible()
   await expect(page.locator('.ov-card.flashed').first()).toBeVisible()
-  await expect(page.locator('.ov-line.flashed').first()).toBeVisible()
+  // Horizontal SVG paths have a zero-height box despite a visible stroke.
+  const flashedLine = page.locator('.ov-line.flashed').first()
+  await expect(flashedLine).toBeAttached()
+  expect(await flashedLine.evaluate(node => { const style = getComputedStyle(node); return style.stroke !== 'none' && Number(style.strokeWidth.replace('px', '')) > 0 && style.visibility === 'visible' })).toBe(true)
   await expect(page.getByRole('status').filter({ hasText: 'Assistant changed this view' })).toBeVisible()
   await present(page, { type: 'open-queue' }, 'open-desk')
   const beforeNext = await call('get_scene', { scene_id: first })

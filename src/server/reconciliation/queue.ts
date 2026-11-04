@@ -161,6 +161,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const task = tasks.find(task => task.id === call.taskId)
       const requestId = call.holdId ?? (call.decisionKey === 'default' && (!task?.queue?.decisions.some(decision => decision.key === 'default') || task.queue.decisions.some(decision => !decision.key)) ? null : call.decisionKey)
       const hold = backlog.find(row => row.id === requestId)
+      // A completed decision still represents its hold; do not resurrect the
+      // same request through the separate hold call after skipping it below.
+      if (!call.holdId && call.type === 'decision' && hold && requestId) representedHolds.add(requestId)
       if (fresh(observation) && (task?.queue?.completed || hold?.queue?.completed || complete(hold?.state) || complete(task?.backlog.state) ||
         (task?.current_state.freshness === 'fresh' && complete(task.current_state.state)))) continue
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
@@ -198,7 +201,6 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       }
       if (item.readiness === 'ready-now') item.reasons.push('First Mate publishes an owner-routed keyed decision or an explicitly captain-actionable hold')
       candidates.push(item)
-      if (!call.holdId && call.type === 'decision' && hold && requestId) representedHolds.add(requestId)
     }
   })
 

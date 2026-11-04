@@ -166,6 +166,18 @@ describe('desk queue correctness', () => {
     expect(build(snapshot([], [worker])).items).toEqual([])
   })
 
+  it('does not resurrect a completed decision through its same-ID hold', () => {
+    const worker = task(); worker.queue!.completed = true
+    const held = hold({ id: 'choose', hold_reason: 'Captain still has this request' })
+    expect(build(snapshot([], [worker], [held])).items).toEqual([])
+
+    // A blocked status cannot represent the distinct captain request.
+    worker.queue!.decisions[0]!.verb = 'blocked'
+    expect(build(snapshot([], [worker], [held])).items).toMatchObject([
+      { action: 'Captain still has this request', decisionKeys: ['choose'] },
+    ])
+  })
+
   it('deduplicates exact keyed calls and captain holds using First Mate hold identity', () => {
     const worker = task([{ key: 'hold', verb: 'needs-decision', summary: 'Choose A or B' }])
     expect(build(snapshot([], [worker], [hold()])).items).toHaveLength(1)

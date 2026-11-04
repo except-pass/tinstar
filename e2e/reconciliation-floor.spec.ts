@@ -71,7 +71,7 @@ test('independent columns, cross-group relationships, two-sided gaps and one per
   await expect(page.locator('.ov-execution.related')).toHaveCount(2)
   for (const name of ['Manager', 'Machine', 'Initiative']) {
     await page.getByRole('button', { name, exact: true }).click()
-    await expect(page.getByLabel('Inspector')).toContainText(fixtureNames.linked)
+    await expect(page.getByLabel('Inspector', { exact: true })).toContainText(fixtureNames.linked)
     await expect(page.locator(`.ov-card.selected[data-entity-id="${fixtureId(1)}"]`).first()).toBeVisible()
     if (name !== 'Initiative') await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveCount(2)
   }
@@ -97,10 +97,10 @@ test('independent columns, cross-group relationships, two-sided gaps and one per
   await page.keyboard.press('Enter')
   await expect(page.locator('.ov')).toHaveAttribute('data-arrangement', 'machine')
   await page.locator('.ov-card').first().click()
-  await expect(page.getByLabel('Inspector')).toBeVisible()
+  await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
   await screenshot(page, 'overview-mobile-reduced-motion')
   await page.keyboard.press('Escape')
-  await expect(page.getByLabel('Inspector')).toHaveCount(0)
+  await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect(mutations).toEqual([])
 })
@@ -120,7 +120,7 @@ test('realistic volume, last-known data and failed refresh suspend absence findi
   await page.clock.fastForward(20_001)
   await expect(page.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
   await expect(page.locator('.ov-card')).toHaveCount(857)
-  await expect(page.getByLabel('Inspector')).toContainText(fixtureNames.linked)
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText(fixtureNames.linked)
   await screenshot(page, 'overview-large-last-known')
 })
 
@@ -134,8 +134,8 @@ for (const state of ['queued', 'held']) {
     const card = page.locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)
     await expect(card).toHaveAttribute('data-tone', 'quiet')
     await card.click()
-    await expect(page.getByLabel('Inspector')).toContainText('Awaiting review capacity')
-    await expect(page.getByLabel('Inspector')).toContainText('review-task')
-    await expect(page.getByLabel('Inspector')).toContainText('2026-11-05T12:00:00Z')
+    await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Awaiting review capacity')
+    await expect(page.getByLabel('Inspector', { exact: true })).toContainText('review-task')
+    await expect(page.getByLabel('Inspector', { exact: true })).toContainText('2026-11-05T12:00:00Z')
   })
 }
