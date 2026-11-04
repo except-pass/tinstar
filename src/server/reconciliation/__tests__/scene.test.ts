@@ -59,6 +59,30 @@ describe('claim evidence and stable identity', () => {
     expect(scene.cards[0]?.progressAssessment).toBeNull()
   })
 
+  it('confirms a worker from an explicit work_item and ignores a non-Notion work_item', () => {
+    const linked = task('worker', null, {
+      cardReferences: cardReferences({ work_item: `https://www.notion.so/Build-reconciliation-${a}?pvs=21` }, 'task'),
+    })
+    const scene = reconcileScene(snapshot([linked]), now)
+    const worker = scene.executions[0]!
+    const rollup = scene.cardRollups.find(entry => entry.cardId === a)
+    expect(rollup?.executionIds).toContain(worker.id)
+    expect(rollup?.counts.workers).toBe(1)
+    expect(scene.claims.filter(claim => claim.executionId === worker.id)).toEqual([
+      expect.objectContaining({ cardId: a, basis: 'explicit', verification: 'confirmed', sources: ['task.work_item'] }),
+    ])
+    expect(scene.findings.find(finding => finding.kind === 'confirmed-link' && finding.executionIds.includes(worker.id) && finding.cardIds.includes(a))?.reason)
+      .toBe('Explicit work_item links this attempt to the card; this does not establish progress or delivery')
+
+    const unlinked = reconcileScene(snapshot([task('worker', null, {
+      cardReferences: cardReferences({ work_item: 'https://github.com/org/repo/issues/1' }, 'task'),
+    })]), now)
+    const other = unlinked.executions[0]!
+    expect(unlinked.cardRollups.find(entry => entry.cardId === a)?.executionIds ?? []).not.toContain(other.id)
+    expect(unlinked.claims.filter(claim => claim.executionId === other.id)).toEqual([])
+    expect(unlinked.claims.some(claim => claim.verification === 'confirmed')).toBe(false)
+  })
+
   it('extracts textual IDs from raw/title but never returns raw contents or upgrades them', () => {
     const refs = cardReferences({ title: `Build (card ${a})`, raw: `private text https://app.notion.com/p/${b}`, notion_page_id: '40d50ce6-d422-814a-a741-c102cd00aaae' }, 'backlog')
     expect(refs).toEqual([

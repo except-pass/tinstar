@@ -212,8 +212,10 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
           state: fresh(observation) && fresh(intentions) ? 'current' : 'last-known', verification,
           accountability: { home: home.source.home, parentHome: home.source.parentHome ?? null, owner: card ? word(card.source, 'Owner') : null } }
         claims.push(claim)
+        // Keep the notion_page_id wording when that field is present; name work_item only when it is the explicit source.
+        const explicitField = evidence.some(ref => ref.source.endsWith('notion_page_id')) ? 'notion_page_id' : 'work_item'
         add(verification === 'confirmed' ? 'confirmed-link' : 'unverified-conflicting', [cardId], [id], verification === 'confirmed'
-          ? 'Explicit notion_page_id links this attempt to the card; this does not establish progress or delivery'
+          ? `Explicit ${explicitField} links this attempt to the card; this does not establish progress or delivery`
           : `Link is ${verification} (${basis})${!card ? '; card not observed in authorized source' : ''}; no automatic repair`)
       }
       if (execution.activity === 'unknown') add('unknown-stale-source', referenced, [id], 'Runtime state or execution identity is unknown; a fresh metadata snapshot alone is insufficient')
