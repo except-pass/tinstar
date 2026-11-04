@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { gapTargets, overviewGroups, managerName, rootHome } from '../overviewModel'
+import { gapTargets, overviewGroups, managerName, rootHome, workerState } from '../overviewModel'
 import { initialPresentation } from '../presentation'
 
 describe('independent Overview stacks', () => {
@@ -54,4 +54,34 @@ it('navigates a canonical Desk task without changing queue position or saved fil
   expect(result.state.navigation?.cardId).toBe(card.id)
   expect(state).toEqual(before)
   expect(applyPresentationAction(state, { type: 'navigate-card', cardId: 'missing' }, scene, now)).toEqual({ outcome: 'unknown-id', state })
+})
+
+
+it('retains event precedence across expiry and shares status with grouping', () => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const task = sources.fleet[1]!.observation.data!.tasks[0]!
+  task.current_state.state = 'working'
+  task.lastEventText = 'paused: Awaiting input'
+  const reconciler = new SceneReconciler()
+  for (const time of [now, now + 61_000]) {
+    const scene = reconciler.reconcile(sources, time)
+    const worker = scene.executions.find(e => e.identity.task_id === task.identity.task_id)!
+    expect(workerState(worker)).toBe('Waiting')
+    const groups = overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'workerStatus', inner: 'none', order: 'checkIn', direction: 'asc' } }, time)
+    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe('Waiting')
+  }
+})
+
+it('distinguishes dead endpoints from completed reports', () => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const task = sources.fleet[1]!.observation.data!.tasks[0]!
+  task.endpoint.exists = false
+  task.lastEventText = 'working: Still working'
+  const reconciler = new SceneReconciler()
+  const status = (time: number) => workerState(reconciler.reconcile(sources, time).executions.find(e => e.identity.task_id === task.identity.task_id)!)
+  expect(status(now)).toBe('Unknown')
+  expect(status(now + 61_000)).toBe('Unknown')
+  task.lastEventText = 'done: Completed'
+  expect(status(now)).toBe('Finished')
+  expect(status(now + 61_000)).toBe('Finished')
 })

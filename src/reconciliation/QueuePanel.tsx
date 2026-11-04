@@ -28,20 +28,20 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
       .catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()
   }, [cardId])
-  const [unavailable, setUnavailable] = useState(false)
+  const [unavailable, setUnavailable] = useState<string | null>(null)
   const deskCards = (item: QueueItem, focused = false) => item.cardIds.length ? item.cardIds.map(id => {
     const card = scene?.cards.find(card => card.id === id)
     return <button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
-      if (scene && !card) { setUnavailable(true); return }
-      setUnavailable(false); send({ type: 'navigate-card', cardId: id })
+      if (scene && !card) { setUnavailable(id); return }
+      setUnavailable(null); send({ type: 'navigate-card', cardId: id })
     }}><small>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small>{cardStatus(card)}</small>}</button>
   }) : <h3>{requestText(item.title)}</h3>
   const readyCards = actionable.filter(item => item.cardIds.length > 0)
   const next = selected?.cardIds.length ? readyCards.slice(readyCards.findIndex(item => item.id === selected.id) + 1, readyCards.findIndex(item => item.id === selected.id) + 4) : readyCards.slice(1, 4)
   const secondary = queue?.items.filter(item => !ready(item)) ?? []
   return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>
-    {unavailable && <p role="status">Card unavailable on the floor. Use the source card link below.</p>}
-    {cardId ? <><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}</> : <>
+    {unavailable && <p role="status">Card not on the floor right now. <a href={`https://www.notion.so/${encodeURIComponent(unavailable)}`} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
+    {cardId ? <><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}</> : <>
       {!selected?.cardIds.length && <>{readyCards[0] ? deskCards(readyCards[0], true) : <p>No verified Notion card ready.</p>}</>}
       {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{selected.cardIds.length ? 'Focused card' : 'First Mate requests'}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}

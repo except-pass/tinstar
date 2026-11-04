@@ -1,3 +1,6 @@
+import { childOutcomeVerb } from '../../shared/childOutcome'
+export { childOutcomeVerb } from '../../shared/childOutcome'
+
 /** Snapshot fields the cockpit already reads. No separate pane or busy-file probe. */
 export interface MateSnapshot {
   kind?: unknown
@@ -14,9 +17,6 @@ export interface MateHomeActivity {
 
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : ''
 
-// Publisher shapes, done or failed: `<state> [key=child-outcome-<id>-<state>-<fp8>]: child <id> <state>: <note>`
-// and the fallback `<state> [key=inactive-outcome-<mate>-<id>-<state>]: inactive terminal child=<id> fingerprint=<fp>`.
-const CHILD_OUTCOME = /^(done|failed) \[key=(?:child-outcome-[^\]]+\](?: \[[^\]]*\])*: child \S+ \1:|inactive-outcome-[^\]]+\](?: \[[^\]]*\])*: inactive terminal child=\S+)/
 const WAITING = new Set(['no_active_work', 'externally_held', 'captain_decision'])
 const REPORT_VERBS = new Set(['working', 'paused', 'blocked', 'needs-decision', 'done', 'failed'])
 const REPORT_NOTE_MAX = 80
@@ -43,12 +43,6 @@ function lastReport(task: MateSnapshot): { state: string; detail: string } | nul
   const note = text(event?.note).replace(/\s+/g, ' ')
   const short = note.length > REPORT_NOTE_MAX ? `${note.slice(0, REPORT_NOTE_MAX - 1).trimEnd()}…` : note
   return { state: verb === 'needs-decision' ? 'parked' : verb, detail: short ? `${short} · ${marker}` : marker }
-}
-
-/** A child-outcome line is another task finishing or failing, not the mate's own outcome. */
-export function childOutcomeVerb(task: MateSnapshot): string | null {
-  if (text(task.kind) !== 'secondmate') return null
-  return CHILD_OUTCOME.exec(text(task.paths?.status_log?.last_event?.raw))?.[1] ?? null
 }
 
 function presence(task: MateSnapshot, home: MateHomeActivity | null): 'working' | 'idle' | 'unknown' {
