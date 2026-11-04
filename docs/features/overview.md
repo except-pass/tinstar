@@ -4,8 +4,12 @@ Tin Star's primary home follows the [operational shared-floor prototype](../desi
 The reference contains illustrative data only. Production reads the configured
 Notion and First Mate sources and never substitutes fixture records.
 
-Workers and Notion tasks render as independent stacks inside shared groups,
-with links in the gutter. A compact toolbar controls both columns:
+Workers and Notion tasks render as independent cards inside shared groups,
+with links in the gutter. Connected sets align across the columns without
+duplicating endpoints within a band. Dashed placeholders accompany unmatched
+records; hidden counterparts and unavailable sources have distinct labels.
+Nested groups use an outer field label and deduplicated worker/task counts,
+with compact worker/task counts on each violet inner band. A compact toolbar controls both columns:
 
 - Outer groups by one field; Inner optionally subdivides it.
 - Order sorts both stacks ascending or descending, with deterministic ID ties
@@ -52,17 +56,20 @@ reads retain last-known data and suppress absence conclusions. Worker counts
 label unavailable or last-known observations when coverage is insufficient.
 
 Worker cards show an identity avatar, title and a consistently placed Running,
-Waiting, Blocked, Finished or Unknown status, followed by Machine, Manager,
-activity and human-readable activity age. Observation freshness is a separate
+Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
+tasks supply the Initiative / Epic breadcrumb; independent workers have none.
+Machine and the manager/home tag follow the title; activity and age share a
+divided footer. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
 Unknown, not Finished. Selection and relationships never fade whole cards or
 serve as execution status.
 
 Task cards keep the same field order in every grouping: Initiative / Epic
-breadcrumb, two-line title, Notion Status, Owner, Next check-in, edit age,
-Last touched by, Priority when set, then contextual Due Date, Waiting For and
-Will action. Relationship evidence belongs in the gutter and diagnostics.
+breadcrumb and top-right Priority, two-line title, then a status dot and
+Notion Status opposite Owner. Next check-in and edit age share a divided footer;
+Last touched by is available on the edit-age tooltip and in Inspector. Contextual
+Due Date, Waiting For and Will action follow when applicable. Relationship evidence belongs in the gutter and diagnostics.
 Check-ins are accountability checkpoints, independent of Due Date and edit age.
 Done, Archived, Backlog, Todo, Not started, Planned and Spare tokens display
 Not applicable; other statuses distinguish missing, upcoming, overdue and
