@@ -48,6 +48,52 @@ describe('source freshness', () => {
 })
 
 describe('fleet collection', () => {
+  it.each([120, 180, 299, 300, 360])('ages published snapshots from generated time at %i seconds', async ageSeconds => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = Date.parse(timestamp) + ageSeconds * 1000
+    vi.setSystemTime(now)
+    const dir = await temp(); const file = join(dir, 'published.json')
+    // Writing the file now must not renew an old snapshot's observation time.
+    await writeFile(file, JSON.stringify(snapshot()))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const result = await sources.snapshot()
+    const observation = result.fleet[0]!.observation
+    expect(observation).toMatchObject({
+      status: ageSeconds < 300 ? 'fresh' : 'stale',
+      coverage: ageSeconds < 300 ? 'complete' : 'unknown',
+      observedAt: timestamp,
+      attemptedAt: new Date(now).toISOString(),
+      expiresAt: new Date(Date.parse(timestamp) + 300_000).toISOString(),
+      data: { generated: timestamp, tasks: [expect.objectContaining({ identity: { fm_home: '/farm/hulk', task_id: 'same-task', spawn_gen: 'attempt-1' } })] },
+    })
+    if (ageSeconds >= 300) {
+      expect(reconcileScene(result, now).coverage.absenceConclusions).toBe('suppressed')
+      // Re-reading the same publication must not make it fresh again.
+      vi.setSystemTime(now + 21_000)
+      expect((await sources.snapshot()).fleet[0]!.observation.status).toBe('stale')
+    }
+  })
+
+  it.each([60, 600])('honors a per-home published snapshot age of %i seconds', async maxAgeSeconds => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.parse(timestamp) + 360_000)
+    const dir = await temp(); const file = join(dir, 'published.json')
+    await writeFile(file, JSON.stringify(snapshot()))
+    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file, maxAgeSeconds }).get()
+    expect(result.status).toBe(maxAgeSeconds === 600 ? 'fresh' : 'stale')
+    expect(result.expiresAt).toBe(new Date(Date.parse(timestamp) + maxAgeSeconds * 1000).toISOString())
+  })
+
+  it('keeps the local-exec default at 60 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const home = await temp(); await mkdir(join(home, 'bin'))
+    await writeFile(join(home, 'bin/fm-fleet-snapshot.sh'), `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(snapshot(home))}\nJSON\n`, { mode: 0o755 })
+    const cache = fleetObservation({ home })
+    const fresh = await cache.get()
+    expect(fresh).toMatchObject({ status: 'fresh', expiresAt: new Date(Date.parse(timestamp) + 60_000).toISOString() })
+    vi.setSystemTime(Date.parse(timestamp) + 60_000)
+    expect(await cache.get()).toMatchObject({ status: 'stale', coverage: 'unknown', data: fresh.data })
+  })
+
   it('shares the local executable contract and bounds published files', async () => {
     const home = await temp()
     await mkdir(join(home, 'bin'))
@@ -217,6 +263,19 @@ describe('Notion reader', () => {
 })
 
 describe('config and HTTP boundary', () => {
+  it.each([30, 300, 3600])('accepts maxAgeSeconds of %i', async maxAgeSeconds => {
+    const root = await temp()
+    const source = { home: '/farm/main', snapshotFile: '/snapshots/main.json', maxAgeSeconds }
+    await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [source] } }))
+    expect(loadReconciliationConfig(root)).toMatchObject({ fleet: [source], warnings: [] })
+  })
+
+  it.each([29, 3601, 30.5, '300', null])('rejects invalid maxAgeSeconds %s', async maxAgeSeconds => {
+    const root = await temp()
+    await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [{ home: '/farm/main', maxAgeSeconds }] } }))
+    expect(loadReconciliationConfig(root)).toMatchObject({ fleet: [], warnings: [expect.stringContaining('maxAgeSeconds')] })
+  })
+
   it('honors the config root, falls back to existing homes, and reports invalid source config', async () => {
     const root = await temp()
     await writeFile(join(root, 'config.json'), JSON.stringify({ firstmate: { homes: ['/farm/hulk'] } }))

@@ -10,6 +10,7 @@ const fleetSource = z.object({
   machine: z.string().min(1).optional(),
   parentHome: absolutePath.optional(),
   snapshotFile: absolutePath.optional(),
+  maxAgeSeconds: z.number().int().min(30).max(3600).optional(),
 })
 export type FleetSource = z.infer<typeof fleetSource>
 const fleetSchema = z.array(fleetSource).max(32)
@@ -27,7 +28,7 @@ export function loadReconciliationConfig(root = getConfigRoot()): Reconciliation
       ? raw.firstmate.homes.filter((home: unknown): home is string => typeof home === 'string' && isAbsolute(home)).map((home: string) => ({ home })) : []
     const parsedFleet = fleetSchema.safeParse(raw.reconciliation?.fleet ?? legacyHomes)
     let fleet = parsedFleet.success ? parsedFleet.data : []
-    if (!parsedFleet.success) warnings.push('Invalid reconciliation fleet configuration; check absolute paths and the 32-home collection bound')
+    if (!parsedFleet.success) warnings.push('Invalid reconciliation fleet configuration; check absolute paths, the 32-home collection bound, and maxAgeSeconds (30–3600 integer seconds)')
     if (new Set(fleet.map(source => source.home)).size !== fleet.length) {
       warnings.push('Configure each First Mate home once')
       fleet = []
