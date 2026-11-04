@@ -145,6 +145,7 @@ test('date grouping uses all six New York buckets in calendar order', async ({ p
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await page.getByLabel('Outer grouping').selectOption('checkIn')
+  await page.getByLabel('Inner grouping').selectOption('none')
   await expect(page.locator('.ov-group-name')).toHaveText(['Overdue', 'Today', 'Tomorrow', 'This week', 'Later', 'Not scheduled'])
   await expect(page.locator('.ov-group').filter({ has: page.locator('.ov-group-name', { hasText: /^Today$/ }) }).locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)).toBeVisible()
 })
@@ -363,7 +364,7 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
   await expect(band).toHaveCount(1)
   const linkedWorkers = ['linked-worker', 'helper-worker'].map(id => scene.executions.find(execution => execution.identity.task_id === id)!)
   for (const execution of linkedWorkers) {
-    const endpoint = band.locator(`.ov-execution[data-entity-id="${execution.id}"]`)
+    const endpoint = band.locator(`.ov-execution[data-entity-id=${JSON.stringify(execution.id)}]`)
     await expect(endpoint).toHaveCount(1)
     await endpoint.hover()
     await expect(band.locator('.ov-line.hot.ov-linked')).toHaveCount(1)
@@ -376,4 +377,32 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
   await outer.locator(':scope > header > button').click()
   await expect(task).toHaveCount(1)
   await screenshot(page, 'approved-floor-structure')
+})
+
+
+test('independent endpoint order survives many-to-many relationships in both directions', async ({ page }) => {
+  const now = Date.parse('2026-11-04T17:00:00Z')
+  await page.clock.install({ time: now })
+  const scene = fixtureScene({ now })
+  const first = scene.claims.find(c => c.cardId === fixtureId(1))!
+  scene.claims.push({ ...first, id: 'additional-task', cardId: fixtureId(6) })
+  for (const [id, hour] of [[1, 12], [4, 13], [6, 14]]) scene.cards.find(c => c.id === fixtureId(id!))!.source.properties['Next check-in'] = { id: 'check', type: 'date', hasMore: false, value: { start: `2026-11-04T${hour}:00:00Z` } }
+  scene.executions.find(w => w.identity.task_id === 'untracked-worker')!.source.last_event.age_seconds = 0
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  await page.getByLabel('Outer grouping').selectOption('none')
+  await page.getByLabel('Inner grouping').selectOption('none')
+  const { organizedGroups } = await import('../src/shared/floorOrganization')
+  const { initialPresentation } = await import('../src/reconciliation/presentation')
+  for (const order of ['activity', 'checkIn'] as const) {
+    await page.getByLabel('Order by').selectOption(order)
+    for (const direction of ['asc', 'desc'] as const) {
+      const desired = organizedGroups(scene, { ...initialPresentation(), organizer: { outer: 'none', inner: 'none', order, direction } }, now)[0]!
+      await expect(page.locator('.ov')).toHaveAttribute('data-direction', direction)
+      expect(await page.locator('.ov-execution').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.workers.map(w => w.id))
+      expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.cards.map(c => c.id))
+      await page.getByRole('button', { name: 'Reverse sort direction' }).click()
+    }
+  }
+  await screenshot(page, 'independent-endpoint-order')
 })
