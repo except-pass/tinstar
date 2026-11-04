@@ -6,6 +6,7 @@ import { SceneReconciler } from '../../server/reconciliation/scene'
 import { dateBucket, dateTimestamp, defaultOrganizer, organizedGroups, type Organizer } from '../../shared/floorOrganization'
 import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
 import { applyPresentationAction, initialPresentation, semanticId } from '../presentation'
+import { workBreadcrumb, workerBreadcrumb } from '../recordFields'
 import { entityTone, overviewGroups } from '../overviewModel'
 import { loadPresentationPreferences, preferencesKey, savePresentationPreferences } from '../presentationPreferences'
 
@@ -34,6 +35,28 @@ describe('shared organization of independent endpoints', () => {
           ? ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'] : ['Delivery'])
       if (!property) expect(groups).toHaveLength(1)
     }
+  })
+  it('reads select Initiative/Epic into groups and confirmed linked-worker breadcrumbs', async () => {
+    const fetcher = (async (_url, init) => new Response(JSON.stringify(init?.method === 'POST'
+      ? { results: [{ object: 'page', id: fixtureId(1), last_edited_time: new Date(now).toISOString(), properties: {
+        Initiative: { type: 'select', select: { name: 'Cloud Platform' } },
+        Epic: { type: 'select', select: { name: 'Observability' } },
+      } }], has_more: false }
+      : { object: 'data_source', properties: { Initiative: { type: 'select' }, Epic: { type: 'select' } } }))) as typeof fetch
+    const observation = await notionObservation({ token: 'fixture', dataSourceId: fixtureId(1) }, fetcher).get()
+    const scene = fixtureScene({ now }), card = scene.cards.find(c => c.id === fixtureId(1))!
+    Object.assign(card.source.properties, observation.data!.cards[0]!.properties)
+    const group = organizedGroups(scene, stateFor({ outer: 'initiative', inner: 'status' }), now).find(g => g.cardIds.includes(card.id))!
+    expect(group.outerLabel).toBe('Cloud Platform')
+    expect(workBreadcrumb(scene, card)).toBe('Cloud Platform / Observability')
+    const claim = scene.claims.find(c => c.cardId === card.id && c.verification === 'confirmed')!
+    const worker = scene.executions.find(w => w.id === claim.executionId)!
+    expect(workerBreadcrumb(scene, worker)).toBe('Cloud Platform / Observability')
+    claim.verification = 'unverified'
+    expect(workerBreadcrumb(scene, worker)).toBe('')
+    delete card.source.properties.Initiative
+    delete card.source.properties.Epic
+    expect(workBreadcrumb(scene, card)).toBe('Unassigned')
   })
   it('resolves generated group members and reveals claim and manager ancestors', () => {
     const scene = fixtureScene({ now }), state = stateFor({ outer: 'machine', inner: 'status' })

@@ -12,8 +12,8 @@ import { usePresentation } from './usePresentation'
 import { QueuePanel } from './QueuePanel'
 import { FloorToolbar } from './FloorToolbar'
 import { decisionItems } from '../shared/reconciliationQueue'
-import { resolveFloorGroup } from '../shared/floorOrganization'
-import { ageLabel, checkIn, taskFields, workBreadcrumb } from './recordFields'
+import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
+import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, compactCheckIn } from './recordFields'
 import './overview.css'
 
 type Dispatch = (action: PresentationAction) => void
@@ -61,15 +61,17 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} aria-pressed={same(state.selection, item)} aria-label={`${title}. ${status}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => send({ type: 'focus', target: item })}>
     {worker ? <>
-      <span className="ov-worker-top"><span className="ov-face"><AgentIcon seed={JSON.stringify(worker.identity)} color="#00f0ff" className="ov-avatar" /></span><span className={`ov-worker-status status-${status.toLowerCase()}`}>{status}</span></span>
+      <span className="ov-face"><AgentIcon seed={JSON.stringify(worker.identity)} color="#63cfb0" className="ov-avatar" /></span>
+      <span className="ov-record-top"><span className="ov-breadcrumb">{workerBreadcrumb(scene, worker)}</span><span className={`ov-worker-status status-${status.toLowerCase()}`}><i />{status}</span></span>
       <strong>{title.replace(/\s*\((?:card|Notion(?: card)?)\s+[a-f0-9-]{32,36}\)/gi, '')}</strong>
-      <span className="ov-worker-meta">Machine: {worker.placement.machine ?? 'Unknown'} · Manager: {managerName(scene, worker.home)}</span>
-      <span className="ov-activity">{workerActivity(worker) || 'No activity published'}</span>
-      <span className="ov-record-foot"><span>Last activity {ageLabel(observedAt(worker), now)}</span>{lastKnown && <span className="ov-freshness">Last known observation</span>}</span>
+      <span className="ov-worker-meta">▣ {worker.placement.machine ?? 'Unknown'} · <span className="ov-home-tag">{managerName(scene, worker.home)}</span></span>
+      <span className="ov-record-foot"><span className="ov-activity" title={workerActivity(worker)}>⌁ {workerActivity(worker) || 'No activity published'}</span><span className="ov-age">{lastKnown && <span className="ov-freshness" title="Last known observation" aria-label="Last known observation">◌ </span>}{ageLabel(observedAt(worker), now)}</span></span>
     </> : <>
-      <span className="ov-breadcrumb">{workBreadcrumb(scene, card!)}</span>
+      <span className="ov-record-top"><span className="ov-breadcrumb">{workBreadcrumb(scene, card!)}</span><span className={`ov-priority priority-${propertyText(card!, 'Priority').replace(/[^a-z]/gi, '').toLowerCase()}`}>{propertyText(card!, 'Priority')}</span></span>
       <strong>{title}</strong>
-      <span className="ov-task-fields">{taskFields(card!, now, view.actionableCardIds.has(card!.id)).map(([label, value]) => <span key={label} className={label === 'Next check-in' ? `ov-check check-${checkIn(card!, now).state}` : label === 'Status' ? 'ov-task-status' : ['Waiting For', 'Will action'].includes(label) ? 'ov-context-field' : undefined}><span className="ov-field-label">{label}</span> {value}</span>)}</span>
+      <span className="ov-task-meta"><span className={`ov-task-status task-${status.toLowerCase().replace(/[^a-z]/g, '-')}`}><i />{status}</span><span className="ov-owner">♙ {propertyText(card!, 'Owner') || 'Unassigned'}</span></span>
+      <span className="ov-record-foot"><span className={`ov-check check-${checkIn(card!, now).state}`} title={`Next check-in: ${checkIn(card!, now).label}`}>◷ {compactCheckIn(card!, now)}</span><span className="ov-age" title={`Last touched by ${propertyText(card!, 'Last touched by') || 'Unknown'}`}>Edited {ageLabel(Date.parse(card!.source.last_edited_time), now)}</span></span>
+      {taskFields(card!, now, view.actionableCardIds.has(card!.id)).filter(([label]) => ['Due Date', 'Waiting For', 'Will action'].includes(label)).map(([label, value]) => <span key={label} className="ov-context-field" title={`${label}: ${value}`}>{label}: {value}</span>)}
     </>}
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
@@ -84,6 +86,29 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
   // Measurement updates local path state; keep its filtered input stable so
   // that update cannot retrigger measurement in a render loop.
   const cs = useMemo(() => state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), [cards, scene, state.roadmapExpanded])
+  // Lay out each connected set once, preserving independent endpoint identities.
+  // Many-to-many links retain multiple ports without duplicating cards in a band.
+  const rows = useMemo(() => {
+    const remainingWorkers = new Set(ws.map(w => w.id)), remainingCards = new Set(cs.map(c => c.id))
+    const links = scene.claims.filter(c => c.state !== 'historical' && remainingWorkers.has(c.executionId) && remainingCards.has(c.cardId))
+    const result: Array<{ workers: Execution[]; cards: SceneCard[] }> = []
+    function take(workerId?: string, cardId?: string) {
+      const w = new Set(workerId ? [workerId] : []), c = new Set(cardId ? [cardId] : [])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const link of links) if (w.has(link.executionId) || c.has(link.cardId)) {
+          if (!w.has(link.executionId) || !c.has(link.cardId)) changed = true
+          w.add(link.executionId); c.add(link.cardId)
+        }
+      }
+      w.forEach(id => remainingWorkers.delete(id)); c.forEach(id => remainingCards.delete(id))
+      result.push({ workers: ws.filter(item => w.has(item.id)), cards: cs.filter(item => c.has(item.id)) })
+    }
+    for (const card of cs) if (remainingCards.has(card.id)) take(undefined, card.id)
+    for (const worker of ws) if (remainingWorkers.has(worker.id)) take(worker.id)
+    return result
+  }, [ws, cs, scene.claims])
   useLayoutEffect(() => {
     const root = body.current
     if (!root || collapsed || state.linksVisible === false) return
@@ -102,11 +127,7 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
           const confirmed = c.verification === 'confirmed' && c.state === 'current' && !readFailed && !stale(scene.coverage.intentions, now) && execution && !stale(execution.observation, now)
           next.push({ id: c.id, d: `M${x},${y} C${x + dx},${y} ${x2 - dx},${y2} ${x2},${y2}`, tone: confirmed ? 'linked' : 'uncertain', worker: c.executionId, card: c.cardId })
         }
-        if (!claims.length && el.dataset.tone === 'orphan') next.push({ id: `w:${el.dataset.entityId}`, d: `M${x},${y} h42`, tone: 'orphan', worker: el.dataset.entityId })
-      }
-      for (const el of right) if (el.dataset.tone === 'gap') {
-        const c = el.getBoundingClientRect(), x = c.left - box.left, y = c.top - box.top + c.height / 2
-        next.push({ id: `c:${el.dataset.entityId}`, d: `M${x - 42},${y} H${x}`, tone: 'gap', card: el.dataset.entityId })
+
       }
       setPaths(next)
     }
@@ -115,17 +136,24 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
     return () => observer.disconnect()
   }, [scene, ws, cs, collapsed, state.linksVisible, now, readFailed])
   const reference = (kind: 'card' | 'execution', id: string) => allGroups.filter(g => g.id !== group.id && (kind === 'card' ? g.cardIds : g.executionIds).includes(id)).map(g => g.label === g.outerLabel ? g.label : `${g.outerLabel} / ${g.label}`)
-  const allWorkers = scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id))
-  const workersLabel = workerCount(scene, now, readFailed, allWorkers, collapsed ? 0 : ws.length)
-  const gaps = ws.filter(w => entityTone(scene, 'execution', w.id, now, readFailed) === 'orphan').length + cs.filter(c => entityTone(scene, 'card', c.id, now, readFailed) === 'gap').length
+  const workersUnavailable = readFailed || !scene.coverage.homes.length || scene.coverage.homes.some(h => stale(h.observation, now) || h.observation.coverage !== 'complete')
+  const tasksUnavailable = readFailed || stale(scene.coverage.intentions, now)
+  const displayLabel = group.label === 'Unassigned / Unknown' && ['initiative', 'epic', 'status'].includes(state.organizer?.inner === 'none' ? state.organizer.outer : state.organizer?.inner ?? '') ? 'Unassigned' : group.label
   return <section className={`ov-group${flashRelated(view, target('group', group.id)) ? ' flashed' : ''}`} data-group-id={group.id}>
     <header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${group.label}`} onClick={() => send({ type: 'set-expanded', target: target('group', group.id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button>
-      <strong className="ov-group-name">{group.label}</strong>
-      <span>{workersLabel}{!cards.length && (readFailed || stale(scene.coverage.intentions, now)) ? ' · Notion unavailable' : ` · ${cards.length}${readFailed || stale(scene.coverage.intentions, now) ? ' last known' : ''} cards`}{gaps > 0 && <em> · {gaps} gaps</em>}</span></header>
+      <strong className="ov-group-name">{displayLabel}</strong><span>{ws.length} W · {cs.length} T</span></header>
     {!collapsed && <div className="ov-group-body" ref={body}>
-      <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{workersLabel === '0 workers' ? 'No workers in this group' : workersLabel}</div>}</div>
-      <div aria-hidden="true" />
-      <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : cards.length ? 'Waiting & planned hidden' : 'No cards in this group'}</div>}</div>
+      {rows.map((row, index) => {
+        const hiddenTask = !row.cards.length && row.workers.some(w => scene.claims.some(c => c.executionId === w.id && c.state !== 'historical'))
+        const outsideWorker = !row.workers.length && row.cards.some(card => scene.claims.some(c => c.cardId === card.id && c.state !== 'historical'))
+        const leftEmpty = outsideWorker ? 'Linked worker outside this view' : workersUnavailable ? 'Workers unavailable' : 'No linked worker'
+        const rightEmpty = hiddenTask ? 'Linked task outside this view' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'
+        return <div className="ov-pair" key={row.cards[0]?.id ?? row.workers[0]?.id ?? index}>
+          <div className="ov-worker-stack">{row.workers.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!row.workers.length && <div className="ov-empty-col">{leftEmpty}</div>}</div>
+          <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length || !row.cards.length) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workersUnavailable ? 'unknown worker' : 'no worker' : hiddenTask ? 'outside view' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
+          <div className="ov-card-stack">{row.cards.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!row.cards.length && <div className="ov-empty-col">{rightEmpty}</div>}</div>
+        </div>
+      })}
       {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${(!state.navigation || state.navigation.cardId !== p.card || p.tone === 'linked') && state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}
     </div>}
   </section>
@@ -224,13 +252,13 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
       <div className="ov-intro"><h1>Overview</h1><span>{workerCount(scene, now, !!error, liveWorkers, new Set(groups.flatMap(g => g.workers.map(w => w.id))).size)}{!notionUnavailable && <> · {new Set(groups.flatMap(g => g.cards.map(c => c.id))).size} Notion cards</>}{gaps.length > 0 && <> · {gaps.length} gaps</>}</span></div>
       <FloorToolbar scene={scene} state={state} send={send} gaps={gaps} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div className="ov-headings"><span>Workers</span><small>LINKS</small><span>Notion cards</span></div>
+      <div className="ov-workspace"><div className="ov-headings"><span>WORKERS</span><small>RELATIONSHIPS</small><span>NOTION TASKS</span></div>
         {[...new Set(groups.map(g => g.outerId))].map(outerId => {
           const children = groups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
           if (!nested) return <Group key={first.id} view={view} group={first} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />
           const collapsed = state.collapsed.includes(semanticId(target('group', outerId)))
-          return <section className="ov-outer" key={outerId} data-outer={first.outerLabel}><header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${first.outerLabel}`} onClick={() => send({ type: 'set-expanded', target: target('group', outerId), expanded: collapsed })}>{collapsed ? '+' : '−'}</button><strong>{first.outerLabel}</strong><span>{new Set(children.flatMap(g => g.workers.map(w => w.id))).size} workers · {new Set(children.flatMap(g => g.cards.map(c => c.id))).size} cards</span></header>
+          return <section className="ov-outer" key={outerId} data-outer={first.outerLabel}><header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${first.outerLabel}`} onClick={() => send({ type: 'set-expanded', target: target('group', outerId), expanded: collapsed })}>{collapsed ? '+' : '−'}</button><strong>{first.outerLabel === 'Unassigned / Unknown' && ['initiative', 'epic'].includes(state.organizer?.outer ?? '') ? 'Unassigned' : first.outerLabel}</strong><small className="ov-group-field">{floorFields.find(f => f.id === state.organizer?.outer)?.label}</small><span>{new Set(children.flatMap(g => g.workers.map(w => w.id))).size} workers · {new Set(children.flatMap(g => g.cards.map(c => c.id))).size} tasks</span></header>
             {!collapsed && <div className="ov-inner">{children.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}</div>}
           </section>
         })}
