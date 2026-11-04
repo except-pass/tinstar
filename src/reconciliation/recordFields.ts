@@ -1,4 +1,4 @@
-import type { SceneCard } from '../server/reconciliation/scene'
+import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene } from './presentation'
 import { cardStatus, cardTitle } from './overviewModel'
 import { dateBucket, dateTimestamp } from '../shared/floorOrganization'
@@ -57,4 +57,27 @@ export function taskFields(card: SceneCard, now: number, actionable = true) {
     ['Will action', !complete && actionable ? propertyText(card, 'Will action') : ''],
   ]
   return fields.filter(([, value]) => value)
+}
+
+/** Workers borrow Work breadcrumbs only from confirmed explicit relationships. */
+export function workerBreadcrumb(scene: FloorScene, worker: Execution): string {
+  const cards = scene.claims.filter(c => c.executionId === worker.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
+    .map(c => scene.cards.find(card => card.id === c.cardId)).filter((c): c is SceneCard => !!c)
+  return [...new Set(cards.map(c => workBreadcrumb(scene, c)).filter(value => value !== 'Unassigned'))].join(' · ')
+}
+export function compactCheckIn(card: SceneCard, now: number): string {
+  const check = checkIn(card, now)
+  if (check.state === 'overdue') {
+    const elapsed = now - dateTimestamp(propertyDate(card, 'Next check-in')!)
+    return `Overdue ${elapsed < 3600000 ? `${Math.max(1, Math.floor(elapsed / 60000))}m` : elapsed < 86400000 ? `${Math.floor(elapsed / 3600000)}h` : `${Math.floor(elapsed / 86400000)}d`}`
+  }
+  if (check.state === 'upcoming') {
+    const value = propertyDate(card, 'Next check-in')!
+    const label = value.length > 10 && dateBucket(value, now, true) === 'Today'
+      ? new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }).format(dateTimestamp(value)).replace(' AM', 'a').replace(' PM', 'p')
+      : dateLabel(value)
+    return `Check-in ${label}`
+  }
+  if (cardStatus(card) === 'Ready for Review' && check.state === 'missing') return 'Review requested'
+  return check.label
 }

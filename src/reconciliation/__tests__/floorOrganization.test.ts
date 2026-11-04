@@ -6,11 +6,12 @@ import { SceneReconciler } from '../../server/reconciliation/scene'
 import { dateBucket, dateTimestamp, defaultOrganizer, organizedGroups, type Organizer } from '../../shared/floorOrganization'
 import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
 import { applyPresentationAction, initialPresentation, semanticId } from '../presentation'
+import { workBreadcrumb, workerBreadcrumb } from '../recordFields'
 import { entityTone, overviewGroups } from '../overviewModel'
 import { loadPresentationPreferences, preferencesKey, savePresentationPreferences } from '../presentationPreferences'
 
 const now = Date.parse('2026-11-04T17:00:00Z')
-const stateFor = (organizer: Partial<Organizer> = {}) => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), ...organizer } })
+const stateFor = (organizer: Partial<Organizer> = {}): ReturnType<typeof initialPresentation> => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), inner: 'none', ...organizer } })
 describe('shared organization of independent endpoints', () => {
   it.each(['initiative', 'epic'] as const)('uses only explicit %s properties from Notion', async field => {
     const name = field === 'initiative' ? 'Initiative' : 'Epic'
@@ -26,7 +27,7 @@ describe('shared organization of independent endpoints', () => {
       const scene = fixtureScene({ now })
       const card = scene.cards.find(c => c.id === fixtureId(1))!
       Object.assign(card.source.properties, observation.data!.cards[0]!.properties)
-      const organizer = { ...defaultOrganizer(), outer: field, order: field }
+      const organizer = { ...defaultOrganizer(), outer: field, inner: 'none' as const, order: field }
       expect(actionSchema.safeParse({ type: 'set-organizer', organizer }).success).toBe(true)
       const groups = organizedGroups(scene, { ...initialPresentation(), organizer }, now)
       expect(groups.filter(g => g.cardIds.includes(card.id)).map(g => g.label).sort()).toEqual(
@@ -34,6 +35,28 @@ describe('shared organization of independent endpoints', () => {
           ? ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'] : ['Delivery'])
       if (!property) expect(groups).toHaveLength(1)
     }
+  })
+  it('reads select Initiative/Epic into groups and confirmed linked-worker breadcrumbs', async () => {
+    const fetcher = (async (_url, init) => new Response(JSON.stringify(init?.method === 'POST'
+      ? { results: [{ object: 'page', id: fixtureId(1), last_edited_time: new Date(now).toISOString(), properties: {
+        Initiative: { type: 'select', select: { name: 'Cloud Platform' } },
+        Epic: { type: 'select', select: { name: 'Observability' } },
+      } }], has_more: false }
+      : { object: 'data_source', properties: { Initiative: { type: 'select' }, Epic: { type: 'select' } } }))) as typeof fetch
+    const observation = await notionObservation({ token: 'fixture', dataSourceId: fixtureId(1) }, fetcher).get()
+    const scene = fixtureScene({ now }), card = scene.cards.find(c => c.id === fixtureId(1))!
+    Object.assign(card.source.properties, observation.data!.cards[0]!.properties)
+    const group = organizedGroups(scene, stateFor({ outer: 'initiative', inner: 'status' }), now).find(g => g.cardIds.includes(card.id))!
+    expect(group.outerLabel).toBe('Cloud Platform')
+    expect(workBreadcrumb(scene, card)).toBe('Cloud Platform / Observability')
+    const claim = scene.claims.find(c => c.cardId === card.id && c.verification === 'confirmed')!
+    const worker = scene.executions.find(w => w.id === claim.executionId)!
+    expect(workerBreadcrumb(scene, worker)).toBe('Cloud Platform / Observability')
+    claim.verification = 'unverified'
+    expect(workerBreadcrumb(scene, worker)).toBe('')
+    delete card.source.properties.Initiative
+    delete card.source.properties.Epic
+    expect(workBreadcrumb(scene, card)).toBe('Unassigned')
   })
   it('resolves generated group members and reveals claim and manager ancestors', () => {
     const scene = fixtureScene({ now }), state = stateFor({ outer: 'machine', inner: 'status' })
@@ -58,7 +81,7 @@ describe('shared organization of independent endpoints', () => {
   })
   it('carries both linked workers under a task field and keeps independent endpoints visible', () => {
     const scene = fixtureScene({ now }), before = JSON.stringify(scene)
-    const groups = overviewGroups(scene, stateFor(), now)
+    const groups = overviewGroups(scene, stateFor({ outer: 'status' }), now)
     const active = groups.find(g => g.label === 'In Progress')!
     expect(active.cards.some(c => c.id === fixtureId(1))).toBe(true)
     expect(active.workers.filter(w => ['linked-worker', 'helper-worker'].includes(w.identity.task_id!))).toHaveLength(2)
@@ -162,6 +185,13 @@ describe('New York calendar buckets', () => {
 })
 
 describe('presets, reducer and persisted semantic preferences', () => {
+  it('starts fresh browsers and resets with initiative status bands', () => {
+    localStorage.removeItem(preferencesKey)
+    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+    const scene = fixtureScene({ now })
+    const state = applyPresentationAction(stateFor({ outer: 'machine' }), { type: 'reset-floor' }, scene).state
+    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+  })
   it('uses current source options and keeps all statuses available under All cards', () => {
     const scene = fixtureScene({ now })
     const state = applyPresentationAction(initialPresentation(), { type: 'set-status-filter', filter: { preset: 'all', statuses: [] } }, scene).state

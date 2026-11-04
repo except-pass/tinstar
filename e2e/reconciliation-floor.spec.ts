@@ -63,6 +63,8 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
   await page.goto(base)
+  await expect(page.getByLabel('Outer grouping')).toHaveValue('initiative')
+  await expect(page.getByLabel('Inner grouping')).toHaveValue('status')
   await expect(page.getByLabel('Status preset')).toHaveValue('operational')
   await expect(page.locator('.ov-execution')).toHaveCount(5)
   await expect(page.locator('.ov-card')).toHaveCount(5)
@@ -70,6 +72,7 @@ test('shared task/worker grouping, nested order, filters, references and persist
   const active = page.locator('.ov-group').filter({ has: page.locator('.ov-group-name', { hasText: /^In Progress$/ }) })
   await expect(active.locator('.ov-execution')).toHaveCount(2)
   await expect(active.locator('.ov-card')).toHaveCount(4)
+  await page.getByLabel('Inner grouping').selectOption('none')
   await page.getByLabel('Outer grouping').selectOption('machine')
   const linked = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
   await expect(linked).toHaveCount(2)
@@ -105,6 +108,9 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await expect(page.getByLabel('Status preset')).toHaveValue('custom')
   await expect(page.getByLabel('Outer grouping')).toHaveValue('checkIn')
   await expect(page.locator('.ov')).toHaveAttribute('data-direction', 'desc')
+  const candidate = page.locator('.ov-execution').filter({ hasText: 'Candidate relationship' })
+  await expect(candidate.locator('..').locator('..').locator('.ov-empty-col')).toHaveText('Task link unverified')
+  await expect(candidate.locator('..').locator('..').locator('.ov-gutter')).toHaveText('unverified')
   await expect(linked).toHaveCount(0)
   await expect(page.locator('.ov-execution')).toHaveCount(5)
   await page.getByRole('button', { name: 'Fields', exact: true }).click()
@@ -114,7 +120,8 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await screenshot(page, 'controlled-shared-floor')
   await page.getByRole('button', { name: 'Reset', exact: true }).click()
   await expect(page.getByLabel('Status preset')).toHaveValue('operational')
-  await expect(page.getByLabel('Outer grouping')).toHaveValue('status')
+  await expect(page.getByLabel('Outer grouping')).toHaveValue('initiative')
+  await expect(page.getByLabel('Inner grouping')).toHaveValue('status')
   await expect(page.getByLabel('Fields', { exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -138,6 +145,7 @@ test('date grouping uses all six New York buckets in calendar order', async ({ p
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await page.getByLabel('Outer grouping').selectOption('checkIn')
+  await page.getByLabel('Inner grouping').selectOption('none')
   await expect(page.locator('.ov-group-name')).toHaveText(['Overdue', 'Today', 'Tomorrow', 'This week', 'Later', 'Not scheduled'])
   await expect(page.locator('.ov-group').filter({ has: page.locator('.ov-group-name', { hasText: /^Today$/ }) }).locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)).toBeVisible()
 })
@@ -187,7 +195,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   workers[1]!.liveness = 'waiting'; workers[1]!.source.current_state.state = 'waiting'
   workers[2]!.liveness = 'liveness-not-observed'; workers[2]!.source.current_state.state = 'unknown'; workers[2]!.source.last_event.state = 'unknown'
   const card = scene.cards.find(c => c.id === fixtureId(1))!
-  for (const [name, value] of Object.entries({ Priority: 'High', 'Last touched by': 'Will', 'Due Date': { start: '2026-11-07' }, 'Next check-in': { start: '2026-11-04T10:00:00-05:00' } })) card.source.properties[name] = { id: name, type: 'rich_text', hasMore: false, value }
+  for (const [name, value] of Object.entries({ Priority: '🔴 High', 'Last touched by': 'Will', 'Due Date': { start: '2026-11-07' }, 'Next check-in': { start: '2026-11-04T10:00:00-05:00' } })) card.source.properties[name] = { id: name, type: 'rich_text', hasMore: false, value }
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
@@ -196,10 +204,11 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await expect(page.locator('.ov-worker-status').filter({ hasText: /^Running$/ })).not.toHaveCount(0)
   for (const status of ['Waiting', 'Blocked', 'Unknown']) await expect(page.locator('.ov-worker-status').filter({ hasText: new RegExp('^' + status + '$') })).toHaveCount(1)
   const task = page.locator(`.ov-card[data-entity-id="${card.id}"]`).first()
-  const fields = await task.locator('.ov-field-label').allTextContents()
-  expect(fields).toEqual(['Status', 'Owner', 'Next check-in', 'Last edited', 'Last touched by', 'Priority', 'Due Date'])
+  const fields = await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()
+  await expect(task.locator('.ov-priority')).toHaveText('High')
+  await expect(task.locator('.ov-task-status')).toHaveText('In Progress')
   await expect(task).toContainText('Overdue')
-  await expect(task).toContainText('Will')
+  await expect(task.locator('.ov-age')).toHaveAttribute('title', 'Last touched by Will')
   await expect(task).not.toContainText(/No worker|Unverified|Machine|Manager|Link|execution/i)
   await expect(task.locator('.ov-breadcrumb')).toHaveText('Unassigned')
   const desk = page.getByRole('complementary', { name: 'Your desk' })
@@ -207,6 +216,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await task.click()
   await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Full source card body')
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Last touched byWill')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Some content omitted')
   await expect(desk.getByLabel('Desk queue')).toBeVisible()
   await expect(desk.locator('.ov-queue')).toHaveAttribute('data-queue-item-id', queueId!)
@@ -215,11 +225,11 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await page.getByRole('button', { name: 'Close Inspector' }).click()
   await expect(task).toBeFocused()
   await page.getByLabel('Outer grouping').selectOption('machine')
-  expect(await task.locator('.ov-field-label').allTextContents()).toEqual(fields)
+  expect(await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()).toEqual(fields)
   // Expire the observations, preserving recorded execution status and legibility.
   await page.clock.fastForward(61_001)
   await expect(running.locator('.status-running')).toBeVisible()
-  await expect(running.locator('.ov-freshness')).toHaveText('Last known observation')
+  await expect(running.locator('.ov-freshness')).toHaveAttribute('aria-label', 'Last known observation')
   await running.click()
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Latest activity')
   await expect(desk.getByLabel('Desk queue')).toBeVisible()
@@ -305,4 +315,94 @@ test('Coming up card removed by scene refresh links its own source without write
   await expect(desk).toHaveAttribute('data-queue-item-id', queueId!)
   await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
   expect(mutations).toEqual([])
+})
+
+test('approved floor structure: select breadcrumbs, band counts, card positions and per-record gaps', async ({ page }) => {
+  await page.setViewportSize({ width: 1396, height: 1039 })
+  const now = Date.parse('2026-11-04T17:00:00Z')
+  await page.clock.install({ time: now })
+  const scene = fixtureScene({ now })
+  for (const card of scene.cards) {
+    card.source.properties.Initiative = { id: 'initiative', type: 'select', hasMore: false, value: 'Delivery' }
+    card.source.properties.Epic = { id: 'epic', type: 'select', hasMore: false, value: 'Readability' }
+    card.source.properties.Priority = { id: 'priority', type: 'select', hasMore: false, value: 'High' }
+  }
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  await page.getByLabel('Outer grouping').selectOption('initiative')
+  await page.getByLabel('Inner grouping').selectOption('status')
+  await expect(page.locator('.ov-headings')).toHaveText('WORKERSRELATIONSHIPSNOTION TASKS')
+  const outer = page.locator('.ov-outer').filter({ has: page.locator('.ov-group-field', { hasText: 'Initiative' }) }).first()
+  await expect(outer.locator(':scope > header')).toContainText('Delivery')
+  await expect(outer.locator(':scope > header')).toContainText(/\d+ workers · \d+ tasks/)
+  for (const header of await page.locator('.ov-group > header').all()) await expect(header).toContainText(/\d+ W · \d+ T/)
+  const task = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
+  await expect(task.locator('.ov-breadcrumb')).toHaveText('Delivery / Readability')
+  const worker = page.locator('.ov-execution').filter({ hasText: 'linked worker' }).first()
+  await expect(worker.locator('.ov-breadcrumb')).toHaveText('Delivery / Readability')
+  const rect = async (locator: import('@playwright/test').Locator) => (await locator.boundingBox())!
+  const crumb = await rect(task.locator('.ov-breadcrumb')), priority = await rect(task.locator('.ov-priority'))
+  const title = await rect(task.locator('strong')), meta = await rect(task.locator('.ov-task-meta')), foot = await rect(task.locator('.ov-record-foot'))
+  expect(Math.abs(crumb.y - priority.y)).toBeLessThan(5)
+  expect(priority.x).toBeGreaterThan(crumb.x)
+  expect(title.y).toBeGreaterThan(crumb.y)
+  expect(meta.y).toBeGreaterThan(title.y)
+  expect(foot.y).toBeGreaterThan(meta.y)
+  const status = await rect(worker.locator('.ov-worker-status')), avatar = await rect(worker.locator('.ov-face'))
+  expect(status.x).toBeGreaterThan(avatar.x + avatar.width)
+  expect((await rect(worker.locator('.ov-record-foot'))).y).toBeGreaterThan((await rect(worker.locator('.ov-worker-meta'))).y)
+  await expect(page.getByText('No linked worker', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('No linked task', { exact: true }).first()).toBeVisible()
+  await expect(page.locator('.ov-gutter').filter({ hasText: /^no worker$/ }).first()).toBeVisible()
+  await expect(page.locator('.ov-gutter').filter({ hasText: /^no task$/ }).first()).toBeVisible()
+  for (const placeholder of await page.locator('.ov-empty-col').all()) {
+    await expect(placeholder).toHaveCSS('border-top-style', 'dashed')
+    expect((await rect(placeholder)).height).toBeGreaterThanOrEqual(108)
+  }
+  await expect(task).toHaveCount(1)
+  const band = outer.locator('.ov-group').filter({ has: page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`) })
+  await expect(band).toHaveCount(1)
+  const linkedWorkers = ['linked-worker', 'helper-worker'].map(id => scene.executions.find(execution => execution.identity.task_id === id)!)
+  for (const execution of linkedWorkers) {
+    const endpoint = band.locator(`.ov-execution[data-entity-id=${JSON.stringify(execution.id)}]`)
+    await expect(endpoint).toHaveCount(1)
+    await endpoint.hover()
+    await expect(band.locator('.ov-line.hot.ov-linked')).toHaveCount(1)
+  }
+  await task.hover()
+  await expect(band.locator('.ov-execution.related')).toHaveCount(2)
+  await expect(band.locator('.ov-line.hot.ov-linked')).toHaveCount(2)
+  await outer.locator(':scope > header > button').click()
+  await expect(task).toHaveCount(0)
+  await outer.locator(':scope > header > button').click()
+  await expect(task).toHaveCount(1)
+  await screenshot(page, 'approved-floor-structure')
+})
+
+
+test('independent endpoint order survives many-to-many relationships in both directions', async ({ page }) => {
+  const now = Date.parse('2026-11-04T17:00:00Z')
+  await page.clock.install({ time: now })
+  const scene = fixtureScene({ now })
+  const first = scene.claims.find(c => c.cardId === fixtureId(1))!
+  scene.claims.push({ ...first, id: 'additional-task', cardId: fixtureId(6) })
+  for (const [id, hour] of [[1, 12], [4, 13], [6, 14]]) scene.cards.find(c => c.id === fixtureId(id!))!.source.properties['Next check-in'] = { id: 'check', type: 'date', hasMore: false, value: { start: `2026-11-04T${hour}:00:00Z` } }
+  scene.executions.find(w => w.identity.task_id === 'untracked-worker')!.source.last_event.age_seconds = 0
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  await page.getByLabel('Outer grouping').selectOption('none')
+  await page.getByLabel('Inner grouping').selectOption('none')
+  const { organizedGroups } = await import('../src/shared/floorOrganization')
+  const { initialPresentation } = await import('../src/reconciliation/presentation')
+  for (const order of ['activity', 'checkIn'] as const) {
+    await page.getByLabel('Order by').selectOption(order)
+    for (const direction of ['asc', 'desc'] as const) {
+      const desired = organizedGroups(scene, { ...initialPresentation(), organizer: { outer: 'none', inner: 'none', order, direction } }, now)[0]!
+      await expect(page.locator('.ov')).toHaveAttribute('data-direction', direction)
+      expect(await page.locator('.ov-execution').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.workers.map(w => w.id))
+      expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.cards.map(c => c.id))
+      await page.getByRole('button', { name: 'Reverse sort direction' }).click()
+    }
+  }
+  await screenshot(page, 'independent-endpoint-order')
 })
