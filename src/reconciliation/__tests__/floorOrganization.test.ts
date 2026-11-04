@@ -11,7 +11,7 @@ import { entityTone, overviewGroups } from '../overviewModel'
 import { loadPresentationPreferences, preferencesKey, savePresentationPreferences } from '../presentationPreferences'
 
 const now = Date.parse('2026-11-04T17:00:00Z')
-const stateFor = (organizer: Partial<Organizer> = {}) => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), ...organizer } })
+const stateFor = (organizer: Partial<Organizer> = {}) => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), inner: 'none', ...organizer } })
 describe('shared organization of independent endpoints', () => {
   it.each(['initiative', 'epic'] as const)('uses only explicit %s properties from Notion', async field => {
     const name = field === 'initiative' ? 'Initiative' : 'Epic'
@@ -27,7 +27,7 @@ describe('shared organization of independent endpoints', () => {
       const scene = fixtureScene({ now })
       const card = scene.cards.find(c => c.id === fixtureId(1))!
       Object.assign(card.source.properties, observation.data!.cards[0]!.properties)
-      const organizer = { ...defaultOrganizer(), outer: field, order: field }
+      const organizer = { ...defaultOrganizer(), outer: field, inner: 'none' as const, order: field }
       expect(actionSchema.safeParse({ type: 'set-organizer', organizer }).success).toBe(true)
       const groups = organizedGroups(scene, { ...initialPresentation(), organizer }, now)
       expect(groups.filter(g => g.cardIds.includes(card.id)).map(g => g.label).sort()).toEqual(
@@ -185,6 +185,13 @@ describe('New York calendar buckets', () => {
 })
 
 describe('presets, reducer and persisted semantic preferences', () => {
+  it('starts fresh browsers and resets with initiative status bands', () => {
+    localStorage.removeItem(preferencesKey)
+    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+    const scene = fixtureScene({ now })
+    const state = applyPresentationAction(stateFor({ outer: 'machine' }), { type: 'reset-floor' }, scene).state
+    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+  })
   it('uses current source options and keeps all statuses available under All cards', () => {
     const scene = fixtureScene({ now })
     const state = applyPresentationAction(initialPresentation(), { type: 'set-status-filter', filter: { preset: 'all', statuses: [] } }, scene).state

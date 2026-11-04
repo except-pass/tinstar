@@ -78,7 +78,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     <span className="ov-port" aria-hidden="true" />
   </button>
 }
-function Group({ view, group, hover, focus, allGroups }: { view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
+export function Group({ view, group, hover, focus, allGroups }: { view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
   const { scene, state, send, now, readFailed } = view
   const body = useRef<HTMLDivElement>(null)
   const [paths, setPaths] = useState<Array<{ id: string; d: string; tone: string; worker?: string; card?: string }>>([])
@@ -87,27 +87,22 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
   // Measurement updates local path state; keep its filtered input stable so
   // that update cannot retrigger measurement in a render loop.
   const cs = useMemo(() => state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), [cards, scene, state.roadmapExpanded])
-  // Lay out each connected set once, preserving independent endpoint identities.
-  // Many-to-many links retain multiple ports without duplicating cards in a band.
   const rows = useMemo(() => {
-    const remainingWorkers = new Set(ws.map(w => w.id)), remainingCards = new Set(cs.map(c => c.id))
-    const links = scene.claims.filter(c => c.state !== 'historical' && remainingWorkers.has(c.executionId) && remainingCards.has(c.cardId))
+    const workerIds = new Set(ws.map(w => w.id)), cardIds = new Set(cs.map(c => c.id))
+    const links = scene.claims.filter(c => c.state !== 'historical' && workerIds.has(c.executionId) && cardIds.has(c.cardId))
+    const linkedWorkers = new Set(links.map(c => c.executionId)), linkedCards = new Set(links.map(c => c.cardId))
     const result: Array<{ workers: Execution[]; cards: SceneCard[] }> = []
-    function take(workerId?: string, cardId?: string) {
-      const w = new Set(workerId ? [workerId] : []), c = new Set(cardId ? [cardId] : [])
-      let changed = true
-      while (changed) {
-        changed = false
-        for (const link of links) if (w.has(link.executionId) || c.has(link.cardId)) {
-          if (!w.has(link.executionId) || !c.has(link.cardId)) changed = true
-          w.add(link.executionId); c.add(link.cardId)
-        }
+    let wi = 0, ci = 0
+    while (wi < ws.length || ci < cs.length) {
+      const worker = ws[wi], card = cs[ci]
+      if (worker && !linkedWorkers.has(worker.id)) { result.push({ workers: [worker], cards: [] }); wi++ }
+      else if (card && !linkedCards.has(card.id)) { result.push({ workers: [], cards: [card] }); ci++ }
+      else {
+        result.push({ workers: worker ? [worker] : [], cards: card ? [card] : [] })
+        if (worker) wi++
+        if (card) ci++
       }
-      w.forEach(id => remainingWorkers.delete(id)); c.forEach(id => remainingCards.delete(id))
-      result.push({ workers: ws.filter(item => w.has(item.id)), cards: cs.filter(item => c.has(item.id)) })
     }
-    for (const card of cs) if (remainingCards.has(card.id)) take(undefined, card.id)
-    for (const worker of ws) if (remainingWorkers.has(worker.id)) take(worker.id)
     return result
   }, [ws, cs, scene.claims])
   useLayoutEffect(() => {
@@ -148,6 +143,8 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
         const workerClaims = scene.claims.filter(c => c.state !== 'historical' && row.workers.some(w => w.id === c.executionId))
         const taskClaims = scene.claims.filter(c => c.state !== 'historical' && row.cards.some(card => card.id === c.cardId))
         const confirmed = (claim: typeof scene.claims[number]) => claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current'
+        const hasVisibleTask = workerClaims.some(c => cs.some(card => card.id === c.cardId))
+        const hasVisibleWorker = taskClaims.some(c => ws.some(worker => worker.id === c.executionId))
         const hiddenTask = !row.cards.length && workerClaims.some(confirmed)
         const outsideWorker = !row.workers.length && taskClaims.some(confirmed)
         const workerCandidate = !row.workers.length && taskClaims.length > 0 && !outsideWorker
@@ -155,9 +152,9 @@ function Group({ view, group, hover, focus, allGroups }: { view: View; group: Re
         const leftEmpty = outsideWorker ? 'Linked worker outside this view' : workerCandidate ? 'Worker link unverified' : workersUnavailable ? 'Workers unavailable' : 'No linked worker'
         const rightEmpty = hiddenTask ? 'Linked task outside this view' : taskCandidate ? 'Task link unverified' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'
         return <div className="ov-pair" key={row.cards[0]?.id ?? row.workers[0]?.id ?? index}>
-          <div className="ov-worker-stack">{row.workers.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!row.workers.length && <div className="ov-empty-col">{leftEmpty}</div>}</div>
-          <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length || !row.cards.length) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workerCandidate ? 'unverified' : workersUnavailable ? 'unknown worker' : 'no worker' : hiddenTask ? 'outside view' : taskCandidate ? 'unverified' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
-          <div className="ov-card-stack">{row.cards.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!row.cards.length && <div className="ov-empty-col">{rightEmpty}</div>}</div>
+          <div className="ov-worker-stack">{row.workers.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!row.workers.length && !hasVisibleWorker && <div className="ov-empty-col">{leftEmpty}</div>}</div>
+          <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length && !hasVisibleWorker || !row.cards.length && !hasVisibleTask) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workerCandidate ? 'unverified' : workersUnavailable ? 'unknown worker' : 'no worker' : hiddenTask ? 'outside view' : taskCandidate ? 'unverified' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
+          <div className="ov-card-stack">{row.cards.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!row.cards.length && !hasVisibleTask && <div className="ov-empty-col">{rightEmpty}</div>}</div>
         </div>
       })}
       {state.linksVisible !== false && <svg className="ov-connections" aria-hidden="true">{paths.map(p => <path key={p.id} d={p.d} className={`ov-line ov-${p.tone}${(!state.navigation || state.navigation.cardId !== p.card || p.tone === 'linked') && state.flash && state.flash.until > now && (state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} />)}</svg>}

@@ -22,7 +22,7 @@ export const floorFields = [
 export type FloorField = typeof floorFields[number]['id']
 export interface Organizer { outer: FloorField | 'none'; inner: FloorField | 'none'; order: FloorField; direction: 'asc' | 'desc' }
 export interface StatusFilter { preset: 'operational' | 'all' | 'custom'; statuses: string[] }
-export const defaultOrganizer = (): Organizer => ({ outer: 'status', inner: 'none', order: 'checkIn', direction: 'asc' })
+export const defaultOrganizer = (): Organizer => ({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
 export const defaultStatusFilter = (): StatusFilter => ({ preset: 'operational', statuses: [] })
 export const operationalStatuses = ['In Progress', 'Queued', 'Waiting', 'Waiting For', 'Waiting for Prod Release', 'Ready for Review', 'In review', 'Delegated to person']
 export const statusName = (card: SceneCard) => String(card.source.properties.Status?.value ?? '').trim()

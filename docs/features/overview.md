@@ -5,7 +5,7 @@ The reference contains illustrative data only. Production reads the configured
 Notion and First Mate sources and never substitutes fixture records.
 
 Workers and Notion tasks render as independent cards inside shared groups,
-with links in the gutter. Connected sets align across the columns without
+with links in the gutter. Each column retains its selected order without
 duplicating endpoints within a band. Dashed placeholders accompany unmatched
 records; hidden counterparts and unavailable sources have distinct labels.
 Nested groups use an outer field label and deduplicated worker/task counts,
@@ -26,7 +26,9 @@ Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
 in Unassigned / Unknown; parent chains never establish either.
-The initial organizer uses Task Status, no Inner, and Next check-in ascending.
+The initial and Reset organizer uses Initiative outer groups, Task Status inner
+bands, and Next check-in ascending. Explicitly saved browser choices take precedence
+on reload.
 
 Only explicit, non-conflicting canonical page-ID links carry endpoints between
 groups. Textual/equal-title candidates remain diagnostics. Multiple references
