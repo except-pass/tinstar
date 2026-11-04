@@ -91,7 +91,7 @@ it('clears mobile source diagnostics on close and subsequent worker selection', 
   const { container } = render(<Overview workers={[]} />)
   fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
   expect(screen.getByText('Source health')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
   fireEvent.click(container.querySelector('.ov-execution')!)
   expect(screen.queryByText('Source health')).toBeNull()
   expect(screen.getByLabelText('Inspector')).toBeTruthy()
