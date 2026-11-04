@@ -23,7 +23,13 @@ async function call(name: string, args: Record<string, unknown>) {
 async function windowId(page: Page) { await expect(page.locator('.ov[data-scene-id]')).toBeVisible(); return (await page.locator('.ov').getAttribute('data-scene-id'))! }
 async function present(page: Page, action: unknown, command_id: string) {
   const scene_id = await windowId(page)
-  const current = await call('get_scene', { scene_id })
+  // Initial queue loading can advance the browser after it registers. Read the
+  // committed revision after its heartbeat reaches MCP before issuing a command.
+  let current = await call('get_scene', { scene_id })
+  await expect.poll(async () => {
+    current = await call('get_scene', { scene_id })
+    return current.state.revision === Number(await page.locator('.ov').getAttribute('data-revision'))
+  }).toBe(true)
   const args = { scene_id, command_id, expected_revision: current.state.revision, action }
   let ack = await call('present_view', args)
   if (ack.outcome === 'queued') {
