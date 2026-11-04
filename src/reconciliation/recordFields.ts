@@ -45,7 +45,7 @@ export function checkIn(card: SceneCard, now: number): { state: string; label: s
 /** Stable order for compact cards and complete Inspector metadata. */
 export function taskFields(card: SceneCard, now: number, actionable = true) {
   const complete = ['done', 'archived'].includes(cardStatus(card).toLowerCase())
-  return [
+  const fields: Array<[string, string]> = [
     ['Status', cardStatus(card)], ['Owner', propertyText(card, 'Owner') || 'Unassigned'],
     ['Next check-in', checkIn(card, now).label],
     ['Last edited', ageLabel(Date.parse(card.source.last_edited_time), now)],
@@ -54,5 +54,6 @@ export function taskFields(card: SceneCard, now: number, actionable = true) {
     ['Due Date', !complete && propertyDate(card, 'Due Date') ? dateLabel(propertyDate(card, 'Due Date')) : ''],
     ['Waiting For', !complete ? propertyText(card, 'Waiting For') : ''],
     ['Will action', !complete && actionable ? propertyText(card, 'Will action') : ''],
-  ].filter(([, value]) => value)
+  ]
+  return fields.filter(([, value]) => value)
 }

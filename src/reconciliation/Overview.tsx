@@ -69,7 +69,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     </> : <>
       <span className="ov-breadcrumb">{workBreadcrumb(scene, card!)}</span>
       <strong>{title}</strong>
-      <span className="ov-task-fields">{taskFields(card!, now, view.actionableCardIds.has(card!.id)).map(([label, value]) => <span key={label} className={label === 'Next check-in' ? `ov-check check-${checkIn(card!, now).state}` : label === 'Status' ? 'ov-task-status' : undefined}><span className="ov-field-label">{label}</span> {value}</span>)}</span>
+      <span className="ov-task-fields">{taskFields(card!, now, view.actionableCardIds.has(card!.id)).map(([label, value]) => <span key={label} className={label === 'Next check-in' ? `ov-check check-${checkIn(card!, now).state}` : label === 'Status' ? 'ov-task-status' : ['Waiting For', 'Will action'].includes(label) ? 'ov-context-field' : undefined}><span className="ov-field-label">{label}</span> {value}</span>)}</span>
     </>}
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
