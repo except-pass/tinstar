@@ -1,6 +1,6 @@
 # Reconciliation sources and scene (S1–S5)
 
-The v8 [Overview](overview.md) replaces the original Floor presentation. Prototype 08 is the current visual reference; the source and reconciliation contracts below remain active.
+The [Overview reference](overview.md) owns the current presentation and visual reference; the source and reconciliation contracts below remain active.
 
 This reference covers the source, scene and Floor slices of the owner-approved [Reconciliation Floor card](https://app.notion.com/p/40d50ce6d422814aa741c102cd00aaae).
 The [approved prototype 06](../design/reconciliation-floor-06.html) is a design reference, including its demonstrative identities, claims and local Assist simulation. It is not served as the production UI. Its preserved SHA-256 is `5020fbc3dc4b0e1379451ec440d9a87536359d10d48dbe7a0e795739a14b2818` (provenance, not a runtime gate).
@@ -59,7 +59,7 @@ Read through the authorized discovery helper using API version `2025-09-03`, GET
 | `Last edited` | `last_edited_time`, also available as the page-level field |
 | `✅ Done`, `↩️ Back to In Progress` | Buttons; not exposed as actions |
 
-The first real query returned 100 pages, `has_more: true`, with 25 nonempty Parent item relations in that page of results. This is a sample, not a total board count. There is no observed dedicated initiative/epic relation property: use actual parent relations when available, retain unassigned cards and do not derive a new canonical hierarchy from Area/Sub-area or prototype labels. Notion can omit inaccessible related content; coverage always means the configured, authorized data source, not the entire workspace.
+The first real query returned 100 pages, `has_more: true`, with 25 nonempty Parent item relations in that page of results. This is a sample, not a total board count. There was no observed dedicated Initiative/Epic property. Parent relations remain source hierarchy evidence; the [Overview reference](overview.md) owns the separate Initiative/Epic organizer contract. Notion can omit inaccessible related content; coverage always means the configured, authorized data source, not the entire workspace.
 
 S1 returns selected card properties and schema identifiers/types. It retains relation IDs and `hasMore`; truncated property relations or a missing expected schema property lower coverage to partial. External relation target context, page bodies, commitments embedded in blocks and PM Bot progress assessments are not collected by S1. Full card context/readiness work must fetch these deliberately in later slices. No new management judgment loop is introduced.
 

@@ -67,7 +67,7 @@ Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `gr
 {type:"clear-selection"}
 ```
 
-Fields are `manager`, `machine`, `workerStatus`, `activity`, `status`, `owner`,
+Fields are `manager`, `machine`, `workerStatus`, `activity`, `initiative`, `epic`, `status`, `owner`,
 `priority`, `checkIn`, `due`, `edited`, `area` and `subArea`. `get_scene` returns
 `records.groups` computed for this window's organizer and filters; group IDs and
 outer IDs are valid expansion/focus targets. `read_record` accepts both. Status

@@ -6,7 +6,7 @@
 
 Tinstar shows the workers First Mate is already running, the calls that need your attention, and provider quota in one view. First Mate remains responsible for dispatch, supervision, and worker lifecycle.
 
-Overview is the primary home: independent Workers and Notion cards share Initiative, Manager or Machine groups, with relationships between the columns and one contextual **Your desk** panel. Grouping, sorting, **Gaps only** and **Find gaps** change presentation only. Source health opens diagnostics; unavailable sources retain last-known records rather than asserting an empty fleet or board. See the [Overview reference](docs/features/overview.md) for detailed presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
+Overview is the primary home: independent Workers and Notion cards share groups controlled by a compact Outer / Inner / Order toolbar, with relationships between the columns and one contextual **Your desk** panel. Operational is the default status view; use All cards or Custom to change visibility. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
