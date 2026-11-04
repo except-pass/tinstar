@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { gapTargets, overviewGroups, managerName, rootHome } from '../overviewModel'
+import { gapTargets, overviewGroups, managerName, rootHome, workerState } from '../overviewModel'
 import { initialPresentation } from '../presentation'
 
 describe('independent Overview stacks', () => {
@@ -31,4 +31,98 @@ describe('independent Overview stacks', () => {
     expect(gapTargets(new SceneReconciler().reconcile(sources, now), now)).toEqual([])
     expect(gapTargets(fixtureScene({ now, unavailable: true }), now)).toEqual([])
   })
+})
+
+it('navigates a canonical Desk task without changing queue position or saved filters', async () => {
+  const { applyPresentationAction, semanticId } = await import('../presentation')
+  const { organizedGroups } = await import('../../shared/floorOrganization')
+  const now = Date.now(), scene = fixtureScene({ now })
+  const card = scene.cards.find(c => c.source.properties.Name?.value === 'Build live reconciliation')!
+  const organizer = { outer: 'machine' as const, inner: 'status' as const, order: 'checkIn' as const, direction: 'asc' as const }
+  const state = { ...initialPresentation(), organizer, statusFilter: { preset: 'custom' as const, statuses: ['Waiting For'] }, queueItemId: 'retain-this-item' }
+  const groups = organizedGroups(scene, { ...state, statusFilter: { preset: 'all', statuses: [] } }, now).filter(g => g.cardIds.includes(card.id))
+  state.collapsed = groups.flatMap(g => [g.id, g.outerId]).map(id => semanticId({ kind: 'group', id }))
+  const before = structuredClone(state)
+  const result = applyPresentationAction(state, { type: 'navigate-card', cardId: card.id }, scene, now)
+  expect(result.outcome).toBe('applied')
+  expect(result.state.selection).toBeNull()
+  expect(result.state.queueItemId).toBe(state.queueItemId)
+  expect(result.state.statusFilter).toEqual(state.statusFilter)
+  expect(result.state.organizer).toEqual(organizer)
+  expect(result.state.collapsed).toEqual([])
+  expect(organizedGroups(scene, result.state, now).filter(g => g.cardIds.includes(card.id))).toHaveLength(2)
+  expect(result.state.navigation?.cardId).toBe(card.id)
+  expect(state).toEqual(before)
+  expect(applyPresentationAction(state, { type: 'navigate-card', cardId: 'missing' }, scene, now)).toEqual({ outcome: 'unknown-id', state })
+})
+
+
+it('retains event precedence across expiry and shares status with grouping', () => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const task = sources.fleet[1]!.observation.data!.tasks[0]!
+  task.current_state.state = 'working'
+  task.lastEventText = 'paused: Awaiting input'
+  const reconciler = new SceneReconciler()
+  for (const time of [now, now + 61_000]) {
+    const scene = reconciler.reconcile(sources, time)
+    const worker = scene.executions.find(e => e.identity.task_id === task.identity.task_id)!
+    expect(workerState(worker)).toBe('Waiting')
+    const groups = overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'workerStatus', inner: 'none', order: 'checkIn', direction: 'asc' } }, time)
+    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe('Waiting')
+  }
+})
+
+it('distinguishes dead endpoints from completed reports', () => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const task = sources.fleet[1]!.observation.data!.tasks[0]!
+  task.endpoint.exists = false
+  task.lastEventText = 'working: Still working'
+  const reconciler = new SceneReconciler()
+  const status = (time: number) => workerState(reconciler.reconcile(sources, time).executions.find(e => e.identity.task_id === task.identity.task_id)!)
+  expect(status(now)).toBe('Unknown')
+  expect(status(now + 61_000)).toBe('Unknown')
+  task.lastEventText = 'done: Completed'
+  expect(status(now)).toBe('Finished')
+  expect(status(now + 61_000)).toBe('Finished')
+})
+
+
+it.each([
+  ['blocked', 'paused: Awaiting input', 'Waiting'],
+  ['working', 'blocked: Needs intervention', 'Blocked'],
+  ['blocked', 'working: Resumed', 'Running'],
+  ['blocked', 'resolved: Cleared', 'Running'],
+  ['blocked', 'unrecognized: Latest note', 'Blocked'],
+])('uses effective status for state %s and event %s', (state, event, expected) => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const task = sources.fleet[1]!.observation.data!.tasks[0]!
+  task.current_state.state = state
+  task.lastEventText = event
+  for (const time of [now, now + 61_000]) {
+    const scene = new SceneReconciler().reconcile(sources, time)
+    const worker = scene.executions.find(e => e.identity.task_id === task.identity.task_id)!
+    expect(workerState(worker)).toBe(expected)
+    const groups = overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'workerStatus', inner: 'none', order: 'workerStatus', direction: 'asc' } }, time)
+    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe(expected)
+  }
+})
+
+it('expires generic flash reveals while retaining selection and Desk navigation', async () => {
+  const { applyPresentationAction } = await import('../presentation')
+  const { organizedGroups } = await import('../../shared/floorOrganization')
+  const now = Date.now(), scene = fixtureScene({ now })
+  const card = scene.cards.find(c => c.source.properties.Name?.value === 'Build live reconciliation')!
+  const state = { ...initialPresentation(), statusFilter: { preset: 'custom' as const, statuses: [] } }
+  const flashed = applyPresentationAction(state, { type: 'flash', targets: [{ kind: 'card', id: card.id }], durationMs: 1000 }, scene, now)
+  const visible = (presentation: Parameters<typeof organizedGroups>[1], time: number) => organizedGroups(scene, presentation, time).some(group => group.cardIds.includes(card.id))
+  expect(visible(state, now)).toBe(false)
+  expect(visible(flashed.state, now + 999)).toBe(true)
+  expect(visible(flashed.state, now + 1000)).toBe(false)
+  expect(visible(flashed.state, now + 2000)).toBe(false)
+  const navigated = applyPresentationAction(state, { type: 'navigate-card', cardId: card.id }, scene, now)
+  expect(visible(navigated.state, now + 5000)).toBe(true)
+  expect(navigated.state.navigation?.cardId).toBe(card.id)
+  expect(visible({ ...flashed.state, selection: { kind: 'card', id: card.id } }, now + 5000)).toBe(true)
+  expect(flashed.state.statusFilter).toEqual(state.statusFilter)
+  expect(navigated.state.statusFilter).toEqual(state.statusFilter)
 })

@@ -51,10 +51,44 @@ source read; hiding a linked task cannot create an orphan finding. Expired/faile
 reads retain last-known data and suppress absence conclusions. Worker counts
 label unavailable or last-known observations when coverage is insufficient.
 
-The existing Desk and card designs remain in this slice. The [queue reference](reconciliation-queue.md)
-owns readiness, source identity and per-source response controls. Inspecting
-and regrouping retain queue identity. Worker terminal links use the exact-home
-resolver and open the safe viewer separately.
+Worker cards show an identity avatar, title and a consistently placed Running,
+Waiting, Blocked, Finished or Unknown status, followed by Machine, Manager,
+activity and human-readable activity age. Observation freshness is a separate
+Last known signal; retained status follows the same event/state precedence as
+[liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
+Unknown, not Finished. Selection and relationships never fade whole cards or
+serve as execution status.
+
+Task cards keep the same field order in every grouping: Initiative / Epic
+breadcrumb, two-line title, Notion Status, Owner, Next check-in, edit age,
+Last touched by, Priority when set, then contextual Due Date, Waiting For and
+Will action. Relationship evidence belongs in the gutter and diagnostics.
+Check-ins are accountability checkpoints, independent of Due Date and edit age.
+Done, Archived, Backlog, Todo, Not started, Planned and Spare tokens display
+Not applicable; other statuses distinguish missing, upcoming, overdue and
+invalid checkpoints using the calendar rules above.
+
+Click a floor worker or task to open the separate Inspector while Your desk
+remains available. The Inspector exposes metadata, related records, connection
+and activity history, evidence and safe source links. Task prose loads on demand;
+partial content labels omissions and unavailable content offers the source link.
+Worker terminal links use the exact-home resolver and open the safe viewer
+separately. Closing the Inspector restores focus to the floor card.
+
+Your desk shows a focused ready Notion card and the next few, with conditional
+and unverified cards in a secondary section. The [queue reference](reconciliation-queue.md)
+owns readiness, source identity and per-source response controls.
+Clicking a Desk card navigates by canonical task ID without opening the Inspector
+or moving the queue position: it expands the required groups, reveals the card
+through saved status filters, scrolls and focuses the first matching floor
+reference deterministically, then flashes the card and its current confirmed
+explicit worker connections. A persistent highlight and navigation reveal remain
+after the flash until another Desk target or Reset. Saved grouping, order and
+status choices stay intact. If the card is missing from the current scene, the
+Desk reports that it is not on the floor and offers that clicked card's own
+Notion link. Navigation never answers, dismisses or writes a source record;
+Answer/Dismiss remain separate explicit controls. Mobile Desk navigation returns
+to the floor; reduced motion uses static highlighting.
 
 Clicks and authenticated MCP use the same reducer. The [MCP reference](reconciliation-mcp.md#tools-and-authority)
 owns semantic actions, targeting and browser acknowledgments. Grouping/filtering

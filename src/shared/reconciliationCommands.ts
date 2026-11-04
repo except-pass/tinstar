@@ -14,6 +14,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('set-links'), visible: z.boolean() }).strict(),
   z.object({ type: z.literal('set-arrangement'), arrangement: z.enum(['initiative', 'secondMate', 'machine']) }).strict(),
   z.object({ type: z.literal('set-expanded'), target: targetSchema.refine(t => ['manager', 'group'].includes(t.kind)), expanded: z.boolean() }).strict(),
+  z.object({ type: z.literal('navigate-card'), cardId: z.string().min(1).max(64) }).strict(),
   z.object({ type: z.literal('focus'), target: targetSchema }).strict(),
   z.object({ type: z.literal('set-exceptions'), enabled: z.boolean() }).strict(),
   z.object({ type: z.literal('set-roadmap'), expanded: z.boolean() }).strict(),
@@ -25,6 +26,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clear-selection') }).strict(),
 ])
 export const stateSchema = z.object({
+  navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
   organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),
   revision: z.number().int().nonnegative(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), selection: targetSchema.nullable(),

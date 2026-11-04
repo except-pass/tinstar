@@ -1,3 +1,4 @@
+import { executionStatus } from './executionLiveness'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene, PresentationState } from './reconciliationPresentation'
 import { homeLabel } from './reconciliationLabels'
@@ -61,7 +62,7 @@ function values(scene: FloorScene, pair: Pair, id: FloorField): string[] {
   switch (id) {
     case 'manager': raw = w ? homeLabel(scene.coverage.homes.find(h => h.source.home === w.home)?.source ?? { home: w.home }) : null; break
     case 'machine': raw = w?.placement.machine; break
-    case 'workerStatus': raw = w ? w.liveness === 'liveness-not-observed' ? 'Unknown' : w.liveness === 'waiting' && w.source.current_state.state === 'blocked' ? 'Blocked' : w.liveness === 'running' ? 'Running' : 'Waiting' : null; break
+    case 'workerStatus': raw = w ? executionStatus(w) : null; break
     case 'activity': {
       const observed = Date.parse(w?.observation.observedAt ?? ''), age = w?.source.last_event.age_seconds
       raw = w && Number.isFinite(observed) && typeof age === 'number' && Number.isFinite(age) ? new Date(observed - age * 1000).toISOString() : null; break
@@ -89,7 +90,7 @@ export interface FloorGroup {
 export function organizedGroups(scene: FloorScene, state: PresentationState, now: number): FloorGroup[] {
   const organizer = state.organizer ?? defaultOrganizer(), filter = state.statusFilter ?? defaultStatusFilter()
   const workers = scene.executions.filter(activeWorker)
-  const cards = scene.cards.filter(c => !c.source.archived && !c.source.in_trash && matchesStatus(c, filter))
+  const cards = scene.cards.filter(c => !c.source.archived && !c.source.in_trash && (matchesStatus(c, filter) || state.navigation?.cardId === c.id || state.selection?.kind === 'card' && state.selection.id === c.id || state.flash && state.flash.until > now && state.flash.ids.includes(`card:${c.id}`)))
   const workerMap = new Map(workers.map(w => [w.id, w])), cardMap = new Map(scene.cards.map(c => [c.id, c]))
   const pairs: Pair[] = [], linkedWorkers = new Set<string>(), linkedCards = new Set<string>()
   for (const claim of scene.claims) {

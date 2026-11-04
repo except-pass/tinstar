@@ -19,7 +19,8 @@ export const stale = (observation: { status: string; expiresAt: string | null },
 export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
   /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
   ['done', 'landed'].includes(String(worker.source.last_event.state))
-export const workerState = (worker: Execution, now: number, readFailed = false) => readFailed || stale(worker.observation, now) ? 'Last known' : ({ running: 'Running', waiting: 'Waiting', finished: 'Finished', absent: 'Offline', 'liveness-not-observed': 'State unknown' })[worker.liveness]
+export { executionStatus as workerState } from '../shared/executionLiveness'
+
 export const observedAt = (worker: Execution) => {
   const time = Date.parse(worker.observation.observedAt ?? '')
   const age = worker.source.last_event.age_seconds

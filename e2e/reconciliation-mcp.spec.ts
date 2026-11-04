@@ -124,6 +124,18 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   expect(nextAck.outcome).toBe('applied')
   await expect(page.getByLabel('Desk queue')).toHaveAttribute('data-queue-item-id', queue.items[1]!.id)
   expect((await call('get_queue', { scene_id: first })).items[0].readiness).toBe('ready-now')
+  await present(page, { type: 'clear-transient' }, 'clear-flash-before-navigation')
+  await present(page, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }, 'hide-desk-task')
+  await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`)).toHaveCount(0)
+  const navigation = await present(page, { type: 'navigate-card', cardId: linkedCardId }, 'navigate-desk-task')
+  expect(navigation.ack.state.selection).toBeNull()
+  expect(navigation.ack.state.navigation.cardId).toBe(linkedCardId)
+  expect(navigation.ack.state.queueItemId).toBe(queue.items[1]!.id)
+  expect(navigation.ack.state.statusFilter).toEqual({ preset: 'custom', statuses: ['Waiting For'] })
+  await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`).first()).toBeFocused()
+  await expect(page.locator('.ov-line.desk-target')).toHaveCount(2)
+  await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Desk queue')).toBeVisible()
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
   // Hold command delivery; a direct click occurs after enqueue and before receipt.
