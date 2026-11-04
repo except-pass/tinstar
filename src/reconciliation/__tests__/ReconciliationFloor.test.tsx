@@ -76,6 +76,10 @@ it('reports unavailable workers with a readable Notion feed', () => {
   const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
   expect(container.querySelectorAll('.ov-card').length).toBeGreaterThan(0)
   expect(container.textContent).toContain('Workers unavailable')
+  for (const header of container.querySelectorAll('.ov-group-head')) {
+    expect(header.textContent).toContain('Workers unavailable')
+    expect(header.textContent).not.toContain('0 W')
+  }
   expect(container.textContent).not.toContain('0 workers')
   expect(container.textContent).not.toContain('No workers')
 })

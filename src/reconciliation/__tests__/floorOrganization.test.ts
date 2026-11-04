@@ -81,7 +81,7 @@ describe('shared organization of independent endpoints', () => {
   })
   it('carries both linked workers under a task field and keeps independent endpoints visible', () => {
     const scene = fixtureScene({ now }), before = JSON.stringify(scene)
-    const groups = overviewGroups(scene, stateFor(), now)
+    const groups = overviewGroups(scene, stateFor({ outer: 'status' }), now)
     const active = groups.find(g => g.label === 'In Progress')!
     expect(active.cards.some(c => c.id === fixtureId(1))).toBe(true)
     expect(active.workers.filter(w => ['linked-worker', 'helper-worker'].includes(w.identity.task_id!))).toHaveLength(2)
