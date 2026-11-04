@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
-import { applyPresentationAction, initialPresentation, type FloorScene, type PresentationAction } from './presentation'
+import { applyPresentationAction, type FloorScene, type PresentationAction } from './presentation'
+import { loadPresentationPreferences, savePresentationPreferences } from './presentationPreferences'
 import { retainedQueueItemId, type DeskQueue } from '../shared/reconciliationQueue'
 import type { CommandResult, ViewCommand } from '../shared/reconciliationCommands'
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
 export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false) {
-  const [state, setState] = useState(initialPresentation)
+  const [state, setState] = useState(loadPresentationPreferences)
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
   const readFailure = useRef(readFailed)
@@ -27,6 +28,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
   }, [])
   useEffect(() => {
     current.current = state
+    savePresentationPreferences(state)
     ready.current.push(...pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).map(ack => ({ ...ack, applied_at: Date.now() })))
     pending.current = pending.current.filter(ack => (ack.revision ?? 0) > state.revision)
   }, [state])

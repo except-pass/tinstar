@@ -281,6 +281,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     coverage: { absenceConclusions: absenceCovered ? 'sufficient-configured-sources' : 'suppressed',
       wholeFarm: 'not-certified', intentions: metadata(intentions),
       homes: fleet.map(home => ({ source: home.source, observation: metadata(home.observation) })) },
+    statusOptions: intentions.data?.schema.Status?.options ?? [],
     cards, executions, backlog, claims, findings, arrangements,
     cardRollups: cards.map(card => {
       const cardIds = cards.filter(child => child.id === card.id || child.ancestry.includes(card.id)).map(child => child.id)
