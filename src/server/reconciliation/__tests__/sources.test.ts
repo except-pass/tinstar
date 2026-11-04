@@ -74,15 +74,6 @@ describe('fleet collection', () => {
     }
   })
 
-  it.each([60, 600])('honors a per-home published snapshot age of %i seconds', async maxAgeSeconds => {
-    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.parse(timestamp) + 360_000)
-    const dir = await temp(); const file = join(dir, 'published.json')
-    await writeFile(file, JSON.stringify(snapshot()))
-    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file, maxAgeSeconds }).get()
-    expect(result.status).toBe(maxAgeSeconds === 600 ? 'fresh' : 'stale')
-    expect(result.expiresAt).toBe(new Date(Date.parse(timestamp) + maxAgeSeconds * 1000).toISOString())
-  })
-
   it('keeps the local-exec default at 60 seconds', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
     const home = await temp(); await mkdir(join(home, 'bin'))
@@ -263,19 +254,6 @@ describe('Notion reader', () => {
 })
 
 describe('config and HTTP boundary', () => {
-  it.each([30, 300, 3600])('accepts maxAgeSeconds of %i', async maxAgeSeconds => {
-    const root = await temp()
-    const source = { home: '/farm/main', snapshotFile: '/snapshots/main.json', maxAgeSeconds }
-    await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [source] } }))
-    expect(loadReconciliationConfig(root)).toMatchObject({ fleet: [source], warnings: [] })
-  })
-
-  it.each([29, 3601, 30.5, '300', null])('rejects invalid maxAgeSeconds %s', async maxAgeSeconds => {
-    const root = await temp()
-    await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [{ home: '/farm/main', maxAgeSeconds }] } }))
-    expect(loadReconciliationConfig(root)).toMatchObject({ fleet: [], warnings: [expect.stringContaining('maxAgeSeconds')] })
-  })
-
   it('honors the config root, falls back to existing homes, and reports invalid source config', async () => {
     const root = await temp()
     await writeFile(join(root, 'config.json'), JSON.stringify({ firstmate: { homes: ['/farm/hulk'] } }))

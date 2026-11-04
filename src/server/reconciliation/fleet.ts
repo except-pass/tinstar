@@ -14,7 +14,7 @@ const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string |
 
 export function fleetObservation(source: FleetSource) {
   // File publication includes snapshot generation and transport between homes.
-  const maxAgeMs = (source.maxAgeSeconds ?? (source.snapshotFile ? 300 : 60)) * 1000
+  const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
   return new CachedObservation(async () => {
     const snapshot = await readFleetSnapshot(source.home, source.snapshotFile)
     // A wrong publisher/path must not silently move work between homes.
