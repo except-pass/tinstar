@@ -11,6 +11,9 @@ describe('cardReferences work_item', () => {
     ['dashed id', dashed],
     ['notion URL with title slug', `https://www.notion.so/Build-reconciliation-${bare}`],
     ['notion URL with query string', `https://app.notion.com/p/${bare}?pvs=21`],
+    ['notion URL with block fragment', `https://notion.so/${bare}#${other}`],
+    ['notion URL with query and fragment', `https://notion.so/${bare}?page=${other}#${other}`],
+    ['notion URL with fragment before query', `https://notion.so/${bare}#${other}?pvs=21`],
     ['dashed id in a notion URL', `https://notion.so/${dashed}`],
   ])('confirms a %s as an explicit page id', (_label, workItem) => {
     expect(cardReferences({ work_item: workItem }, 'task')).toEqual([
@@ -22,6 +25,16 @@ describe('cardReferences work_item', () => {
     expect(cardReferences({ work_item: dashed }, 'task.backlog')).toEqual([
       { pageId: bare, basis: 'explicit', source: 'task.backlog.work_item' },
     ])
+  })
+
+  it.each(['task', 'task.backlog', 'backlog'])('uses only URL paths for references on %s', prefix => {
+    const url = `https://notion.so/${dashed}#${other}`
+    expect(cardReferences({ work_item: url, title: url, raw: url }, prefix)).toEqual([
+      { pageId: bare, basis: 'explicit', source: `${prefix}.work_item` },
+      { pageId: bare, basis: 'textual', source: `${prefix}.title` },
+      { pageId: bare, basis: 'textual', source: `${prefix}.raw` },
+    ])
+    expect(cardReferences({ work_item: `https://notion.so/workspace#${other}` }, prefix)).toEqual([])
   })
 
   it.each([

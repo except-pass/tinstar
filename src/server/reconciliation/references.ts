@@ -11,7 +11,7 @@ const NOTION_URL = /https:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/[^\s<>"()]*/gi
 const PAGE_ID_AT_END = /([a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})\/?$/i
 
 function pageIdFromNotionUrl(url: string): string | null {
-  return notionPageId(url.split('?')[0]!.match(PAGE_ID_AT_END)?.[1])
+  return notionPageId(new URL(url).pathname.match(PAGE_ID_AT_END)?.[1])
 }
 
 /** A work_item confirms a card only when the whole value is a page id or a Notion page URL. */
