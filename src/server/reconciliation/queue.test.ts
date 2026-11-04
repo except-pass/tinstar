@@ -366,14 +366,29 @@ describe('desk queue correctness', () => {
     if (context === 'pull') worker.pr.url = pull
     const s = snapshot(context === 'card' ? [card()] : [], [worker], context === 'holds' ? [hold({ id: 'access' }), hold({ id: 'reviewer' })] : [])
     const result = build(s, new Map([[pull, readyPull()]]))
-    expect(result.items).toHaveLength(2)
-    expect(new Set(result.items.map(item => item.id)).size).toBe(2)
-    expect(result.items.map(item => item.action).sort()).toEqual([...summaries].sort())
-    expect(result.items.every(item => item.kind === 'blocked' && !item.oneTouch && item.decisionKeys.length === 0)).toBe(true)
+    expect(result.items).toHaveLength(context === 'holds' ? 4 : 2)
+    expect(new Set(result.items.map(item => item.id)).size).toBe(result.items.length)
+    const blocked = result.items.filter(item => item.kind === 'blocked')
+    expect(blocked.map(item => item.action).sort()).toEqual([...summaries].sort())
+    expect(blocked.every(item => !item.oneTouch && item.decisionKeys.length === 0)).toBe(true)
     worker.queue!.decisions.reverse()
     expect(build(s).items.map(item => item.id)).toEqual(result.items.map(item => item.id))
     s.fleet.unshift({ ...s.fleet[0]!, source: { ...s.fleet[0]!.source, home: '/farm/empty' }, observation: obs({ ...s.fleet[0]!.observation.data!, tasks: [], backlog: [] }) })
     expect(build(s).items.map(item => item.id)).toEqual(result.items.map(item => item.id))
+  })
+
+  it('retains the distinct captain hold when a blocked call shares its key', () => {
+    const worker = task([{ key: 'access', verb: 'blocked', summary: 'Need repository access' }])
+    const held = hold({ id: 'access', hold_reason: 'Approve the access proposal', pr_url: pull,
+      cardReferences: [{ pageId: a, basis: 'explicit', source: 'backlog.notion_page_id' }],
+      ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: worker'] }) })
+    const result = build(snapshot([card()], [worker], [held]))
+    expect(result.items).toHaveLength(2)
+    expect(result.items.find(item => item.kind === 'blocked')).toMatchObject({ action: 'Need repository access', decisionKeys: [] })
+    const request = result.items.find(item => item.decisionKeys.includes('access'))!
+    expect(request).toMatchObject({ action: 'Approve the access proposal', cardIds: [a] })
+    expect(request.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ url: pull }), expect.objectContaining({ kind: 'card' })]))
+    expect(request.sources.find(source => source.kind === 'firstmate')?.request).toEqual({ home: '/farm/hulk', taskId: 'worker', id: 'access', kind: 'hold' })
   })
 
   it('does not deduplicate separate decisions sharing a card, PR or title', () => {

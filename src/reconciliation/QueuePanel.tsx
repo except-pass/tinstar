@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { homeName } from '../cockpit/overviewQuery'
+import type { Worker } from '../cockpit/shell/types'
+import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { decisionItems, type DeskQueue } from '../shared/reconciliationQueue'
 import type { QueueItem } from '../server/reconciliation/queue'
 import type { PresentationAction, PresentationState } from './presentation'
 
-export function QueuePanel({ state, send, queue, error, now }: { state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number }) {
+export function QueuePanel({ state, send, queue, error, now, workers }: { workers: Worker[]; state: PresentationState; send: (action: PresentationAction) => void; queue: DeskQueue | null; error: string | null; now: number }) {
   const ready = (item: QueueItem) => !error && item.readiness === 'ready-now' && item.sources.every(s => ['fresh', 'partial'].includes(s.status) && (!s.expiresAt || Date.parse(s.expiresAt) > now))
   const items = queue ? decisionItems(queue, now) : []
   const actionable = items.filter(ready)
@@ -34,7 +35,11 @@ export function QueuePanel({ state, send, queue, error, now }: { state: Presenta
         <div className="ov-queue-actions"><button type="button" disabled={index <= 0} onClick={() => send({ type: 'navigate-queue', direction: 'previous' })}>← Previous</button><button type="button" disabled={index >= items.length - 1} onClick={() => send({ type: 'navigate-queue', direction: 'next' })}>Next →</button></div>
         <section aria-label="Request inspector">{selected.sources.filter(source => source.kind === 'firstmate').map((source, index) => {
           const request = source.request
-          const href = request?.taskId ? `?${new URLSearchParams({ worker: request.taskId, home: homeName(request.home) })}` : null
+          const matches = workers.filter(worker => worker.home === request?.home && worker.id === request?.taskId)
+          const worker = matches.length === 1 ? matches[0] : null
+          const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
+          const resolved = route ? findLinkedWorker(workers, route) : null
+          const href = worker && route && resolved?.home === worker.home && resolved.id === worker.id ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
           return <details key={`${source.id}:${source.field}:${index}`}><summary>First Mate {request?.kind === 'hold' ? 'hold' : 'request'} · {index + 1}</summary>
             {href ? <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a> : <p>Source terminal unavailable</p>}
             <pre>{JSON.stringify(source, null, 2)}</pre>

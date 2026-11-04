@@ -144,9 +144,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const taskCalls = buildAttentionCards(homeIndex,
       tasks.map(task => ({ id: task.id, hints: { open_decisions: task.queue?.decisions ?? [] } })), [], workers, new Map())
       .filter(call => call.type === 'decision' || call.type === 'blocked')
-    const requestKeys = new Set(tasks.flatMap(task => task.queue?.decisions.map(decision => decision.key).filter(Boolean) ?? []))
     const holdCalls = buildAttentionCards(homeIndex, [],
-      backlog.filter(row => !requestKeys.has(row.id)).map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
+      backlog.map(row => ({ ...row, state: undefined, hold_kind: row.queue?.holdKind, merged: row.queue?.completed,
         body_lines: row.queue?.originTaskId ? [`Origin: ${row.queue.originTaskId}`] : [] })), workers, new Map())
       .filter(call => call.type === 'decision')
     const attention = [...taskCalls, ...holdCalls]
@@ -156,7 +155,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         decisionKey: null, holdId: null, dismissal: null, type: 'decision', headline: text(task.current_state.detail) ?? `${task.id} needs decision context`,
         detail: '', workerKey: null, workerId: text(task.id), ageDays: null, prUrl: null, repository: null, prNumber: null, reviewStatus: null, ci: 'unknown' })
     }
+    const representedHolds = new Set<string>()
     for (const call of attention) {
+      if (call.holdId && representedHolds.has(call.holdId)) continue
       const task = tasks.find(task => task.id === call.taskId)
       const requestId = call.holdId ?? (call.decisionKey === 'default' && (!task?.queue?.decisions.some(decision => decision.key === 'default') || task.queue.decisions.some(decision => !decision.key)) ? null : call.decisionKey)
       const hold = backlog.find(row => row.id === requestId)
@@ -197,6 +198,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       }
       if (item.readiness === 'ready-now') item.reasons.push('First Mate publishes an owner-routed keyed decision or an explicitly captain-actionable hold')
       candidates.push(item)
+      if (!call.holdId && call.type === 'decision' && hold && requestId) representedHolds.add(requestId)
     }
   })
 
