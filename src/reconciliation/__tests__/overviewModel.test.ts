@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { gapTargets, overviewGroups, managerName, relevantWorkerHomes, rootHome, workerAbsenceLabel, workerSourceCoverage, workerState, workerSummary } from '../overviewModel'
+import { expandedRelationships, gapTargets, overviewGroups, managerName, relevantWorkerHomes, rootHome, workerAbsenceLabel, workerSourceCoverage, workerState, workerSummary } from '../overviewModel'
 import { initialPresentation } from '../presentation'
 
 describe('independent Overview stacks', () => {
@@ -202,4 +202,23 @@ it.each(['machine', 'manager'] as const)('preserves %s outer aggregate coverage 
   expect(workerSummary(inspectorHomes, now, false, aggregate.executionIds.length)).toBe(`${aggregate.executionIds.length} last known workers`)
   scene.coverage.homes[1]!.observation.status = 'fresh'
   expect(workerSourceCoverage(relevantWorkerHomes(scene, state.organizer, aggregate), now)).toBe('available')
+})
+
+it('does not revive an expired unrelated Backlog flash when opening a relationship', () => {
+  const now = Date.now(), scene = fixtureScene({ now })
+  const backlog = scene.cards.find(c => c.source.properties.Status?.value === 'Backlog')!
+  const worker = scene.executions.find(w => w.identity.task_id === 'linked-worker')!
+  const linkedCard = scene.claims.find(c => c.executionId === worker.id && c.verification === 'confirmed')!.cardId
+  scene.cards.find(c => c.id === linkedCard)!.source.properties.Status!.value = 'Backlog'
+  const state = { ...initialPresentation(), flash: { ids: [`card:${backlog.id}`], until: now + 1000 } }
+  const revealed = expandedRelationships(scene, [{ kind: 'execution', id: worker.id }])
+  const cardsAt = (time: number) => overviewGroups(scene, state, time, false, revealed).flatMap(g => g.cardIds)
+  expect(cardsAt(now + 999)).toContain(backlog.id)
+  for (const time of [now + 1000, now + 2000]) {
+    expect(cardsAt(time)).not.toContain(backlog.id)
+    expect(cardsAt(time)).toContain(linkedCard)
+  }
+  expect(overviewGroups(scene, state, now + 2000).flatMap(g => g.cardIds)).not.toContain(linkedCard)
+  expect(state.flash).toEqual({ ids: [`card:${backlog.id}`], until: now + 1000 })
+  expect(state.statusFilter?.preset ?? 'operational').toBe('operational')
 })
