@@ -9,6 +9,12 @@ export interface WorkerLink { fm_home: string; task_id: string; first_observed_s
 export type WorkerLinks = { status: 'valid'; tasks: WorkerLink[] } |
   { status: 'unknown' | 'invalid'; reason: string }
 
+// A blank property is unknown, like a missing one, but it is the normal unset
+// state. Callers suppress absence from the status and skip a per-card finding.
+export const BLANK_PROPERTY_REASON = 'Blank property is unlinked'
+export const isBlankWorkerLinks = (value: WorkerLinks): boolean =>
+  value.status === 'unknown' && value.reason === BLANK_PROPERTY_REASON
+
 const invalid = (reason: string): WorkerLinks => ({ status: 'invalid', reason })
 const identityString = (value: unknown): value is string => typeof value === 'string' &&
   value.length > 0 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
@@ -79,5 +85,9 @@ export function readWorkerLinks(value: unknown): WorkerLinks {
     if (chunk.length > 2000) return invalid('Rich-text item exceeds 2,000 characters')
     chunks.push(chunk)
   }
-  return parseWorkerLinks(chunks.join(''))
+  // Empty or whitespace-only text is not a JSON record and not an explicit
+  // empty declaration. Any other text is still parsed and can still be invalid.
+  const text = chunks.join('')
+  if (text.trim() === '') return { status: 'unknown', reason: BLANK_PROPERTY_REASON }
+  return parseWorkerLinks(text)
 }

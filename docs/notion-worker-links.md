@@ -9,7 +9,7 @@ workers. Independent/ad hoc workers may have no card.
 
 ## Property format
 
-The board property to be created is named exactly **First Mate tasks**, with type
+The board property is named exactly **First Mate tasks**, with type
 **rich text**. The responsible First Mate coordinator is the only routine writer.
 The page ID is implicit in the owning card. This illustrative record is not a
 real assignment:
@@ -36,8 +36,11 @@ claim of a live Notion write or concurrent-write proof.
 
 `{"schema":"tinstar.fm-links.v1","tasks":[]}` explicitly declares no links. A
 missing/wrong-type/unreadable/truncated property is **unknown**, not an empty
-association. Blank text is invalid JSON; writers should use the explicit empty
-record when that is what they mean.
+association. A readable rich-text property with no items, or whose concatenated
+text is empty or whitespace-only, is the same unknown/unlinked state: not
+malformed JSON and not a verified assertion of zero links. It emits no finding
+and suppresses absence coverage the same way a missing property does. Writers
+who mean "no links" still use the explicit empty record.
 
 ## Parser rules
 
@@ -80,7 +83,7 @@ alone stays unknown.
 | Declared task absent from a complete fresh home | Unverified declared relationship with an investigation diagnostic; never switch to a similarly named worker. |
 | Same worker on two primary cards, multiple observed attempts with the same ID, or different spawn evidence | Conflicting claims; request First Mate investigation. Hidden/Done cards still participate in duplicate detection. |
 | Done/archived card or changed Owner with a declared relationship | Historical claim retained. Card status/ownership alone is not an identity conflict. Operational expectations are evaluated separately. |
-| Notion missing, inaccessible, stale, expired or incomplete card pagination | Unknown/last-known; no confirmation or absence-based mismatch claims. A missing/unreadable/invalid declaration also suppresses absence claims. |
+| Notion missing, inaccessible, stale, expired or incomplete card pagination | Unknown/last-known; no confirmation or absence-based mismatch claims. Declaration availability follows the [property format rules](#property-format). |
 | Legacy `work_item`, `notion_page_id`, URL, or equal-title hint | Candidate/corroboration only; cannot create a confirmed assignment. |
 
 A changed generation is not automatically a new task, but the available snapshot
@@ -149,14 +152,13 @@ This sequence does not provide atomic compare-and-swap guarantees. Link creation
 reconciliation, nudge delivery, worker activity and routine edits are not milestone
 completion and must not create Will-action tags.
 
-## Deferred live integration evidence
+## Live integration evidence
 
-The property does not exist yet. Under the approved Slice A scope exception,
-owner/PM Bot creates it outside this PR; the responsible First Mate writes and
-verifies the real active worker references after merge. First Mate then posts
-live property feasibility/round-trip evidence, sanitized Notion readback and a
-screenshot of a confirmed gutter edge after ordinary source refresh on the card.
-Tin Star performs neither property creation nor link writes. This PR does not
-claim live proof; fixture proof and automated tests do not substitute for it.
+The owner has created the board property. The responsible First Mate writes and
+verifies real active worker references. Keep live property feasibility/round-trip
+evidence, sanitized Notion readback and a screenshot of a confirmed gutter edge
+after ordinary source refresh on the owning card.
+Tin Star performs neither property creation nor link writes. Fixture proof and
+automated tests do not substitute for live integration evidence.
 The local nudge bridge, broad backfill, and optional decision model are later
 slices and are not implemented here.

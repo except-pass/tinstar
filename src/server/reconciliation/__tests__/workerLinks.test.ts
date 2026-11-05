@@ -49,9 +49,14 @@ describe('versioned Notion worker declarations', () => {
   ])('keeps missing, unreadable and truncated properties unknown (%j)', value => {
     expect(readWorkerLinks(value)).toMatchObject({ status: 'unknown' })
   })
-  it('distinguishes a blank property from an explicitly empty list', () => {
-    expect(readWorkerLinks(rich([]))).toMatchObject({ status: 'invalid' })
+  it('treats an empty or whitespace-only property as unknown and unlinked', () => {
+    const blank = { status: 'unknown', reason: 'Blank property is unlinked' }
+    expect(readWorkerLinks(rich([]))).toEqual(blank)
+    expect(readWorkerLinks({ type: 'rich_text', rich_text: [] })).toEqual(blank)
+    expect(readWorkerLinks(rich(['', ' \n\t']))).toEqual(blank)
+    expect(readWorkerLinks({ type: 'rich_text', rich_text: [{ plain_text: '  ' }, { text: { content: '\n' } }] })).toEqual(blank)
     expect(readWorkerLinks(rich([payload([])]))).toEqual({ status: 'valid', tasks: [] })
-    expect(parseWorkerLinks(undefined)).toMatchObject({ status: 'unknown' })
+    expect(readWorkerLinks(rich(['{']))).toMatchObject({ status: 'invalid', reason: 'Malformed JSON' })
+    expect(parseWorkerLinks(undefined)).toMatchObject({ status: 'unknown', reason: 'Property is missing or unreadable' })
   })
 })
