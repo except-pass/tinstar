@@ -122,7 +122,7 @@ export function AskDesk({ now }: { now: number }) {
   const [history, setHistory] = useState(false), [search, setSearch] = useState('')
   if (!controls) return null
   const rank = (item: AskItem) => item.reply && !item.read_at ? 0 : item.status === 'sent' || item.status === 'delivered' ? 1 : item.status === 'failed' ? 2 : 3
-  const visible = controls.items.filter(item => !!item.dismissed_at === history && (!search || `${item.question} ${item.context.anchor.label} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => rank(a) - rank(b) || b.created_at.localeCompare(a.created_at))
+  const visible = controls.items.filter(item => !!item.dismissed_at === history && (!history || !search || `${item.question} ${item.context.anchor.label} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => rank(a) - rank(b) || b.created_at.localeCompare(a.created_at))
   return <section className="ask-desk" aria-label="Questions for First Mate"><header><h3>Questions</h3><button type="button" onClick={() => controls.open()}>Ask about a task</button></header>
     {controls.error && <p role="status">{controls.error}. Questions will refresh automatically.</p>}
     <button type="button" aria-pressed={history} onClick={() => setHistory(!history)}>{history ? 'Back to questions' : 'Question history'}</button>

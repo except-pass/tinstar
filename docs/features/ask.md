@@ -118,7 +118,9 @@ in the existing scheduler and make failures visible through that scheduler.
    per note. A follow-up has a fresh request/note and the same conversation ID.
 5. The puller reads `fm-inbox.sh receipts --all-pending --all-handled
    --all-replies`. It joins only tracked notes and verifies `request_id`.
-   Unrelated inbox content is never posted to Tin Star. It posts
+   Unrelated inbox content is never posted to Tin Star. Omitted receipts or a
+   rejected mapped reply do not block other mapped replies; after processing
+   them, the pass exits with a generic failure to report incomplete coverage. It posts
    `{request_id, reply:{id,at,body,cursor}}`; `id` must match the retained note,
    `at` is UTC ISO time and `cursor` is the inbox's per-home sequence string.
    Duplicate/older sequences are no-ops. A conflicting later immutable answer
@@ -147,7 +149,7 @@ can publish this JSON as its reply body (fill IDs/content, no credentials):
 Only credential-free HTTPS reference links are accepted. Plain text is displayed
 as text, never executable HTML. Limits include a 4,000-character question,
 32,000-character answer, 20 references and 10 suggested actions. API JSON bodies
-are bounded to 48 KiB; the puller has process/network timeouts and bounded reads.
+are bounded to 256 KiB; the puller has process/network timeouts and bounded reads.
 
 ## Persistence and verification
 

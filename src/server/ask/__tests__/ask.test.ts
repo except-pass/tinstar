@@ -87,6 +87,18 @@ describe('owner-scoped durable Ask protocol', () => {
     expect((await call('requests')).data.data).toHaveLength(2)
     expect((await readFile(join(root, 'ask-requests.json'), 'utf8'))).toContain(reply.body)
   })
+  it.each(['漢', '\u0000', '😀'])('accepts a maximum-length escaped Unicode reply (%s)', async character => {
+    const { call, bridge, base, reload } = await setup()
+    const id = (await call('requests', input())).data.data.request_id
+    await bridge({ request_id: id, note: note(id) })
+    const body = character.repeat(32000 / character.length)
+    const payload = { request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body, cursor: '1' } }
+    const serialized = JSON.stringify(payload).replace(/[\u007f-\uffff]/g, value => '\\u' + value.charCodeAt(0).toString(16).padStart(4, '0'))
+    const response = await fetch(base + '/api/ask/bridge', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: serialized })
+    expect(response.status).toBe(200)
+    reload()
+    expect((await call('requests')).data.data[0]).toMatchObject({ status: 'answered', reply: { detail: body } })
+  })
   it('reports capture/wake failures honestly and retries the same logical request', async () => {
     const { call, bridge } = await setup()
     const id = (await call('requests', input())).data.data.request_id

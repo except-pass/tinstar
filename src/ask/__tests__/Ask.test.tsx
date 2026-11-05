@@ -116,6 +116,22 @@ describe('one-card text Ask and Desk', () => {
     expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Why is this waiting?')
     expect(requests).toHaveLength(0)
   })
+  it('does not apply a hidden history search to active questions', async () => {
+    const archived = { ...seed(), question: 'Archived deployment', dismissed_at: new Date().toISOString() }
+    records = [archived, seed()]
+    mount()
+    const desk = screen.getByLabelText('Questions for First Mate')
+    await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
+    fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search question history' }), { target: { value: 'deployment' } })
+    expect(desk).toHaveTextContent('Archived deployment')
+    expect(desk).not.toHaveTextContent('Why is this waiting?')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to questions' }))
+    expect(screen.queryByRole('searchbox')).toBeNull()
+    expect(desk).toHaveTextContent('Why is this waiting?')
+    expect(desk).toHaveTextContent('New answer')
+    expect(desk).not.toHaveTextContent('Archived deployment')
+  })
   it('shows the original source when its card is missing and keeps follow-ups correlated', async () => {
     const original = seed(); records = [original]; scene.cards = scene.cards.filter(card => card.id !== fixtureId(1))
     mount()

@@ -79,17 +79,23 @@ def pull_once(base, token, home):
     replied = 0
     if tracked:
         receipts, _ = inbox(home, ['receipts', '--all-pending', '--all-handled', '--all-replies'])
-        if receipts.get('schema') != 'fm-inbox-receipts.v1' or receipts.get('omitted'):
+        if receipts.get('schema') != 'fm-inbox-receipts.v1':
             raise PullerError('Inbox receipt read is incomplete')
+        incomplete = bool(receipts.get('omitted'))
         for receipt in receipts.get('pending', []) + receipts.get('handled', []):
             note_id = receipt.get('id')
             request_id = tracked.get(note_id)
             if not request_id or not receipt.get('reply'):
                 continue
-            if receipt.get('request_id') != 'tinstar-ask-' + request_id:
-                raise PullerError('Inbox receipt correlation failed')
-            api(base, token, {'request_id': request_id, 'reply': receipt['reply']})
-            replied += 1
+            try:
+                if receipt.get('request_id') != 'tinstar-ask-' + request_id:
+                    raise PullerError('Inbox receipt correlation failed')
+                api(base, token, {'request_id': request_id, 'reply': receipt['reply']})
+                replied += 1
+            except PullerError:
+                incomplete = True
+        if incomplete:
+            raise PullerError('Inbox receipt delivery is incomplete')
     return {'captured': captured, 'replied': replied}
 
 
