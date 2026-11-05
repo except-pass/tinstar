@@ -97,6 +97,50 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       cursor = next
     }
     const items = [...cards.values()]
+    // Notion inlines at most 25 relation ids. Follow each has_more relation so a
+    // finished card query can still report complete coverage. Cap the follow-up
+    // at 10 pages per property and 20 requests per refresh: this read shares one
+    // 20s deadline, and uncapped paging would blow that deadline. A read that
+    // fails or hits either cap keeps the inline list and names the card/property.
+    const relationBudget = { remaining: 20 }
+    async function completeRelation(pageId: string, propertyId: string): Promise<string[] | null> {
+      const ids: string[] = []
+      let cursor: string | undefined
+      for (let page = 0; page < 10; page++) {
+        if (relationBudget.remaining <= 0) return null
+        relationBudget.remaining -= 1
+        const query = new URLSearchParams({ page_size: '100' })
+        if (cursor) query.set('start_cursor', cursor)
+        let body: Record<string, unknown>
+        try {
+          body = await request(`pages/${pageId}/properties/${propertyId}?${query}`)
+        } catch {
+          return null
+        }
+        if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') return null
+        for (const value of body.results) {
+          const row = record(value)
+          if (row.type !== 'relation') return null
+          const relationId = notionPageId(record(row.relation).id)
+          if (!relationId) return null
+          ids.push(relationId)
+        }
+        if (!body.has_more) return ids
+        const next = text(body.next_cursor)
+        if (!next || next === cursor) return null
+        cursor = next
+      }
+      return null
+    }
+    for (const item of items) {
+      for (const prop of Object.values(item.properties)) {
+        if (prop.type !== 'relation' || !prop.hasMore || !prop.id) continue
+        const ids = await completeRelation(item.id, prop.id)
+        if (!ids) continue
+        prop.value = ids
+        prop.hasMore = false
+      }
+    }
     const truncatedRelations = items.flatMap(item => Object.entries(item.properties)
       .filter(([, p]) => p.hasMore).map(([name]) => ({ pageId: item.id, property: name })))
     const missingSchemaProperties = ['Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item', 'Link']

@@ -262,6 +262,115 @@ describe('Notion reader', () => {
       .mockResolvedValueOnce(new Response('private error', { status: 403 }))
     expect(await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()).toMatchObject({ status: 'unknown', coverage: 'unknown', data: null })
   })
+
+  it('does not read a relation property when has_more is false', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema))
+      .mockResolvedValueOnce(response({ results: [page], has_more: false }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result).toMatchObject({ status: 'fresh', coverage: 'complete', data: { truncatedRelations: [] } })
+    expect(fetcher.mock.calls.map(([url]) => String(url)).some(url => url.includes('/properties/'))).toBe(false)
+  })
+
+  it('pages an encoded property ID unchanged and reports complete relation coverage', async () => {
+    const inline = '3fb50ce6d422812ea3fbfe3a4b2fae58'
+    const third = '30950ce6d42280d3a541cbd66c274f6a'
+    const propertyId = 'f%5C%5C%3Ap'
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema))
+      .mockResolvedValueOnce(response({ results: [{ ...page, properties: { ...page.properties, 'Sub-item': {
+        id: propertyId, type: 'relation', relation: [{ id: inline }], has_more: true,
+      } } }], has_more: false }))
+      .mockResolvedValueOnce(response({ object: 'list', has_more: true, next_cursor: 'more', results: [
+        { type: 'relation', relation: { id: inline } },
+      ] }))
+      .mockResolvedValueOnce(response({ object: 'list', has_more: false, results: [
+        { type: 'relation', relation: { id: third } },
+      ] }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result).toMatchObject({ status: 'fresh', coverage: 'complete', data: { hasMore: false, truncatedRelations: [], missingSchemaProperties: [] } })
+    expect(result.data!.cards[0]!.properties['Sub-item']).toMatchObject({ hasMore: false, value: [inline, third] })
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    expect(fetcher.mock.calls[2]?.[1]).toMatchObject({ method: 'GET', headers: { Authorization: 'Bearer secret', 'Notion-Version': '2025-09-03' } })
+    expect(String(fetcher.mock.calls[2]?.[0])).toBe(`https://api.notion.com/v1/pages/${id}/properties/${propertyId}?page_size=100`)
+    const next = new URL(String(fetcher.mock.calls[3]?.[0]))
+    expect(next.pathname).toBe(`/v1/pages/${id}/properties/${propertyId}`)
+    expect(next.searchParams.get('page_size')).toBe('100')
+    expect(next.searchParams.get('start_cursor')).toBe('more')
+  })
+
+  it('reads every truncated relation property before reporting complete coverage', async () => {
+    const parent = '30950ce6d42280d3a541cbd66c274f6a'
+    const child = '3fb50ce6d422812ea3fbfe3a4b2fae58'
+    const other = '3f850ce6d4228145bf16d59da8ce4a3c'
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema))
+      .mockResolvedValueOnce(response({ results: [{ ...page, id, properties: { ...page.properties,
+        'Parent item': { id: 'parent', type: 'relation', relation: [{ id: parent }], has_more: true },
+        'Sub-item': { id: 'sub', type: 'relation', relation: [{ id: child }], has_more: true },
+      } }], has_more: false }))
+      .mockResolvedValueOnce(response({ has_more: false, results: [
+        { type: 'relation', relation: { id: parent } },
+        { type: 'relation', relation: { id: other } },
+      ] }))
+      .mockResolvedValueOnce(response({ has_more: false, results: [
+        { type: 'relation', relation: { id: child } },
+        { type: 'relation', relation: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } },
+      ] }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result).toMatchObject({ status: 'fresh', coverage: 'complete', data: { truncatedRelations: [] } })
+    expect(result.data!.cards[0]!.properties['Parent item']!.value).toEqual([parent, other])
+    expect(result.data!.cards[0]!.properties['Sub-item']!.value).toEqual([child, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])
+    expect(fetcher.mock.calls.map(([url]) => String(url)).filter(url => url.includes('/properties/'))).toEqual([
+      `https://api.notion.com/v1/pages/${id}/properties/parent?page_size=100`,
+      `https://api.notion.com/v1/pages/${id}/properties/sub?page_size=100`,
+    ])
+  })
+
+  it('keeps the named relation truncated when the property read fails', async () => {
+    const inline = '3fb50ce6d422812ea3fbfe3a4b2fae58'
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema))
+      .mockResolvedValueOnce(response({ results: [{ ...page, properties: { ...page.properties, 'Sub-item': {
+        id: 'sub', type: 'relation', relation: [{ id: inline }], has_more: true,
+      } } }], has_more: false }))
+      .mockResolvedValueOnce(new Response('private error', { status: 500 }))
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    expect(result).toMatchObject({
+      status: 'partial', coverage: 'partial',
+      data: { hasMore: false, missingSchemaProperties: [], truncatedRelations: [{ pageId: id, property: 'Sub-item' }] },
+    })
+    expect(result.data!.cards[0]!.properties['Sub-item']).toMatchObject({ hasMore: true, value: [inline] })
+    expect(JSON.stringify(result)).not.toContain('private error')
+  })
+
+  it('records each relation still truncated when paging exceeds its bounds', async () => {
+    const inline = '30950ce6d42280d3a541cbd66c274f6a'
+    const relation = (propertyId: string) => ({ id: propertyId, type: 'relation', relation: [{ id: inline }], has_more: true })
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      const target = String(url)
+      if (target.includes('/properties/')) return response({
+        object: 'list', has_more: true, next_cursor: `cursor-${fetcher.mock.calls.length}`,
+        results: [{ type: 'relation', relation: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }],
+      })
+      if (init?.method === 'GET') return response(schema)
+      return response({ results: [{ ...page, properties: { ...page.properties,
+        'Parent item': relation('parent'), 'Sub-item': relation('sub'), Initiative: relation('initiative'),
+      } }], has_more: false })
+    })
+    const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
+    const propertyCalls = fetcher.mock.calls.map(([url]) => String(url)).filter(url => url.includes('/properties/'))
+    expect(propertyCalls.filter(url => url.includes('/properties/parent'))).toHaveLength(10)
+    expect(propertyCalls.filter(url => url.includes('/properties/sub'))).toHaveLength(10)
+    expect(propertyCalls.filter(url => url.includes('/properties/initiative'))).toHaveLength(0)
+    expect(result).toMatchObject({
+      status: 'partial', coverage: 'partial',
+      data: { hasMore: false, truncatedRelations: [
+        { pageId: id, property: 'Parent item' },
+        { pageId: id, property: 'Sub-item' },
+        { pageId: id, property: 'Initiative' },
+      ] },
+    })
+    for (const name of ['Parent item', 'Sub-item', 'Initiative']) {
+      expect(result.data!.cards[0]!.properties[name]).toMatchObject({ hasMore: true, value: [inline] })
+    }
+  })
 })
 
 describe('First Mate tasks source property', () => {
