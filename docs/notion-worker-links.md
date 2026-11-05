@@ -215,9 +215,10 @@ An existing declaration on any card suppresses proposals for that home/task.
 Current, paginated Notion reads are required; an unrelated partial relation does
 not invalidate a fully read positive reference or declaration.
 
-The dry-run tiers cover currently operational workers/cards. Finished/absent
-workers and Done/archived/trashed cards are excluded from backfill; historical
-links still appear in the detector report. An unavailable home with no cached
+The dry-run tiers cover currently operational workers/cards. Finished workers
+and Done/archived/trashed cards are excluded from backfill; declarations naming
+absent workers remain investigation or coverage rows, and historical links still
+appear in the detector report. An unavailable home with no cached
 inventory emits one `kind: home` coverage row with null task/generation, rather
 than inventing workers or a zero-worker assertion. Other rows identify an
 observed worker or a declared-but-unobserved task. Positive contradictions retain
@@ -230,9 +231,12 @@ Merges are manual verification aids for ambiguous candidates, never auto-write
 instructions. They preserve all existing declarations and add all proposed workers for that
 card, sorted by home/task. Missing/truncated/malformed properties cannot be
 replaced as empty. Explicit `tasks: []` is mergeable. The report also checks for
-a fully readable blank rich-text property with the parser's no-declaration
-result before permitting initialization. The blank-property parser fix shipped in
-PR #287; blank text remains unknown as described in [Property format](#property-format).
+a fully readable blank rich-text property with the text parser's no-declaration
+result before permitting initialization. Currently the wire reader treats blank
+text as unknown, but `parseWorkerLinks` rejects it as malformed JSON, so this
+additional guard prevents blank-property merge proposals. Blank-property
+initialization therefore requires a separate parser change; the wire property's
+classification remains as described in [Property format](#property-format).
 The whole merge must fit 200,000 characters and 100 items of at most 2,000
 characters each; there is no truncation or partial replacement.
 
