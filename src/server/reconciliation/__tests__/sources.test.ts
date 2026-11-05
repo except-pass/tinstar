@@ -271,29 +271,28 @@ describe('Notion reader', () => {
     expect(fetcher.mock.calls.map(([url]) => String(url)).some(url => url.includes('/properties/'))).toBe(false)
   })
 
-  it('replaces a truncated relation with the full paged id list and reports complete coverage', async () => {
+  it('pages an encoded property ID unchanged and reports complete relation coverage', async () => {
     const inline = '3fb50ce6d422812ea3fbfe3a4b2fae58'
-    const second = '3f850ce6d4228145bf16d59da8ce4a3c'
     const third = '30950ce6d42280d3a541cbd66c274f6a'
+    const propertyId = 'f%5C%5C%3Ap'
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(schema))
       .mockResolvedValueOnce(response({ results: [{ ...page, properties: { ...page.properties, 'Sub-item': {
-        id: 'sub', type: 'relation', relation: [{ id: inline }], has_more: true,
+        id: propertyId, type: 'relation', relation: [{ id: inline }], has_more: true,
       } } }], has_more: false }))
       .mockResolvedValueOnce(response({ object: 'list', has_more: true, next_cursor: 'more', results: [
         { type: 'relation', relation: { id: inline } },
-        { type: 'relation', id: second },
       ] }))
       .mockResolvedValueOnce(response({ object: 'list', has_more: false, results: [
         { type: 'relation', relation: { id: third } },
       ] }))
     const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
     expect(result).toMatchObject({ status: 'fresh', coverage: 'complete', data: { hasMore: false, truncatedRelations: [], missingSchemaProperties: [] } })
-    expect(result.data!.cards[0]!.properties['Sub-item']).toMatchObject({ hasMore: false, value: [inline, second, third] })
+    expect(result.data!.cards[0]!.properties['Sub-item']).toMatchObject({ hasMore: false, value: [inline, third] })
     expect(fetcher).toHaveBeenCalledTimes(4)
     expect(fetcher.mock.calls[2]?.[1]).toMatchObject({ method: 'GET', headers: { Authorization: 'Bearer secret', 'Notion-Version': '2025-09-03' } })
-    expect(String(fetcher.mock.calls[2]?.[0])).toBe(`https://api.notion.com/v1/pages/${id}/properties/sub?page_size=100`)
+    expect(String(fetcher.mock.calls[2]?.[0])).toBe(`https://api.notion.com/v1/pages/${id}/properties/${propertyId}?page_size=100`)
     const next = new URL(String(fetcher.mock.calls[3]?.[0]))
-    expect(next.pathname).toBe(`/v1/pages/${id}/properties/sub`)
+    expect(next.pathname).toBe(`/v1/pages/${id}/properties/${propertyId}`)
     expect(next.searchParams.get('page_size')).toBe('100')
     expect(next.searchParams.get('start_cursor')).toBe('more')
   })

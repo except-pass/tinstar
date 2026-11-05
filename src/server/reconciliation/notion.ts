@@ -113,7 +113,7 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
         if (cursor) query.set('start_cursor', cursor)
         let body: Record<string, unknown>
         try {
-          body = await request(`pages/${pageId}/properties/${encodeURIComponent(propertyId)}?${query}`)
+          body = await request(`pages/${pageId}/properties/${propertyId}?${query}`)
         } catch {
           return null
         }
@@ -121,7 +121,7 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
         for (const value of body.results) {
           const row = record(value)
           if (row.type !== 'relation') return null
-          const relationId = notionPageId(record(row.relation).id) ?? notionPageId(row.id)
+          const relationId = notionPageId(record(row.relation).id)
           if (!relationId) return null
           ids.push(relationId)
         }
