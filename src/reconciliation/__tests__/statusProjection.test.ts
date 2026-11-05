@@ -149,6 +149,8 @@ describe('organizer presets and operational ordering', () => {
     const groups = organizedGroups(scene, { ...initialPresentation(), organizer: { ...organizerPresets.manager } }, now)
     expect(groups[0]!.outerLabel).toBe('Z First Mate')
     expect(groups.at(-1)!.outerLabel).toBe('Unassigned / Unknown')
+    const initiative = organizedGroups(scene, { ...initialPresentation(), organizer: { ...organizerPresets.initiative } }, now)
+    expect(initiative.findIndex(g => g.innerLabel === 'A Second Mate')).toBeLessThan(initiative.findIndex(g => g.innerLabel === 'Z First Mate'))
     const first = scene.cards.find(c => c.id === fixtureId(1))!, sixth = scene.cards.find(c => c.id === fixtureId(6))!
     first.source.properties.Name!.value = 'Z task'; sixth.source.properties.Name!.value = 'A task'
     sixth.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-05' }, hasMore: false }

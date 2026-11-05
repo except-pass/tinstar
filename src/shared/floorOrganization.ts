@@ -1,4 +1,4 @@
-import { compareStatus, floorWorkerStatus, hasDonutFilter, unknownStatus } from './floorStatus'
+import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene, PresentationState } from './reconciliationPresentation'
 import { homeLabel } from './reconciliationLabels'
@@ -174,7 +174,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     }
     return ap.length - bp.length || a.localeCompare(b)
   }
-  const compareGroup = (a: string, b: string, id: FloorField | 'none') => Number(blank(a)) - Number(blank(b)) || (id === 'none' ? 0 : field(id).kind === 'date' ? dateBuckets.indexOf(a) - dateBuckets.indexOf(b) : id === 'operational' ? compareStatus(a, b, 'workers') : id === 'manager' ? compareManager(a, b) : compareValue(a, b, id)) || a.localeCompare(b)
+  const compareGroup = (a: string, b: string, id: FloorField | 'none') => Number(blank(a)) - Number(blank(b)) || (id === 'none' ? 0 : field(id).kind === 'date' ? dateBuckets.indexOf(a) - dateBuckets.indexOf(b) : id === 'operational' ? compareStatus(a, b, 'workers') : id === 'manager' && organizer.outer === 'manager' ? compareManager(a, b) : compareValue(a, b, id)) || a.localeCompare(b)
   const direction = organizer.direction === 'asc' ? 1 : -1
   for (const group of groups.values()) {
     // Sorting counterparts uses only links that occur in this exact subdivision.
@@ -206,7 +206,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
       const status = (entity: Execution | SceneCard) => domain === 'workers' ? floorWorkerStatus(entity as Execution) : statusName(entity as SceneCard)
       const title = (entity: Execution | SceneCard) => domain === 'workers' ? String((entity as Execution).source.backlog.title || (entity as Execution).identity.task_id || '') : String((entity as SceneCard).source.properties.Name?.value || '')
       const at = checkIns.get(a.id) ?? Infinity, bt = checkIns.get(b.id) ?? Infinity
-      return direction * compareStatus(status(a), status(b), domain) || (at === bt ? 0 : at < bt ? -1 : 1) || title(a).localeCompare(title(b)) || a.id.localeCompare(b.id)
+      return Number(statusRank(status(a), domain) === 10000) - Number(statusRank(status(b), domain) === 10000) || direction * compareStatus(status(a), status(b), domain) || (at === bt ? 0 : at < bt ? -1 : 1) || title(a).localeCompare(title(b)) || a.id.localeCompare(b.id)
     }
     group.workers.sort((a, b) => organizer.order === 'operational' ? operational(a, b, 'workers') : compare(a, b, workerOrder))
     group.cards.sort((a, b) => organizer.order === 'operational' ? operational(a, b, 'cards') : compare(a, b, cardOrder))

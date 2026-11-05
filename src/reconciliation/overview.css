@@ -151,3 +151,6 @@
 @media(max-width:1600px){.ov-donut-key{display:none}}
 @media(max-width:1100px){.ov-toolbar{padding:0 5px;gap:3px}.ov-toolbar button{font-size:9px}.ov-preset-scroll{flex:0 1 auto}.ov-donuts{gap:6px}}
 @media(max-width:600px){.ov-toolbar{padding:0 4px}.ov-preset-scroll{flex:1}.ov-toolbar .ov-filter-chips{flex:0 1 50px}.ov-filter-chips button{font-size:8px}.ov-donuts{gap:3px}.ov-donut{width:25px;height:25px}.ov-donut-trigger b{font-size:9px}.ov-toolbar .ov-donut-trigger{font-size:8px}.ov-customize-trigger>span,.ov-clear-filters>span{display:none}.ov-toolbar .ov-customize-trigger,.ov-toolbar .ov-clear-filters{padding:4px;font-size:14px}}
+
+.ov-toolbar .ov-filter-chips:empty{display:none}
+@media(max-width:600px){.ov-count-note{display:none}}

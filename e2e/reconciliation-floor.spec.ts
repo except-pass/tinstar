@@ -554,12 +554,15 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
     await expect(page.locator('.ov')).toHaveAttribute('data-order', 'operational')
   }
   const slice = (name: string) => page.getByRole('button', { name, exact: true })
-  await slice('Cards: Waiting For, 1').focus()
+  await slice('Cards: Waiting For, 1').click()
+  await counts(1, 1)
   await slice('Cards: Waiting For, 1').press('Space')
+  await counts(5, 5)
+  await slice('Cards: Waiting For, 1').press('Enter')
   await counts(1, 1)
   expect(await cardIds()).toEqual([fixtureId(4)])
   await expect(page.getByRole('button', { name: 'Workers statuses: 1 visible, 1 eligible' })).toBeVisible()
-  await slice('Cards: In Progress, 4').click()
+  await slice('Cards: In Progress, 4').press('Enter')
   await counts(5, 3) // OR in the card donut; independent workers disappear.
   await slice('Workers: Running, 2').press('Enter')
   await counts(2, 2) // AND across donuts; a canonical task is counted once.

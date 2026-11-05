@@ -32,7 +32,7 @@ starts the floor immediately below it, without a separate title or controls row.
 
 | Preset | Outer | Inner | Order |
 | --- | --- | --- | --- |
-| By Initiative (default) | Initiative, alphabetical | Manager, configured hierarchy then alphabetical | Operational status |
+| By Initiative (default) | Initiative, alphabetical | Manager, alphabetical | Operational status |
 | By Machine | Machine, alphabetical | Initiative, alphabetical | Operational status |
 | By Manager | Manager, configured hierarchy then alphabetical | Initiative, alphabetical | Operational status |
 
