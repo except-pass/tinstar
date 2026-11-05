@@ -99,12 +99,8 @@ pilot would create redundant provenance stores.
 
 ## Dry-run tiers and bounded pilot
 
-The report groups operational workers/cards per configured home into exactly
-`already confirmed`, `eligible auto-write`, `ambiguous`, `independent`,
-`conflicts`, and `unavailable`. Each row contains IDs and source field paths;
-no raw task prose, transcript or credential is exported. Finished/absent workers
-and Done/archived/trashed cards are outside the operational backfill. Historical
-relationships remain visible in the separate deterministic detector report.
+The [report contract](notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report)
+owns the current tiers, evidence fields and operational scope.
 
 First Mate reviews the initial dry run and authorized receipt source before
 enabling any pilot. Proposed initial adapter bounds: at most five operational

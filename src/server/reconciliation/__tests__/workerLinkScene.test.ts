@@ -134,7 +134,11 @@ describe('Notion authoritative observation table', () => {
       expect(scene.claims).toHaveLength(2 - Number(conflict === 'different generation'))
       expect(scene.claims.every(c => c.verification === 'conflicting' && c.state === 'last-known')).toBe(true)
       expect(scene.findings.filter(f => f.kind === 'unverified-conflicting' && f.reason.includes('First Mate must investigate')))
-        .toHaveLength(scene.claims.length)
+        .toHaveLength(scene.claims.length + Number(conflict === 'multiple attempts'))
+      if (conflict === 'multiple attempts') {
+        expect(scene.findings.some(f => f.workerLinkDetectors?.includes('spawn-evidence') &&
+          scene.executions.every(e => f.executionIds.includes(e.id)))).toBe(true)
+      }
       expect(scene.findings.some(f => ['confirmed-link', 'task-execution-gap', 'untracked-worker'].includes(f.kind))).toBe(false)
     },
   )

@@ -209,7 +209,7 @@ score, branch/PR or field name claiming dispatch provenance cannot promote eithe
 tier. See [the coordinator writer design](notion-worker-links-writer-design.md)
 for the missing exact-provenance input and future authority boundary.
 Title equality alone produces no proposal. Competing references, missing identity
-or generation, multiple observed attempts, secondmate manager rows, stale/partial
+or generation, multiple observed attempts, inactive workers, secondmate manager rows, stale/partial
 homes, unreadable declarations and Done/archived/trashed cards produce no proposal.
 An existing declaration on any card suppresses proposals for that home/task.
 Current, paginated Notion reads are required; an unrelated partial relation does
@@ -229,13 +229,17 @@ with current sources. The report does not mint durable dispatch receipts.
 Merges are manual verification aids for ambiguous candidates, never auto-write
 instructions. They preserve all existing declarations and add all proposed workers for that
 card, sorted by home/task. Missing/truncated/malformed properties cannot be
-replaced as empty. A fully readable blank rich-text property with the parser's
-no-declaration result can be initialized, while explicit `tasks: []` is mergeable.
+replaced as empty. Explicit `tasks: []` is mergeable. The report also checks for
+a fully readable blank rich-text property with the parser's no-declaration
+result before permitting initialization. The current parser rejects blank text
+as described in [Property format](#property-format), so that path remains
+unavailable until the separate blank-property parser fix lands.
 The whole merge must fit 200,000 characters and 100 items of at most 2,000
 characters each; there is no truncation or partial replacement.
 
 Detector codes are `duplicate-primary`, `spawn-evidence` (different generations
-or multiple attempts requiring continuity/ID-reuse investigation),
+or multiple attempts requiring continuity/ID-reuse investigation, including
+freshly observed generations without any Notion declaration or card reference),
 `declared-absent`, `historical-link`, `invalid-record`, `duplicate-execution`,
 and `unknown-coverage`. Other rows retain their Slice A finding kind as the
 detector, including confirmed links, legacy candidates (`unverified-conflicting`),
