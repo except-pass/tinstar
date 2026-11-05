@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fixtureSources, fixtureId } from '../../../../test-fixtures/reconciliation/scenes'
 import { BACKFILL_TIERS, buildWorkerLinkReport } from '../workerLinkReport'
 import { reconcileScene } from '../scene'
+import { notionObservation } from '../notion'
 import { cardReferences } from '../references'
-import { MAX_WORKER_LINK_CHARS, readWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from '../workerLinks'
+import { BLANK_PROPERTY_REASON, MAX_WORKER_LINK_CHARS, parseWorkerLinks, readWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from '../workerLinks'
 
 const now = Date.parse('2026-11-05T12:00:00Z'), a = fixtureId(1), b = fixtureId(2)
 function source() {
@@ -22,6 +23,20 @@ function link(input: ReturnType<typeof source>, overrides = {}): WorkerLink {
 }
 function declare(input: ReturnType<typeof source>, tasks: WorkerLink[]) {
   input.intentions.data!.cards[0]!.properties['First Mate tasks']!.value = JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks })
+}
+const notionResponse = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+/** Property object produced by the Notion wire reader, including its workerLinks classification. */
+async function readTasksProperty(property: Record<string, unknown>) {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(notionResponse({ object: 'data_source', properties: { Name: { id: 'title', type: 'title' } } }))
+    .mockResolvedValueOnce(notionResponse({ has_more: false, results: [{
+      object: 'page', id: a, last_edited_time: '2026-11-05T12:00:00.000Z',
+      properties: { 'First Mate tasks': { id: 'links', type: 'rich_text', ...property } },
+    }] }))
+  const result = await notionObservation({ token: 'secret', dataSourceId: a }, fetcher).get()
+  const read = result.data?.cards[0]?.properties['First Mate tasks']
+  if (!read?.workerLinks) throw new Error('reader did not return First Mate tasks')
+  return read
 }
 
 describe('read-only backfill proposals', () => {
@@ -95,6 +110,57 @@ describe('read-only backfill proposals', () => {
     expect(property.workerLinks.status).toBe('unknown')
     expect(proposals(input)).toEqual([])
     expect(buildWorkerLinkReport(input).merges).toEqual([])
+  })
+
+  it('proposes an ambiguous text candidate when the wire reader classifies rich text blank', async () => {
+    const textCandidate = { cardId: a, fm_home: '/fixture/hulk', task_id: 'linked-worker', spawn_gen: 'attempt-1', sources: ['task.raw'], strength: 'textual-reference' as const }
+    for (const rich_text of [[], [{ plain_text: ' \n\t' }]]) {
+      const input = source()
+      input.fleet[0]!.observation.data!.tasks[0]!.cardReferences = cardReferences({ raw: `card ${a}` }, 'task')
+      const property = await readTasksProperty({ rich_text })
+      expect(property.workerLinks).toEqual({ status: 'unknown', reason: BLANK_PROPERTY_REASON })
+      expect(property.type).toBe('rich_text')
+      expect(property.hasMore).toBe(false)
+      expect(parseWorkerLinks(property.value)).toMatchObject({ status: 'invalid', reason: 'Malformed JSON' })
+      input.intentions.data!.cards[0]!.properties['First Mate tasks'] = property
+      const report = buildWorkerLinkReport(input)
+      expect(report.coverage.cards).toContainEqual(expect.objectContaining({
+        cardId: a, declaration: 'unknown', reason: BLANK_PROPERTY_REASON, mergeable: true,
+      }))
+      expect(report.homes[0]?.counts).toMatchObject({ ambiguous: 1, unavailable: 0 })
+      expect(proposals(input)).toEqual([textCandidate])
+      expect(report.merges[0]).toMatchObject({ cardId: a, status: 'ready-for-verification' })
+    }
+    const explicit = source()
+    explicit.fleet[0]!.observation.data!.tasks[0]!.cardReferences = cardReferences({ raw: `card ${a}` }, 'task')
+    const empty = JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks: [] })
+    explicit.intentions.data!.cards[0]!.properties['First Mate tasks'] = await readTasksProperty({ rich_text: [{ plain_text: empty }] })
+    const explicitReport = buildWorkerLinkReport(explicit)
+    expect(explicitReport.coverage.cards).toContainEqual(expect.objectContaining({ cardId: a, declaration: 'valid', mergeable: true }))
+    expect(proposals(explicit)).toEqual([textCandidate])
+    for (const property of [
+      { rich_text: [], has_more: true },
+      { rich_text: [{}] },
+      { type: 'select', select: { name: 'unset' } },
+    ]) {
+      const input = source()
+      input.fleet[0]!.observation.data!.tasks[0]!.cardReferences = cardReferences({ raw: `card ${a}` }, 'task')
+      const read = await readTasksProperty(property)
+      expect(read.workerLinks).not.toEqual({ status: 'unknown', reason: BLANK_PROPERTY_REASON })
+      input.intentions.data!.cards[0]!.properties['First Mate tasks'] = read
+      const report = buildWorkerLinkReport(input)
+      expect(report.coverage.cards.find(card => card.cardId === a)?.mergeable).toBe(false)
+      expect(report.homes[0]?.counts.unavailable).toBe(1)
+      expect(report.homes[0]?.counts.ambiguous).toBe(0)
+      expect(proposals(input)).toEqual([])
+    }
+    const missing = source()
+    missing.fleet[0]!.observation.data!.tasks[0]!.cardReferences = cardReferences({ raw: `card ${a}` }, 'task')
+    delete missing.intentions.data!.cards[0]!.properties['First Mate tasks']
+    const missingReport = buildWorkerLinkReport(missing)
+    expect(missingReport.coverage.cards.find(card => card.cardId === a)?.mergeable).toBe(false)
+    expect(missingReport.homes[0]?.counts.unavailable).toBe(1)
+    expect(proposals(missing)).toEqual([])
   })
   it('accepts positive evidence with an unrelated truncated relation but never infers a missing generation', () => {
     const input = source()

@@ -1,6 +1,6 @@
 import type { SourceSnapshot } from './index'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
-import { FIRST_MATE_TASKS, MAX_WORKER_LINK_CHARS, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
+import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, MAX_WORKER_LINK_CHARS, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
 const operationalWorker = (execution: Execution) => execution.kind !== 'secondmate' && execution.activity !== 'inactive'
 const key = (...parts: unknown[]) => JSON.stringify(parts)
@@ -86,12 +86,11 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
   const cards = scene.cards.map(card => {
     const declaration = declaredLinks(card.source)
     const property = card.source.properties[FIRST_MATE_TASKS]
-    // Only a fully read, genuinely blank rich-text property can be initialized.
-    // Missing, malformed and truncated records cannot safely be merged as empty.
-    const parsedText = typeof property?.value === 'string' && !property.value.trim() ? parseWorkerLinks(property.value) : null
-    // The wire reader must agree with the text parser's no-declaration result.
-    // Unreadable rich-text items can normalize to an empty display value too.
-    const blank = declaration.status === 'unknown' && parsedText?.status === 'unknown' && declaration.reason === parsedText.reason &&
+    // Mergeable blank is the wire reader's blank classification on a fully read
+    // rich-text property. Missing, wrong-type, truncated, unreadable and invalid
+    // records stay non-mergeable. Do not re-parse the display text: parseWorkerLinks
+    // rejects blank text as malformed JSON, which is a different result.
+    const blank = declaration.status === 'unknown' && declaration.reason === BLANK_PROPERTY_REASON &&
       property?.type === 'rich_text' && !property.hasMore
     return { card, declaration, mergeable: declaration.status === 'valid' || blank }
   })

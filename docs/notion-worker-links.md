@@ -229,14 +229,13 @@ with current sources. The report does not mint durable dispatch receipts.
 
 Merges are manual verification aids for ambiguous candidates, never auto-write
 instructions. They preserve all existing declarations and add all proposed workers for that
-card, sorted by home/task. Missing/truncated/malformed properties cannot be
-replaced as empty. Explicit `tasks: []` is mergeable. The report also checks for
-a fully readable blank rich-text property with the text parser's no-declaration
-result before permitting initialization. Currently the wire reader treats blank
-text as unknown, but `parseWorkerLinks` rejects it as malformed JSON, so this
-additional guard prevents blank-property merge proposals. Blank-property
-initialization therefore requires a separate parser change; the wire property's
-classification remains as described in [Property format](#property-format).
+card, sorted by home/task. Missing, wrong-type, truncated, unreadable and invalid
+properties cannot be replaced as empty. Explicit `tasks: []` is mergeable. A fully
+read rich-text property is mergeable when the wire reader classified it blank:
+unknown, with reason "Blank property is unlinked", and the property is not
+truncated. The report uses that classification. It does not re-parse the display
+text, because `parseWorkerLinks` still rejects blank text as malformed JSON.
+The property classification remains as described in [Property format](#property-format).
 The whole merge must fit 200,000 characters and 100 items of at most 2,000
 characters each; there is no truncation or partial replacement.
 
