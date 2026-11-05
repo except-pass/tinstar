@@ -43,6 +43,32 @@ async function clickAdvanced(page: Page, name: string, keepOpen = false) {
   if (!keepOpen) await closeCustomize(page)
 }
 
+/** Use an actual point on the visible stroke. A path's box center may be the
+ * donut hole; hit-testing first also detects decorative overlays stealing input. */
+async function clickStatusSlice(page: Page, name: string) {
+  const slice = page.getByRole('button', { name, exact: true })
+  const point = await slice.evaluate(element => {
+    const path = element as SVGPathElement
+    const midpoint = path.getPointAtLength(path.getTotalLength() / 2)
+    const screen = midpoint.matrixTransform(path.getScreenCTM()!)
+    const hit = document.elementFromPoint(screen.x, screen.y)
+    return { x: screen.x, y: screen.y, hitsSlice: hit === path || !!hit && path.contains(hit), covering: hit?.outerHTML.slice(0, 300) }
+  })
+  expect(point.hitsSlice, `Slice midpoint covered by ${point.covering}`).toBe(true)
+  await page.mouse.click(point.x, point.y)
+}
+async function tabToStatusSlice(page: Page, name: string) {
+  const slice = page.getByRole('button', { name, exact: true })
+  // Start from the preceding native control and traverse the real tab order.
+  await page.getByRole('button', { name: 'Customize', exact: true }).focus()
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press('Tab')
+    if (await slice.evaluate(element => element === document.activeElement)) break
+  }
+  await expect(slice).toBeFocused()
+  return slice
+}
+
 // These regressions exercise the preserved rich presentation.
 test.beforeEach(async ({ page }, info) => {
   if (info.title.startsWith('single-row toolbar')) return
@@ -554,16 +580,20 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
     await expect(page.locator('.ov')).toHaveAttribute('data-order', 'operational')
   }
   const slice = (name: string) => page.getByRole('button', { name, exact: true })
-  await slice('Cards: Waiting For, 1').click()
+  await clickStatusSlice(page, 'Cards: Waiting For, 1')
   await counts(1, 1)
-  await slice('Cards: Waiting For, 1').press('Space')
+  await (await tabToStatusSlice(page, 'Cards: Waiting For, 1')).press('Space')
   await counts(5, 5)
   await slice('Cards: Waiting For, 1').press('Enter')
   await counts(1, 1)
   expect(await cardIds()).toEqual([fixtureId(4)])
   await expect(page.getByRole('button', { name: 'Workers statuses: 1 visible, 1 eligible' })).toBeVisible()
-  await slice('Cards: In Progress, 4').press('Enter')
+  await clickStatusSlice(page, 'Cards: In Progress, 4')
   await counts(5, 3) // OR in the card donut; independent workers disappear.
+  await clickStatusSlice(page, 'Workers: Running, 2')
+  await counts(2, 2)
+  await (await tabToStatusSlice(page, 'Workers: Running, 2')).press('Space')
+  await counts(5, 3)
   await slice('Workers: Running, 2').press('Enter')
   await counts(2, 2) // AND across donuts; a canonical task is counted once.
   expect(await cardIds()).toEqual([fixtureId(1), fixtureId(6)])
