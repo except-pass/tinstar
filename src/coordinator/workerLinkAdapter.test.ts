@@ -265,6 +265,53 @@ describe('authorized coordinator adapter with fake Notion', () => {
     await expect(run(source(), fake, { audit: async () => { throw new Error('disk full') } })).rejects.toThrow('disk full')
     expect(fake.patches).toHaveLength(0)
   })
+  it.each([
+    'checks green: PR ready for review',
+    'checks green: PR ready for review (still monitoring for merge/close)',
+    'checks green: PR held for merge (ci monitor ended)',
+    'run passed: PR open',
+    'run passed: PR open · pr=https://github.com/except-pass/tinstar/pull/292',
+  ])('plans a done worker with an open review pull request (%s)', async detail => {
+    const input = source(), task = input.fleet[0]!.observation.data!.tasks[0]!
+    task.lastEventText = 'done [at=1]: checks green'
+    task.current_state.state = 'done'
+    task.current_state.detail = detail
+    task.pr.url = 'https://github.com/except-pass/tinstar/pull/292'
+    const { result } = await run(input, fakeNotion(), { apply: false })
+    expect(result.report.homes[0]?.tiers['eligible auto-write']).toEqual([expect.objectContaining({
+      proposals: [expect.objectContaining({ cardId: a, fm_home: '/fixture/hulk', task_id: 'linked-worker', spawn_gen: 'attempt-1', strength: 'dispatch-ledger' })],
+    })])
+    expect(result.plannedWrites).toHaveLength(1)
+    expect(result.decisions).toContainEqual(expect.objectContaining({ cardId: a, result: 'planned', identities: [link()] }))
+  })
+  it.each([
+    ['run passed: PR merged', 'https://github.com/except-pass/tinstar/pull/292'],
+    ['checks green: PR merged (ci monitor ended)', 'https://github.com/except-pass/tinstar/pull/292'],
+    ['run passed: PR closed', 'https://github.com/except-pass/tinstar/pull/292'],
+    ['run completed', null],
+    ['checks green: PR ready for review', null],
+  ])('does not plan a done worker for pull disposition %j', async (detail, url) => {
+    const input = source(), task = input.fleet[0]!.observation.data!.tasks[0]!
+    task.lastEventText = 'done [at=1]: checks green'
+    task.current_state.state = 'done'
+    task.current_state.detail = detail
+    task.pr.url = url
+    task.backlog.title = 'checks green: PR ready for review'
+    const { result } = await run(input, fakeNotion(), { apply: false })
+    expect(result.report.homes[0]?.tiers['eligible auto-write']).toEqual([])
+    expect(result.plannedWrites).toEqual([])
+  })
+  it('keeps a done secondmate with an open pull request out of the write', async () => {
+    const input = source(), task = input.fleet[0]!.observation.data!.tasks[0]!
+    task.lastEventText = 'done [at=1]: checks green'
+    task.current_state.state = 'done'
+    task.current_state.detail = 'checks green: PR ready for review'
+    task.pr.url = 'https://github.com/except-pass/tinstar/pull/292'
+    task.kind = 'secondmate'
+    const { result } = await run(input, fakeNotion(), { apply: false })
+    expect(result.report.homes[0]?.tiers['eligible auto-write']).toEqual([])
+    expect(result.plannedWrites).toEqual([])
+  })
   it('routes repeated malformed dispatch lines with the same investigation key', async () => {
     const input = source(), task = input.fleet[0]!.observation.data!.tasks[0]!
     task.dispatchProvenance = parseDispatchProvenance(['card: malformed'])
