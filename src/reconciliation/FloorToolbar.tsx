@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { currentStatusOptions, defaultOrganizer, defaultStatusFilter, floorFields, operationalStatuses, type FloorField, type Organizer } from '../shared/floorOrganization'
+import type { OverviewDensity } from './overviewDensity'
 import type { FloorScene, PresentationAction, PresentationState, Target } from './presentation'
 
-export function FloorToolbar({ scene, state, send, gaps }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; gaps: Target[] }) {
+export function FloorToolbar({ scene, state, send, gaps, density, onDensityChange }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; gaps: Target[]; density?: OverviewDensity; onDensityChange?: (density: OverviewDensity) => void }) {
   const [panel, setPanel] = useState<'filters' | 'fields' | null>(null), [chosen, setChosen] = useState<FloorField | null>(null)
   const organizer = state.organizer ?? defaultOrganizer(), filter = state.statusFilter ?? defaultStatusFilter()
   const options = currentStatusOptions(scene)
@@ -19,6 +20,7 @@ export function FloorToolbar({ scene, state, send, gaps }: { scene: FloorScene; 
           {(['worker', 'task'] as const).map(source => <optgroup key={source} label={source === 'worker' ? 'Worker' : 'Work'}>{floorFields.filter(f => f.source === source).map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</optgroup>)}
         </select>
       </label>)}
+      {onDensityChange && <div className="ov-segments ov-density-control" role="group" aria-label="Overview density">{(['compact', 'detailed'] as const).map(value => <button type="button" key={value} aria-pressed={density === value} onClick={() => onDensityChange(value)}>{value === 'compact' ? 'Ultra Compact' : 'Detailed'}</button>)}</div>}
       <button type="button" aria-label="Reverse sort direction" title={organizer.direction === 'asc' ? 'Ascending' : 'Descending'} onClick={() => send({ type: 'set-organizer', organizer: { ...organizer, direction: organizer.direction === 'asc' ? 'desc' : 'asc' } })}>{organizer.direction === 'asc' ? '↑' : '↓'}</button>
       <select className="ov-preset" aria-label="Status preset" value={filter.preset} onChange={e => send({ type: 'set-status-filter', filter: { preset: e.target.value as typeof filter.preset, statuses: e.target.value === 'custom' ? selected : filter.statuses } })}>
         <option value="operational">Operational</option><option value="all">All cards</option><option value="custom">Custom</option>

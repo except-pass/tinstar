@@ -74,3 +74,44 @@
 
 
 .ov-task-fields>.ov-context-field{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ov-selected-request>summary{font-size:10px}.ov-selected-request[open]>summary{margin-bottom:12px}
+
+/* Ultra Compact: independent columns share one measured relationship gutter. */
+.ov-density-compact .ov-canvas{position:relative;min-width:680px}
+.ov-density-compact .ov-headings,.ov-density-compact .ov-compact-columns{display:grid;grid-template-columns:minmax(0,1fr) 56px minmax(0,1fr)}
+.ov-density-compact .ov-headings{height:23px;padding:0 6px;font-size:9px;margin:0}
+.ov-density-compact .ov-headings small{font-size:7px;letter-spacing:0}
+.ov-density-compact .ov-outer{border:0;border-radius:0;background:none;margin:0 0 3px}
+.ov-density-compact .ov-group{border:0;border-left:2px solid #806e9d;background:none;margin:2px 0 0}
+.ov-density-compact .ov-inner{padding:0}
+.ov-density-compact .ov-group-head{height:25px;min-height:25px;padding:0 6px;gap:7px;border-bottom:1px solid #2c414a;background:#101b22;border-left:2px solid #598692}
+.ov-density-compact .ov-inner .ov-group>.ov-group-head{height:21px;min-height:21px;background:#141925;border-left:0;padding:0 5px}
+.ov-density-compact .ov-group-head>strong,.ov-density-compact .ov-group-name{font-size:11px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov-density-compact .ov-group-head>span{font-size:9px}
+.ov-density-compact .ov-group-head>.ov-group-field{font-size:9px}
+.ov-density-compact .ov-group-head>button:first-child{height:18px;width:18px;line-height:16px;border:0;border-radius:0;background:none;padding:0}
+.ov-density-compact .ov-compact-columns{padding:0;min-height:0;align-items:start}
+.ov-density-compact .ov-worker-stack,.ov-density-compact .ov-card-stack{gap:0;padding:0;z-index:auto}
+.ov-density-compact .ov-gutter{padding:0}
+.ov-density-compact .ov-item.ov-collapsed{height:29px;min-height:29px;max-height:29px;flex-direction:row;align-items:center;gap:6px;padding:0 6px;border:0;border-bottom:1px solid #1b3039;border-radius:0;background:#0b151b;box-shadow:none}
+.ov-density-compact .ov-item.ov-collapsed:hover,.ov-density-compact .ov-item.ov-collapsed:focus-visible{background:#18303a}
+.ov-density-compact .ov-collapsed strong{display:block;flex:1;min-width:0;min-height:0;line-height:28px;margin:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ov-tiny-glyph{color:#88a8b3;font-size:12px;flex:none}
+.ov-compact-status,.ov-link-label{font:9px var(--ov-mono);white-space:nowrap;flex:none;color:#a1bac3}
+.ov-compact-status.status-waiting,.ov-compact-status.status-blocked,.ov-compact-status.status-paused{color:var(--ov-amber)}
+.ov-compact-status.check-overdue{color:var(--ov-rose)}
+.ov-link-label{color:#90a3bb;font-size:8px;max-width:135px;overflow:hidden;text-overflow:ellipsis}
+.ov-density-compact .ov-collapsed .ov-reference{position:static;font-size:8px;background:none;flex:none}
+.ov-density-compact .ov-empty-col{min-height:29px;height:29px;padding:0 6px;border:0;border-bottom:1px solid #1b3039;font-size:9px;justify-content:flex-start}
+.ov-density-compact .ov-port{height:5px;width:5px;z-index:4;right:-3px}
+.ov-density-compact .ov-card .ov-port{right:auto;left:-3px}
+.ov-density-compact .ov-inline-expanded{border-radius:2px;margin:2px 0;min-height:133px}
+.ov-density-compact .ov-inline-expanded strong{display:block;white-space:normal;overflow:visible;-webkit-line-clamp:unset}
+.ov-density-compact .ov-inline-expanded .ov-activity{white-space:normal;overflow:visible}
+.ov-density-compact .ov-compact-connections{z-index:3}
+.ov-full-title{display:none;position:absolute;top:100%;left:6px;right:6px;z-index:8;padding:7px;background:#19333f;border:1px solid #537687;font-size:12px;line-height:1.5;white-space:normal;overflow-wrap:anywhere;pointer-events:none}
+.ov-collapsed:focus-visible .ov-full-title{display:block}
+.ov-density-control{margin-left:auto;padding:0;border:0;gap:0}
+@media(max-width:850px){.ov-density-compact .ov-workspace{padding:0 6px 65px}.ov-density-compact .ov-item.ov-inline-expanded{min-height:133px}.ov-density-control{margin-left:0}}
+.ov-density-compact .ov-inline-expanded .ov-context-field,.ov-density-compact .ov-inline-expanded .ov-breadcrumb,.ov-density-compact .ov-inline-expanded .ov-worker-meta{white-space:normal;overflow:visible;overflow-wrap:anywhere}
+.ov-expansion-hint{font:9px var(--ov-mono);color:#9eb9c4;margin-top:8px}
+.ov-density-compact .ov-inline-expanded[data-open-root=true]{border-color:#649caa}

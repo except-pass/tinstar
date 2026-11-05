@@ -100,10 +100,33 @@ export function gapTargets(scene: FloorScene, now: number, readFailed = false): 
   ]
 }
 /** Visibility never rewrites source links or absence findings. */
-export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false): FloorGroup[] {
-  return organizedGroups(scene, state, now).map(group => {
-    const workers = group.workers.filter(e => !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
-    const cards = group.cards.filter(c => !state.exceptionsOnly || entityTone(scene, 'card', c.id, now, readFailed) === 'gap')
+export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false, revealed: ReadonlySet<string> = new Set()): FloorGroup[] {
+  // Inline expansion reveals immediate counterparts even through a status filter.
+  const display = revealed.size ? { ...state, flash: { ids: [...(state.flash?.ids ?? []), ...revealed], until: Math.max(state.flash?.until ?? 0, now + 1) } } : state
+  return organizedGroups(scene, display, now).map(group => {
+    const workers = group.workers.filter(e => !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || revealed.has(`execution:${e.id}`) || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
+    const cards = group.cards.filter(c => !state.exceptionsOnly || revealed.has(`card:${c.id}`) || entityTone(scene, 'card', c.id, now, readFailed) === 'gap')
     return { ...group, workers, cards, cardIds: cards.map(c => c.id) }
   }).filter(g => g.workers.length || g.cards.length)
+}
+
+/** Selection roots contribute only their own immediate confirmed relationships.
+ * Never walk from a revealed counterpart: many-to-many components stay bounded. */
+export function expandedRelationships(scene: FloorScene, roots: readonly Target[]): Set<string> {
+  const expanded = new Set(roots.map(root => `${root.kind}:${root.id}`))
+  for (const root of roots) for (const claim of scene.claims) {
+    if (claim.basis !== 'explicit' || claim.verification !== 'confirmed' || claim.state !== 'current') continue
+    if (root.kind === 'execution' && root.id === claim.executionId) expanded.add(`card:${claim.cardId}`)
+    if (root.kind === 'card' && root.id === claim.cardId) expanded.add(`execution:${claim.executionId}`)
+  }
+  return expanded
+}
+/** Compact renders each canonical endpoint once. Reference badges preserve its
+ * other group memberships; counts continue to use the original groups. */
+export function canonicalOverviewGroups(groups: readonly FloorGroup[]): FloorGroup[] {
+  const workers = new Set<string>(), cards = new Set<string>()
+  return groups.map(group => ({ ...group,
+    workers: group.workers.filter(w => { if (workers.has(w.id)) return false; workers.add(w.id); return true }),
+    cards: group.cards.filter(c => { if (cards.has(c.id)) return false; cards.add(c.id); return true }),
+  }))
 }

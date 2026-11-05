@@ -39,6 +39,11 @@ async function present(page: Page, action: unknown, command_id: string) {
   expect(ack.outcome).toBe('applied')
   return { ack, args }
 }
+// These regressions exercise the preserved rich presentation.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
+})
+
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-browser-'))
   const mcp = new ReconciliationMcp({ workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()), scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [{ id: 'context', text: 'Controlled card prose' }] }), queue: async () => queue }, root)
