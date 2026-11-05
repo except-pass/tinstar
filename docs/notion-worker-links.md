@@ -213,14 +213,15 @@ score, branch/PR or field name claiming dispatch provenance cannot promote eithe
 tier. See [the coordinator writer design](notion-worker-links-writer-design.md)
 for the approved dispatch source and coordinator authority boundary.
 Title equality alone produces no proposal. Competing references, missing identity
-or generation, multiple observed attempts, inactive workers without an open review pull request, secondmate manager rows, stale/partial
+or generation, multiple observed attempts, workers excluded by the
+[operational-worker rule](#coordinator-adapter), stale/partial
 homes, unreadable declarations and Done/archived/trashed cards produce no proposal.
 An existing declaration on any card suppresses proposals for that home/task.
 Current, paginated Notion reads are required; an unrelated partial relation does
 not invalidate a fully read positive reference or declaration.
 
-The dry-run tiers cover currently operational workers/cards. Finished workers
-without an open review pull request, and Done/archived/trashed cards, are excluded from backfill; declarations naming
+The dry-run tiers cover workers eligible under that rule and operational cards.
+Done/archived/trashed cards are excluded from backfill; declarations naming
 absent workers remain investigation or coverage rows, and historical links still
 appear in the detector report. An unavailable home with no cached
 inventory emits one `kind: home` coverage row with null task/generation, rather
@@ -318,8 +319,14 @@ remain conflicts requiring coordinator continuity evidence.
 An eligible proposal requires a fresh complete home, operational exact worker
 identity, complete current Notion coverage, an operational card on the configured
 board, readable declarations and no competing worker declaration/reference.
-A done worker whose recorded pull request is still open for review stays eligible
-on the same terms; a merged or closed pull request, or none, stays excluded.
+For this report and adapter, an operational worker is not a `secondmate` and is
+either active or has recorded open-review evidence. An inactive worker qualifies
+only with a nonempty `pr.url` and `current_state.detail` beginning with
+`run passed: PR open`, `checks green: PR held for merge`, or
+`checks green: PR ready for review` (followed by a word boundary). This uses the
+snapshot's recorded forge disposition, not a live PR lookup or title text.
+Inactive workers with merged, closed, missing or unrecognized PR evidence stay
+excluded.
 Malformed/unreadable declarations anywhere on the board prevent proving
 uniqueness. Fully read blank properties can be initialized only by explicit apply.
 Changed generation and duplicate attempts require investigation, never an
