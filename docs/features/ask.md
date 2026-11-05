@@ -1,4 +1,8 @@
-# Ask First Mate: one-card text slice
+# Ask First Mate: slice 1
+
+Slice 1 is one work card, text, **Sent / Delivered / Answered**, approved by
+First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
+This PR implements this approved slice of the parent card.
 
 A left drag on a Notion task opens a text composer with that task's canonical
 page ID. The visible **Ask about a task** button provides the same action without
@@ -14,7 +18,8 @@ horizontal overflow ancestor stays native; at its right edge, a left drag can
 open Ask. Use the visible action anywhere without changing the floor's scroll
 position. Pointer/touch cancellation never opens a composer.
 
-Questions appear in the existing Desk alongside its operational requests. The
+Operational decision/request items render before Ask questions in the existing
+Desk on desktop and mobile. The
 slice's states are **Sent** (Tin Star retained it), **Delivered** (First Mate
 captured its note), **Answered** (correlated primary reply), and **Failed** (known
 capture failure). No readiness/announcement/acknowledgement is misrepresented as
@@ -175,3 +180,22 @@ The unit suite includes gesture lock/thresholds, UI context/return/history,
 owner/auth isolation, retry/correlation/out-of-order persistence, the HTTP/puller
 integration, and Python CLI safety tests. Existing Overview/compact/link/queue
 and MCP behavior remains part of the regression suite.
+
+
+## Follow-up slices
+
+The remaining parent-card items are follow-up slices:
+
+- Worker context with stable logical identity and observed attempt/home; verified
+  Link context with provenance and both endpoints, explicit relationship targets,
+  and removable additional context chips.
+- Right-drag voice entry, activation-only microphone permission, transcription
+  review/edit, text fallback and discoverable accessible voice controls.
+- Queued, Investigating and Needs input/decision lifecycle updates, progress and
+  revision-aware delivery; unified priority for decisions, unread answers,
+  investigations and failures.
+- Worker/Link return navigation and highlighting of both endpoints and the link,
+  with truthful reassignment, stale, missing and inaccessible context handling.
+- Full parent-card failure, permissions, accessibility and reduced-motion proof;
+  physical iPhone Safari and Android Chrome touch/microphone verification remains
+  an explicit review gate when devices are available.
