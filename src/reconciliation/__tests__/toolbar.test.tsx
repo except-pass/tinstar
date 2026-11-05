@@ -36,6 +36,23 @@ describe('single-row Overview toolbar', () => {
     expect(screen.getByRole('button', { name: 'Cards statuses: 5 visible, 5 eligible' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Workers statuses: 5 visible, 5 eligible' })).toBeTruthy()
   })
+  it('offers Operational status only in Order and rejects grouping drops', () => {
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    for (const label of ['Outer grouping', 'Inner grouping']) {
+      const select = screen.getByLabelText(label)
+      expect(within(select).queryByRole('option', { name: 'Operational status' })).toBeNull()
+      const previous = (select as HTMLSelectElement).value
+      fireEvent.drop(select.closest('label')!, { dataTransfer: { getData: () => 'operational' } })
+      expect(select).toHaveValue(previous)
+    }
+    const order = screen.getByLabelText('Order by')
+    fireEvent.change(order, { target: { value: 'priority' } })
+    fireEvent.change(order, { target: { value: 'operational' } })
+    expect(order).toHaveValue('operational')
+    fireEvent.click(screen.getByRole('button', { name: 'Fields' }))
+    expect(within(screen.getByRole('region', { name: 'Fields' })).queryByRole('button', { name: /Operational status/ })).toBeNull()
+  })
   it('keeps every advanced control, custom edits and keyboard focus through Customize', () => {
     mount()
     const customize = screen.getByRole('button', { name: 'Customize' })

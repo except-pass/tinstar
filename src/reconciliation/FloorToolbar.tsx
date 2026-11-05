@@ -23,6 +23,10 @@ export function FloorToolbar({ scene, state, send, gaps, density, onDensityChang
   const options = currentStatusOptions(scene)
   const selected = filter.preset === 'all' ? options : filter.preset === 'operational' ? options.filter(s => operationalStatuses.includes(s)) : filter.statuses
   const place = (slot: 'outer' | 'inner' | 'order', value: string) => {
+    if (slot === 'order' && value === 'operational') {
+      send({ type: 'set-organizer', organizer: { ...organizer, order: 'operational' } })
+      return
+    }
     if (value !== 'none' && !floorFields.some(f => f.id === value) || slot === 'order' && value === 'none') return
     send({ type: 'set-organizer', organizer: { ...organizer, [slot]: value } as Organizer })
   }
@@ -41,7 +45,7 @@ export function FloorToolbar({ scene, state, send, gaps, density, onDensityChang
 
       {(['outer', 'inner', 'order'] as const).map(slot => <label key={slot} className="ov-slot" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); place(slot, e.dataTransfer.getData('text/plain')) }}>
         <span>{slot}</span><select aria-label={slot === 'order' ? 'Order by' : `${slot === 'outer' ? 'Outer' : 'Inner'} grouping`} value={organizer[slot]} onChange={e => place(slot, e.target.value)}>
-          {slot !== 'order' && <option value="none">None</option>}
+          {slot === 'order' ? <option value="operational">Operational status</option> : <option value="none">None</option>}
           {(['worker', 'task'] as const).map(source => <optgroup key={source} label={source === 'worker' ? 'Worker' : 'Work'}>{floorFields.filter(f => f.source === source).map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</optgroup>)}
         </select>
       </label>)}

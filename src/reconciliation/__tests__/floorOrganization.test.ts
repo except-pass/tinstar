@@ -185,6 +185,21 @@ describe('New York calendar buckets', () => {
 })
 
 describe('presets, reducer and persisted semantic preferences', () => {
+  it('accepts Operational status only as an ordering field for commands and saved state', () => {
+    for (const direction of ['asc', 'desc'] as const) {
+      const organizer = { ...defaultOrganizer(), direction }
+      expect(actionSchema.safeParse({ type: 'set-organizer', organizer }).success).toBe(true)
+      expect(stateSchema.safeParse({ ...initialPresentation(), organizer }).success).toBe(true)
+      for (const slot of ['outer', 'inner'] as const) {
+        const invalid = { ...organizer, [slot]: 'operational' }
+        expect(actionSchema.safeParse({ type: 'set-organizer', organizer: invalid }).success).toBe(false)
+        expect(stateSchema.safeParse({ ...initialPresentation(), organizer: invalid }).success).toBe(false)
+        localStorage.setItem(preferencesKey, JSON.stringify({ organizer: invalid }))
+        expect(loadPresentationPreferences().organizer).toEqual(defaultOrganizer())
+      }
+    }
+    localStorage.removeItem(preferencesKey)
+  })
   it('starts fresh browsers and resets with the Initiative preset', () => {
     localStorage.removeItem(preferencesKey)
     expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' })

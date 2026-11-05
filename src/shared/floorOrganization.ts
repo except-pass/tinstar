@@ -4,7 +4,6 @@ import type { FloorScene, PresentationState } from './reconciliationPresentation
 import { homeLabel } from './reconciliationLabels'
 
 export const floorFields = [
-  { id: 'operational', label: 'Operational status', source: 'worker', kind: 'operational' },
   { id: 'manager', label: 'Manager', source: 'worker', kind: 'category' },
   { id: 'machine', label: 'Machine', source: 'worker', kind: 'category' },
   { id: 'workerStatus', label: 'Worker status', source: 'worker', kind: 'category' },
@@ -21,7 +20,7 @@ export const floorFields = [
   { id: 'subArea', label: 'Sub-area', source: 'task', kind: 'category' },
 ] as const
 export type FloorField = typeof floorFields[number]['id']
-export interface Organizer { outer: FloorField | 'none'; inner: FloorField | 'none'; order: FloorField; direction: 'asc' | 'desc' }
+export interface Organizer { outer: FloorField | 'none'; inner: FloorField | 'none'; order: FloorField | 'operational'; direction: 'asc' | 'desc' }
 export interface StatusFilter { preset: 'operational' | 'all' | 'custom'; statuses: string[] }
 export const organizerPresets = {
   initiative: { outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' },
@@ -73,7 +72,6 @@ function values(scene: FloorScene, pair: Pair, id: FloorField): string[] {
   switch (id) {
     case 'manager': raw = w ? homeLabel(scene.coverage.homes.find(h => h.source.home === w.home)?.source ?? { home: w.home }) : null; break
     case 'machine': raw = w?.placement.machine; break
-    case 'operational': raw = w ? floorWorkerStatus(w) : c ? statusName(c) : null; break
     case 'workerStatus': raw = w ? floorWorkerStatus(w) : null; break
     case 'activity': {
       const observed = Date.parse(w?.observation.observedAt ?? ''), age = w?.source.last_event.age_seconds
@@ -174,14 +172,14 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     }
     return ap.length - bp.length || a.localeCompare(b)
   }
-  const compareGroup = (a: string, b: string, id: FloorField | 'none') => Number(blank(a)) - Number(blank(b)) || (id === 'none' ? 0 : field(id).kind === 'date' ? dateBuckets.indexOf(a) - dateBuckets.indexOf(b) : id === 'operational' ? compareStatus(a, b, 'workers') : id === 'manager' && organizer.outer === 'manager' ? compareManager(a, b) : compareValue(a, b, id)) || a.localeCompare(b)
+  const compareGroup = (a: string, b: string, id: FloorField | 'none') => Number(blank(a)) - Number(blank(b)) || (id === 'none' ? 0 : field(id).kind === 'date' ? dateBuckets.indexOf(a) - dateBuckets.indexOf(b) : id === 'manager' && organizer.outer === 'manager' ? compareManager(a, b) : compareValue(a, b, id)) || a.localeCompare(b)
   const direction = organizer.direction === 'asc' ? 1 : -1
   for (const group of groups.values()) {
     // Sorting counterparts uses only links that occur in this exact subdivision.
     const localPairs = memberships.get(group.id)!
     const workerOrder = new Map<string, string | number>(), cardOrder = new Map<string, string | number>()
     const compareScalar = (a: string | number, b: string | number) => typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b))
-    for (const pair of localPairs) for (const value of values(scene, pair, organizer.order)) {
+    if (organizer.order !== 'operational') for (const pair of localPairs) for (const value of values(scene, pair, organizer.order)) {
       const kind = field(organizer.order).kind
       const scalar = kind === 'date' ? dateTimestamp(value) : kind === 'priority' ? priorityRank(value) : value
       if (typeof scalar === 'number' && !Number.isFinite(scalar)) continue
