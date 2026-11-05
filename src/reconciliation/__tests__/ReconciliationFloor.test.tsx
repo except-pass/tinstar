@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { fixtureSources, fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import { Overview } from '../Overview'
@@ -27,7 +27,7 @@ it.each(['queued', 'held'])('retains independently visible %s cards and keeps wa
   expect(card.getAttribute('data-tone')).toBe('quiet')
   expect(container.querySelectorAll('.ov-worker-stack .ov-execution')).toHaveLength(5)
   expect(container.querySelectorAll('.ov-card-stack .ov-card')).toHaveLength(5)
-  fireEvent.click(card)
+  fireEvent.click(within(card.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
   expect(screen.getByLabelText('Inspector').textContent).toContain('Awaiting review capacity')
   expect(screen.getByLabelText('Inspector').textContent).toContain('review-task')
   fireEvent.change(screen.getByLabelText('Outer grouping'), { target: { value: 'machine' } })
@@ -218,7 +218,7 @@ it('clears mobile source diagnostics on close and subsequent worker selection', 
   fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
   expect(screen.getByText('Source health')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-  fireEvent.click(container.querySelector('.ov-execution')!)
+  fireEvent.click(within(container.querySelector('.ov-execution')!.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
   expect(screen.queryByText('Source health')).toBeNull()
   expect(screen.getByLabelText('Inspector')).toBeTruthy()
 })
