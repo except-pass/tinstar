@@ -4,10 +4,28 @@ Tin Star's primary home follows the [operational shared-floor prototype](../desi
 The reference contains illustrative data only. Production reads the configured
 Notion and First Mate sources and never substitutes fixture records.
 
-Workers and Notion tasks render as independent cards inside shared groups,
-with links in the gutter. Each column retains its selected order without
-duplicating endpoints within a band. Dashed placeholders accompany unmatched
-records; hidden counterparts and unavailable sources have distinct labels.
+Overview defaults to **Ultra Compact**: 29px collapsed rows, 25px outer
+headers and 21px inner headers. Workers stay on the left and Notion tasks on
+the right, with real confirmed relationships in a dedicated gutter. Each
+canonical endpoint renders once across compact groups; reference badges name
+its other memberships. Unmatched records and unavailable sources keep their
+coverage labels. The toolbar offers **Detailed** for the original rich cards
+and Inspector interaction. Density persists across reloads in browser storage.
+Both columns remain side by side on narrow screens using horizontal scrolling.
+
+In Ultra Compact, click a row or press Enter/Space to open that relationship:
+the selected endpoint and all directly confirmed current counterparts expand
+inline. Expansion is one hop; it never recursively opens a connected component.
+Several relationship roots can remain open. Click a root again to close it;
+a counterpart shared by another open root stays expanded. Expanded rows label
+whether clicking opens or closes their own relationship. Direct tasks hidden
+by a status filter are temporarily revealed. Opening a relationship reopens only
+groups containing that root or its immediate counterparts; previously opened
+relationships do not reopen groups you collapsed. Sorting and grouping retain
+expansion by canonical ID.
+Truncated text has a full title tooltip and a visible keyboard-focus tooltip;
+expanded titles and metadata wrap. Connectors follow measured anchors after
+expansion, sorting, filtering, group collapse, scrolling and resizing.
 Nested groups use an outer field label and deduplicated worker/task counts,
 with compact worker/task counts on each violet inner band. A compact toolbar controls both columns:
 
@@ -73,7 +91,7 @@ and groups without a manager or machine axis use all configured homes. Partial c
 unmatched worker relationship Unknown worker instead of asserting No linked
 worker; absence conclusions remain suppressed.
 
-Worker cards show an identity avatar, title and a consistently placed Running,
+Expanded and Detailed worker cards show an identity avatar, title and a consistently placed Running,
 Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a
@@ -83,7 +101,7 @@ Last known signal; retained status follows the same event/state precedence as
 Unknown, not Finished. Selection and relationships never fade whole cards or
 serve as execution status.
 
-Task cards keep the same field order in every grouping: Initiative / Epic
+Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
 Notion Status opposite Owner. Next check-in and edit age share a divided footer;
 Last touched by is available on the edit-age tooltip and in Inspector. Contextual
@@ -93,7 +111,7 @@ Done, Archived, Backlog, Todo, Not started, Planned and Spare tokens display
 Not applicable; other statuses distinguish missing, upcoming, overdue and
 invalid checkpoints using the calendar rules above.
 
-Click a floor worker or task to open the separate Inspector while Your desk
+In Detailed, click a floor worker or task to open the separate Inspector while Your desk
 remains available. The Inspector exposes metadata, related records, connection
 and activity history, evidence and safe source links. Task prose loads on demand;
 partial content labels omissions and unavailable content offers the source link.
@@ -115,7 +133,8 @@ Notion link. Navigation never answers, dismisses or writes a source record;
 Answer/Dismiss remain separate explicit controls. Mobile Desk navigation returns
 to the floor; reduced motion uses static highlighting.
 
-Clicks and authenticated MCP use the same reducer. The [MCP reference](reconciliation-mcp.md#tools-and-authority)
+Grouping, filters and authenticated MCP use the same reducer. Compact inline
+relationship roots are local to the current window and are not source writes. The [MCP reference](reconciliation-mcp.md#tools-and-authority)
 owns semantic actions, targeting and browser acknowledgments. Grouping/filtering
 never edits Notion or First Mate, launches workers, or changes relationship truth.
 

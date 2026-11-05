@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { fixtureSources, fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
@@ -12,6 +12,9 @@ beforeAll(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
 })
+// Inspector regressions exercise the preserved Detailed presentation. Compact
+// interaction and its default are covered by ultraCompact.test.tsx.
+beforeEach(() => localStorage.setItem('tinstar.overview.density', 'detailed'))
 afterEach(() => { cleanup(); localStorage.clear(); observed.error = null })
 
 it.each(['queued', 'held'])('retains independently visible %s cards and keeps wait evidence in details', state => {

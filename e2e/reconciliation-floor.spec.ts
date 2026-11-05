@@ -18,6 +18,11 @@ let server: ChildProcess
 let root: string
 let base: string
 
+// These regressions exercise the preserved rich presentation.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
+})
+
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'tinstar-floor-'))
   await mkdir(join(root, 'config'))
@@ -431,4 +436,59 @@ test('Notion declarations draw confirmed edges without worker-side assignment me
   await page.getByText('Evidence & diagnostics', { exact: true }).click()
   await expect(page.getByLabel('Inspector')).toContainText('notion.First Mate tasks')
   await screenshot(page, 'notion-owned-confirmed-links-fixture')
+})
+
+test('Ultra Compact density, canonical fan-out, keyboard, geometry and reload persistence', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1200 })
+  const now = Date.now(), scene = fixtureScene({ now })
+  const first = scene.claims.find(c => c.cardId === fixtureId(1))!
+  scene.claims.push({ ...first, id: 'ui-second-direct-task', cardId: fixtureId(6) })
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  await page.getByRole('button', { name: 'Ultra Compact', exact: true }).click()
+  const workerId = scene.executions.find(w => w.identity.task_id === 'linked-worker')!.id
+  const worker = page.locator('.ov-execution').filter({ hasText: 'linked worker' })
+  const helper = page.locator('.ov-execution').filter({ hasText: 'helper worker' })
+  const task = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
+  const second = page.locator(`.ov-card[data-entity-id="${fixtureId(6)}"]`)
+  await expect(worker).toHaveAttribute('aria-expanded', 'false')
+  expect((await worker.boundingBox())!.height).toBe(29)
+  const heights = await page.locator('.ov-outer>.ov-group-head,.ov-inner .ov-group-head').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))
+  expect(heights).toContain(25); expect(heights).toContain(21)
+  await worker.focus(); await worker.press('Enter')
+  await expect(worker).toBeFocused()
+  await expect(task).toHaveAttribute('aria-expanded', 'true')
+  await expect(second).toHaveAttribute('aria-expanded', 'true')
+  await expect(helper).toHaveAttribute('aria-expanded', 'false')
+  await worker.press('Space')
+  await expect(task).toHaveAttribute('aria-expanded', 'false')
+  await page.getByLabel('Outer grouping').selectOption('machine')
+  await page.getByLabel('Inner grouping').selectOption('none')
+  await expect(task).toHaveCount(1)
+  await task.click()
+  await expect(worker).toHaveAttribute('aria-expanded', 'true')
+  await expect(helper).toHaveAttribute('aria-expanded', 'true')
+  await expect(second).toHaveAttribute('aria-expanded', 'false')
+  const anchors = async () => page.evaluate(({ workerId, taskId }) => {
+    const path = Array.from(document.querySelectorAll<SVGPathElement>('.ov-compact-connections path')).find(el => el.dataset.workerId === workerId && el.dataset.cardId === taskId)!
+    const worker = Array.from(document.querySelectorAll<HTMLElement>('.ov-execution')).find(el => el.dataset.entityId === workerId)!.getBoundingClientRect()
+    const task = document.querySelector<HTMLElement>(`.ov-card[data-entity-id="${taskId}"]`)!.getBoundingClientRect()
+    const canvas = document.querySelector('.ov-canvas')!.getBoundingClientRect()
+    const start = path.getPointAtLength(0), end = path.getPointAtLength(path.getTotalLength())
+    return Math.max(Math.abs(start.x - (worker.right - canvas.left)), Math.abs(start.y - (worker.top + worker.height / 2 - canvas.top)), Math.abs(end.x - (task.left - canvas.left)), Math.abs(end.y - (task.top + task.height / 2 - canvas.top)))
+  }, { workerId, taskId: fixtureId(1) })
+  await expect.poll(anchors).toBeLessThan(1)
+  await page.getByRole('button', { name: 'Reverse sort direction' }).click()
+  await expect.poll(anchors).toBeLessThan(1)
+  await page.setViewportSize({ width: 700, height: 900 })
+  await page.locator('.ov-workspace').evaluate(el => { el.scrollTop = 80; el.scrollLeft = 100 })
+  await expect.poll(anchors).toBeLessThan(1)
+  const positions = await page.evaluate(() => ({ worker: document.querySelector('.ov-execution')!.getBoundingClientRect().left, task: document.querySelector('.ov-card')!.getBoundingClientRect().left, doc: document.documentElement.scrollWidth, viewport: innerWidth }))
+  expect(positions.worker).toBeLessThan(positions.task)
+  expect(positions.doc).toBe(positions.viewport)
+  await page.reload()
+  await expect(page.locator('.ov')).toHaveAttribute('data-density', 'compact')
+  await page.getByRole('button', { name: 'Detailed', exact: true }).click()
+  await page.reload()
+  await expect(page.locator('.ov')).toHaveAttribute('data-density', 'detailed')
 })
