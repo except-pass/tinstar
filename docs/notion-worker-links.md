@@ -36,8 +36,11 @@ claim of a live Notion write or concurrent-write proof.
 
 `{"schema":"tinstar.fm-links.v1","tasks":[]}` explicitly declares no links. A
 missing/wrong-type/unreadable/truncated property is **unknown**, not an empty
-association. Blank text is invalid JSON; writers should use the explicit empty
-record when that is what they mean.
+association. A readable rich-text property with no items, or whose concatenated
+text is empty or whitespace-only, means the card has no declaration: no finding,
+no confirmation, and legacy hints stay corroboration only. That blank property
+does not suppress absence coverage. Writers who mean "no links" still use the
+explicit empty record.
 
 ## Parser rules
 

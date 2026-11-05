@@ -148,9 +148,13 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   })
   const byCard = new Map(cards.map(card => [card.id, card]))
   const linkRecords = new Map(cards.map(card => [card.id, declaredLinks(card.source)]))
-  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid')
+  // Blank properties are readable and declare nothing, so they do not suppress
+  // coverage. Unknown and invalid records still do, as they did when the
+  // property was missing or unreadable.
+  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid' || parsed.status === 'none')
   const declarations = cards.flatMap(card => {
     const parsed = linkRecords.get(card.id)!
+    if (parsed.status === 'none') return []
     if (parsed.status !== 'valid') {
       add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`)
       return []

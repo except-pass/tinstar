@@ -3,7 +3,7 @@ import { fixtureHomes, fixtureId, fixtureSources } from '../../../../test-fixtur
 import { SceneReconciler } from '../scene'
 import { initialPresentation } from '../../../reconciliation/presentation'
 import { overviewGroups } from '../../../reconciliation/overviewModel'
-import { FIRST_MATE_TASKS, WORKER_LINK_SCHEMA, type WorkerLink } from '../workerLinks'
+import { FIRST_MATE_TASKS, readWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from '../workerLinks'
 
 const now = Date.parse('2026-11-04T20:00:00Z')
 const link: WorkerLink = { fm_home: fixtureHomes[1]!, task_id: 'linked-worker', first_observed_spawn_gen: 'attempt-1' }
@@ -176,6 +176,47 @@ describe('Notion authoritative observation table', () => {
     const input = source(); declare(input); declare(input, fixtureId(5))
     input.fleet[1]!.observation = { ...input.fleet[1]!.observation, status: 'unknown', coverage: 'unknown', data: null }
     expect(reconcile(input).claims.every(c => c.verification === 'conflicting' && c.state === 'last-known')).toBe(true)
+  })
+
+  it('does not treat blank properties as malformed while still confirming a real link', () => {
+    const input = source()
+    const cards = input.intentions.data!.cards
+    const linked = cards.find(c => c.id === fixtureId(1))!
+    const malformed = cards.find(c => c.id === fixtureId(2))!
+    declare(input, linked.id, [link])
+    linked.properties[FIRST_MATE_TASKS]!.workerLinks = readWorkerLinks({
+      type: 'rich_text', rich_text: [{ plain_text: linked.properties[FIRST_MATE_TASKS]!.value as string }],
+    })
+    malformed.properties[FIRST_MATE_TASKS]!.workerLinks = readWorkerLinks({
+      type: 'rich_text', rich_text: [{ plain_text: '{' }],
+    })
+    const hinted = cards.find(c => c.id === fixtureId(3))!
+    for (const card of cards) {
+      if (card.id === linked.id || card.id === malformed.id) continue
+      const blank = card.id === hinted.id
+        ? { type: 'rich_text', rich_text: [{ plain_text: ' \n\t' }] }
+        : { type: 'rich_text', rich_text: [] }
+      card.properties[FIRST_MATE_TASKS]!.workerLinks = readWorkerLinks(blank)
+      card.properties[FIRST_MATE_TASKS]!.value = ''
+    }
+    const observed = input.fleet[1]!.observation.data!.tasks[0]!
+    input.fleet[1]!.observation.data!.tasks.push({ ...observed, id: 'hinted', identity: { ...observed.identity, task_id: 'hinted' },
+      cardReferences: [{ pageId: hinted.id, basis: 'textual', source: 'task.work_item' }] })
+    const scene = reconcile(input)
+    const propertyFindings = scene.findings.filter(f => f.reason.startsWith(`${FIRST_MATE_TASKS}:`))
+    expect(propertyFindings).toEqual([expect.objectContaining({
+      kind: 'unverified-conflicting', cardIds: [malformed.id], reason: `${FIRST_MATE_TASKS}: Malformed JSON`,
+    })])
+    expect(scene.claims.filter(c => c.verification === 'confirmed')).toEqual([
+      expect.objectContaining({ cardId: linked.id, basis: 'explicit' }),
+    ])
+    expect(scene.claims.find(c => c.cardId === hinted.id)).toMatchObject({ verification: 'unverified', basis: 'textual' })
+    expect(scene.findings.some(f => f.kind === 'confirmed-link' && f.cardIds.includes(linked.id))).toBe(true)
+    malformed.properties[FIRST_MATE_TASKS]!.workerLinks = readWorkerLinks({ type: 'rich_text', rich_text: [] })
+    const covered = reconcile(input)
+    expect(covered.findings.some(f => f.reason.includes('Malformed JSON'))).toBe(false)
+    expect(covered.coverage.absenceConclusions).toBe('sufficient-configured-sources')
+    expect(covered.claims.filter(c => c.verification === 'confirmed').map(c => c.cardId)).toEqual([linked.id])
   })
 
   it('treats a missing generation in a partial home as unknown evidence', () => {

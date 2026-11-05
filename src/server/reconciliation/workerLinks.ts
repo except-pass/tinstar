@@ -6,7 +6,10 @@ export const WORKER_LINK_SCHEMA = 'tinstar.fm-links.v1'
 // Bound parsing too, so malformed remote input cannot consume unbounded work.
 export const MAX_WORKER_LINK_CHARS = 200_000
 export interface WorkerLink { fm_home: string; task_id: string; first_observed_spawn_gen: string }
+// 'none' is a readable property with no declaration. It is not the explicit
+// empty record, and it is not an unreadable property.
 export type WorkerLinks = { status: 'valid'; tasks: WorkerLink[] } |
+  { status: 'none' } |
   { status: 'unknown' | 'invalid'; reason: string }
 
 const invalid = (reason: string): WorkerLinks => ({ status: 'invalid', reason })
@@ -79,5 +82,9 @@ export function readWorkerLinks(value: unknown): WorkerLinks {
     if (chunk.length > 2000) return invalid('Rich-text item exceeds 2,000 characters')
     chunks.push(chunk)
   }
-  return parseWorkerLinks(chunks.join(''))
+  // A blank property is the normal unset state, not a JSON record. Empty and
+  // whitespace-only text declare nothing; any other text is still parsed.
+  const text = chunks.join('')
+  if (text.trim() === '') return { status: 'none' }
+  return parseWorkerLinks(text)
 }
