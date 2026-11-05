@@ -57,6 +57,46 @@ records and explicitly attest a verified association through that same auditable
 workflow. That is a new authorized decision, never automatic promotion of legacy
 evidence. The current backfill merges are manual verification aids only.
 
+## Provenance-source options and pilot recommendation
+
+The live-source inspection found Notion URLs in backlog body text, which supplies
+candidates only. There is no existing typed dispatch-provenance source in the
+collected snapshots. These options concern the future coordinator adapter; this
+PR implements none of them:
+
+| Option | Exact source and author | Advantages | Costs and failure handling |
+| --- | --- | --- | --- |
+| A. Coordinator-owned append-only dispatch ledger | The coordinator's dispatch wrapper/adapter appends a typed receipt at the moment it dispatches a Notion-originated task: canonical page ID, `fm_home`, `task_id`, observed `spawn_gen`, timestamp and dispatch decision ID. | Works with today's upstream First Mate. One coordinator-owned audit stream supports dispatch, idempotency and later investigation. It records an actual page-selection decision instead of parsing prose. | Requires a small trusted workflow integration and ledger ownership/retention. Serialize appends. A spawn may succeed before its receipt is committed: leave that worker a candidate and reconcile from durable task evidence, never fabricate success or provenance from the brief. |
+| B. Upstream dispatch metadata | [The upstream First Mate proposal](https://github.com/kunchenguid/firstmate/pull/8141) adds optional `--work-item <url-or-id>`, records `work_item` in task metadata, publishes it in fleet snapshots, preserves it on relaunch and rejects relaunch overrides. | Natural association at the dispatch seam; broad upstream transport support would avoid a separate ledger join for simple cases. Its tests cover dispatch, snapshot publication and relaunch preservation. | The proposal is open/unmerged at this design's 2026-11-05 inspection; maintainer review/CI approval and rollout are external dependencies. It cannot gate this pilot, and no fork/cherry-pick is proposed. A bare legacy `work_item` is still candidate-only: future adoption needs a coordinator-authored dispatch/creation provenance contract that distinguishes new receipts from legacy or manually edited metadata and handles reused IDs/continuity. |
+| C. One structured receipt artifact per coordinator dispatch | The same trusted wrapper writes a dedicated machine-readable receipt beside its durable dispatch audit material, indexed by a unique dispatch decision ID rather than by a reused task ID. | No upstream change; independently reviewable per-dispatch artifacts. A completed receipt can be published with an ordinary atomic file replacement, avoiding shared append contention. | Needs artifact indexing, transport/retention and incomplete-artifact recovery. More files and a second discovery path add complexity compared with the single-coordinator ledger pilot. Existing raw launch briefs, shell output and task reports are not receipts. |
+| D. Explicit coordinator attestation of an existing worker | First Mate investigates durable task records and records a typed verified-association decision using the ledger/artifact format above. | Provides a bounded path for existing workers that predate dispatch receipts, including manual verification of the current candidate backfill. | Requires coordinator judgment and is not automatic proof of the original dispatch. Do not auto-attest from a URL, title or branch. Keep the verification decision and evidence references in the audit. |
+
+**Recommend A for the narrow pilot**, with D only for specifically reviewed
+preexisting candidates. It supplies exact provenance now, does not depend on
+an unmerged upstream change, and shares the coordinator's existing single-writer
+ownership with the Notion merge loop. Limit the first implementation to one
+coordinator, its configured homes and the bounded dry-run batch described below.
+Do not add ledger transport to Tin Star or another relationship database to make
+this work: the future adapter can read its own local ledger and fresh fleet
+snapshots, while Tin Star continues reading the resulting Notion declaration.
+
+The wrapper should append a planned dispatch event with the selected canonical
+page/task decision before dispatch, then append a committed receipt only after
+the real task identity/generation is read back. Only the committed receipt is
+eligible. A crash or failed readback between those events leaves an incomplete
+decision for one investigation item. An independently running worker or a
+replayed planned event cannot complete the receipt. The adapter's own audit
+append should be durable before its Notion write begins. This workflow couples
+receipt creation to normal dispatch, avoiding a separate routine bookkeeping
+operation for First Mate.
+
+Revisit B if it is accepted and deployed through normal upstream releases. It
+may become a useful carrier/corroborator of A's exact decision, but merely seeing
+`task.work_item` in a later snapshot must not retroactively promote today's
+legacy candidates. C remains an alternative if the coordinator already has a
+suitable structured receipt-artifact mechanism; introducing both A and C for the
+pilot would create redundant provenance stores.
+
 ## Dry-run tiers and bounded pilot
 
 The report groups operational workers/cards per configured home into exactly
