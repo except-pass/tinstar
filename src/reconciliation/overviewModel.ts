@@ -14,6 +14,53 @@ export const managerName = (scene: FloorScene, home: string) => homeLabel(scene.
 export const rootHome = (scene: FloorScene) => scene.coverage.homes.find(h => !h.source.parentHome && (h.source.label === 'main' || scene.coverage.homes.some(child => child.source.parentHome === h.source.home)))
 export const stale = (observation: { status: string; expiresAt: string | null }, now: number) =>
   !['fresh', 'partial'].includes(observation.status) || !!observation.expiresAt && Date.parse(observation.expiresAt) <= now
+/** One stale or partial home must not mark every other home's workers unavailable. */
+export const homeAuthoritative = (observation: { status: string; coverage: string; expiresAt: string | null }, now: number, readFailed = false) =>
+  !readFailed && observation.status === 'fresh' && observation.coverage === 'complete' && !stale(observation, now)
+export type WorkerSourceCoverage = 'available' | 'partial' | 'unavailable'
+export function workerSourceCoverage(homes: ReadonlyArray<{ observation: { status: string; coverage: string; expiresAt: string | null } }>, now: number, readFailed = false): WorkerSourceCoverage {
+  if (readFailed || !homes.length || homes.every(home => !homeAuthoritative(home.observation, now, readFailed))) return 'unavailable'
+  return homes.every(home => homeAuthoritative(home.observation, now)) ? 'available' : 'partial'
+}
+const openWorkerLabel = new Set(['Unassigned / Unknown', 'Unassigned', 'All work', 'Unknown'])
+function homesForLabel(scene: FloorScene, field: 'manager' | 'machine', label: string) {
+  if (openWorkerLabel.has(label)) return scene.coverage.homes
+  const matched = scene.coverage.homes.filter(home => field === 'machine'
+    ? (home.source.machine || 'Unknown') === label
+    : managerName(scene, home.source.home) === label)
+  return matched.length ? matched : scene.coverage.homes
+}
+/** Manager and machine groups speak for that home. Every other grouping can hide a worker on any configured home. */
+export function relevantWorkerHomes(scene: FloorScene, organizer: { outer?: string; inner?: string } | undefined, group: { outerLabel: string; label: string }) {
+  const outer = organizer?.outer, inner = organizer?.inner
+  if (outer === 'manager' || outer === 'machine') return homesForLabel(scene, outer, group.outerLabel)
+  if (inner === 'manager' || inner === 'machine') return homesForLabel(scene, inner, group.label)
+  return scene.coverage.homes
+}
+export function workerSummary(homes: Parameters<typeof workerSourceCoverage>[0], now: number, readFailed: boolean, count: number, visible = count, compact = false) {
+  const coverage = workerSourceCoverage(homes, now, readFailed)
+  if (coverage === 'unavailable') return count ? `${count} last known workers` : 'Workers unavailable'
+  if (count === 0) return coverage === 'partial' ? 'Unknown workers' : compact ? '0 W' : '0 workers'
+  return compact ? `${count} W` : `${count} workers${visible < count ? ` · ${count - visible} hidden` : ''}`
+}
+export function workerAbsenceLabel(coverage: WorkerSourceCoverage, place: 'column' | 'gutter') {
+  if (coverage === 'available') return place === 'column' ? 'No linked worker' : 'no worker'
+  if (coverage === 'partial') return place === 'column' ? 'Unknown worker' : 'unknown worker'
+  return place === 'column' ? 'Workers unavailable' : 'unknown worker'
+}
+export function emptyWorkerScopeLabel(coverage: WorkerSourceCoverage) {
+  if (coverage === 'unavailable') return 'Workers unavailable'
+  if (coverage === 'partial') return 'Unknown workers'
+  return 'No current records observed in this scope.'
+}
+export function workerCoverageNotice(coverage: WorkerSourceCoverage) {
+  if (coverage === 'unavailable') return 'Worker sources are unavailable. Last known workers remain visible.'
+  if (coverage === 'partial') return 'Partial worker coverage. Known workers remain visible.'
+  return null
+}
+export function unreadableWorkerHomes<T extends { observation: { status: string; coverage: string; expiresAt: string | null } }>(homes: readonly T[], now: number) {
+  return homes.filter(home => !homeAuthoritative(home.observation, now))
+}
 /** A stale feed cannot make a recorded final report into a current worker.
  * This preserves history placement only; it does not certify present liveness. */
 export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { gapTargets, overviewGroups, managerName, rootHome, workerState } from '../overviewModel'
+import { gapTargets, overviewGroups, managerName, relevantWorkerHomes, rootHome, workerAbsenceLabel, workerSourceCoverage, workerState, workerSummary } from '../overviewModel'
 import { initialPresentation } from '../presentation'
 
 describe('independent Overview stacks', () => {
@@ -21,6 +21,30 @@ describe('independent Overview stacks', () => {
     expect(managerName(scene, '/some/fm-kdf')).toBe('kdf')
     expect(rootHome(scene)?.source.label).toBe('main')
     expect(overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'manager', inner: 'none', order: 'checkIn', direction: 'asc' } }, Date.now()).some(group => group.label === 'hulk')).toBe(true)
+  })
+  it('treats one stale or partial home as partial coverage and all-unreadable homes as unavailable', () => {
+    const now = Date.now(), scene = fixtureScene({ now })
+    expect(workerSourceCoverage(scene.coverage.homes, now)).toBe('available')
+    expect(workerSummary(scene.coverage.homes, now, false, 4)).toBe('4 workers')
+    expect(workerAbsenceLabel('available', 'gutter')).toBe('no worker')
+    scene.coverage.homes[0]!.observation.coverage = 'partial'
+    expect(workerSourceCoverage(scene.coverage.homes, now)).toBe('partial')
+    expect(workerSummary(scene.coverage.homes, now, false, 4, 4, true)).toBe('4 W')
+    expect(workerSummary(scene.coverage.homes, now, false, 0)).toBe('Unknown workers')
+    expect(workerAbsenceLabel('partial', 'column')).toBe('Unknown worker')
+    expect(workerAbsenceLabel('partial', 'gutter')).toBe('unknown worker')
+    scene.coverage.homes[0]!.observation.status = 'stale'
+    expect(workerSourceCoverage(scene.coverage.homes, now)).toBe('partial')
+    for (const home of scene.coverage.homes) Object.assign(home.observation, { status: 'unknown', coverage: 'unknown' })
+    expect(workerSourceCoverage(scene.coverage.homes, now)).toBe('unavailable')
+    expect(workerSummary(scene.coverage.homes, now, false, 0)).toBe('Workers unavailable')
+    expect(workerSummary(scene.coverage.homes, now, false, 2)).toBe('2 last known workers')
+    expect(workerSummary(scene.coverage.homes, now, true, 2)).toBe('2 last known workers')
+    const hulk = relevantWorkerHomes(scene, { outer: 'manager', inner: 'none' }, { outerLabel: 'hulk', label: 'hulk' })
+    expect(hulk.map(home => home.source.home)).toEqual([fixtureHomes[1]])
+    expect(relevantWorkerHomes(scene, { outer: 'manager', inner: 'none' }, { outerLabel: 'Unassigned / Unknown', label: 'Unassigned' })).toHaveLength(scene.coverage.homes.length)
+    expect(relevantWorkerHomes(scene, { outer: 'initiative', inner: 'status' }, { outerLabel: 'Unassigned / Unknown', label: 'In Progress' })).toBe(scene.coverage.homes)
+    expect(relevantWorkerHomes(scene, { outer: 'none', inner: 'none' }, { outerLabel: 'All work', label: 'All work' })).toBe(scene.coverage.homes)
   })
   it('suppresses gaps on expired, missing-ID and partial coverage scenes', () => {
     const now = Date.now(), scene = fixtureScene({ now })
