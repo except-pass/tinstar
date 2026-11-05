@@ -99,9 +99,12 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
     let beforeHash: string | null = null, afterHash: string | null = null
     let attempted = false
     try {
-      const current = buildWorkerLinkReport({ ...input, generatedAt: new Date(now()).toISOString() })
-      const stillEligible = current.homes.flatMap(h => h.tiers['eligible auto-write'].flatMap(r => r.proposals))
-      if (additions.some(link => !stillEligible.some(p => p.cardId === cardId && JSON.stringify(asLink(p)) === JSON.stringify(link)))) throw new Error('coverage-expired')
+      const assertEligible = () => {
+        const current = buildWorkerLinkReport({ ...input, generatedAt: new Date(now()).toISOString() })
+        const stillEligible = current.homes.flatMap(h => h.tiers['eligible auto-write'].flatMap(r => r.proposals))
+        if (additions.some(link => !stillEligible.some(p => p.cardId === cardId && JSON.stringify(asLink(p)) === JSON.stringify(link)))) throw new Error('coverage-expired')
+      }
+      assertEligible()
       const before = await transport.read(cardId)
       const plan = mergeLinks(before.links, additions)
       const { merged } = plan
@@ -109,14 +112,10 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
       if (beforeHash === afterHash) { await audit(cardId, additions, 'no-op', beforeHash, afterHash); continue }
       // Durable audit must succeed before the property PATCH can begin.
       await audit(cardId, additions, 'write-planned', beforeHash, afterHash)
-      attempted = true
-      const expired = buildWorkerLinkReport({ ...input, generatedAt: new Date(now()).toISOString() }).homes
-        .flatMap(h => h.tiers['eligible auto-write'].flatMap(r => r.proposals))
-      if (additions.some(link => !expired.some(p => p.cardId === cardId && JSON.stringify(asLink(p)) === JSON.stringify(link)))) {
-        attempted = false
-        throw new Error('coverage-expired')
-      }
-      await transport.write(cardId, merged.properties)
+      await transport.write(cardId, merged.properties, () => {
+        assertEligible()
+        attempted = true
+      })
       const after = await transport.read(cardId)
       if (after.links.status !== 'valid' || workerLinkRecord(after.links.tasks).json !== merged.json) throw new Error('readback-mismatch')
       await audit(cardId, additions, 'verified', beforeHash, afterHash)
@@ -131,7 +130,7 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
 
 export interface NotionLinkTransport {
   read(cardId: string): Promise<{ links: WorkerLinks }>
-  write(cardId: string, properties: ReturnType<typeof workerLinkRecord>['properties']): Promise<void>
+  write(cardId: string, properties: ReturnType<typeof workerLinkRecord>['properties'], beforePatch: () => void): Promise<void>
 }
 
 /** The only credential-bearing component. Errors are fixed messages, never remote bodies. */
@@ -140,10 +139,11 @@ export function notionLinkTransport(token: string, dataSourceId: string, fetcher
   const board = notionPageId(dataSourceId)
   if (!board || !token.trim() || /[\r\n]/.test(token)) throw new Error('Invalid adapter credentials or board')
   let lastWrite = -Infinity
-  async function request(path: string, method = 'GET', body?: unknown) {
+  async function request(path: string, method = 'GET', body?: unknown, beforePatch?: () => void) {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (method === 'PATCH') {
         await timing.sleep(Math.max(0, lastWrite + 1000 - timing.now()))
+        beforePatch!()
         lastWrite = timing.now()
       }
       const response = await fetcher(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(20_000),
@@ -213,8 +213,8 @@ export function notionLinkTransport(token: string, dataSourceId: string, fetcher
       }
       throw new Error('Property pagination incomplete')
     },
-    async write(cardId, properties) {
-      await request(`pages/${cardId}`, 'PATCH', { properties: { [FIRST_MATE_TASKS]: properties[FIRST_MATE_TASKS] } })
+    async write(cardId, properties, beforePatch) {
+      await request(`pages/${cardId}`, 'PATCH', { properties: { [FIRST_MATE_TASKS]: properties[FIRST_MATE_TASKS] } }, beforePatch)
     },
   }
 }

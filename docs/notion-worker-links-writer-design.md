@@ -29,7 +29,9 @@ attestation. Never mint it by extracting an ID from a worker brief after dispatc
 copying a title/URL or accepting a model suggestion. Workers without this line
 remain candidates; the adapter does not manufacture attestations for them.
 
-The initial generation comes from the fresh observed task identity. Existing
+The card line binds the page to the logical task (backlog item). The first write
+anchors the generation observed at that moment. Later generation differences
+remain conflicts requiring coordinator continuity evidence. Existing
 Notion anchors and multiple observed attempts catch changed generation/ID reuse;
 the note alone supplies no continuity authority. Relaunches and moves that
 contradict an anchor require First Mate review, with no silent anchor replacement.
@@ -85,9 +87,12 @@ For each eligible card, the adapter:
 6. Appends verified success, or stops the entire batch on any uncertain write or
    readback. There is no blind timeout/network retry. Only explicit HTTP 429
    responses retry, at most twice, honoring Retry-After up to 30 seconds per
-   retry. All PATCH attempts are spaced by at least one second.
+   retry. All PATCH attempts are spaced by at least one second. Home and Notion
+   freshness are rechecked after waits immediately before every PATCH attempt;
+   expired coverage stops the batch.
 
-Dispatch is the normal trigger; substantive scheduled check-ins are a backstop.
+Dispatch-time triggering and substantive scheduled check-in reruns belong to the
+coordinator workflow, not this CLI.
 Repeated reconciliation derives idempotency from current Notion content. Audit
 history never grants assignment authority. After uncertainty, First Mate must
 investigate and reread Notion before explicitly invoking the adapter again.
@@ -107,7 +112,8 @@ home/task; card-wide malformed/readback problems use one card key. The report
 contains candidate IDs, source field paths and freshness for the coordinator's
 existing supervision workflow. Repeated evidence routes to that same item until
 First Mate closes the episode after verified disposition/readback and refreshed
-Tin Star evidence. The adapter emits routing records; it does not create cards,
+Tin Star evidence. Investigation handoff and deduplication also belong to that coordinator workflow,
+not this CLI. The adapter emits routing records; it does not create cards,
 change progress, send nudges or add a privileged MCP path.
 
 The owner-only next step is First Mate's reviewed report-only run, followed by a

@@ -161,6 +161,24 @@ describe('authorized coordinator adapter with fake Notion', () => {
     expect(fake.patches[1]!.time - fake.patches[0]!.time).toBeGreaterThanOrEqual(2000)
     expect(fake.patches[2]!.time - fake.patches[1]!.time).toBeGreaterThanOrEqual(1000)
   })
+  it.each(['home', 'notion'] as const)('stops retries when %s coverage expires during Retry-After', async coverage => {
+    const input = source(true), fake = fakeNotion()
+    const observation = coverage === 'home' ? input.fleet[0]!.observation : input.intentions
+    observation.expiresAt = new Date(now + 1000).toISOString()
+    fake.setRateLimits(1)
+    const { result } = await run(input, fake)
+    expect(result.stopped).toBe(true)
+    expect(fake.patches.map(p => p.id)).toEqual([a])
+  })
+  it.each(['home', 'notion'] as const)('stops a paced PATCH when %s coverage expires', async coverage => {
+    const input = source(true), fake = fakeNotion()
+    const observation = coverage === 'home' ? input.fleet[0]!.observation : input.intentions
+    observation.expiresAt = new Date(now + 500).toISOString()
+    const { result, audit } = await run(input, fake)
+    expect(result.stopped).toBe(true)
+    expect(fake.patches.map(p => p.id)).toEqual([a])
+    expect(audit.at(-1)?.result).toBe('stop-prewrite-conflict')
+  })
   it('reads every rich-text page and keeps encoded property ids intact', async () => {
     const fake = fakeNotion([link('sibling', 'x'.repeat(2200))])
     const raw = fake.fetcher.getMockImplementation()!

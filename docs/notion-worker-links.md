@@ -308,6 +308,9 @@ Other prose, URLs, legacy metadata and equal titles remain candidate-only.
 Only coordinator-controlled dispatch notes are authoritative; this is an
 operational trust boundary, not a signature on arbitrary worker-supplied text.
 The collector returns identifiers and source paths, never the raw note.
+The card line binds a page to the logical task (backlog item). The first write
+anchors the generation observed at that moment; later generation differences
+remain conflicts requiring coordinator continuity evidence.
 
 `dispatchProvenance.status` becomes `collected` for homes publishing markers.
 An eligible proposal requires a fresh complete home, operational exact worker
@@ -345,7 +348,9 @@ requires exact semantic equality. A concurrent append visible at reread is
 preserved. A changed generation, invalid/unknown-schema/truncated/unreadable
 record or oversized replacement cannot be overwritten. Explicit apply can
 initialize a genuinely blank field; report-only cannot. Writes are serialized
-and limited to one PATCH attempt per second. HTTP 429 Retry-After is honored
+and limited to one PATCH attempt per second. Home and Notion freshness are
+rechecked after waits immediately before every PATCH attempt; expired coverage
+stops the batch. HTTP 429 Retry-After is honored
 with at most two retries and a 30-second maximum delay per retry; other write
 errors and any uncertain readback stop the batch, exit 1 and require coordinator
 investigation. Ordinary report-only decisions exit 0. Notion provides no CAS:
@@ -360,6 +365,8 @@ string as the before state. Results include tier decisions, `planned`,
 `stop-prewrite-conflict`, `stop-uncertain-write` and `investigate-invalid-record`.
 No token, remote error body or raw prose is logged. New audit files use mode 0600.
 
+Dispatch-time triggering, substantive scheduled check-in reruns and investigation
+handoff/deduplication belong to the coordinator workflow, not this CLI.
 Routing decisions also include a stable `investigationKey`, a JSON-encoded
 `["worker", home, task_id]` or `["card", cardId]` tuple. Combine it with the
 returned report's candidate IDs, source paths and freshness in the existing
