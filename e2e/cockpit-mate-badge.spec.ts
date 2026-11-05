@@ -63,7 +63,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     ])
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(`${base}/?worker=harbor`)
-    await page.getByRole('button', { name: 'Workers', exact: true }).click()
+    await page.getByRole('button', { name: /^Workers(?:,|$)/ }).click()
     await expect(page.getByRole('heading', { name: 'harbor' })).toBeVisible()
     await expect(page.locator('.cockpit-detail-rail .cockpit-worker-marks .cockpit-mate')).toHaveText('Second mate')
     await expect(page.locator('.cockpit-detail-rail .cockpit-status-detail .cockpit-mate')).toBeHidden()
