@@ -130,3 +130,23 @@ export function canonicalOverviewGroups(groups: readonly FloorGroup[]): FloorGro
     cards: group.cards.filter(c => { if (cards.has(c.id)) return false; cards.add(c.id); return true }),
   }))
 }
+
+/** Order only the rendered task column. Input cards already follow the user's
+ * Order key and stable identity, which also breaks equal barycenters. */
+export function tasksByWorkerPosition(workers: readonly Execution[], cards: readonly SceneCard[], claims: FloorScene['claims']): SceneCard[] {
+  const positions = new Map(workers.map((worker, index) => [worker.id, index]))
+  const linked = new Map<string, Set<number>>()
+  for (const claim of claims) {
+    if (claim.basis !== 'explicit' || claim.verification !== 'confirmed' || claim.state !== 'current') continue
+    const position = positions.get(claim.executionId)
+    if (position === undefined) continue
+    const indices = linked.get(claim.cardId) ?? new Set<number>()
+    indices.add(position)
+    linked.set(claim.cardId, indices)
+  }
+  const barycenters = new Map([...linked].map(([id, indices]) => [id, [...indices].reduce((sum, index) => sum + index, 0) / indices.size]))
+  return cards.map((card, order) => ({ card, order, position: barycenters.get(card.id) }))
+    .sort((a, b) => Number(a.position === undefined) - Number(b.position === undefined) ||
+      (a.position !== undefined && b.position !== undefined ? a.position - b.position : 0) || a.order - b.order)
+    .map(({ card }) => card)
+}
