@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureSources, fixtureId } from '../../../../test-fixtures/reconciliation/scenes'
-import { buildWorkerLinkReport } from '../workerLinkReport'
+import { BACKFILL_TIERS, buildWorkerLinkReport } from '../workerLinkReport'
 import { reconcileScene } from '../scene'
 import { cardReferences } from '../references'
 import { MAX_WORKER_LINK_CHARS, readWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from '../workerLinks'
@@ -15,7 +15,7 @@ function source() {
   input.intentions.data!.cards[0]!.properties['First Mate tasks']!.value = JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks: [] })
   return input
 }
-const proposals = (input: ReturnType<typeof source>) => buildWorkerLinkReport(input).homes.flatMap(home => home.proposals)
+const proposals = (input: ReturnType<typeof source>) => buildWorkerLinkReport(input).homes.flatMap(home => home.tiers.ambiguous.flatMap(row => row.proposals))
 function link(input: ReturnType<typeof source>, overrides = {}): WorkerLink {
   const identity = input.fleet[0]!.observation.data!.tasks[0]!.identity
   return { fm_home: identity.fm_home, task_id: identity.task_id!, first_observed_spawn_gen: identity.spawn_gen!, ...overrides }
@@ -121,7 +121,7 @@ describe('read-only backfill proposals', () => {
     declare(input, [existing])
     const before = JSON.stringify(input), report = buildWorkerLinkReport(input)
     expect(JSON.stringify(input)).toBe(before)
-    expect(report.homes.flatMap(h => h.proposals)).toHaveLength(4)
+    expect(report.homes.flatMap(h => h.tiers.ambiguous.flatMap(row => row.proposals))).toHaveLength(4)
     const merged = report.merges[0]!
     expect(merged.status).toBe('ready-for-verification')
     if (!merged.properties) throw new Error('Expected pasteable merge')
@@ -206,12 +206,52 @@ describe('deterministic detector report over Slice A classification', () => {
     tasks.push(structuredClone(tasks[0]!))
     const report = buildWorkerLinkReport(input)
     expect(report.findings.some(f => f.detector === 'duplicate-execution')).toBe(true)
-    expect(report.homes.flatMap(h => h.proposals)).toHaveLength(1)
+    expect(report.homes.flatMap(h => h.tiers.ambiguous.flatMap(row => row.proposals))).toHaveLength(0)
+    expect(report.merges).toEqual([])
   })
   it('retains the other Slice A classifications, including untracked workers and confirmed links', () => {
     const input = source()
     expect(buildWorkerLinkReport(input).findings.some(f => f.detector === 'untracked-worker')).toBe(true)
     declare(input, [link(input)])
     expect(buildWorkerLinkReport(input).findings.some(f => f.detector === 'confirmed-link')).toBe(true)
+  })
+})
+
+describe('operational six-tier dry run', () => {
+  it('keeps exact declaration matches, candidates, independent workers, contradictions and unavailable homes distinct', () => {
+    const input = source(), home = input.fleet[0]!, original = home.observation.data!.tasks[0]!
+    home.observation.data!.tasks = ['candidate', 'confirmed', 'independent', 'reused'].map(id => ({
+      ...structuredClone(original), id, identity: { ...original.identity, task_id: id }, lastEventText: 'PRIVATE TASK PROSE',
+    }))
+    home.observation.data!.tasks[2]!.cardReferences = []
+    declare(input, [link(input, { task_id: 'confirmed' }), link(input, { task_id: 'reused', first_observed_spawn_gen: 'old' })])
+    const offline = structuredClone(home)
+    offline.source.home = '/fixture/offline'
+    offline.observation.status = 'stale'; offline.observation.coverage = 'unknown'
+    offline.observation.data!.tasks = [{ ...structuredClone(original), identity: { ...original.identity, fm_home: offline.source.home } }]
+    input.fleet.push(offline)
+    const report = buildWorkerLinkReport(input), first = report.homes.find(h => h.fm_home === home.source.home)!
+    expect(Object.keys(first.tiers)).toEqual([...BACKFILL_TIERS])
+    expect(first.counts).toEqual({ 'already confirmed': 1, 'eligible auto-write': 0, ambiguous: 1, independent: 1, conflicts: 1, unavailable: 0 })
+    expect(report.homes.find(h => h.fm_home === offline.source.home)?.counts.unavailable).toBe(1)
+    expect(report.dispatchProvenance.status).toBe('not-collected')
+    expect(JSON.stringify(report)).not.toContain('PRIVATE TASK PROSE')
+  })
+  it('never promotes legacy IDs, URLs, title equality or claimed dispatch field names to auto-write authority', () => {
+    const input = source(), task = input.fleet[0]!.observation.data!.tasks[0]!
+    task.cardReferences = [
+      ...cardReferences({ notion_page_id: a, work_item: a, raw: `card ${a}`, title: `https://app.notion.com/p/${a}` }, 'task'),
+      { pageId: a, basis: 'explicit', source: 'task.dispatch_provenance' },
+    ]
+    const report = buildWorkerLinkReport(input)
+    expect(report.homes[0]?.tiers['eligible auto-write']).toEqual([])
+    expect(report.homes[0]?.counts.ambiguous).toBe(1)
+  })
+  it('represents an offline home with no cached inventory as unknown coverage, not a zero-worker count', () => {
+    const input = source()
+    input.fleet[0]!.observation.status = 'unknown'; input.fleet[0]!.observation.coverage = 'unknown'; input.fleet[0]!.observation.data = null
+    const report = buildWorkerLinkReport(input)
+    expect(report.homes[0]?.tiers.unavailable).toEqual([expect.objectContaining({ kind: 'home', task_id: null, spawn_gen: null })])
+    expect(report.homes[0]?.tiers.independent).toEqual([])
   })
 })

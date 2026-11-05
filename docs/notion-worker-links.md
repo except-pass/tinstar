@@ -155,7 +155,7 @@ completion and must not create Will-action tags.
 ## Live integration evidence
 
 Slice A shipped in https://github.com/except-pass/tinstar/pull/286. The coordinating
-First Mate subsequently wrote real declarations on three cards and confirmed them
+First Mate subsequently wrote real declarations on three cards (four worker links) and confirmed them
 in Tin Star. Tin Star performs neither property creation nor link writes.
 Slice B adds report-only backfill; the responsible First Mate must perform and
 record live verification/writes. Automated tests do not substitute for that proof.
@@ -194,7 +194,9 @@ The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 | --- | --- |
 | `evaluatedAt` | Input snapshot's `generatedAt`; expiry is evaluated at this timestamp. |
 | `coverage` | Notion and each configured home's observation metadata, pagination completeness, card declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
-| `homes[].proposals[]` | Exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and `strength`. No raw brief/backlog text. |
+| `homes[].tiers` / `counts` | Exactly six tiers per home: `already confirmed`, `eligible auto-write`, `ambiguous`, `independent`, `conflicts`, `unavailable`. Counts are report rows, not an assertion of total worker coverage. |
+| `homes[].tiers.ambiguous[].proposals[]` | Manual verification candidates: exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and categorical `strength`. No raw brief/backlog text. |
+| `dispatchProvenance` | `not-collected`: current scene inputs expose no exact durable dispatch binding. `eligible auto-write` remains empty. |
 | `merges[]` | One card-wide merge across all homes. `ready-for-verification` includes the complete v1 `record`, exact compact `json`, and the `properties` payload with consecutive rich-text chunks. `size-limit` includes a reason and emits no replacement. |
 | `findings[]` | Stable detector rows with Slice A `classification`, sorted card/execution/home identities and the classifier's reason. |
 
@@ -202,7 +204,10 @@ The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 reference. `textual-reference` means an actual Notion URL or explicit `card <id>`
 reference found by the existing reconciler in task metadata or matching backlog
 text. Sources retain exact field paths, such as `task.work_item`,
-`task.backlog.title` or `backlog.raw`. Neither strength is a verified assignment.
+`task.backlog.title` or `backlog.raw`. Neither strength is a verified assignment or auto-write authority. A confidence
+score, branch/PR or field name claiming dispatch provenance cannot promote either
+tier. See [the coordinator writer design](notion-worker-links-writer-design.md)
+for the missing exact-provenance input and future authority boundary.
 Title equality alone produces no proposal. Competing references, missing identity
 or generation, multiple observed attempts, secondmate manager rows, stale/partial
 homes, unreadable declarations and Done/archived/trashed cards produce no proposal.
@@ -210,7 +215,19 @@ An existing declaration on any card suppresses proposals for that home/task.
 Current, paginated Notion reads are required; an unrelated partial relation does
 not invalidate a fully read positive reference or declaration.
 
-Merges preserve all existing declarations and add all proposed workers for that
+The dry-run tiers cover currently operational workers/cards. Finished/absent
+workers and Done/archived/trashed cards are excluded from backfill; historical
+links still appear in the detector report. An unavailable home with no cached
+inventory emits one `kind: home` coverage row with null task/generation, rather
+than inventing workers or a zero-worker assertion. Other rows identify an
+observed worker or a declared-but-unobserved task. Positive contradictions retain
+the conflicts tier even when unrelated coverage is unavailable. Existing exact
+fresh declarations enter `already confirmed`; legacy/textual/title candidates
+enter `ambiguous`; no operational Notion provenance enters `independent` only
+with current sources. The report does not mint durable dispatch receipts.
+
+Merges are manual verification aids for ambiguous candidates, never auto-write
+instructions. They preserve all existing declarations and add all proposed workers for that
 card, sorted by home/task. Missing/truncated/malformed properties cannot be
 replaced as empty. A fully readable blank rich-text property with the parser's
 no-declaration result can be initialized, while explicit `tasks: []` is mergeable.
