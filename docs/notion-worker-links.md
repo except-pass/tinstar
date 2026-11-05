@@ -231,9 +231,8 @@ instructions. They preserve all existing declarations and add all proposed worke
 card, sorted by home/task. Missing/truncated/malformed properties cannot be
 replaced as empty. Explicit `tasks: []` is mergeable. The report also checks for
 a fully readable blank rich-text property with the parser's no-declaration
-result before permitting initialization. The current parser rejects blank text
-as described in [Property format](#property-format), so that path remains
-unavailable until the separate blank-property parser fix lands.
+result before permitting initialization. The blank-property parser fix shipped in
+PR #287; blank text remains unknown as described in [Property format](#property-format).
 The whole merge must fit 200,000 characters and 100 items of at most 2,000
 characters each; there is no truncation or partial replacement.
 
