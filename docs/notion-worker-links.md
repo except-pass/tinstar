@@ -2,8 +2,9 @@
 
 Notion declares the primary task association. First Mate owns worker identity,
 execution state and location. Tin Star reads both sources, compares identities,
-and displays the relationship and evidence; it never writes assignments or
-executes a path/command from a Notion field. No First Mate patch or spawn CLI
+and displays the relationship and evidence; its server, UI and MCP never write
+assignments or execute a path/command from a Notion field. A separate coordinator
+adapter may write under First Mate authority as described below. No First Mate patch or spawn CLI
 flag is required. A worker may have one primary card; a card may have many
 workers. Independent/ad hoc workers may have no card.
 
@@ -196,7 +197,8 @@ The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 | `coverage` | Notion and each configured home's observation metadata, pagination completeness, card declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
 | `homes[].tiers` / `counts` | Exactly six tiers per home: `already confirmed`, `eligible auto-write`, `ambiguous`, `independent`, `conflicts`, `unavailable`. Counts are report rows, not an assertion of total worker coverage. |
 | `homes[].tiers.ambiguous[].proposals[]` | Manual verification candidates: exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and categorical `strength`. No raw brief/backlog text. |
-| `dispatchProvenance` | `not-collected`: current scene inputs expose no exact durable dispatch binding. `eligible auto-write` remains empty. |
+| `homes[].tiers["eligible auto-write"][].proposals[]` | Exact coordinator dispatch proposals, with `dispatch-ledger` strength. Only these may be automatically applied. |
+| `dispatchProvenance` | `collected` when snapshots publish coordinator dispatch markers; otherwise `not-collected`. Only valid markers can populate `eligible auto-write`. |
 | `merges[]` | One card-wide merge across all homes. `ready-for-verification` includes the complete v1 `record`, exact compact `json`, and the `properties` payload with consecutive rich-text chunks. `size-limit` includes a reason and emits no replacement. |
 | `findings[]` | Stable detector rows with Slice A `classification`, sorted card/execution/home identities and the classifier's reason. |
 
@@ -207,7 +209,7 @@ text. Sources retain exact field paths, such as `task.work_item`,
 `task.backlog.title` or `backlog.raw`. Neither strength is a verified assignment or auto-write authority. A confidence
 score, branch/PR or field name claiming dispatch provenance cannot promote either
 tier. See [the coordinator writer design](notion-worker-links-writer-design.md)
-for the missing exact-provenance input and future authority boundary.
+for the approved dispatch source and coordinator authority boundary.
 Title equality alone produces no proposal. Competing references, missing identity
 or generation, multiple observed attempts, inactive workers, secondmate manager rows, stale/partial
 homes, unreadable declarations and Done/archived/trashed cards produce no proposal.
@@ -225,10 +227,12 @@ observed worker or a declared-but-unobserved task. Positive contradictions retai
 the conflicts tier even when unrelated coverage is unavailable. Existing exact
 fresh declarations enter `already confirmed`; legacy/textual/title candidates
 enter `ambiguous`; no operational Notion provenance enters `independent` only
-with current sources. The report does not mint durable dispatch receipts.
+with current sources. The report does not mint dispatch provenance.
+Coordinator-authored backlog lines can populate the eligible tier under the adapter contract below.
 
-Merges are manual verification aids for ambiguous candidates, never auto-write
-instructions. They preserve all existing declarations and add all proposed workers for that
+Merges for ambiguous candidates are manual verification aids. Only proposals in
+the eligible tier may be consumed automatically by the coordinator adapter.
+The card-wide report merges preserve all existing declarations and add all proposed workers for that
 card, sorted by home/task. Missing, wrong-type, truncated, unreadable and invalid
 properties cannot be replaced as empty. Explicit `tasks: []` is mergeable. A fully
 read rich-text property is mergeable when the wire reader classified it blank:
@@ -283,3 +287,84 @@ source observation timestamps naturally change when a new snapshot is collected.
 
 This report performs no nudge, write, auto-repair, decision-model call, task-card
 text edit, progress update or checkpoint change.
+
+
+## Coordinator adapter
+
+The coordinator-run CLI shares the report's configured fleet snapshot files/homes
+and Notion reads. It is separate from the Tin Star server, UI and MCP. Dispatch
+provenance is collected from the task's backlog note `body_lines`, published in
+`tasks[].backlog` and/or `backlog.records[]`. First Mate writes exactly one line
+at dispatch, when it selects the canonical card:
+
+```text
+card: 40f50ce6d42281b08375d793820e2e40
+```
+
+Use `card: none` for intentionally independent work. The key is case-sensitive;
+standard dashed UUIDs are accepted and normalized. Multiple lines, malformed
+values, spacing changes or disagreeing task/backlog copies are conflicts.
+Other prose, URLs, legacy metadata and equal titles remain candidate-only.
+Only coordinator-controlled dispatch notes are authoritative; this is an
+operational trust boundary, not a signature on arbitrary worker-supplied text.
+The collector returns identifiers and source paths, never the raw note.
+
+`dispatchProvenance.status` becomes `collected` for homes publishing markers.
+An eligible proposal requires a fresh complete home, operational exact worker
+identity, complete current Notion coverage, an operational card on the configured
+board, readable declarations and no competing worker declaration/reference.
+Malformed/unreadable declarations anywhere on the board prevent proving
+uniqueness. Fully read blank properties can be initialized only by explicit apply.
+Changed generation and duplicate attempts require investigation, never an
+automatic anchor refresh. Existing confirmed links need no write.
+
+Report-only is the default and does not read a write credential or make any
+Notion calls beyond the shared source reads:
+
+```sh
+npm run --silent worker-links:adapter -- --config-home /example/tinstar-config --audit-file /example/worker-links.jsonl
+```
+
+Review the `plannedWrites` property replacements and source coverage, then run
+one coordinator invocation per board at a time:
+
+```sh
+npm run --silent worker-links:adapter -- --config-home /example/tinstar-config --audit-file /example/worker-links.jsonl --apply --max-cards 1 --card 40f50ce6d42281b08375d793820e2e40 --write-token-file /example/coordinator-notion-token
+```
+
+The write token comes only from the named file; never pass its value in argv or
+an environment variable. `--apply` requires an explicit integer `--max-cards`
+between 1 and 5. Repeated `--card` filters are supported. Apply adds at most ten
+worker references per invocation, preserves all existing siblings, and reports
+queued cards as `batch-limit`. The source configuration still supplies the read
+credential and board scope, exactly as for `worker-links:report`.
+
+Each card is reread with its entire paginated property before merging. The
+adapter writes only `First Mate tasks`, then reads the full record back and
+requires exact semantic equality. A concurrent append visible at reread is
+preserved. A changed generation, invalid/unknown-schema/truncated/unreadable
+record or oversized replacement cannot be overwritten. Explicit apply can
+initialize a genuinely blank field; report-only cannot. Writes are serialized
+and limited to one PATCH attempt per second. HTTP 429 Retry-After is honored
+with at most two retries and a 30-second maximum delay per retry; other write
+errors and any uncertain readback stop the batch, exit 1 and require coordinator
+investigation. Ordinary report-only decisions exit 0. Notion provides no CAS:
+the coordinator must exclude concurrent relationship edits by other writers.
+
+The required audit file receives one JSON object per line, synced before a
+write starts and after its result. Each object has `time`, `cardId` (or null),
+`identities` (exact v1 worker entries), `beforeHash`, `afterHash` (SHA-256 or null
+when no record was read), and `result`. Blank initialization hashes the empty
+string as the before state. Results include tier decisions, `planned`,
+`filtered`, `batch-limit`, `write-planned`, `verified`, `no-op`,
+`stop-prewrite-conflict`, `stop-uncertain-write` and `investigate-invalid-record`.
+No token, remote error body or raw prose is logged. New audit files use mode 0600.
+
+Routing decisions also include a stable `investigationKey`, a JSON-encoded
+`["worker", home, task_id]` or `["card", cardId]` tuple. Combine it with the
+returned report's candidate IDs, source paths and freshness in the existing
+First Mate investigation workflow; repeated runs update one episode instead of
+opening duplicate alerts. The CLI emits these records without sending messages
+or creating Notion items. After a verified write, ordinary Tin Star refresh
+reads the declaration and supplies the confirmed gutter edge. The live pilot
+and screenshot/readback evidence remain First Mate's post-merge operator step.

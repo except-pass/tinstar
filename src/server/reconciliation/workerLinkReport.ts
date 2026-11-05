@@ -1,6 +1,7 @@
 import type { SourceSnapshot } from './index'
+import { dispatchForTask } from './dispatchProvenance'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
-import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, MAX_WORKER_LINK_CHARS, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
+import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, workerLinkRecord, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
 const operationalWorker = (execution: Execution) => execution.kind !== 'secondmate' && execution.activity !== 'inactive'
 const key = (...parts: unknown[]) => JSON.stringify(parts)
@@ -14,7 +15,7 @@ export interface BackfillProposal {
   fm_home: string
   task_id: string
   spawn_gen: string
-  strength: 'legacy-metadata' | 'textual-reference'
+  strength: 'legacy-metadata' | 'textual-reference' | 'dispatch-ledger'
   sources: string[]
 }
 interface BackfillRow {
@@ -28,7 +29,7 @@ interface BackfillRow {
 }
 
 function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: BackfillProposal[], notionCurrent: boolean,
-  records: Map<string, { mergeable: boolean; invalid: boolean }>) {
+  records: Map<string, { mergeable: boolean; invalid: boolean }>, autoCoverage: boolean) {
   const operationalCard = (id: string) => {
     const card = scene.cards.find(card => card.id === id)?.source
     return !card || !card.archived && !card.in_trash && !['done', 'archived'].includes(String(card.properties.Status?.value).toLowerCase())
@@ -43,20 +44,47 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
       const claims = scene.claims.filter(c => c.executionId === execution.id && operationalCard(c.cardId))
       const declared = claims.filter(c => c.sources.includes(`notion.${FIRST_MATE_TASKS}`))
       const cardIds = sorted(claims.map(c => c.cardId))
-      const sources = sorted(claims.flatMap(c => c.sources))
+      const backlog = scene.backlog.find(b => b.home === source.home && b.source.id === (execution.source.backlog.id ?? execution.identity.task_id))
+      const provenance = dispatchForTask(execution.source, backlog?.source)
+      const sources = sorted([...claims.flatMap(c => c.sources), ...provenance.sources])
+      if (provenance.status === 'card' && !cardIds.includes(provenance.cardId)) cardIds.push(provenance.cardId)
+      cardIds.sort(compare)
+      const competing = scene.claims.some(c => c.identity.fm_home === source.home && c.identity.task_id === execution.identity.task_id &&
+        (c.verification === 'conflicting' || provenance.status === 'card' && c.cardId !== provenance.cardId))
+      const dispatchConflict = provenance.status === 'conflict' || provenance.status === 'independent' && claims.length > 0 ||
+        provenance.status === 'card' && competing
       const contradiction = scene.findings.some(f => f.executionIds.includes(execution.id) &&
         f.workerLinkDetectors?.some(d => ['duplicate-primary', 'spawn-evidence', 'duplicate-execution'].includes(d)))
       const invalid = notionCurrent && cardIds.some(id => records.get(id)?.invalid)
       const confirmed = declared.some(c => c.verification === 'confirmed' && c.state === 'current')
       let tier: BackfillTier, reason: string
-      if (contradiction || invalid) { tier = 'conflicts'; reason = 'Source classification requires First Mate investigation; no write' }
+      if (contradiction || invalid || dispatchConflict) { tier = 'conflicts'; reason = 'Source classification requires First Mate investigation; no write' }
       else if (!homeAvailable || !notionCurrent || cardIds.some(id => !records.get(id)?.mergeable)) {
         tier = 'unavailable'; reason = 'Home, Notion coverage or referenced declaration is unknown, stale, partial or unreadable'
       } else if (confirmed) { tier = 'already confirmed'; reason = 'Existing Notion declaration matches the fresh worker identity; no write' }
+      else if (provenance.status === 'card') {
+        const card = scene.cards.find(c => c.id === provenance.cardId)
+        if (!autoCoverage || !card || !records.get(card.id)?.mergeable || !operationalCard(card.id) || typeof card.source.properties.Status?.value !== 'string') {
+          tier = 'unavailable'; reason = 'Dispatch target or complete Notion declaration coverage is unavailable; no write'
+        } else if (!['executing', 'waiting'].includes(execution.activity) || !execution.identity.task_id || !execution.identity.spawn_gen) {
+          tier = 'unavailable'; reason = 'Operational worker identity is not established; no write'
+        } else {
+          const proposal: BackfillProposal = { cardId: card.id, fm_home: source.home, task_id: execution.identity.task_id,
+            spawn_gen: execution.identity.spawn_gen, strength: 'dispatch-ledger', sources: provenance.sources }
+          if (parseWorkerLinks(JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks: [{ fm_home: proposal.fm_home,
+            task_id: proposal.task_id, first_observed_spawn_gen: proposal.spawn_gen }] })).status !== 'valid') {
+            tier = 'conflicts'; reason = 'Dispatch worker identity is invalid; investigate'
+          } else {
+            proposals.push(proposal)
+            tier = 'eligible auto-write'; reason = 'Coordinator dispatch line binds one operational worker to this board card'
+          }
+        }
+      }
       else if (claims.length) { tier = 'ambiguous'; reason = 'Candidate evidence only; exact durable dispatch provenance is not collected' }
       else { tier = 'independent'; reason = 'No operational Notion provenance observed; no forced card association' }
       tiers[tier].push({ kind: 'worker', task_id: execution.identity.task_id, spawn_gen: execution.identity.spawn_gen,
-        cardIds, sources, proposals: proposals.filter(p => p.fm_home === source.home && p.task_id === execution.identity.task_id), reason })
+        cardIds, sources, proposals: proposals.filter(p => p.fm_home === source.home && p.task_id === execution.identity.task_id &&
+          (tier === 'eligible auto-write' ? p.strength === 'dispatch-ledger' : p.strength !== 'dispatch-ledger')), reason })
     }
     // Positive declarations can name a task absent from the snapshot. Keep that
     // investigation/unknown distinct from an invented zero-worker assertion.
@@ -103,6 +131,8 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
     const home = scene.coverage.homes.find(home => home.source.home === fm_home)
     const entry = cards.find(entry => entry.card.id === claim.cardId)
     const execution = scene.executions.find(execution => execution.id === claim.executionId)
+    const backlog = scene.backlog.find(b => b.home === fm_home && b.source.id === (execution?.source.backlog.id ?? task_id))
+    if (execution && dispatchForTask(execution.source, backlog?.source).status !== 'absent') continue
     if (!notionCurrent || !home || !complete(home.observation) || !entry?.mergeable || !task_id || !spawn_gen || !execution || !operationalWorker(execution)) continue
     const source = entry.card.source
     const status = source.properties.Status?.value
@@ -117,6 +147,10 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
     proposals.push({ cardId: claim.cardId, fm_home, task_id, spawn_gen,
       strength: claim.basis === 'explicit' ? 'legacy-metadata' : 'textual-reference', sources: sorted(claim.sources) })
   }
+  const autoCoverage = complete(scene.coverage.intentions) && notionCurrent &&
+    cards.every(({ mergeable }) => mergeable)
+  const homes = groupBackfill(scene, proposals, notionCurrent, new Map(cards.map(({ card, declaration, mergeable }) =>
+    [card.id, { mergeable, invalid: declaration.status === 'invalid' }])), autoCoverage)
   ordered(proposals)
   const merges = cards.filter(({ card }) => proposals.some(p => p.cardId === card.id)).map(({ card, declaration }) => {
     const tasks: WorkerLink[] = [...(declaration.status === 'valid' ? declaration.tasks : []),
@@ -124,21 +158,11 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
     // Preserve every existing entry. Canonical ordering also makes coordinator
     // readback/diff review independent of source collection order.
     tasks.sort((a, b) => compare(key(a.fm_home, a.task_id), key(b.fm_home, b.task_id)))
-    const record = { schema: WORKER_LINK_SCHEMA, tasks }
-    const json = JSON.stringify(record)
-    if (json.length > MAX_WORKER_LINK_CHARS) return { cardId: card.id, status: 'size-limit' as const, reason: 'Merged record exceeds 200,000 characters; no pasteable replacement emitted' }
-    const rich_text: Array<{ type: 'text'; text: { content: string } }> = []
-    // Iterate Unicode code points: never break a surrogate pair at
-    // the Notion item boundary; the parser still bounds each chunk by JS length.
-    let chunk = ''
-    for (const char of json) {
-      if (chunk.length + char.length > 2000) { rich_text.push({ type: 'text', text: { content: chunk } }); chunk = '' }
-      chunk += char
+    try {
+      return { cardId: card.id, status: 'ready-for-verification' as const, ...workerLinkRecord(tasks) }
+    } catch {
+      return { cardId: card.id, status: 'size-limit' as const, properties: undefined, reason: 'Merged record exceeds Notion limits; no pasteable replacement emitted' }
     }
-    if (chunk) rich_text.push({ type: 'text', text: { content: chunk } })
-    if (rich_text.length > 100) return { cardId: card.id, status: 'size-limit' as const, reason: 'Merged record exceeds 100 rich-text items; no pasteable replacement emitted' }
-    return { cardId: card.id, status: 'ready-for-verification' as const, record, json,
-      properties: { [FIRST_MATE_TASKS]: { rich_text } } }
   })
   const findings = scene.findings.flatMap(finding => {
     const detectors: string[] = [...(finding.workerLinkDetectors ?? []),
@@ -152,7 +176,9 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
   const uniqueFindings = [...new Map(findings.map(f => [JSON.stringify(f), f])).values()]
   return {
     schema: 'tinstar.worker-link-report.v1', mode: 'report-only', evaluatedAt: input.generatedAt, scope: input.scope,
-    dispatchProvenance: { status: 'not-collected', reason: 'Configured scene inputs contain no exact durable coordinator dispatch binding; eligible auto-write remains empty. Legacy metadata and text cannot supply this authority.' },
+    dispatchProvenance: { status: scene.executions.some(e => e.source.dispatchProvenance?.status !== undefined && e.source.dispatchProvenance.status !== 'absent') ||
+      scene.backlog.some(b => b.source.dispatchProvenance?.status !== undefined && b.source.dispatchProvenance.status !== 'absent') ? 'collected' : 'not-collected',
+      reason: 'Only coordinator-authored backlog body_lines card: declarations supply dispatch authority. Legacy metadata and text remain candidates.' },
     warnings: sorted(input.warnings),
     coverage: {
       wholeFarm: scene.coverage.wholeFarm, absenceConclusions: scene.coverage.absenceConclusions,
@@ -161,8 +187,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
       cards: ordered(cards.map(({ card, declaration, mergeable }) => ({ cardId: card.id, declaration: declaration.status,
         ...('reason' in declaration ? { reason: declaration.reason } : {}), mergeable: notionCurrent && mergeable }))),
     },
-    homes: ordered(groupBackfill(scene, proposals, notionCurrent, new Map(cards.map(({ card, declaration, mergeable }) =>
-      [card.id, { mergeable, invalid: declaration.status === 'invalid' }])))),
+    homes: ordered(homes),
     merges: ordered(merges), findings: ordered(uniqueFindings),
   }
 }
