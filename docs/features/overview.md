@@ -30,10 +30,13 @@ Nested groups use an outer field label and deduplicated worker/task counts,
 with compact worker/task counts on each violet inner band. A compact toolbar controls both columns:
 
 - Outer groups by one field; Inner optionally subdivides it.
-- Order sorts both stacks ascending or descending, with deterministic ID ties
-  and blanks last. Task fields carry linked workers and worker fields carry
-  linked tasks. Counterpart ordering uses the earliest value ascending or latest
-  descending among links in that subdivision.
+- Order sorts workers ascending or descending, with deterministic ID ties and
+  blanks last. Task fields carry linked workers using the earliest value
+  ascending or latest descending among links in that subdivision. In both
+  densities, tasks follow the mean row position of their visible workers with
+  explicit, confirmed, current links within each rendered group. Equal positions
+  use Order then stable identity; tasks without such a link follow linked tasks
+  in Order.
 - Filters contains status checkboxes plus the existing gap and connection controls.
 - Fields reveals draggable chips; click a chip and choose a slot, or use the
   keyboard-accessible toolbar selects. Reset restores the default view.

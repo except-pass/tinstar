@@ -5,7 +5,7 @@ import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { AgentIcon } from '../components/agentIcon'
 import { semanticId, ancestorHomes, isPlanned, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
-import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups } from './overviewModel'
+import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
 import { useFloorScene } from './useFloorScene'
 import { useDeskQueue } from './useDeskQueue'
 import { usePresentation } from './usePresentation'
@@ -95,7 +95,7 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
   const ws = group.workers, cards = group.cards
   // Measurement updates local path state; keep its filtered input stable so
   // that update cannot retrigger measurement in a render loop.
-  const cs = useMemo(() => state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), [cards, scene, state.roadmapExpanded])
+  const cs = useMemo(() => tasksByWorkerPosition(ws, state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), scene.claims), [ws, cards, scene, state.roadmapExpanded])
   const rows = useMemo(() => {
     const workerIds = new Set(ws.map(w => w.id)), cardIds = new Set(cs.map(c => c.id))
     const links = scene.claims.filter(c => c.state !== 'historical' && workerIds.has(c.executionId) && cardIds.has(c.cardId))

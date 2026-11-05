@@ -389,7 +389,7 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
 })
 
 
-test('independent endpoint order survives many-to-many relationships in both directions', async ({ page }) => {
+test('worker Order drives task barycenters with many-to-many relationships in both directions', async ({ page }) => {
   const now = Date.parse('2026-11-04T17:00:00Z')
   await page.clock.install({ time: now })
   const scene = fixtureScene({ now })
@@ -409,7 +409,10 @@ test('independent endpoint order survives many-to-many relationships in both dir
       const desired = organizedGroups(scene, { ...initialPresentation(), organizer: { outer: 'none', inner: 'none', order, direction } }, now)[0]!
       await expect(page.locator('.ov')).toHaveAttribute('data-direction', direction)
       expect(await page.locator('.ov-execution').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.workers.map(w => w.id))
-      expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(desired.cards.map(c => c.id))
+      // Fixture: tasks 1 and 6 share a worker; task 1 also has a helper.
+      // Unlinked tasks 2 and 3 follow the linked endpoints.
+      const expectedTasks = order === 'activity' ? [4, 1, 6, 2, 3] : direction === 'asc' ? [1, 6, 4, 2, 3] : [6, 4, 1, 2, 3]
+      expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')))).toEqual(expectedTasks.map(fixtureId))
       await page.getByRole('button', { name: 'Reverse sort direction' }).click()
     }
   }
