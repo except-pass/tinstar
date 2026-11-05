@@ -54,8 +54,24 @@ retain their own state; reload restores the most recently saved preferences.
 
 Filters affect presentation only. Reconciliation sees the complete authorized
 source read; hiding a linked task cannot create an orphan finding. Expired/failed
-reads retain last-known data and suppress absence conclusions. Worker counts
-label unavailable or last-known observations when coverage is insufficient.
+reads retain last-known data and suppress absence conclusions.
+
+Worker coverage is authoritative only for fresh, complete, unexpired home
+observations. When some configured homes remain authoritative, known worker
+counts remain visible with a partial-coverage warning; an empty uncertain scope
+shows Unknown workers rather than a verified zero. With no authoritative homes,
+counts show last known workers, or Workers unavailable when no workers are known.
+A failed scene read also makes retained counts last-known. Source health details
+name the affected homes and show their observation status, coverage and age.
+Refreshing all homes restores ordinary counts and absence labels.
+
+Manager groups scope coverage to their home label. Machine groups use the homes
+publishing the workers placed on that machine, including remote placements;
+the configured machine name alone does not establish authority. Outer aggregate
+headers and Inspector use the same scope as their groups. Unassigned, unmatched
+and groups without a manager or machine axis use all configured homes. Partial coverage labels an
+unmatched worker relationship Unknown worker instead of asserting No linked
+worker; absence conclusions remain suppressed.
 
 Worker cards show an identity avatar, title and a consistently placed Running,
 Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
