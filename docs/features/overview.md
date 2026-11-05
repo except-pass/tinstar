@@ -27,19 +27,69 @@ Truncated text has a full title tooltip and a visible keyboard-focus tooltip;
 expanded titles and metadata wrap. Connectors follow measured anchors after
 expansion, sorting, filtering, group collapse, scrolling and resizing.
 Nested groups use an outer field label and deduplicated worker/task counts,
-with compact worker/task counts on each violet inner band. A compact toolbar controls both columns:
+with compact worker/task counts on each violet inner band. One 48px toolbar
+starts the floor immediately below it, without a separate title or controls row.
 
-- Outer groups by one field; Inner optionally subdivides it.
-- Order sorts workers ascending or descending, with deterministic ID ties and
-  blanks last. Task fields carry linked workers using the earliest value
-  ascending or latest descending among links in that subdivision. In both
-  densities, tasks follow the mean row position of their visible workers with
-  explicit, confirmed, current links within each rendered group. Equal positions
-  use Order then stable identity; tasks without such a link follow linked tasks
-  in Order.
-- Filters contains status checkboxes plus the existing gap and connection controls.
-- Fields reveals draggable chips; click a chip and choose a slot, or use the
-  keyboard-accessible toolbar selects. Reset restores the default view.
+| Preset | Outer | Inner | Order |
+| --- | --- | --- | --- |
+| By Initiative (default) | Initiative, alphabetical | Manager, configured hierarchy then alphabetical | Operational status |
+| By Machine | Machine, alphabetical | Initiative, alphabetical | Operational status |
+| By Manager | Manager, configured hierarchy then alphabetical | Initiative, alphabetical | Operational status |
+
+Configured parent-home relationships establish manager ancestry; names and task
+Owner never imply hierarchy. Unknown/Unassigned groups sort last. Each preset
+replaces the organizer slots and direction only; status selections, base scope,
+density and unrelated filter choices survive. Browser-local organizer settings
+remain authoritative on reload. Customize can override any slot, and closes
+without discarding edits. It exposes Outer, Inner, Order, direction, density,
+Operational/All cards/Custom, Filters (status checkboxes, gaps and links), Fields
+(draggable chips or keyboard slot controls), and Reset in a temporary popover.
+Escape closes the popover and restores its trigger's focus.
+
+Operational worker urgency is Blocked → Error → Running → Queued → Waiting →
+Idle → Stopped → Finished. The current worker projection uses the existing
+observation/event precedence; otherwise unknown records can expose the actual
+publisher's Error, Queued, Idle or Stopped state. History remains separate.
+Card attention order includes every current board option, preserving the exact
+source labels: Ready for Review → In review → In Progress → Queued → Waiting For
+→ Waiting → Waiting for Prod Release → Delegated to person → Todo → Not started
+→ Planned → Backlog → Spare tokens → Done → Archived. Planned is also supported
+when published. New source options follow known options alphabetically, with
+blank/unknown last. Within the same status, Next check-in ascending, display
+name and canonical ID settle ties. Worker check-in ties use the earliest linked
+card checkpoint in that subdivision. In both densities and under every preset,
+tasks follow the mean row position of their visible workers with explicit,
+confirmed, current links within each rendered group. Equal positions use the
+chosen Order then stable identity; tasks without such a link follow linked tasks
+in Order. Operational status and its tie-breakers remain the secondary task
+ordering within each position. This preserves the shared floor's crossing
+reduction. This is presentation ordering only.
+
+The two labelled status donuts use unique canonical current endpoints from the
+base scope. Activate a slice with click, Enter or Space to toggle it; text status
+menus expose the same choices and counts. Multiple selections within one donut
+are OR; selections across donuts are AND. A card selection shows matching cards
+and only their confirmed linked workers; a worker selection shows matching
+workers and only their confirmed linked cards. With both selected, only matching
+endpoints on valid current explicit confirmed links survive. Candidate,
+conflicting, historical and unavailable-endpoint references never supply links.
+
+Each donut's eligible distribution ignores its own selections and applies the
+opposite donut's selections, so other eligible statuses stay selectable. The
+labels show visible/eligible unique counts; column counts show the filtered
+unique nodes, independent of repeated group memberships. Selected statuses with
+zero candidates remain removable in the menu and inline chips. Clear is always
+in the toolbar and clears only these explicit selections, restoring the saved
+base scope and organizer. No filter-summary row is added. Empty results are
+labelled, and source health remains available from the toolbar indicator.
+
+Without explicit donut selections, Operational retains independent and unmatched
+endpoints and its intentional hidden-task labels. Opening a relationship can
+reveal direct tasks through the base status scope; it never overrides explicit
+donut selections. Filtering never changes claim evidence or absence findings.
+Both donuts and the floor use the same canonical projection and presentation
+reducer; selections and organizer overrides persist in the existing browser
+preferences. Source refreshes recompute candidates from the current graph.
 
 Available Worker fields are Manager, Machine, Worker status and Last activity.
 Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-in,
@@ -47,8 +97,7 @@ Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
 in Unassigned / Unknown; parent chains never establish either.
-The initial and Reset organizer uses Initiative outer groups, Task Status inner
-bands, and Next check-in ascending. Explicitly saved browser choices take precedence
+The initial and Reset organizer uses the By Initiative preset. Explicitly saved browser choices take precedence
 on reload.
 
 Only explicit, non-conflicting canonical page-ID links carry endpoints between

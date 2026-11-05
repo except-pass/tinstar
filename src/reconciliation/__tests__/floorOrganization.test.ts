@@ -185,12 +185,12 @@ describe('New York calendar buckets', () => {
 })
 
 describe('presets, reducer and persisted semantic preferences', () => {
-  it('starts fresh browsers and resets with initiative status bands', () => {
+  it('starts fresh browsers and resets with the Initiative preset', () => {
     localStorage.removeItem(preferencesKey)
-    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' })
     const scene = fixtureScene({ now })
     const state = applyPresentationAction(stateFor({ outer: 'machine' }), { type: 'reset-floor' }, scene).state
-    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' })
+    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' })
   })
   it('uses current source options and keeps all statuses available under All cards', () => {
     const scene = fixtureScene({ now })

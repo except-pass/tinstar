@@ -66,7 +66,7 @@ export function unreadableWorkerHomes<T extends { observation: { status: string;
 export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
   /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
   ['done', 'landed'].includes(String(worker.source.last_event.state))
-export { executionStatus as workerState } from '../shared/executionLiveness'
+export { floorWorkerStatus as workerState } from '../shared/floorStatus'
 
 export const observedAt = (worker: Execution) => {
   const time = Date.parse(worker.observation.observedAt ?? '')

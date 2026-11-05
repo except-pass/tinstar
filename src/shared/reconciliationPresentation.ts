@@ -1,3 +1,4 @@
+import { emptyDonutFilter, type DonutFilter } from './floorStatus'
 import { defaultOrganizer, defaultStatusFilter, organizedGroups, type Organizer, type StatusFilter } from './floorOrganization'
 import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
@@ -20,6 +21,7 @@ export interface PresentationState {
   navigation?: { cardId: string; revision: number } | null
   organizer?: Organizer
   statusFilter?: StatusFilter
+  donutFilter?: DonutFilter
   sort?: 'activity' | 'priority'
   linksVisible?: boolean
   arrangement: Arrangement
@@ -34,11 +36,13 @@ export interface PresentationState {
   queueItemId?: string | null
 }
 export const initialPresentation = (): PresentationState => ({
-  revision: 0, organizer: defaultOrganizer(), statusFilter: defaultStatusFilter(), sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
+  revision: 0, donutFilter: emptyDonutFilter(), organizer: defaultOrganizer(), statusFilter: defaultStatusFilter(), sort: 'priority', linksVisible: true, arrangement: 'initiative', selection: null, collapsed: [], exceptionsOnly: false, roadmapExpanded: true, flash: null, assistantChangedView: false,
 })
 type Change =
   | { type: 'set-organizer'; organizer: Organizer }
   | { type: 'set-status-filter'; filter: StatusFilter }
+  | { type: 'set-donut-filter'; filter: DonutFilter }
+  | { type: 'clear-donut-filter' }
   | { type: 'reset-floor' }
   | { type: 'set-arrangement'; arrangement: Arrangement }
   | { type: 'set-sort'; sort: 'activity' | 'priority' }
@@ -109,7 +113,9 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   switch (action.type) {
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
-    case 'reset-floor': next.navigation = null; next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
+    case 'set-donut-filter': next.donutFilter = { cards: [...new Set(action.filter.cards)], workers: [...new Set(action.filter.workers)] }; break
+    case 'clear-donut-filter': next.donutFilter = emptyDonutFilter(); break
+    case 'reset-floor': next.donutFilter = emptyDonutFilter(); next.navigation = null; next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
     case 'set-arrangement': next.arrangement = action.arrangement; next.organizer = { ...(state.organizer ?? defaultOrganizer()), outer: action.arrangement === 'secondMate' ? 'manager' : action.arrangement === 'machine' ? 'machine' : 'none', inner: 'none' }; break
     case 'set-sort': next.sort = action.sort; next.organizer = { ...(state.organizer ?? defaultOrganizer()), order: action.sort === 'activity' ? 'activity' : 'priority', direction: action.sort === 'activity' ? 'desc' : 'asc' }; break
     case 'set-links': next.linksVisible = action.visible; break

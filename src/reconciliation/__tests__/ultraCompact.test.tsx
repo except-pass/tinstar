@@ -15,6 +15,7 @@ const resizeCallbacks = new Set<() => void>()
 let scene: FloorScene
 beforeEach(() => {
   localStorage.clear()
+  localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' } }))
   scene = fixtureScene()
   const first = scene.claims.find(c => c.cardId === fixtureId(1))!
   // W1 -> T1,T6; W2 -> T1. Expanding W1 must never recursively open W2.
@@ -25,7 +26,11 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(() => { cleanup(); localStorage.clear(); resizeCallbacks.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
-const mount = () => render(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+const mount = () => {
+  const view = render(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  return view
+}
 const worker = (host: HTMLElement, taskId: string) => [...host.querySelectorAll<HTMLButtonElement>('.ov-execution')].find(el => el.dataset.entityId === scene.executions.find(w => w.identity.task_id === taskId)!.id)!
 const task = (host: HTMLElement, id: number) => host.querySelector<HTMLButtonElement>(`.ov-card[data-entity-id="${fixtureId(id)}"]`)!
 const open = (element: HTMLElement) => expect(element).toHaveAttribute('aria-expanded', 'true')
@@ -78,7 +83,7 @@ describe('Ultra Compact Overview', () => {
     const { container } = mount()
     arrange('machine')
     expect(container.querySelectorAll(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveLength(1)
-    expect(container.querySelector('.ov-intro')).toHaveTextContent('5 Notion cards')
+    expect(container.querySelector('.ov-headings')).toHaveTextContent('NOTION TASKS · 5')
     fireEvent.click(task(container, 1))
     open(worker(container, 'linked-worker')); open(worker(container, 'helper-worker'))
     expect(task(container, 1).querySelector('.ov-reference')).toBeTruthy()
@@ -170,7 +175,7 @@ describe('Ultra Compact Overview', () => {
     scene.coverage.homes[0]!.observation.coverage = 'partial'
     const { container } = mount()
     expect(task(container, 2).textContent).toContain('Unknown worker')
-    expect(container.querySelector('.ov-top')).toHaveTextContent('Coverage incomplete')
+    expect(screen.getByRole('button', { name: 'Coverage incomplete · Details' })).toBeTruthy()
     expect(container.textContent).not.toContain('No linked worker')
   })
   it('connects only current explicit confirmed links and does not expand unverified candidates', () => {
