@@ -61,25 +61,22 @@ describe('Open in Inspector', () => {
     }
   })
 
-  it.each(['worker', 'task'] as const)('compact body click still toggles a %s', kind => {
-    const { container } = mount('compact')
+  it.each([
+    ['compact', 'worker'], ['compact', 'task'],
+    ['detailed', 'worker'], ['detailed', 'task'],
+  ] as const)('%s body click and keyboard toggle a %s without opening Inspector', (density, kind) => {
+    const { container } = mount(density)
     const card = endpoint(container, kind)
-    fireEvent.click(card)
-    expect(card).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.queryByLabelText('Inspector')).toBeNull()
-    fireEvent.click(card)
-    expect(card).toHaveAttribute('aria-expanded', 'false')
+    let expanded = density === 'detailed'
+    for (const key of ['click', 'Enter', ' '] as const) {
+      activate(card, key)
+      expanded = !expanded
+      expect(card).toHaveAttribute('aria-expanded', String(expanded))
+      expect(screen.queryByLabelText('Inspector')).toBeNull()
+      expect(card.parentElement?.querySelector('.ov-open-inspector') !== null).toBe(expanded)
+    }
   })
 
-  it('detailed body click still opens the Inspector', () => {
-    const { container } = mount('detailed')
-    const card = endpoint(container, 'task')
-    expect(card.hasAttribute('aria-expanded')).toBe(false)
-    fireEvent.click(card)
-    expect(heading()).toHaveTextContent('Build live reconciliation')
-    expect(card.hasAttribute('aria-expanded')).toBe(false)
-    expect(card.classList.contains('ov-collapsed')).toBe(false)
-  })
 })
 
 describe('Copy Notion link', () => {
@@ -132,6 +129,24 @@ describe('Copy Notion link', () => {
     await waitFor(() => expect(screen.getByText('Copied')).toBeTruthy())
     expect(writeText).toHaveBeenCalledWith(url())
     expect(copied).toBe(url())
+  })
+
+  it.each(['success', 'refused', 'throws'] as const)('restores focus and removes the fallback textarea when copy %s', async outcome => {
+    installClipboard(vi.fn().mockRejectedValue(new Error('denied')))
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
+      document.querySelector('textarea')!.focus()
+      if (outcome === 'throws') throw new Error('copy failed')
+      return outcome === 'success'
+    } })
+    await openTask()
+    const button = screen.getByRole('button', { name: 'Copy link' })
+    button.focus()
+    fireEvent.keyDown(button, { key: 'Enter' })
+    await waitFor(() => expect(button).toHaveFocus())
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelector('textarea')).toBeNull()
+    expect(button).toHaveFocus()
+    expect(screen.queryByText('Copied') !== null).toBe(outcome === 'success')
   })
 
   it('clears the Copied feedback', async () => {

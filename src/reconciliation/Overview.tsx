@@ -32,19 +32,21 @@ async function copyText(value: string) {
       return true
     }
   } catch { /* clipboard can reject without permission; the selection fallback still copies */ }
+  const previousFocus = document.activeElement
+  const area = document.createElement('textarea')
   try {
-    const area = document.createElement('textarea')
     area.value = value
     area.setAttribute('readonly', '')
     area.style.position = 'fixed'
     area.style.opacity = '0'
     document.body.appendChild(area)
     area.select()
-    const copied = document.execCommand('copy')
-    area.remove()
-    return copied
+    return document.execCommand('copy')
   } catch {
     return false
+  } finally {
+    area.remove()
+    if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true })
   }
 }
 function CopyNotionLink({ url }: { url: string }) {
@@ -95,7 +97,9 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const tone = entityTone(scene, kind, entity.id, now, readFailed)
   const worker = kind === 'execution' ? entity as Execution : null, card = kind === 'card' ? entity as SceneCard : null
   const title = worker ? workerTitle(worker) : cardTitle(card!)
-  const compact = view.compact, expanded = compact?.expanded.has(semanticId(item))
+  const [detailedExpanded, setDetailedExpanded] = useState(true)
+  const compact = view.compact, expanded = compact ? compact.expanded.has(semanticId(item)) : detailedExpanded
+  const toggle = () => compact ? compact.toggle(item) : setDetailedExpanded(value => !value)
   const openRoot = compact?.roots.some(root => same(root, item))
   const links = scene.claims.filter(c => (worker ? c.executionId === worker.id : c.cardId === card!.id))
   const confirmedLinks = links.filter(c => c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
@@ -106,17 +110,16 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const priority = card ? propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '') : ''
   const lastKnown = worker && (readFailed || stale(worker.observation, now))
   const deskRelated = state.navigation && (card ? card.id === state.navigation.cardId : scene.claims.some(c => c.cardId === state.navigation?.cardId && c.executionId === worker?.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current'))
-  const rich = !compact || !!expanded
   const openInInspector = (event: { stopPropagation(): void }) => {
     event.stopPropagation()
     send({ type: 'focus', target: item })
   }
-  return <div className="ov-item-frame"><button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${compact ? expanded ? ' ov-inline-expanded' : ' ov-collapsed' : ''}`}
-    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-pressed={compact ? undefined : same(state.selection, item)} aria-expanded={compact ? !!expanded : undefined} aria-label={`${title}. ${status}${compact ? `. ${openRoot ? 'Collapse' : 'Expand'} relationship` : ''}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
-    onKeyDown={e => { if (compact && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); compact.toggle(item) } }}
-    onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => compact ? compact.toggle(item) : send({ type: 'focus', target: item })}>
-    {compact && !expanded && <><span className="ov-tiny-glyph" aria-hidden="true">{worker ? '◇' : '▤'}</span><strong>{title}</strong><span className={`ov-compact-status ${worker ? `status-${status.toLowerCase()}` : checkIn(card!, now).state === 'overdue' ? 'check-overdue' : /waiting/i.test(status) ? 'status-waiting' : ''}`}>{card && checkIn(card, now).state === 'overdue' ? compactCheckIn(card, now) : status}{lastKnown ? ' · Last known' : ''}</span>{linkLabel && <span className="ov-link-label">{linkLabel}</span>}<span className="ov-full-title">{title}</span></>}
-    {(!compact || expanded) && (worker ? <>
+  return <div className="ov-item-frame"><button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
+    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
+    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
+    onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={toggle}>
+    {!expanded && <><span className="ov-tiny-glyph" aria-hidden="true">{worker ? '◇' : '▤'}</span><strong>{title}</strong><span className={`ov-compact-status ${worker ? `status-${status.toLowerCase()}` : checkIn(card!, now).state === 'overdue' ? 'check-overdue' : /waiting/i.test(status) ? 'status-waiting' : ''}`}>{card && checkIn(card, now).state === 'overdue' ? compactCheckIn(card, now) : status}{lastKnown ? ' · Last known' : ''}</span>{linkLabel && <span className="ov-link-label">{linkLabel}</span>}<span className="ov-full-title">{title}</span></>}
+    {expanded && (worker ? <>
       <span className="ov-face"><AgentIcon seed={JSON.stringify(worker.identity)} color="#63cfb0" className="ov-avatar" /></span>
       <span className="ov-record-top"><span className="ov-breadcrumb">{workerBreadcrumb(scene, worker)}</span><span className={`ov-worker-status status-${status.toLowerCase()}`}><i />{status}</span></span>
       <strong>{title.replace(/\s*\((?:card|Notion(?: card)?)\s+[a-f0-9-]{32,36}\)/gi, '')}</strong>
@@ -133,7 +136,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
   </button>
-    {rich && <button type="button" className="ov-open-inspector" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
+    {expanded && <button type="button" className="ov-open-inspector" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
       <span className="material-symbols-outlined" aria-hidden="true">pageview</span><span>Inspector</span>
     </button>}
   </div>

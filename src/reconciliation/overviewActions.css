@@ -7,3 +7,4 @@
 .ov-source-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
 .ov-inspector .ov-source-actions a{display:inline;margin:0}
 .ov-copy-link{display:inline-flex;align-items:center;gap:4px}
+.ov-density-detailed .ov-item.ov-collapsed{min-height:0}
