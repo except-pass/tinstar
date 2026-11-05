@@ -1,7 +1,8 @@
 import type { SourceSnapshot } from './index'
-import { declaredLinks, reconcileScene } from './scene'
+import { declaredLinks, reconcileScene, type Execution } from './scene'
 import { FIRST_MATE_TASKS, MAX_WORKER_LINK_CHARS, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
+const operationalWorker = (execution: Execution) => execution.kind !== 'secondmate' && execution.activity !== 'inactive'
 const key = (...parts: unknown[]) => JSON.stringify(parts)
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
 const sorted = (values: string[]) => [...new Set(values)].sort(compare)
@@ -37,7 +38,7 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
       'already confirmed': [], 'eligible auto-write': [], ambiguous: [], independent: [], conflicts: [], unavailable: [],
     }
     const homeAvailable = observation.status === 'fresh' && observation.coverage === 'complete'
-    const active = scene.executions.filter(e => e.home === source.home && e.kind !== 'secondmate' && e.activity !== 'inactive')
+    const active = scene.executions.filter(e => e.home === source.home && operationalWorker(e))
     for (const execution of active) {
       const claims = scene.claims.filter(c => c.executionId === execution.id && operationalCard(c.cardId))
       const declared = claims.filter(c => c.sources.includes(`notion.${FIRST_MATE_TASKS}`))
@@ -103,7 +104,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
     const home = scene.coverage.homes.find(home => home.source.home === fm_home)
     const entry = cards.find(entry => entry.card.id === claim.cardId)
     const execution = scene.executions.find(execution => execution.id === claim.executionId)
-    if (!notionCurrent || !home || !complete(home.observation) || !entry?.mergeable || !task_id || !spawn_gen || execution?.kind === 'secondmate') continue
+    if (!notionCurrent || !home || !complete(home.observation) || !entry?.mergeable || !task_id || !spawn_gen || !execution || !operationalWorker(execution)) continue
     const source = entry.card.source
     const status = source.properties.Status?.value
     if (source.archived || source.in_trash || typeof status !== 'string' || ['done', 'archived'].includes(status.toLowerCase())) continue

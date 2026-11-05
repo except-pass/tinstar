@@ -109,6 +109,13 @@ describe('read-only backfill proposals', () => {
     input.intentions.data!.cards[0]!.properties.Status!.value = status
     expect(proposals(input)).toEqual([])
   })
+  it.each(['done [at=1]: complete', 'landed [at=1]: merged'])('excludes inactive workers from proposals and merges (%s)', event => {
+    const input = source()
+    input.fleet[0]!.observation.data!.tasks[0]!.lastEventText = event
+    const report = buildWorkerLinkReport(input)
+    expect(report.homes[0]!.counts).toEqual(Object.fromEntries(BACKFILL_TIERS.map(tier => [tier, 0])))
+    expect(report.merges).toEqual([])
+  })
   it('merges workers across homes with existing entries; five controlled pairs confirm after coordinator-style roundtrip', () => {
     const input = source(), home = input.fleet[0]!, task = home.observation.data!.tasks[0]!
     home.observation.data!.tasks = Array.from({ length: 4 }, (_, i) => ({ ...structuredClone(task), id: `worker-${i}`, identity: { ...task.identity, task_id: `worker-${i}` } }))
@@ -200,6 +207,29 @@ describe('deterministic detector report over Slice A classification', () => {
     const report = buildWorkerLinkReport(input)
     expect(report.findings.some(f => f.detector === 'spawn-evidence')).toBe(false)
     expect(report.findings.some(f => f.detector === 'unknown-coverage')).toBe(true)
+  })
+  it.each([true, false])('detects undeclared generations independently of references (%s)', referenced => {
+    const input = source(), home = input.fleet[0]!, task = home.observation.data!.tasks[0]!
+    if (!referenced) task.cardReferences = []
+    home.observation.status = 'partial'; home.observation.coverage = 'partial'
+    home.observation.data!.tasks.push({ ...structuredClone(task), identity: { ...task.identity, spawn_gen: 'attempt-2' } })
+    input.intentions.status = 'stale'
+    const scene = reconcileScene(input, now)
+    expect(scene.findings.filter(f => f.workerLinkDetectors?.includes('spawn-evidence'))).toEqual([
+      expect.objectContaining({ kind: 'unverified-conflicting', executionIds: expect.arrayContaining(scene.executions.map(e => e.id)) }),
+    ])
+    const report = buildWorkerLinkReport(input)
+    expect(report.homes[0]!.counts.conflicts).toBe(2)
+    expect(report.homes[0]!.counts.unavailable).toBe(0)
+    expect(report.findings.some(f => f.detector === 'spawn-evidence')).toBe(true)
+    expect(report.merges).toEqual([])
+    home.observation.data!.tasks.reverse()
+    expect(buildWorkerLinkReport(input)).toEqual(report)
+    home.observation.status = 'stale'
+    expect(buildWorkerLinkReport(input).findings.some(f => f.detector === 'spawn-evidence')).toBe(false)
+    home.observation.status = 'partial'
+    home.observation.data!.tasks[0]!.identity.spawn_gen = null
+    expect(buildWorkerLinkReport(input).findings.some(f => f.detector === 'spawn-evidence')).toBe(false)
   })
   it('reports duplicate source identities without making duplicate proposals', () => {
     const input = source(), tasks = input.fleet[0]!.observation.data!.tasks

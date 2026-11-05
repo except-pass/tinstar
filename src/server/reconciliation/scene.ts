@@ -224,6 +224,22 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       if (execution.activity === 'unknown') add('unknown-stale-source', referenced, [id], 'Runtime state or execution identity is unknown; a fresh metadata snapshot alone is insufficient')
     }
   }
+  const observedAttempts = new Map<string, Execution[]>()
+  for (const execution of executions) {
+    if (!execution.identity.task_id || !execution.identity.spawn_gen || !fresh({ ...execution.observation, data: execution.source })) continue
+    const id = key(execution.home, execution.identity.task_id)
+    const attempts = observedAttempts.get(id) ?? []
+    attempts.push(execution)
+    observedAttempts.set(id, attempts)
+  }
+  for (const attempts of observedAttempts.values()) {
+    if (new Set(attempts.map(e => e.identity.spawn_gen)).size < 2) continue
+    const executionIds = attempts.map(e => e.id).sort()
+    const cardIds = [...new Set(claims.filter(c => executionIds.includes(c.executionId)).map(c => c.cardId))].sort()
+    add('unverified-conflicting', cardIds, executionIds,
+      'Multiple observed generations for one task; First Mate must investigate continuity or ID reuse; never auto-switch',
+      [attempts[0]!.home], ['spawn-evidence'])
+  }
   for (const { card, link } of declarations) {
     const home = fleet.find(home => home.source.home === link.fm_home)
     const matches = executions.filter(e => e.home === link.fm_home && e.identity.task_id === link.task_id)
