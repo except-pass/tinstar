@@ -231,7 +231,7 @@ Presentation controls and inspector behavior follow [Overview](overview.md). IDs
 
 The inspector links eligible exact home/task identities to the existing guarded worker/terminal page in a separate tab. File-published homes do not acquire terminal access. Ambiguous basename routes are withheld to avoid opening the wrong home. Closing this page uses the existing viewer lifecycle and never stops the worker. No new domain-write route, orchestration, approval or claim repair is added.
 
-All Overview presentation changes pass through the pure reducer in `src/shared/reconciliationPresentation.ts`, re-exported by `src/reconciliation/presentation.ts`. Historical or removed IDs remain selected with explicit unavailable labeling. S5 uses this reducer for clicks and authenticated command delivery; see [the MCP presentation and acknowledgment contract](reconciliation-mcp.md).
+Shared organization, filtering and semantic selection pass through the pure reducer in `src/shared/reconciliationPresentation.ts`, re-exported by `src/reconciliation/presentation.ts`. Density and inline relationship expansion follow the [Overview reference](overview.md). Historical or removed IDs remain selected with explicit unavailable labeling. S5 uses this reducer for shared controls and authenticated command delivery; see [the MCP presentation and acknowledgment contract](reconciliation-mcp.md).
 
 ### Click acceptance and controlled browser proof
 

@@ -19,8 +19,10 @@ inline. Expansion is one hop; it never recursively opens a connected component.
 Several relationship roots can remain open. Click a root again to close it;
 a counterpart shared by another open root stays expanded. Expanded rows label
 whether clicking opens or closes their own relationship. Direct tasks hidden
-by a status filter are temporarily revealed, and closed counterpart groups
-reopen when selected. Sorting and grouping retain expansion by canonical ID.
+by a status filter are temporarily revealed. Opening a relationship reopens only
+groups containing that root or its immediate counterparts; previously opened
+relationships do not reopen groups you collapsed. Sorting and grouping retain
+expansion by canonical ID.
 Truncated text has a full title tooltip and a visible keyboard-focus tooltip;
 expanded titles and metadata wrap. Connectors follow measured anchors after
 expansion, sorting, filtering, group collapse, scrolling and resizing.
@@ -89,7 +91,7 @@ and groups without a manager or machine axis use all configured homes. Partial c
 unmatched worker relationship Unknown worker instead of asserting No linked
 worker; absence conclusions remain suppressed.
 
-Worker cards show an identity avatar, title and a consistently placed Running,
+Expanded and Detailed worker cards show an identity avatar, title and a consistently placed Running,
 Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a
@@ -99,7 +101,7 @@ Last known signal; retained status follows the same event/state precedence as
 Unknown, not Finished. Selection and relationships never fade whole cards or
 serve as execution status.
 
-Task cards keep the same field order in every grouping: Initiative / Epic
+Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
 Notion Status opposite Owner. Next check-in and edit age share a divided footer;
 Last touched by is available on the edit-age tooltip and in Inspector. Contextual
