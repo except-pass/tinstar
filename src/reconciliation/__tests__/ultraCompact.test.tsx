@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../Overview'
 import { overviewDensityKey } from '../overviewDensity'
@@ -147,7 +147,7 @@ describe('Ultra Compact Overview', () => {
     const first = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Detailed' }))
     expect(localStorage.getItem(overviewDensityKey)).toBe('detailed')
-    fireEvent.click(worker(first.container, 'linked-worker'))
+    fireEvent.click(within(worker(first.container, 'linked-worker').parentElement!).getByRole('button', { name: 'Open in Inspector' }))
     expect(screen.getByLabelText('Inspector')).toBeTruthy()
     first.unmount()
     const second = mount()

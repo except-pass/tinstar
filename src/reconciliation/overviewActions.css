@@ -1,0 +1,10 @@
+.ov-item-frame{position:relative;min-width:0;width:100%}
+.ov-density-compact .ov-item-frame:has(.ov-inline-expanded){margin:2px 0}
+.ov-density-compact .ov-item-frame .ov-inline-expanded{margin:0}
+.ov-open-inspector{position:absolute;z-index:4;top:8px;right:8px;display:inline-flex;align-items:center;gap:3px;padding:2px 5px;border:1px solid #537687;border-radius:3px;background:#102c37;color:#d7eaf1;font:9px var(--ov-mono);line-height:1;letter-spacing:.04em}
+.ov-open-inspector .material-symbols-outlined,.ov-copy-link .material-symbols-outlined{font-family:'Material Symbols Outlined';font-weight:400;font-style:normal;font-size:14px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;width:14px;height:14px;font-feature-settings:'liga'}
+.ov-item-frame:has(.ov-open-inspector) .ov-record-top{padding-right:116px}
+.ov-source-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
+.ov-inspector .ov-source-actions a{display:inline;margin:0}
+.ov-copy-link{display:inline-flex;align-items:center;gap:4px}
+.ov-density-detailed .ov-item.ov-collapsed{min-height:0}

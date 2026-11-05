@@ -114,9 +114,11 @@ Done, Archived, Backlog, Todo, Not started, Planned and Spare tokens display
 Not applicable; other statuses distinguish missing, upcoming, overdue and
 invalid checkpoints using the calendar rules above.
 
-In Detailed, click a floor worker or task to open the separate Inspector while Your desk
-remains available. The Inspector exposes metadata, related records, connection
-and activity history, evidence and safe source links. Task prose loads on demand;
+Expanded Detailed cards and expanded Ultra Compact rows carry an Open in Inspector
+control that opens the separate Inspector while Your desk remains available. Clicking
+the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection
+and activity history, evidence and safe source links. Next to Open Notion card, Copy link
+copies that card's URL. Task prose loads on demand;
 partial content labels omissions and unavailable content offers the source link.
 Worker terminal links use the exact-home resolver and open the safe viewer
 separately. Closing the Inspector restores focus to the floor card.

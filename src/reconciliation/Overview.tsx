@@ -17,12 +17,56 @@ import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, proper
 import { CompactConnections } from './CompactConnections'
 import { loadOverviewDensity, saveOverviewDensity, type OverviewDensity } from './overviewDensity'
 import './overview.css'
+import './overviewActions.css'
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const same = (a: Target | null, b: Target) => !!a && semanticId(a) === semanticId(b)
 const safeUrl = (value: string | null | undefined) => { try { const url = new URL(value ?? ''); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null } }
+const copyFeedbackMs = 1600
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch { /* clipboard can reject without permission; the selection fallback still copies */ }
+  const previousFocus = document.activeElement
+  const area = document.createElement('textarea')
+  try {
+    area.value = value
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    area.remove()
+    if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true })
+  }
+}
+function CopyNotionLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => { setCopied(false) }, [url])
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), copyFeedbackMs)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  const copy = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault()
+    event.stopPropagation()
+    void copyText(url).then(ok => { if (ok) setCopied(true) })
+  }
+  return <button type="button" className="ov-copy-link" onClick={copy} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') copy(event) }}>
+    <span className="material-symbols-outlined" aria-hidden="true">content_copy</span>
+    <span aria-live="polite">{copied ? 'Copied' : 'Copy link'}</span>
+  </button>
+}
 function homeFreshness(observation: { status: string; coverage: string; observedAt: string | null; expiresAt: string | null }, now: number) {
   const expired = !!observation.expiresAt && Date.parse(observation.expiresAt) <= now
   return `${expired ? 'stale' : observation.status}/${expired ? 'unknown' : observation.coverage} · ${ageLabel(Date.parse(observation.observedAt ?? ''), now)}`
@@ -53,7 +97,9 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const tone = entityTone(scene, kind, entity.id, now, readFailed)
   const worker = kind === 'execution' ? entity as Execution : null, card = kind === 'card' ? entity as SceneCard : null
   const title = worker ? workerTitle(worker) : cardTitle(card!)
-  const compact = view.compact, expanded = compact?.expanded.has(semanticId(item))
+  const [detailedExpanded, setDetailedExpanded] = useState(true)
+  const compact = view.compact, expanded = compact ? compact.expanded.has(semanticId(item)) : detailedExpanded
+  const toggle = () => compact ? compact.toggle(item) : setDetailedExpanded(value => !value)
   const openRoot = compact?.roots.some(root => same(root, item))
   const links = scene.claims.filter(c => (worker ? c.executionId === worker.id : c.cardId === card!.id))
   const confirmedLinks = links.filter(c => c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
@@ -64,12 +110,16 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const priority = card ? propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '') : ''
   const lastKnown = worker && (readFailed || stale(worker.observation, now))
   const deskRelated = state.navigation && (card ? card.id === state.navigation.cardId : scene.claims.some(c => c.cardId === state.navigation?.cardId && c.executionId === worker?.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current'))
-  return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${compact ? expanded ? ' ov-inline-expanded' : ' ov-collapsed' : ''}`}
-    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-pressed={compact ? undefined : same(state.selection, item)} aria-expanded={compact ? !!expanded : undefined} aria-label={`${title}. ${status}${compact ? `. ${openRoot ? 'Collapse' : 'Expand'} relationship` : ''}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
-    onKeyDown={e => { if (compact && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); compact.toggle(item) } }}
-    onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => compact ? compact.toggle(item) : send({ type: 'focus', target: item })}>
-    {compact && !expanded && <><span className="ov-tiny-glyph" aria-hidden="true">{worker ? '◇' : '▤'}</span><strong>{title}</strong><span className={`ov-compact-status ${worker ? `status-${status.toLowerCase()}` : checkIn(card!, now).state === 'overdue' ? 'check-overdue' : /waiting/i.test(status) ? 'status-waiting' : ''}`}>{card && checkIn(card, now).state === 'overdue' ? compactCheckIn(card, now) : status}{lastKnown ? ' · Last known' : ''}</span>{linkLabel && <span className="ov-link-label">{linkLabel}</span>}<span className="ov-full-title">{title}</span></>}
-    {(!compact || expanded) && (worker ? <>
+  const openInInspector = (event: { stopPropagation(): void }) => {
+    event.stopPropagation()
+    send({ type: 'focus', target: item })
+  }
+  return <div className="ov-item-frame"><button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
+    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
+    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
+    onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={toggle}>
+    {!expanded && <><span className="ov-tiny-glyph" aria-hidden="true">{worker ? '◇' : '▤'}</span><strong>{title}</strong><span className={`ov-compact-status ${worker ? `status-${status.toLowerCase()}` : checkIn(card!, now).state === 'overdue' ? 'check-overdue' : /waiting/i.test(status) ? 'status-waiting' : ''}`}>{card && checkIn(card, now).state === 'overdue' ? compactCheckIn(card, now) : status}{lastKnown ? ' · Last known' : ''}</span>{linkLabel && <span className="ov-link-label">{linkLabel}</span>}<span className="ov-full-title">{title}</span></>}
+    {expanded && (worker ? <>
       <span className="ov-face"><AgentIcon seed={JSON.stringify(worker.identity)} color="#63cfb0" className="ov-avatar" /></span>
       <span className="ov-record-top"><span className="ov-breadcrumb">{workerBreadcrumb(scene, worker)}</span><span className={`ov-worker-status status-${status.toLowerCase()}`}><i />{status}</span></span>
       <strong>{title.replace(/\s*\((?:card|Notion(?: card)?)\s+[a-f0-9-]{32,36}\)/gi, '')}</strong>
@@ -86,6 +136,10 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
   </button>
+    {expanded && <button type="button" className="ov-open-inspector" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
+      <span className="material-symbols-outlined" aria-hidden="true">pageview</span><span>Inspector</span>
+    </button>}
+  </div>
 }
 export function Group({ view, group, hover, focus, allGroups }: { view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
   const { scene, state, send, now, readFailed } = view
@@ -137,7 +191,9 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
       setPaths(next)
     }
     draw()
-    const observer = new ResizeObserver(draw); observer.observe(root)
+    const observer = new ResizeObserver(draw)
+    observer.observe(root)
+    root.querySelectorAll('.ov-item').forEach(element => observer.observe(element))
     return () => observer.disconnect()
   }, [scene, ws, cs, collapsed, state.linksVisible, now, readFailed, view.compact])
   const reference = (kind: 'card' | 'execution', id: string) => allGroups.filter(g => g.id !== group.id && (kind === 'card' ? g.cardIds : g.executionIds).includes(id)).map(g => g.label === g.outerLabel ? g.label : `${g.outerLabel} / ${g.label}`)
@@ -214,12 +270,13 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const claims = [...scene.claims, ...scene.claimHistory].filter(c => card ? c.cardId === card.id : execution ? c.executionId === execution.id : c.id === claim?.id)
   const backlog = scene.backlog.filter(entry => card && entry.source.cardReferences.some(ref => ref.pageId === card.id))
   const findings = scene.findings.filter(f => card ? f.cardIds.includes(card.id) : execution ? f.executionIds.includes(execution.id) : home ? f.homeIds.includes(home.source.home) : false)
+  const notionUrl = card ? safeUrl(card.source.url) : null
   return <section className="ov-inspector" aria-label="Inspector">
     <header><h2>Inspector</h2><button type="button" className="ov-back" ref={close} onClick={() => send({ type: 'clear-selection' })}>Close Inspector</button></header>
     <small className="ov-eyebrow">{card ? 'Notion card' : execution ? 'Worker' : home ? 'Manager' : 'Overview'}</small>
     <h3>{card ? cardTitle(card) : execution ? workerTitle(execution) : home ? managerName(scene, home.source.home) : group?.label ?? (selection.kind === 'firstMate' ? 'First Mate' : 'Selected record unavailable')}</h3>
     {execution && <><p>{execution.placement.machine ?? 'Unknown machine'} · {workerState(execution)}</p><p>Manager: {managerName(scene, execution.home)} · Last activity {ageLabel(observedAt(execution), now)}{(readFailed || stale(execution.observation, now)) && ' · Last known observation'}</p><h4>Latest activity</h4><p>{String(execution.source.last_event.note ?? execution.source.lastEventText ?? 'No report published')}</p>{terminal && <a href={terminal} target="_blank" rel="noreferrer">Open worker terminal ↗</a>}</>}
-    {card && <><p className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{safeUrl(card.source.url) && <a href={safeUrl(card.source.url)!} target="_blank" rel="noreferrer">Open Notion card ↗</a>}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
+    {card && <><p className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
       {card.parentIds.map(id => <button key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{workerSummary(scene.coverage.homes.filter(h => h.source.home === home.source.home), now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && e.home === home.source.home).length, state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 0 : undefined)} · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
     {group && <><p>{group.cardIds.length} cards · {workerSummary(groupHomes, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id)).length)}</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
