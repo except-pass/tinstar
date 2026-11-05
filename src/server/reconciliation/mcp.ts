@@ -14,6 +14,7 @@ import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../
 import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
+import type { WorkerLinkReport } from './workerLinkReport'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -53,6 +54,7 @@ export interface PresentationReaders {
   scene(): Promise<FloorScene>
   card(id: string): Promise<unknown>
   queue(): Promise<QueueRead>
+  workerLinkReport(): Promise<WorkerLinkReport>
 }
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
 const renderedSchema = z.object({ scene_generated_at: z.string().datetime().nullable(), scene_read_failed: z.boolean() }).strict()
@@ -100,6 +102,7 @@ export class ReconciliationMcp {
       return result(card ? { card, context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
     })
     server.registerTool('get_queue', { description: 'Read ordered Desk readiness and each exact source (home, task, request id/kind), per-source readiness and bound response identity. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Queue source read failed' }))))
+    server.registerTool('get_worker_link_report', { description: 'Read deterministic configured-home worker-link mismatch findings, unknown coverage and auditable backfill proposals. Report only: First Mate must verify durable task records before writing any proposed merged Notion property.', inputSchema: {}, annotations: readAnnotations }, async () => result(await this.readers.workerLinkReport()))
     server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
     server.registerTool('next_queue_item', { description: 'Navigate to the next ordered verified ready desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
@@ -119,11 +122,18 @@ export class ReconciliationMcp {
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]
-    if (path !== '/api/reconciliation/mcp' && path !== '/api/reconciliation/ui') return false
+    const report = path === '/api/reconciliation/worker-links/report'
+    if (!report && path !== '/api/reconciliation/mcp' && path !== '/api/reconciliation/ui') return false
     const allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tinstar-UI, MCP-Protocol-Version', 'Cache-Control': 'no-store' }
     if (!privatePeer(req.socket.remoteAddress) || req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Unauthorized private interface', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
+    if (report) {
+      if (!this.token) return fail(res, 'CONFIG_UNAVAILABLE', 'MCP token unavailable; check private config permissions', { headers })
+      if (!secretEquals(String(req.headers.authorization ?? ''), `Bearer ${this.token}`)) return fail(res, 'FORBIDDEN', 'unauthorized', { headers, status: 401 })
+      if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers, status: 405 })
+      return ok(res, await this.readers.workerLinkReport(), { headers })
+    }
     if (req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use POST', { headers, status: 405 })
     if (path.endsWith('/mcp')) {
       if (!this.token) return fail(res, 'CONFIG_UNAVAILABLE', 'MCP token unavailable; check private config permissions', { headers })

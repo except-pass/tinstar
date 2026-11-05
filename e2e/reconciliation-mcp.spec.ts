@@ -1,3 +1,4 @@
+import { buildWorkerLinkReport } from '../src/server/reconciliation/workerLinkReport'
 import { test, expect, type Page } from '@playwright/test'
 import { createServer, type Server } from 'node:http'
 import { createReadStream } from 'node:fs'
@@ -7,7 +8,7 @@ import { join, extname } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
-import { fixtureScene, fixtureQueue, fixtureId } from '../test-fixtures/reconciliation/scenes'
+import { fixtureScene, fixtureQueue, fixtureId, fixtureSources } from '../test-fixtures/reconciliation/scenes'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 
 let server: Server, root: string, base: string, client: Client
@@ -40,7 +41,7 @@ async function present(page: Page, action: unknown, command_id: string) {
 }
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-browser-'))
-  const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [{ id: 'context', text: 'Controlled card prose' }] }), queue: async () => queue }, root)
+  const mcp = new ReconciliationMcp({ workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()), scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [{ id: 'context', text: 'Controlled card prose' }] }), queue: async () => queue }, root)
   server = createServer(async (req, res) => {
     if (await mcp.handle(req, res)) return
     const path = (req.url ?? '/').split('?')[0]!
