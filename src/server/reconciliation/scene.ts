@@ -11,6 +11,7 @@ type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][num
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
 export type FindingKind = 'confirmed-link' | 'task-execution-gap' | 'untracked-worker' |
   'unverified-conflicting' | 'unknown-stale-source' | 'legitimate-wait-planned' | 'outside-coverage'
+export type WorkerLinkDetector = 'duplicate-primary' | 'spawn-evidence' | 'declared-absent' | 'historical-link' | 'invalid-record' | 'duplicate-execution'
 export interface Finding {
   id: string
   kind: FindingKind
@@ -18,6 +19,7 @@ export interface Finding {
   executionIds: string[]
   homeIds: string[]
   reason: string
+  workerLinkDetectors?: WorkerLinkDetector[]
 }
 export interface Claim {
   id: string
@@ -75,7 +77,7 @@ export interface SceneGroup {
 const key = (...parts: unknown[]) => JSON.stringify(parts)
 const property = (card: SourceCard, name: string) => card.properties[name]?.value
 const word = (card: SourceCard, name: string) => text(property(card, name))
-const declaredLinks = (card: SourceCard) => {
+export const declaredLinks = (card: SourceCard) => {
   const p = card.properties[FIRST_MATE_TASKS]
   return p?.workerLinks ?? parseWorkerLinks(p?.type === 'rich_text' && !p.hasMore ? p.value : undefined)
 }
@@ -121,8 +123,9 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   const intentions = ageObservation(input.intentions, now)
   const fleet = input.fleet.map(home => ({ ...home, observation: ageObservation(home.observation, now) }))
   const findings: Finding[] = []
-  const add = (kind: FindingKind, cardIds: string[], executionIds: string[], reason: string, homeIds: string[] = []) => {
-    findings.push({ id: key(kind, cardIds, executionIds, homeIds, reason), kind, cardIds, executionIds, homeIds, reason })
+  const add = (kind: FindingKind, cardIds: string[], executionIds: string[], reason: string, homeIds: string[] = [], workerLinkDetectors: WorkerLinkDetector[] = []) => {
+    findings.push({ id: key(kind, cardIds, executionIds, homeIds, reason), kind, cardIds, executionIds, homeIds, reason,
+      ...(workerLinkDetectors.length ? { workerLinkDetectors } : {}) })
   }
   const sourceCards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const cards: SceneCard[] = [...sourceCards.values()].map(card => {
@@ -155,7 +158,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const parsed = linkRecords.get(card.id)!
     if (isBlankWorkerLinks(parsed)) return []
     if (parsed.status !== 'valid') {
-      add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`)
+      add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`, [], parsed.status === 'invalid' ? ['invalid-record'] : [])
       return []
     }
     return parsed.tasks.map(link => ({ card, link }))
@@ -179,7 +182,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       const id = key(task.identity.fm_home, task.identity.task_id, task.identity.spawn_gen)
       // Duplicate rows are evidence conflicts, not additional workers.
       if (executions.some(execution => execution.id === id)) {
-        add('unverified-conflicting', [], [id], 'Duplicate execution identity in source snapshot'); continue
+        add('unverified-conflicting', [], [id], 'Duplicate execution identity in source snapshot', [home.source.home], fresh(observation) ? ['duplicate-execution'] : []); continue
       }
       const observedMachine = text(task.remote?.host)
       const liveness = executionLiveness(task, observation)
@@ -221,6 +224,22 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       if (execution.activity === 'unknown') add('unknown-stale-source', referenced, [id], 'Runtime state or execution identity is unknown; a fresh metadata snapshot alone is insufficient')
     }
   }
+  const observedAttempts = new Map<string, Execution[]>()
+  for (const execution of executions) {
+    if (!execution.identity.task_id || !execution.identity.spawn_gen || !fresh({ ...execution.observation, data: execution.source })) continue
+    const id = key(execution.home, execution.identity.task_id)
+    const attempts = observedAttempts.get(id) ?? []
+    attempts.push(execution)
+    observedAttempts.set(id, attempts)
+  }
+  for (const attempts of observedAttempts.values()) {
+    if (new Set(attempts.map(e => e.identity.spawn_gen)).size < 2) continue
+    const executionIds = attempts.map(e => e.id).sort()
+    const cardIds = [...new Set(claims.filter(c => executionIds.includes(c.executionId)).map(c => c.cardId))].sort()
+    add('unverified-conflicting', cardIds, executionIds,
+      'Multiple observed generations for one task; First Mate must investigate continuity or ID reuse; never auto-switch',
+      [attempts[0]!.home], ['spawn-evidence'])
+  }
   for (const { card, link } of declarations) {
     const home = fleet.find(home => home.source.home === link.fm_home)
     const matches = executions.filter(e => e.home === link.fm_home && e.identity.task_id === link.task_id)
@@ -231,8 +250,10 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
     const homeAvailable = !!home && sufficient(home.observation)
     const homeObserved = !!home && fresh(home.observation)
     const available = homeAvailable && notionAvailable
-    const conflict = fresh(intentions) && (new Set(competing.map(d => d.card.id)).size > 1 || homeObserved &&
-      (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen)))
+    const duplicatePrimary = fresh(intentions) && new Set(competing.map(d => d.card.id)).size > 1
+    const spawnEvidence = fresh(intentions) && homeObserved &&
+      (matches.length > 1 || matches.some(e => e.identity.spawn_gen && e.identity.spawn_gen !== link.first_observed_spawn_gen))
+    const conflict = duplicatePrimary || spawnEvidence
     const historical = card.source.archived || card.source.in_trash || card.expectation === 'outside' ||
       ['done', 'archived'].includes(word(card.source, 'Status')?.toLowerCase() ?? '')
     const identity = { fm_home: link.fm_home, task_id: link.task_id, spawn_gen: link.first_observed_spawn_gen }
@@ -254,7 +275,12 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
           : !available ? 'Declared relationship is last-known; Notion or worker home unavailable, stale or partial'
             : execution ? 'Notion First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery'
               : historical ? 'Historical Notion relationship retained; worker is not currently observed'
-                : 'Declared worker not observed in a complete fresh home; First Mate must investigate', [link.fm_home])
+                : 'Declared worker not observed in a complete fresh home; First Mate must investigate', [link.fm_home], [
+          ...(duplicatePrimary ? ['duplicate-primary' as const] : []),
+          ...(spawnEvidence ? ['spawn-evidence' as const] : []),
+          ...(!conflict && available && !execution && !historical ? ['declared-absent' as const] : []),
+          ...(historical ? ['historical-link' as const] : []),
+        ])
     }
   }
   // Independent/ad hoc workers are legitimate. Only positive source evidence

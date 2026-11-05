@@ -40,6 +40,7 @@ Localhost is the default. For a remote client, the operator must explicitly bind
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors (read only), or `queue-source-unavailable` |
+| `get_worker_link_report()` | Read-only [worker-link backfill report](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report); no open window or `scene_id` required |
 | `present_view(...)` | Enqueue a semantic action for one explicit window and wait up to two seconds for its acknowledgment |
 | `next_queue_item(...)` | Navigate the real S4 ordered verified-ready queue with the same acknowledgment protocol |
 | `get_command(scene_id, command_id)` | Query a prior command outcome without applying it again |

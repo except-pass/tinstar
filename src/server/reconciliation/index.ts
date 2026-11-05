@@ -10,6 +10,7 @@ import { CardContextReader } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader } from './queuePulls'
+import { buildWorkerLinkReport } from './workerLinkReport'
 
 export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot']>>
 
@@ -48,6 +49,8 @@ export class ReconciliationSources {
   async card(id: string) { return this.context.get(id) }
 
   async scene() { return this.reconciler.reconcile(await this.snapshot()) }
+
+  async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
   async queue() {
     const snapshot = await this.snapshot()
