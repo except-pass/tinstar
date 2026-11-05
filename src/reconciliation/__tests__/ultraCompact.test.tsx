@@ -94,6 +94,35 @@ describe('Ultra Compact Overview', () => {
     fireEvent.click(worker(container, 'linked-worker'))
     expect(task(container, 6)).toBeNull()
   })
+  it('labels confirmed Backlog counterparts outside the Operational view', () => {
+    for (const id of [1, 6]) scene.cards.find(c => c.id === fixtureId(id))!.source.properties.Status!.value = 'Backlog'
+    const { container } = mount()
+    expect(task(container, 1)).toBeNull()
+    expect(task(container, 6)).toBeNull()
+    const group = worker(container, 'linked-worker').closest('.ov-group')!
+    expect(group.querySelector('.ov-card-stack .ov-empty-col')).toHaveTextContent('Linked task outside this view')
+    expect(group).not.toHaveTextContent('No linked task')
+  })
+  it('labels a confirmed worker hidden from the current view', () => {
+    for (const w of scene.executions) w.liveness = 'finished'
+    const { container } = mount()
+    const group = task(container, 1).closest('.ov-group')!
+    expect(group.querySelector('.ov-worker-stack .ov-empty-col')).toHaveTextContent('Linked worker outside this view')
+  })
+  it.each(['outer', 'inner'])('keeps a collapsed %s group closed when opening another relationship', level => {
+    const { container } = mount()
+    arrange('manager', 'status')
+    fireEvent.click(worker(container, 'linked-worker'))
+    const a = worker(container, 'linked-worker').closest(level === 'outer' ? '.ov-outer' : '.ov-group')!
+    const toggle = a.querySelector<HTMLButtonElement>(':scope > header > button')!
+    fireEvent.click(toggle)
+    closed(toggle)
+    fireEvent.click(task(container, 2))
+    closed(toggle)
+    open(task(container, 2))
+    fireEvent.click(toggle)
+    open(worker(container, 'linked-worker')); open(task(container, 1)); open(task(container, 6))
+  })
   it('reopens a collapsed counterpart group without closing other relationships', () => {
     const { container } = mount()
     arrange('machine')

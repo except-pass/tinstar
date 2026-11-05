@@ -146,15 +146,24 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
   const tasksUnavailable = readFailed || stale(scene.coverage.intentions, now)
   const localView = view.compact ? { ...view, compact: { ...view.compact, coverage: workerCoverage } } : view
   const membership = view.compact ? allGroups.find(g => g.id === group.id) ?? group : group
+  const emptyLabels = (workers: Execution[], cards: SceneCard[]) => {
+    const workerClaims = scene.claims.filter(c => c.state !== 'historical' && workers.some(w => w.id === c.executionId))
+    const taskClaims = scene.claims.filter(c => c.state !== 'historical' && cards.some(card => card.id === c.cardId))
+    const confirmed = (claim: typeof scene.claims[number]) => claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current'
+    return {
+      worker: taskClaims.some(confirmed) ? 'Linked worker outside this view' : taskClaims.length ? 'Worker link unverified' : workerAbsenceLabel(workerCoverage, 'column'),
+      task: workerClaims.some(confirmed) ? 'Linked task outside this view' : workerClaims.length ? 'Task link unverified' : tasksUnavailable ? 'Notion unavailable' : 'No linked task',
+    }
+  }
   const displayLabel = group.label === 'Unassigned / Unknown' && ['initiative', 'epic', 'status'].includes(state.organizer?.inner === 'none' ? state.organizer.outer : state.organizer?.inner ?? '') ? 'Unassigned' : group.label
   return <section className={`ov-group${flashRelated(view, target('group', group.id)) ? ' flashed' : ''}`} data-group-id={group.id}>
     <header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${group.label}`} onClick={() => send({ type: 'set-expanded', target: target('group', group.id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button>
       <strong className="ov-group-name">{displayLabel}</strong><span>{workerSummary(workerHomes, now, readFailed, membership.workers.length, ws.length, true)} · {view.compact ? membership.cards.length : cs.length} T</span></header>
     {!collapsed && <div className={`ov-group-body${view.compact ? ' ov-compact-columns' : ''}`} ref={body}>
       {view.compact ? <>
-        <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={localView} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{group.executionIds.length ? 'Workers referenced in another group' : workerAbsenceLabel(workerCoverage, 'column')}</div>}</div>
+        <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={localView} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{group.executionIds.length ? 'Workers referenced in another group' : emptyLabels(ws, cs).worker}</div>}</div>
         <div className="ov-gutter" />
-        <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={localView} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{group.cardIds.length ? 'Tasks referenced in another group' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'}</div>}</div>
+        <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={localView} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{group.cardIds.length ? 'Tasks referenced in another group' : emptyLabels(ws, cs).task}</div>}</div>
       </> : rows.map((row, index) => {
         const workerClaims = scene.claims.filter(c => c.state !== 'historical' && row.workers.some(w => w.id === c.executionId))
         const taskClaims = scene.claims.filter(c => c.state !== 'historical' && row.cards.some(card => card.id === c.cardId))
@@ -165,8 +174,7 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
         const outsideWorker = !row.workers.length && taskClaims.some(confirmed)
         const workerCandidate = !row.workers.length && taskClaims.length > 0 && !outsideWorker
         const taskCandidate = !row.cards.length && workerClaims.length > 0 && !hiddenTask
-        const leftEmpty = outsideWorker ? 'Linked worker outside this view' : workerCandidate ? 'Worker link unverified' : workerAbsenceLabel(workerCoverage, 'column')
-        const rightEmpty = hiddenTask ? 'Linked task outside this view' : taskCandidate ? 'Task link unverified' : tasksUnavailable ? 'Notion unavailable' : 'No linked task'
+        const { worker: leftEmpty, task: rightEmpty } = emptyLabels(row.workers, row.cards)
         return <div className="ov-pair" key={row.cards[0]?.id ?? row.workers[0]?.id ?? index}>
           <div className="ov-worker-stack">{row.workers.map(worker => <Entity key={worker.id} view={localView} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!row.workers.length && !hasVisibleWorker && <div className="ov-empty-col">{leftEmpty}</div>}</div>
           <div className="ov-gutter">{state.linksVisible !== false && (!row.workers.length && !hasVisibleWorker || !row.cards.length && !hasVisibleTask) && <span>{!row.workers.length ? outsideWorker ? 'outside view' : workerCandidate ? 'unverified' : workerAbsenceLabel(workerCoverage, 'gutter') : hiddenTask ? 'outside view' : taskCandidate ? 'unverified' : tasksUnavailable ? 'unknown task' : 'no task'}</span>}</div>
@@ -271,7 +279,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
     const roots = removing ? openRelationships.filter(root => !same(root, item)) : [...openRelationships, item]
     setOpenRelationships(roots)
     if (!removing) {
-      const revealed = expandedRelationships(scene, roots)
+      const revealed = expandedRelationships(scene, [item])
       for (const group of overviewGroups(scene, state, now, !!error, revealed)) {
         if (!group.workers.some(w => revealed.has(`execution:${w.id}`)) && !group.cards.some(c => revealed.has(`card:${c.id}`))) continue
         for (const id of [group.outerId, group.id]) if (state.collapsed.includes(semanticId(target('group', id)))) send({ type: 'set-expanded', target: target('group', id), expanded: true })
