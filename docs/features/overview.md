@@ -82,6 +82,8 @@ zero candidates remain removable in the menu and inline chips. Clear is always
 in the toolbar and clears only these explicit selections, restoring the saved
 base scope and organizer. No filter-summary row is added. Empty results are
 labelled, and source health remains available from the toolbar indicator.
+Counts retain partial/last-known labels; an unavailable or uncertain empty worker
+scope displays unknown rather than asserting a verified zero.
 
 Without explicit donut selections, Operational retains independent and unmatched
 endpoints and its intentional hidden-task labels. Opening a relationship can

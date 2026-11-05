@@ -295,10 +295,13 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   const checksSuspended = notionUnavailable || fleetCoverage !== 'available' || scene.coverage.absenceConclusions === 'suppressed'
   const coverageNotice = workerCoverageNotice(fleetCoverage)
   const unreadHomes = unreadableWorkerHomes(scene.coverage.homes, now)
+  const visibleWorkers = new Set(groups.flatMap(g => g.workers.map(w => w.id))).size
+  const visibleCards = new Set(groups.flatMap(g => g.cards.map(c => c.id))).size
+  const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar now={now} visibleWorkers={new Set(groups.flatMap(g => g.workers.map(w => w.id))).size} visibleCards={new Set(groups.flatMap(g => g.cards.map(c => c.id))).size} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
+      <FloorToolbar now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)
         if (value === 'compact' && state.selection) {
           const selected = state.selection
@@ -307,7 +310,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
         }
       }} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {new Set(groups.flatMap(g => g.workers.map(w => w.id))).size}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {new Set(groups.flatMap(g => g.cards.map(c => c.id))).size}</span></div>
+      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
@@ -318,7 +321,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
           </section>
         })}
         {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} focus={hovered ?? state.selection} />}
-        {!groups.length && <p className="ov-empty">{state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
+        {!groups.length && <p className="ov-empty">{state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
         {!hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>
     </div><aside ref={deskPanel} className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><h2>Your desk</h2><button type="button" className="ov-mobile-close" onClick={() => { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); setDiagnostics(false); setDeskMobile(false) }}>Close</button></header>

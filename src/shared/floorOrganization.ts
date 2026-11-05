@@ -195,14 +195,17 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
       const av = order.get(a.id), bv = order.get(b.id)
       return Number(av === undefined) - Number(bv === undefined) || (av !== undefined && bv !== undefined ? direction * compareScalar(av, bv) : 0) || a.id.localeCompare(b.id)
     }
-    const checkIn = (entity: Execution | SceneCard) => {
-      const dates = localPairs.filter(pair => pair.worker?.id === entity.id || pair.card?.id === entity.id).flatMap(pair => values(scene, pair, 'checkIn')).map(dateTimestamp).filter(Number.isFinite)
-      return dates.length ? Math.min(...dates) : Infinity
+    const checkIns = new Map<string, number>()
+    for (const pair of localPairs) {
+      const dates = values(scene, pair, 'checkIn').map(dateTimestamp).filter(Number.isFinite)
+      if (!dates.length) continue
+      const earliest = Math.min(...dates)
+      for (const id of [pair.worker?.id, pair.card?.id]) if (id) checkIns.set(id, Math.min(checkIns.get(id) ?? Infinity, earliest))
     }
     const operational = (a: Execution | SceneCard, b: Execution | SceneCard, domain: 'cards' | 'workers') => {
       const status = (entity: Execution | SceneCard) => domain === 'workers' ? floorWorkerStatus(entity as Execution) : statusName(entity as SceneCard)
       const title = (entity: Execution | SceneCard) => domain === 'workers' ? String((entity as Execution).source.backlog.title || (entity as Execution).identity.task_id || '') : String((entity as SceneCard).source.properties.Name?.value || '')
-      const at = checkIn(a), bt = checkIn(b)
+      const at = checkIns.get(a.id) ?? Infinity, bt = checkIns.get(b.id) ?? Infinity
       return direction * compareStatus(status(a), status(b), domain) || (at === bt ? 0 : at < bt ? -1 : 1) || title(a).localeCompare(title(b)) || a.id.localeCompare(b.id)
     }
     group.workers.sort((a, b) => organizer.order === 'operational' ? operational(a, b, 'workers') : compare(a, b, workerOrder))

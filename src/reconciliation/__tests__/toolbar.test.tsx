@@ -118,4 +118,13 @@ describe('single-row Overview toolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear all status selections' }))
     expect(cardIds(container)).toHaveLength(5)
   })
+  it('labels unavailable source counts as unknown instead of asserting a verified zero', () => {
+    scene.executions = []
+    for (const home of scene.coverage.homes) home.observation.status = 'unknown'
+    const { container } = mount()
+    expect(screen.getByRole('button', { name: 'Workers statuses: unavailable' })).toBeTruthy()
+    expect(container.querySelector('.ov-headings')).toHaveTextContent('WORKERS · unavailable')
+    expect(container.querySelector('.ov-headings')).not.toHaveTextContent('WORKERS · 0')
+  })
+
 })
