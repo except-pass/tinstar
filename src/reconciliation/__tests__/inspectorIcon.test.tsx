@@ -61,6 +61,45 @@ describe('Open in Inspector', () => {
     }
   })
 
+  it.each(['worker', 'task'] as const)('reanchors Detailed connections when a %s resizes within an unchanged group', kind => {
+    const observers = new Set<{ elements: Set<Element>; notify: () => void }>()
+    vi.stubGlobal('ResizeObserver', class {
+      record: { elements: Set<Element>; notify: () => void }
+      constructor(notify: () => void) {
+        this.record = { elements: new Set(), notify }
+        observers.add(this.record)
+      }
+      observe(element: Element) { this.record.elements.add(element) }
+      disconnect() { observers.delete(this.record) }
+    })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const isEndpoint = this.matches('.ov-execution, .ov-card')
+      const left = this.matches('.ov-card') ? 456 : 0
+      const height = isEndpoint ? this.getAttribute('aria-expanded') === 'true' ? 133 : 29 : 200
+      const top = isEndpoint ? 40 : 0
+      return { x: left, y: top, left, top, width: 400, height, right: left + 400, bottom: top + height, toJSON() {} }
+    })
+    const workerId = scene.executions.find(worker => worker.identity.task_id === 'linked-worker')!.id
+    scene.claims = scene.claims.filter(claim => claim.executionId === workerId && claim.cardId === fixtureId(1))
+    const { container } = mount('detailed')
+    const item = endpoint(container, kind)
+    const group = item.closest('.ov-group')!
+    const edge = () => group.querySelector('.ov-connections path')!
+    const initial = 'M400,106.5 C430.8,106.5 425.2,106.5 456,106.5'
+    expect(edge()).toHaveAttribute('d', initial)
+    for (const expanded of [false, true]) {
+      fireEvent.click(item)
+      act(() => observers.forEach(observer => {
+        if (observer.elements.has(item)) observer.notify()
+      }))
+      expect(item).toHaveAttribute('aria-expanded', String(expanded))
+      const workerY = !expanded && kind === 'worker' ? 54.5 : 106.5
+      const taskY = !expanded && kind === 'task' ? 54.5 : 106.5
+      expect(edge()).toHaveAttribute('d', `M400,${workerY} C430.8,${workerY} 425.2,${taskY} 456,${taskY}`)
+      expect(screen.queryByLabelText('Inspector')).toBeNull()
+    }
+  })
+
   it.each([
     ['compact', 'worker'], ['compact', 'task'],
     ['detailed', 'worker'], ['detailed', 'task'],

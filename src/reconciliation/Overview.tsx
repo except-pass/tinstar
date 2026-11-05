@@ -191,7 +191,9 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
       setPaths(next)
     }
     draw()
-    const observer = new ResizeObserver(draw); observer.observe(root)
+    const observer = new ResizeObserver(draw)
+    observer.observe(root)
+    root.querySelectorAll('.ov-item').forEach(element => observer.observe(element))
     return () => observer.disconnect()
   }, [scene, ws, cs, collapsed, state.linksVisible, now, readFailed, view.compact])
   const reference = (kind: 'card' | 'execution', id: string) => allGroups.filter(g => g.id !== group.id && (kind === 'card' ? g.cardIds : g.executionIds).includes(id)).map(g => g.label === g.outerLabel ? g.label : `${g.outerLabel} / ${g.label}`)
