@@ -6,7 +6,7 @@
 
 Tinstar shows the workers First Mate is already running, the calls that need your attention, and provider quota in one view. First Mate remains responsible for dispatch, supervision, and worker lifecycle.
 
-Overview is the primary home: independent Workers and Notion cards share groups controlled by a compact Outer / Inner / Order toolbar, with relationships between the columns and one contextual **Your desk** panel. Operational is the default status view; use All cards or Custom to change visibility. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
+Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in a single-row toolbar with linked status donuts, with relationships between the columns and one contextual **Your desk** panel. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
 For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.
 

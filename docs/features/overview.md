@@ -9,7 +9,7 @@ headers and 21px inner headers. Workers stay on the left and Notion tasks on
 the right, with real confirmed relationships in a dedicated gutter. Each
 canonical endpoint renders once across compact groups; reference badges name
 its other memberships. Unmatched records and unavailable sources keep their
-coverage labels. The toolbar offers **Detailed** for the original rich cards
+coverage labels. Customize offers **Detailed** for the original rich cards
 and Inspector interaction. Density persists across reloads in browser storage.
 Both columns remain side by side on narrow screens using horizontal scrolling.
 
@@ -44,18 +44,14 @@ remain authoritative on reload. Customize can override any slot, and closes
 without discarding edits. It exposes Outer, Inner, Order, direction, density,
 Operational/All cards/Custom, Filters (status checkboxes, gaps and links), Fields
 (draggable chips or keyboard slot controls), and Reset in a temporary popover.
+Operational status is available only in Order, not as a grouping field or Fields chip.
 Escape closes the popover and restores its trigger's focus.
 
-Operational worker urgency is Blocked → Error → Running → Queued → Waiting →
-Idle → Stopped → Finished. The current worker projection uses the existing
-observation/event precedence; otherwise unknown records can expose the actual
-publisher's Error, Queued, Idle or Stopped state. History remains separate.
-Card attention order includes every current board option, preserving the exact
-source labels: Ready for Review → In review → In Progress → Queued → Waiting For
-→ Waiting → Waiting for Prod Release → Delegated to person → Todo → Not started
-→ Planned → Backlog → Spare tokens → Done → Archived. Planned is also supported
-when published. New source options follow known options alphabetically, with
-blank/unknown last. Within the same status, Next check-in ascending, display
+The authoritative worker and card attention orders, exact source labels and
+unknown-state handling live in [`floorStatus.ts`](../../src/shared/floorStatus.ts).
+The worker projection preserves observation/event precedence and exposes additional
+publisher states only when otherwise unknown; history remains separate.
+Within the same status, Next check-in ascending, display
 name and canonical ID settle ties. Worker check-in ties use the earliest linked
 card checkpoint in that subdivision. In both densities and under every preset,
 tasks follow the mean row position of their visible workers with explicit,
@@ -145,8 +141,7 @@ and groups without a manager or machine axis use all configured homes. Partial c
 unmatched worker relationship Unknown worker instead of asserting No linked
 worker; absence conclusions remain suppressed.
 
-Expanded and Detailed worker cards show an identity avatar, title and a consistently placed Running,
-Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
+Expanded and Detailed worker cards show an identity avatar, title and a consistently placed worker status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate
