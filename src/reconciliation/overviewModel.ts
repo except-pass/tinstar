@@ -31,10 +31,10 @@ function homesForLabel(scene: FloorScene, field: 'manager' | 'machine', label: s
     : managerName(scene, home.source.home) === label)
   return matched.length ? matched : scene.coverage.homes
 }
-export function relevantWorkerHomes(scene: FloorScene, organizer: { outer?: string; inner?: string } | undefined, group: { outerLabel: string; label: string }) {
+export function relevantWorkerHomes(scene: FloorScene, organizer: { outer?: string; inner?: string } | undefined, group: { outerLabel?: string; label: string }) {
   const outer = organizer?.outer, inner = organizer?.inner
-  if (outer === 'manager' || outer === 'machine') return homesForLabel(scene, outer, group.outerLabel)
-  if (inner === 'manager' || inner === 'machine') return homesForLabel(scene, inner, group.label)
+  if (outer === 'manager' || outer === 'machine') return homesForLabel(scene, outer, group.outerLabel ?? group.label)
+  if (group.outerLabel !== undefined && (inner === 'manager' || inner === 'machine')) return homesForLabel(scene, inner, group.label)
   return scene.coverage.homes
 }
 export function workerSummary(homes: Parameters<typeof workerSourceCoverage>[0], now: number, readFailed: boolean, count: number, visible = count, compact = false) {

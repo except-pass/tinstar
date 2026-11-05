@@ -181,3 +181,25 @@ it.each(['outer', 'inner'] as const)('follows remote worker publishers for the %
   expect(homes.map(home => home.source.home)).toEqual([fixtureHomes[1], fixtureHomes[2]])
   expect(workerSourceCoverage(homes, now)).toBe('partial')
 })
+
+
+it.each(['machine', 'manager'] as const)('preserves %s outer aggregate coverage after focus', async outer => {
+  const { organizedGroups, resolveFloorGroup } = await import('../../shared/floorOrganization')
+  const { applyPresentationAction } = await import('../presentation')
+  const now = Date.now(), scene = fixtureScene({ now })
+  scene.executions = scene.executions.filter(worker => worker.home === fixtureHomes[1])
+  scene.executions.forEach(worker => { worker.placement.machine = 'Bandit' })
+  scene.coverage.homes[1]!.observation.status = 'stale'
+  const state = { ...initialPresentation(), organizer: { outer, inner: 'status' as const, order: 'checkIn' as const, direction: 'asc' as const } }
+  const child = organizedGroups(scene, state, now).find(group => group.workers.length)!
+  const focused = applyPresentationAction(state, { type: 'focus', target: { kind: 'group', id: child.outerId } }, scene, now)
+  expect(focused.outcome).toBe('applied')
+  const aggregate = resolveFloorGroup(scene, focused.state, child.outerId, now)!
+  const inspectorHomes = relevantWorkerHomes(scene, state.organizer, aggregate)
+  const headerHomes = relevantWorkerHomes(scene, state.organizer, { label: child.outerLabel })
+  expect(inspectorHomes.map(home => home.source.home)).toEqual([fixtureHomes[1]])
+  expect(inspectorHomes).toEqual(headerHomes)
+  expect(workerSummary(inspectorHomes, now, false, aggregate.executionIds.length)).toBe(`${aggregate.executionIds.length} last known workers`)
+  scene.coverage.homes[1]!.observation.status = 'fresh'
+  expect(workerSourceCoverage(relevantWorkerHomes(scene, state.organizer, aggregate), now)).toBe('available')
+})

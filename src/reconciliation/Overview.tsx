@@ -181,7 +181,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const card = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
   const home = scene.coverage.homes.find(h => h.source.home === (selection.kind === 'manager' ? selection.id : execution?.home))
   const group = selection.kind === 'group' ? resolveFloorGroup(scene, state, selection.id, now) : undefined
-  const groupHomes = group && 'outerLabel' in group && typeof group.outerLabel === 'string' ? relevantWorkerHomes(scene, state.organizer, { outerLabel: group.outerLabel, label: group.label }) : scene.coverage.homes
+  const groupHomes = group ? relevantWorkerHomes(scene, state.organizer, group) : scene.coverage.homes
   const matches = workers.filter(w => w.home === execution?.home && w.id === execution?.identity.task_id)
   const worker = matches.length === 1 ? matches[0] : null
   const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
@@ -264,7 +264,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
           if (!nested) return <Group key={first.id} view={view} group={first} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />
           const collapsed = state.collapsed.includes(semanticId(target('group', outerId)))
-          return <section className="ov-outer" key={outerId} data-outer={first.outerLabel}><header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${first.outerLabel}`} onClick={() => send({ type: 'set-expanded', target: target('group', outerId), expanded: collapsed })}>{collapsed ? '+' : '−'}</button><strong>{first.outerLabel === 'Unassigned / Unknown' && ['initiative', 'epic'].includes(state.organizer?.outer ?? '') ? 'Unassigned' : first.outerLabel}</strong><small className="ov-group-field">{floorFields.find(f => f.id === state.organizer?.outer)?.label}</small><span>{workerSummary(relevantWorkerHomes(scene, state.organizer, { outerLabel: first.outerLabel, label: first.outerLabel }), now, !!error, new Map(children.flatMap(g => g.workers.map(w => [w.id, w] as const))).size)} · {new Set(children.flatMap(g => g.cards.map(c => c.id))).size} tasks</span></header>
+          return <section className="ov-outer" key={outerId} data-outer={first.outerLabel}><header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${first.outerLabel}`} onClick={() => send({ type: 'set-expanded', target: target('group', outerId), expanded: collapsed })}>{collapsed ? '+' : '−'}</button><strong>{first.outerLabel === 'Unassigned / Unknown' && ['initiative', 'epic'].includes(state.organizer?.outer ?? '') ? 'Unassigned' : first.outerLabel}</strong><small className="ov-group-field">{floorFields.find(f => f.id === state.organizer?.outer)?.label}</small><span>{workerSummary(relevantWorkerHomes(scene, state.organizer, { label: first.outerLabel }), now, !!error, new Map(children.flatMap(g => g.workers.map(w => [w.id, w] as const))).size)} · {new Set(children.flatMap(g => g.cards.map(c => c.id))).size} tasks</span></header>
             {!collapsed && <div className="ov-inner">{children.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}</div>}
           </section>
         })}
