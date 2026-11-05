@@ -59,14 +59,14 @@ test('activity strip switches panels, opens a worker, and restores overview on b
 
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(base)
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: /Needs You|Floor/ })).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: 'Jump to worker' })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Receipts' }).click()
     await expect(page.getByText('No messages yet.')).toBeVisible()
 
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
     await page.getByRole('button', { name: 'Workers' }).click()
@@ -84,7 +84,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     expect(new URL(page.url()).searchParams.get('worker')).toBe('alpha')
 
     await page.goBack()
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.getByRole('button', { name: /Needs You|Floor/ })).toHaveCount(0)
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
@@ -99,7 +99,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
 
     await page.setViewportSize({ width: 616, height: 800 })
     await page.goto(base)
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.locator('.cockpit-context-backdrop')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Overview' })).toHaveAttribute('title', 'Overview')

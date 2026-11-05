@@ -106,7 +106,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     await expect(page.locator('.cockpit-detail-rail .cockpit-status-detail .cockpit-mate')).toHaveText('Second mate')
     await page.screenshot({ path: test.info().outputPath('private-mate-badge-detail-390x844.png') })
     await page.getByRole('button', { name: 'Overview' }).click()
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('private-overview-390x844.png') })
   } finally {
     server?.kill('SIGTERM')

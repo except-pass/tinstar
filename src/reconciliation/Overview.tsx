@@ -272,7 +272,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
     element.scrollIntoView({ block: 'center', behavior: 'instant' })
     element.focus({ preventScroll: true })
   }, [state.navigation])
-  if (!scene) return <section className="ov-loading"><p role="status">{error ? 'Sources unavailable · Retrying' : 'Reading workers and Notion cards…'}</p></section>
+  if (!scene) return <section className="ov-loading" aria-label="Overview"><p role="status">{error ? 'Sources unavailable · Retrying' : 'Reading workers and Notion cards…'}</p></section>
   const toggleRelationship = (item: Target) => {
     setDiagnostics(false)
     setDeskMobile(false)
@@ -296,7 +296,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   const coverageNotice = workerCoverageNotice(fleetCoverage)
   const unreadHomes = unreadableWorkerHomes(scene.coverage.homes, now)
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
-  return <div ref={root} className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
+  return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
       <FloorToolbar now={now} visibleWorkers={new Set(groups.flatMap(g => g.workers.map(w => w.id))).size} visibleCards={new Set(groups.flatMap(g => g.cards.map(c => c.id))).size} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)

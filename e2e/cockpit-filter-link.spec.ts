@@ -65,14 +65,14 @@ test('worker task-id links, switcher navigation and Overview return on a private
     }
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(base)
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Workers', exact: true }).click()
     await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     await page.keyboard.press('Control+BracketRight')
     await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
     await page.goBack()
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
 
     await page.goto(`${base}/?worker=bravo`)
     await expect(page.getByRole('heading', { name: 'bravo' })).toBeVisible()
@@ -85,7 +85,7 @@ test('worker task-id links, switcher navigation and Overview return on a private
     await page.screenshot({ path: test.info().outputPath('worker-deep-link.png') })
 
     await page.getByRole('button', { name: 'Overview' }).click()
-    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect.poll(() => new URL(page.url()).searchParams.get('worker')).toBeNull()
 
     await page.goto(`${base}/?worker=alpha&q=window`)
