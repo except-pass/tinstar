@@ -109,10 +109,11 @@ function AskComposer({ scene, state, cardId, parent, clientKey, submit, close }:
 }
 function AskAnswer({ item, available, close, followUp }: { item: AskItem; available: boolean; close: () => void; followUp: () => void }) {
   const ref = useDialogFocus(item.context.anchor.page_id)
-  return <dialog ref={ref} className="ask-dialog ask-answer" aria-labelledby="ask-answer-title" onCancel={event => { event.preventDefault(); close() }}>
+  const [expanded, setExpanded] = useState(false)
+  return <dialog ref={ref} data-expanded={expanded} className="ask-dialog ask-answer" aria-labelledby="ask-answer-title" onCancel={event => { event.preventDefault(); close() }}>
     <header><h2 id="ask-answer-title">{item.context.anchor.label}</h2><button type="button" aria-label="Close answer" onClick={close}>×</button></header>
     {!available && <p role="status">The original task is no longer on the floor. <a href={item.context.anchor.url} target="_blank" rel="noreferrer">Open the source task</a></p>}
-    <p>{item.question}</p>{item.reply ? <><h3>{item.reply.summary}</h3><p className="ask-detail">{item.reply.detail}</p>{item.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label}</a>)}{item.reply.suggested_actions.length > 0 && <><h4>Suggested next actions</h4><ul>{item.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}</> : <p>{item.error ?? 'Waiting for First Mate’s answer.'}</p>}
+    <p className="ask-answer-question" title={item.question}>{item.question}</p>{item.reply ? <><h3 className="ask-answer-summary" title={item.reply.summary}>{item.reply.summary}</h3><details onToggle={event => setExpanded(event.currentTarget.open)}><summary>Full answer &amp; evidence</summary><p className="ask-detail">{item.reply.detail}</p>{item.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label}</a>)}{item.reply.suggested_actions.length > 0 && <><h4>Suggested next actions</h4><ul>{item.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}</details></> : <p>{item.error ?? 'Waiting for First Mate’s answer.'}</p>}
     <footer><button type="button" onClick={close}>Back to task</button><button type="button" onClick={followUp}>Follow up</button></footer>
   </dialog>
 }

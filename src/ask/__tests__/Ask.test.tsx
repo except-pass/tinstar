@@ -104,6 +104,7 @@ describe('one-card text Ask and Desk', () => {
     expect(card(container)).toBeVisible()
     expect(card(container)).toHaveClass('flashed')
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    fireEvent.click(screen.getByText('Full answer & evidence'))
     expect(screen.getByRole('dialog')).toHaveTextContent('First Mate checked the live dependency.')
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute('href', 'https://example.test/evidence')
     fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
