@@ -17,12 +17,54 @@ import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, proper
 import { CompactConnections } from './CompactConnections'
 import { loadOverviewDensity, saveOverviewDensity, type OverviewDensity } from './overviewDensity'
 import './overview.css'
+import './overviewActions.css'
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const same = (a: Target | null, b: Target) => !!a && semanticId(a) === semanticId(b)
 const safeUrl = (value: string | null | undefined) => { try { const url = new URL(value ?? ''); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null } }
+const copyFeedbackMs = 1600
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch { /* clipboard can reject without permission; the selection fallback still copies */ }
+  try {
+    const area = document.createElement('textarea')
+    area.value = value
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const copied = document.execCommand('copy')
+    area.remove()
+    return copied
+  } catch {
+    return false
+  }
+}
+function CopyNotionLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => { setCopied(false) }, [url])
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), copyFeedbackMs)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  const copy = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault()
+    event.stopPropagation()
+    void copyText(url).then(ok => { if (ok) setCopied(true) })
+  }
+  return <button type="button" className="ov-copy-link" onClick={copy} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') copy(event) }}>
+    <span className="material-symbols-outlined" aria-hidden="true">content_copy</span>
+    <span aria-live="polite">{copied ? 'Copied' : 'Copy link'}</span>
+  </button>
+}
 function homeFreshness(observation: { status: string; coverage: string; observedAt: string | null; expiresAt: string | null }, now: number) {
   const expired = !!observation.expiresAt && Date.parse(observation.expiresAt) <= now
   return `${expired ? 'stale' : observation.status}/${expired ? 'unknown' : observation.coverage} · ${ageLabel(Date.parse(observation.observedAt ?? ''), now)}`
@@ -64,7 +106,12 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const priority = card ? propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '') : ''
   const lastKnown = worker && (readFailed || stale(worker.observation, now))
   const deskRelated = state.navigation && (card ? card.id === state.navigation.cardId : scene.claims.some(c => c.cardId === state.navigation?.cardId && c.executionId === worker?.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current'))
-  return <button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${compact ? expanded ? ' ov-inline-expanded' : ' ov-collapsed' : ''}`}
+  const rich = !compact || !!expanded
+  const openInInspector = (event: { stopPropagation(): void }) => {
+    event.stopPropagation()
+    send({ type: 'focus', target: item })
+  }
+  return <div className="ov-item-frame"><button type="button" className={`ov-item ov-${kind} ov-${tone}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${compact ? expanded ? ' ov-inline-expanded' : ' ov-collapsed' : ''}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-pressed={compact ? undefined : same(state.selection, item)} aria-expanded={compact ? !!expanded : undefined} aria-label={`${title}. ${status}${compact ? `. ${openRoot ? 'Collapse' : 'Expand'} relationship` : ''}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
     onKeyDown={e => { if (compact && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); compact.toggle(item) } }}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={() => compact ? compact.toggle(item) : send({ type: 'focus', target: item })}>
@@ -86,6 +133,10 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />
   </button>
+    {rich && <button type="button" className="ov-open-inspector" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
+      <span className="material-symbols-outlined" aria-hidden="true">pageview</span><span>Inspector</span>
+    </button>}
+  </div>
 }
 export function Group({ view, group, hover, focus, allGroups }: { view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
   const { scene, state, send, now, readFailed } = view
@@ -214,12 +265,13 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const claims = [...scene.claims, ...scene.claimHistory].filter(c => card ? c.cardId === card.id : execution ? c.executionId === execution.id : c.id === claim?.id)
   const backlog = scene.backlog.filter(entry => card && entry.source.cardReferences.some(ref => ref.pageId === card.id))
   const findings = scene.findings.filter(f => card ? f.cardIds.includes(card.id) : execution ? f.executionIds.includes(execution.id) : home ? f.homeIds.includes(home.source.home) : false)
+  const notionUrl = card ? safeUrl(card.source.url) : null
   return <section className="ov-inspector" aria-label="Inspector">
     <header><h2>Inspector</h2><button type="button" className="ov-back" ref={close} onClick={() => send({ type: 'clear-selection' })}>Close Inspector</button></header>
     <small className="ov-eyebrow">{card ? 'Notion card' : execution ? 'Worker' : home ? 'Manager' : 'Overview'}</small>
     <h3>{card ? cardTitle(card) : execution ? workerTitle(execution) : home ? managerName(scene, home.source.home) : group?.label ?? (selection.kind === 'firstMate' ? 'First Mate' : 'Selected record unavailable')}</h3>
     {execution && <><p>{execution.placement.machine ?? 'Unknown machine'} · {workerState(execution)}</p><p>Manager: {managerName(scene, execution.home)} · Last activity {ageLabel(observedAt(execution), now)}{(readFailed || stale(execution.observation, now)) && ' · Last known observation'}</p><h4>Latest activity</h4><p>{String(execution.source.last_event.note ?? execution.source.lastEventText ?? 'No report published')}</p>{terminal && <a href={terminal} target="_blank" rel="noreferrer">Open worker terminal ↗</a>}</>}
-    {card && <><p className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{safeUrl(card.source.url) && <a href={safeUrl(card.source.url)!} target="_blank" rel="noreferrer">Open Notion card ↗</a>}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
+    {card && <><p className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
       {card.parentIds.map(id => <button key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{workerSummary(scene.coverage.homes.filter(h => h.source.home === home.source.home), now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && e.home === home.source.home).length, state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 0 : undefined)} · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
     {group && <><p>{group.cardIds.length} cards · {workerSummary(groupHomes, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id)).length)}</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
