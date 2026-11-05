@@ -91,3 +91,19 @@ export function readWorkerLinks(value: unknown): WorkerLinks {
   if (text.trim() === '') return { status: 'unknown', reason: BLANK_PROPERTY_REASON }
   return parseWorkerLinks(text)
 }
+
+/** Complete wire replacement; validation and limits apply to the whole record. */
+export function workerLinkRecord(tasks: WorkerLink[]) {
+  const record = { schema: WORKER_LINK_SCHEMA, tasks }
+  const json = JSON.stringify(record)
+  if (parseWorkerLinks(json).status !== 'valid') throw new Error('Invalid or oversized worker-link record')
+  const rich_text: Array<{ type: 'text'; text: { content: string } }> = []
+  let chunk = ''
+  for (const char of json) {
+    if (chunk.length + char.length > 2000) { rich_text.push({ type: 'text', text: { content: chunk } }); chunk = '' }
+    chunk += char
+  }
+  if (chunk) rich_text.push({ type: 'text', text: { content: chunk } })
+  if (rich_text.length > 100) throw new Error('Worker-link record exceeds 100 rich-text items')
+  return { record, json, properties: { [FIRST_MATE_TASKS]: { rich_text } } }
+}
