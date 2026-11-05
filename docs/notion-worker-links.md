@@ -92,7 +92,8 @@ contract does not publish positive continuity evidence. Tin Star therefore
 surfaces differing spawn evidence for investigation. The responsible First Mate
 must verify a relaunch or handoff from durable evidence before maintaining or
 correcting the Notion entry. Merely seeing the same task ID, title, or changed
-metadata is not continuity proof. Backfill remains a read-only proposal; no automatic repair runs here.
+metadata is not continuity proof. Tin Star's scene and report remain read-only;
+eligible writes use the separate [coordinator adapter](#coordinator-adapter).
 
 ## Display and operation
 
@@ -157,9 +158,10 @@ completion and must not create Will-action tags.
 
 Slice A shipped in https://github.com/except-pass/tinstar/pull/286. The coordinating
 First Mate subsequently wrote real declarations on three cards (four worker links) and confirmed them
-in Tin Star. Tin Star performs neither property creation nor link writes.
-Slice B adds report-only backfill; the responsible First Mate must perform and
-record live verification/writes. Automated tests do not substitute for that proof.
+in Tin Star. Tin Star's server, UI and MCP perform neither property creation nor
+link writes. For the separate adapter's rollout status and remaining live proof,
+see the [writer design](notion-worker-links-writer-design.md).
+Automated tests do not substitute for that proof.
 The local nudge bridge and optional decision model remain later slices.
 
 ## Slice B: backfill and deterministic mismatch report
