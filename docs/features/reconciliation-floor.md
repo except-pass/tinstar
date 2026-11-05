@@ -61,9 +61,9 @@ Read through the authorized discovery helper using API version `2025-09-03`, GET
 
 The first real query returned 100 pages, `has_more: true`, with 25 nonempty Parent item relations in that page of results. This is a sample, not a total board count. There was no observed dedicated Initiative/Epic property. Parent relations remain source hierarchy evidence; the [Overview reference](overview.md) owns the separate Initiative/Epic organizer contract. Notion can omit inaccessible related content; coverage always means the configured, authorized data source, not the entire workspace.
 
-S1 returns selected card properties and schema identifiers/types. It retains relation IDs and `hasMore`; truncated property relations or a missing expected schema property lower coverage to partial. External relation target context, page bodies, commitments embedded in blocks and PM Bot progress assessments are not collected by S1. Full card context/readiness work must fetch these deliberately in later slices. No new management judgment loop is introduced.
+S1 returns selected card properties and schema identifiers/types. It retains relation IDs. A relation whose inline list has `hasMore` is read in full through the page property endpoint and replaces that list; a relation that stays truncated, an unfinished card query, or a missing expected schema property lowers coverage to partial. External relation target context, page bodies, commitments embedded in blocks and PM Bot progress assessments are not collected by S1. Full card context/readiness work must fetch these deliberately in later slices. No new management judgment loop is introduced.
 
-The reader uses the supported [data source query](https://developers.notion.com/reference/query-a-data-source) and [schema retrieval](https://developers.notion.com/reference/retrieve-a-data-source) interfaces. No dependency on a machine's discovery helper or its credential is shipped.
+The reader uses the supported [data source query](https://developers.notion.com/reference/query-a-data-source), [schema retrieval](https://developers.notion.com/reference/retrieve-a-data-source), and [page property item](https://developers.notion.com/reference/retrieve-a-page-property) interfaces. No dependency on a machine's discovery helper or its credential is shipped.
 
 ## Real card-to-execution evidence
 
