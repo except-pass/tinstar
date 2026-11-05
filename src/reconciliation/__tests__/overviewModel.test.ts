@@ -150,3 +150,34 @@ it('expires generic flash reveals while retaining selection and Desk navigation'
   expect(flashed.state.statusFilter).toEqual(state.statusFilter)
   expect(navigated.state.statusFilter).toEqual(state.statusFilter)
 })
+
+
+it.each(['outer', 'inner'] as const)('follows remote worker publishers for the %s machine axis', axis => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  sources.fleet[1]!.observation.data!.tasks.forEach(task => { task.remote = { host: 'Bandit' } as NonNullable<typeof task.remote> })
+  sources.fleet[2]!.observation.data!.tasks = []
+  const reconciler = new SceneReconciler()
+  const organizer = { outer: axis === 'outer' ? 'machine' : 'initiative', inner: axis === 'inner' ? 'machine' : 'none' }
+  const group = { outerLabel: axis === 'outer' ? 'Bandit' : 'Reconciliation initiative', label: 'Bandit' }
+  const summary = () => {
+    const scene = reconciler.reconcile(sources, now)
+    const homes = relevantWorkerHomes(scene, organizer, group)
+    expect(homes.map(home => home.source.home)).toEqual([fixtureHomes[1]])
+    expect(relevantWorkerHomes(scene, { outer: 'manager', inner: 'none' }, { outerLabel: 'bandit', label: 'bandit' }).map(home => home.source.home)).toEqual([fixtureHomes[2]])
+    return workerSummary(homes, now, false, 4)
+  }
+  sources.fleet[2]!.observation.status = 'stale'
+  expect(summary()).toBe('4 workers')
+  sources.fleet[1]!.observation.status = 'stale'
+  sources.fleet[2]!.observation.status = 'fresh'
+  expect(summary()).toBe('4 last known workers')
+  sources.fleet[1]!.observation.status = 'fresh'
+  expect(summary()).toBe('4 workers')
+  sources.fleet[2]!.observation.data!.tasks = [structuredClone(sources.fleet[1]!.observation.data!.tasks[0]!)]
+  const task = sources.fleet[2]!.observation.data!.tasks[0]!
+  task.identity = { ...task.identity, fm_home: fixtureHomes[2]! }
+  sources.fleet[2]!.observation.status = 'stale'
+  const homes = relevantWorkerHomes(reconciler.reconcile(sources, now), organizer, group)
+  expect(homes.map(home => home.source.home)).toEqual([fixtureHomes[1], fixtureHomes[2]])
+  expect(workerSourceCoverage(homes, now)).toBe('partial')
+})

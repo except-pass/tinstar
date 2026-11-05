@@ -1,6 +1,6 @@
 import { homeLabel } from '../shared/reconciliationLabels'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
-import { organizedGroups, type FloorGroup } from '../shared/floorOrganization'
+import { activeWorker, organizedGroups, type FloorGroup } from '../shared/floorOrganization'
 import { managerCollapsed, type FloorScene, type PresentationState, type Target } from './presentation'
 
 export const cardTitle = (card: SceneCard) => String(card.source.properties.Name?.value || 'Untitled card')
@@ -25,12 +25,12 @@ export function workerSourceCoverage(homes: ReadonlyArray<{ observation: { statu
 const openWorkerLabel = new Set(['Unassigned / Unknown', 'Unassigned', 'All work', 'Unknown'])
 function homesForLabel(scene: FloorScene, field: 'manager' | 'machine', label: string) {
   if (openWorkerLabel.has(label)) return scene.coverage.homes
+  const publishers = new Set(scene.executions.filter(worker => activeWorker(worker) && worker.placement.machine === label).map(worker => worker.home))
   const matched = scene.coverage.homes.filter(home => field === 'machine'
-    ? (home.source.machine || 'Unknown') === label
+    ? publishers.has(home.source.home)
     : managerName(scene, home.source.home) === label)
   return matched.length ? matched : scene.coverage.homes
 }
-/** Manager and machine groups speak for that home. Every other grouping can hide a worker on any configured home. */
 export function relevantWorkerHomes(scene: FloorScene, organizer: { outer?: string; inner?: string } | undefined, group: { outerLabel: string; label: string }) {
   const outer = organizer?.outer, inner = organizer?.inner
   if (outer === 'manager' || outer === 'machine') return homesForLabel(scene, outer, group.outerLabel)
