@@ -215,8 +215,10 @@ describe('Notion authoritative observation table', () => {
     malformed.properties[FIRST_MATE_TASKS]!.workerLinks = readWorkerLinks({ type: 'rich_text', rich_text: [] })
     const covered = reconcile(input)
     expect(covered.findings.some(f => f.reason.includes('Malformed JSON'))).toBe(false)
-    expect(covered.coverage.absenceConclusions).toBe('sufficient-configured-sources')
+    expect(covered.findings.some(f => f.reason.startsWith(`${FIRST_MATE_TASKS}:`))).toBe(false)
+    expect(covered.coverage.absenceConclusions).toBe('suppressed')
     expect(covered.claims.filter(c => c.verification === 'confirmed').map(c => c.cardId)).toEqual([linked.id])
+    expect(covered.claims.find(c => c.cardId === hinted.id)?.verification).not.toBe('confirmed')
   })
 
   it('treats a missing generation in a partial home as unknown evidence', () => {

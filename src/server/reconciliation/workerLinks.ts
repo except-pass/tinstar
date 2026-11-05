@@ -6,11 +6,14 @@ export const WORKER_LINK_SCHEMA = 'tinstar.fm-links.v1'
 // Bound parsing too, so malformed remote input cannot consume unbounded work.
 export const MAX_WORKER_LINK_CHARS = 200_000
 export interface WorkerLink { fm_home: string; task_id: string; first_observed_spawn_gen: string }
-// 'none' is a readable property with no declaration. It is not the explicit
-// empty record, and it is not an unreadable property.
 export type WorkerLinks = { status: 'valid'; tasks: WorkerLink[] } |
-  { status: 'none' } |
   { status: 'unknown' | 'invalid'; reason: string }
+
+// A blank property is unknown, like a missing one, but it is the normal unset
+// state. Callers suppress absence from the status and skip a per-card finding.
+export const BLANK_PROPERTY_REASON = 'Blank property is unlinked'
+export const isBlankWorkerLinks = (value: WorkerLinks): boolean =>
+  value.status === 'unknown' && value.reason === BLANK_PROPERTY_REASON
 
 const invalid = (reason: string): WorkerLinks => ({ status: 'invalid', reason })
 const identityString = (value: unknown): value is string => typeof value === 'string' &&
@@ -82,9 +85,9 @@ export function readWorkerLinks(value: unknown): WorkerLinks {
     if (chunk.length > 2000) return invalid('Rich-text item exceeds 2,000 characters')
     chunks.push(chunk)
   }
-  // A blank property is the normal unset state, not a JSON record. Empty and
-  // whitespace-only text declare nothing; any other text is still parsed.
+  // Empty or whitespace-only text is not a JSON record and not an explicit
+  // empty declaration. Any other text is still parsed and can still be invalid.
   const text = chunks.join('')
-  if (text.trim() === '') return { status: 'none' }
+  if (text.trim() === '') return { status: 'unknown', reason: BLANK_PROPERTY_REASON }
   return parseWorkerLinks(text)
 }

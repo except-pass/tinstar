@@ -5,7 +5,7 @@ import type { SourceSnapshot } from './index'
 import { ageObservation, type Observation } from './observation'
 import type { CardReference } from './references'
 import { record, text } from './values'
-import { FIRST_MATE_TASKS, parseWorkerLinks } from './workerLinks'
+import { FIRST_MATE_TASKS, isBlankWorkerLinks, parseWorkerLinks } from './workerLinks'
 
 type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
@@ -148,13 +148,12 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   })
   const byCard = new Map(cards.map(card => [card.id, card]))
   const linkRecords = new Map(cards.map(card => [card.id, declaredLinks(card.source)]))
-  // Blank properties are readable and declare nothing, so they do not suppress
-  // coverage. Unknown and invalid records still do, as they did when the
-  // property was missing or unreadable.
-  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid' || parsed.status === 'none')
+  // Blank is unknown for coverage, like a missing property. It is the normal
+  // unset state, so it does not emit the per-card diagnostic a real read failure does.
+  const declarationsReadable = [...linkRecords.values()].every(parsed => parsed.status === 'valid')
   const declarations = cards.flatMap(card => {
     const parsed = linkRecords.get(card.id)!
-    if (parsed.status === 'none') return []
+    if (isBlankWorkerLinks(parsed)) return []
     if (parsed.status !== 'valid') {
       add(parsed.status === 'invalid' ? 'unverified-conflicting' : 'unknown-stale-source', [card.id], [], `${FIRST_MATE_TASKS}: ${parsed.reason}`)
       return []

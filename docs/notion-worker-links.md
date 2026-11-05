@@ -37,10 +37,10 @@ claim of a live Notion write or concurrent-write proof.
 `{"schema":"tinstar.fm-links.v1","tasks":[]}` explicitly declares no links. A
 missing/wrong-type/unreadable/truncated property is **unknown**, not an empty
 association. A readable rich-text property with no items, or whose concatenated
-text is empty or whitespace-only, means the card has no declaration: no finding,
-no confirmation, and legacy hints stay corroboration only. That blank property
-does not suppress absence coverage. Writers who mean "no links" still use the
-explicit empty record.
+text is empty or whitespace-only, is the same unknown/unlinked state: not
+malformed JSON and not a verified assertion of zero links. It emits no finding
+and suppresses absence coverage the same way a missing property does. Writers
+who mean "no links" still use the explicit empty record.
 
 ## Parser rules
 
@@ -83,7 +83,7 @@ alone stays unknown.
 | Declared task absent from a complete fresh home | Unverified declared relationship with an investigation diagnostic; never switch to a similarly named worker. |
 | Same worker on two primary cards, multiple observed attempts with the same ID, or different spawn evidence | Conflicting claims; request First Mate investigation. Hidden/Done cards still participate in duplicate detection. |
 | Done/archived card or changed Owner with a declared relationship | Historical claim retained. Card status/ownership alone is not an identity conflict. Operational expectations are evaluated separately. |
-| Notion missing, inaccessible, stale, expired or incomplete card pagination | Unknown/last-known; no confirmation or absence-based mismatch claims. A missing/unreadable/invalid declaration also suppresses absence claims. |
+| Notion missing, inaccessible, stale, expired or incomplete card pagination | Unknown/last-known; no confirmation or absence-based mismatch claims. A missing, blank, unreadable, or invalid declaration also suppresses absence claims. Blank text emits no finding. |
 | Legacy `work_item`, `notion_page_id`, URL, or equal-title hint | Candidate/corroboration only; cannot create a confirmed assignment. |
 
 A changed generation is not automatically a new task, but the available snapshot
