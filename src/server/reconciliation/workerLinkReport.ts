@@ -3,7 +3,17 @@ import { dispatchForTask } from './dispatchProvenance'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
 import { BLANK_PROPERTY_REASON, FIRST_MATE_TASKS, workerLinkRecord, parseWorkerLinks, WORKER_LINK_SCHEMA, type WorkerLink } from './workerLinks'
 
-const operationalWorker = (execution: Execution) => execution.kind !== 'secondmate' && execution.activity !== 'inactive'
+// pr.url is the recorded pull request. current_state.detail is the forge disposition
+// published by crew state (open, held for merge, or ready for review). Title text is not evidence.
+// Only an inactive worker that passes this check is admitted to the write tier.
+const reviewPrOpen = (execution: Execution) => {
+  const url = execution.source.pr.url
+  const detail = execution.source.current_state.detail
+  return typeof url === 'string' && url.length > 0 && typeof detail === 'string' &&
+    /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/.test(detail)
+}
+const operationalWorker = (execution: Execution) =>
+  execution.kind !== 'secondmate' && (execution.activity !== 'inactive' || reviewPrOpen(execution))
 const key = (...parts: unknown[]) => JSON.stringify(parts)
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
 const sorted = (values: string[]) => [...new Set(values)].sort(compare)
@@ -66,7 +76,7 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
         const card = scene.cards.find(c => c.id === provenance.cardId)
         if (!autoCoverage || !card || !records.get(card.id)?.mergeable || !operationalCard(card.id) || typeof card.source.properties.Status?.value !== 'string') {
           tier = 'unavailable'; reason = 'Dispatch target or complete Notion declaration coverage is unavailable; no write'
-        } else if (!['executing', 'waiting'].includes(execution.activity) || !execution.identity.task_id || !execution.identity.spawn_gen) {
+        } else if (!['executing', 'waiting', 'inactive'].includes(execution.activity) || !execution.identity.task_id || !execution.identity.spawn_gen) {
           tier = 'unavailable'; reason = 'Operational worker identity is not established; no write'
         } else {
           const proposal: BackfillProposal = { cardId: card.id, fm_home: source.home, task_id: execution.identity.task_id,
