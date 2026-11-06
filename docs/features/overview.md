@@ -18,8 +18,8 @@ the selected endpoint and all directly confirmed current counterparts expand
 inline. Expansion is one hop; it never recursively opens a connected component.
 Several relationship roots can remain open. Click a root again to close it;
 a counterpart shared by another open root stays expanded. Expanded rows label
-whether clicking opens or closes their own relationship. Direct tasks hidden
-by a status filter are temporarily revealed. Opening a relationship reopens only
+whether clicking opens or closes their own relationship. Direct tasks can be
+temporarily revealed under the scope rules below. Opening a relationship reopens only
 groups containing that root or its immediate counterparts; previously opened
 relationships do not reopen groups you collapsed. Sorting and grouping retain
 expansion by canonical ID.
@@ -103,7 +103,8 @@ Only explicit, non-conflicting canonical page-ID links carry endpoints between
 groups. Textual/equal-title candidates remain diagnostics. Multiple references
 retain one canonical entity ID. Each group and the headline deduplicate counts.
 Independent workers/tasks retain Unassigned / Unknown membership. A missing or
-hidden task never removes a current worker. Finished/offline workers stay in
+hidden task never removes a current worker when no explicit donut or search
+predicates apply. Finished/offline workers stay in
 expandable history, including last-known final reports after source expiry.
 
 Date groups use America/New_York calendar buckets: Overdue, Today, Tomorrow,
@@ -174,8 +175,9 @@ Your desk shows a focused ready Notion card and the next few, with conditional
 and unverified cards in a secondary section. The [queue reference](reconciliation-queue.md)
 owns readiness, source identity and per-source response controls.
 Clicking a Desk card navigates by canonical task ID without opening the Inspector
-or moving the queue position: it expands the required groups, reveals the card
-through saved status filters, scrolls and focuses the first matching floor
+or moving the queue position: it expands the required groups and can reveal the
+card through the base status scope when no explicit donut or search predicates
+apply, then scrolls and focuses the first matching floor
 reference deterministically, then flashes the card and its current confirmed
 explicit worker connections. A persistent highlight and navigation reveal remain
 after the flash until another Desk target or Reset. Saved grouping, order and

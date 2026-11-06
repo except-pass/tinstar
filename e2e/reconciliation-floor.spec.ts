@@ -698,6 +698,7 @@ test('single-row toolbar Smart Search exact snippets, safe identifiers and expli
   const input = page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true })
   const results = page.getByRole('listbox', { name: 'Search results' })
   const initiative = page.getByRole('combobox', { name: 'Search initiative', exact: true })
+  await expect(initiative).toBeVisible()
   expect(await initiative.locator('option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value))).toEqual(['', 'explicit'])
   await initiative.selectOption('explicit')
   await page.getByRole('button', { name: 'Needs my decision', exact: true }).click()
