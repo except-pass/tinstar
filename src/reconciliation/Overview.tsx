@@ -294,9 +294,15 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </section>
 }
-export function Overview({ workers, submit, messages }: { messages: OutboxMessage[]; workers: Worker[]; submit: (draft: Draft) => Promise<SubmitResult> }) {
+export function Overview({ workers, submit, messages, initialCardId }: { initialCardId?: string; messages: OutboxMessage[]; workers: Worker[]; submit: (draft: Draft) => Promise<SubmitResult> }) {
   const { scene, error, now } = useFloorScene(), { queue, error: queueError } = useDeskQueue()
   const { state, send, connection, bridgeError } = usePresentation(scene, queue, !!error)
+  const navigatedCard = useRef<string | null>(null)
+  useEffect(() => {
+    if (!initialCardId || !scene?.cards.some(card => card.id === initialCardId) || navigatedCard.current === initialCardId) return
+    navigatedCard.current = initialCardId
+    send({ type: 'navigate-card', cardId: initialCardId })
+  }, [initialCardId, scene, send])
   const [hovered, setHovered] = useState<Target | null>(null), [diagnosticsRevision, setDiagnosticsRevision] = useState<number | null>(null)
   const diagnostics = diagnosticsRevision === state.revision
   const setDiagnostics = (open: boolean) => setDiagnosticsRevision(open ? state.revision : null)

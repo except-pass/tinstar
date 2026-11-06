@@ -1,0 +1,77 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { z } from 'zod'
+import type { ReconciliationSources } from '../reconciliation'
+import { getConfigRoot } from '../configRoot'
+import { currentOriginAllowlist } from '../api/originAllowlist'
+import { resolveCorsHeaders } from '../api/cors'
+import { fail, ok } from '../api/envelope'
+import { releaseAssociations } from '../../shared/releases'
+import { AssociationConflict, AssociationStore, associationInput } from './associations'
+import { ReleasePullReader } from './pulls'
+
+async function ownerLogins(root: string): Promise<string[]> {
+  try {
+    const config = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
+    return z.array(z.string().min(1)).parse(config.ask?.ownerLogins)
+  } catch { return [] }
+}
+/** Local association overrides only. This API has no Notion writer or forge mutation. */
+export class ReleasesApi {
+  readonly store: AssociationStore
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins) {
+    this.store = new AssociationStore(root)
+  }
+  async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const path = (req.url ?? '').split('?')[0]
+    if (!['/api/releases', '/api/releases/associations'].includes(path!)) return false
+    const allowlist = currentOriginAllowlist(), origin = req.headers.origin
+    const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI', 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
+    if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
+    if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
+    const peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
+    const login = req.headers['tailscale-user-login']
+    // Same tailnet owner boundary as Ask: only the local serve proxy injects this identity.
+    const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
+    try {
+      if (path === '/api/releases' && req.method === 'GET') {
+        const scene = await this.sources.scene()
+        let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
+        try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
+        const data = releaseAssociations(scene, events)
+        data.associationsWritable = writable && !warning
+        if (warning) { data.associationsComplete = false; data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
+        const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
+        for (const pull of data.pulls) {
+          Object.assign(pull, observations.get(pull.url))
+          if (pull.freshness !== 'fresh') pull.exceptions.push('GitHub merge evidence pending, stale or unavailable')
+          else if (pull.state !== 'merged') pull.exceptions.push(pull.state === 'open' ? 'PR has not merged' : 'PR closed without merge')
+        }
+        return ok(res, data, { headers })
+      }
+      if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
+      if (!writable || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'Authorized tailnet owner and UI handshake required', { headers })
+      if (!req.headers['content-type']?.startsWith('application/json')) return fail(res, 'BAD_REQUEST', 'Expected JSON', { headers })
+      const chunks: Buffer[] = []; let bytes = 0
+      const timeout = setTimeout(() => req.destroy(), 10_000)
+      let input: z.infer<typeof associationInput>
+      try {
+        for await (const chunk of req) {
+          bytes += Buffer.byteLength(chunk)
+          if (bytes > 16 * 1024) return fail(res, 'BAD_REQUEST', 'Association payload too large', { headers })
+          chunks.push(Buffer.from(chunk))
+        }
+        input = associationInput.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } finally { clearTimeout(timeout) }
+      const scene = await this.sources.scene()
+      // Do not attach an arbitrary inaccessible card. Unlink remains possible for retired local edges.
+      if (input.action === 'link' && !scene.cards.some(card => card.id === input.cardId && !card.source.in_trash && !card.source.archived)) return fail(res, 'NOT_FOUND', 'Card unavailable in the authorized source', { headers })
+      return ok(res, await this.store.append(input, String(login)), { headers })
+    } catch (error) {
+      if (error instanceof AssociationConflict) return fail(res, 'CONFLICT', error.message, { headers })
+      if (error instanceof z.ZodError || error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid association request', { headers })
+      return fail(res, 'BACKEND_UNAVAILABLE', 'Release sources or local association audit unavailable', { headers })
+    }
+  }
+}

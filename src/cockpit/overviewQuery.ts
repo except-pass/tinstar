@@ -7,6 +7,8 @@ export interface FilterableWorker {
 }
 
 export interface OverviewLocation {
+  page?: 'releases'
+  card?: string
   /** First Mate task id, or null when the overview is showing. */
   worker: string | null
   /** Folder name of the worker's First Mate home, or null to take the only worker with that task id. */
@@ -69,7 +71,7 @@ export function readOverviewSearch(search: string): OverviewLocation {
   const home = params.get('home')
   return worker && worker.trim()
     ? { worker, home: home || null, key: null, q: params.get('q') ?? '' }
-    : { worker: null, home: null, key: null, q: params.get('q') ?? '' }
+    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(params.get('view') === 'releases' ? { page: 'releases' as const } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
 }
 
 /** Merge the overview params into the current query string, preserving anything else. */
@@ -81,6 +83,10 @@ export function writeOverviewSearch(currentSearch: string, next: OverviewLocatio
   else params.delete('home')
   if (next.q.trim()) params.set('q', next.q)
   else params.delete('q')
+  if (next.page === 'releases' && !next.worker) params.set('view', 'releases')
+  else params.delete('view')
+  if (next.card && !next.page && !next.worker) params.set('card', next.card)
+  else params.delete('card')
   const text = params.toString()
   return text ? `?${text}` : ''
 }

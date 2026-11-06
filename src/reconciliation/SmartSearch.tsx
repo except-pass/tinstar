@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { searchIndex } from '../shared/smartSearch'
+import { SmartSearchIndex, searchIndex } from '../shared/smartSearch'
 import type { SearchDocument } from '../shared/searchDocuments'
 import { statusProjection } from '../shared/floorOrganization'
 import type { FloorScene, PresentationState, Target } from './presentation'
 import './smartSearch.css'
 
 function context(document: SearchDocument) {
+  if (document.target.kind === 'pull') return 'GitHub PR'
   if (document.entity) return `${document.entity[0]!.toUpperCase()}${document.entity.slice(1)} · ${document.focusTargets?.length ?? 0} ${document.entity === 'initiative' ? 'tasks' : 'workers'}`
   const fields = document.fields
   const type = document.target.kind === 'card' ? 'Notion task' : 'Worker'
@@ -14,14 +15,17 @@ function context(document: SearchDocument) {
 }
 
 /** A draft query never changes the floor. Selecting a suggestion starts focus. */
-export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismiss, onRestore, onChoose }: {
+export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismiss, onRestore, onChoose, documents, scope }: {
+  scope?: 'releases'
+  documents?: SearchDocument[]
   scene: FloorScene; state: PresentationState; now: number; open: boolean; focused: boolean
   onOpen: () => void; onDismiss: () => void; onRestore: () => void
   onChoose: (target: Target, targets?: Target[]) => void
 }) {
   const input = useRef<HTMLInputElement>(null), trigger = useRef<HTMLButtonElement>(null), host = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState(''), [active, setActive] = useState(0)
-  const hits = useMemo(() => open && query.trim() ? searchIndex(scene).search(query, now).slice(0, 8) : [], [scene, query, now, open])
+  const index = useMemo(() => { if (!documents) return searchIndex(scene); const index = new SmartSearchIndex(); index.update(documents); return index }, [scene, documents])
+  const hits = useMemo(() => open && query.trim() ? index.search(query, now).slice(0, 8) : [], [index, query, now, open])
   const base = useMemo(() => open ? statusProjection(scene, { ...state, searchReveal: null, searchFocus: undefined }, now) : { cards: [], workers: [] }, [scene, state, now, open])
   const baseKeys = new Set([...base.cards.map(card => `card:${card.id}`), ...base.workers.map(worker => `execution:${worker.id}`)])
   const activeIndex = Math.min(active, Math.max(0, hits.length - 1)), activeHit = hits[activeIndex]
@@ -45,12 +49,12 @@ export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismis
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setActive(value => Math.max(0, Math.min(hits.length - 1, value + (event.key === 'ArrowDown' ? 1 : -1)))) }
         if (event.key === 'Enter' && activeHit) { event.preventDefault(); choose(activeHit.document) }
       }} /><button type="button" aria-label="Close search palette" onClick={dismiss}>Esc</button></div>
-      <div id="ov-search-results" role="listbox" aria-label="Search results">{hits.map((hit, index) => <button type="button" role="option" aria-label={`${hit.document.title}. ${context(hit.document)}${!baseKeys.has(hit.document.key) && !hit.document.entity ? ' · Outside current view' : ''}`} id={`ov-search-hit-${index}`} aria-selected={index === activeIndex} key={hit.document.key} onFocus={() => setActive(index)} onMouseEnter={() => setActive(index)} onClick={() => choose(hit.document)}>
+      <div id="ov-search-results" role="listbox" aria-label="Search results">{hits.map((hit, index) => <button type="button" role="option" aria-label={`${hit.document.title}. ${context(hit.document)}${hit.document.target.kind !== 'pull' && !baseKeys.has(hit.document.key) && !hit.document.entity ? ' · Outside current view' : ''}`} id={`ov-search-hit-${index}`} aria-selected={index === activeIndex} key={hit.document.key} onFocus={() => setActive(index)} onMouseEnter={() => setActive(index)} onClick={() => choose(hit.document)}>
         <span className="ov-search-icon" aria-hidden="true">{hit.document.entity === 'machine' ? '▣' : hit.document.entity ? '◈' : hit.document.target.kind === 'card' ? '▤' : '◇'}</span>
-        <span><strong>{hit.document.title}</strong><small>{context(hit.document)}{!baseKeys.has(hit.document.key) && !hit.document.entity ? ' · Outside current view' : ''}{scene.searchReadFailed || hit.document.expiresAt && Date.parse(hit.document.expiresAt) <= now ? ' · last known' : ''}</small></span>
+        <span><strong>{hit.document.title}</strong><small>{context(hit.document)}{hit.document.target.kind !== 'pull' && !baseKeys.has(hit.document.key) && !hit.document.entity ? ' · Outside current view' : ''}{scene.searchReadFailed || hit.document.expiresAt && Date.parse(hit.document.expiresAt) <= now ? ' · last known' : ''}</small></span>
       </button>)}</div>
-      {!hits.length && <p role="status">{query.trim() ? 'No matches in available records.' : 'Type to find tasks, workers, machines, managers, initiatives and linked PRs.'}</p>}
-      <footer>↑↓ Navigate <span>↵ Focus in Overview</span><span>Esc Close</span></footer>
+      {!hits.length && <p role="status">{query.trim() ? 'No matches in available records.' : scope === 'releases' ? 'Type to find PRs and linked tasks.' : 'Type to find tasks, workers, machines, managers, initiatives and linked PRs.'}</p>}
+      <footer>↑↓ Navigate <span>↵ {scope === 'releases' ? 'Focus PR' : 'Focus in Overview'}</span><span>Esc Close</span></footer>
     </section>}
   </div>
 }

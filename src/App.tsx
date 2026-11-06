@@ -11,6 +11,9 @@ import { DRAWER_MEDIA, isDrawerLayout, messageNeedsAttention, type AttentionCard
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
+import { Releases } from './releases/Releases'
+import { useReleases } from './releases/useReleases'
+import { releaseQueueCount } from './releases/model'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
@@ -34,6 +37,7 @@ function displayTime(value: string | null): string {
 }
 
 export default function App() {
+  const releases = useReleases()
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(true)
@@ -290,7 +294,7 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
+    <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: '', page: 'releases' }, 'push') }} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
 
@@ -298,7 +302,7 @@ export default function App() {
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {!current && !overviewLocation.worker ? <Overview workers={workers} messages={messages} submit={submit} /> : current ? <>
+      {overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} messages={messages} submit={submit} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {
