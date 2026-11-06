@@ -60,7 +60,7 @@ All six categories have explicit candidate and unknown-coverage results:
 | Category | Rules and limits |
 | --- | --- |
 | Duplicates | Exact normalized titles, or canonical PR/Jira identifiers with strong title overlap; connected components dedupe pair findings. Same title/reference is a candidate, never confirmation. |
-| Overlapping scopes | Bounded title/identifier neighbors. Explicit ancestor/child relations, numbered slices, different dated runs and different work identifiers retain their distinctions. Writer/reconciliation versus recovery roles stay distinct. |
+| Overlapping scopes | Bounded title/identifier neighbors. Explicit ancestor/child relations, lettered/numeric implementation markers (including compound phase/slice names), different dated runs and different work identifiers retain their distinctions. Writer/reconciliation versus recovery roles stay distinct. |
 | Potentially superseded | An explicit `superseded by`, `replaced by` or `consolidated into` assertion immediately naming an observed Notion card. Negated/conditional assertions and unavailable targets are not replacement conclusions. |
 | Stale/no next action | Missing Next action / Next Action properties after checking published waits/delegation and bounded prose markers. Last edit age is context, never proof of progress, obsolescence or completion. Uncollected prose may contain a plan. |
 | Check-in metadata | Missing, malformed or past published dates, using the board's New York date-only semantics. No working-hour/business-morning policy or PM Bot verdict is recreated; no commitment is reset. |
@@ -69,8 +69,9 @@ All six categories have explicit candidate and unknown-coverage results:
 Title neighbor retrieval is deterministic: each card selects up to eight ranked
 neighbors, and pairs selected by either card are deduplicated. A card can therefore
 participate in more than eight comparisons. Large common-word buckets are windowed;
-the audit reports actual comparison
-counts. This is a conservative candidate search, not exhaustive semantic analysis.
+the audit reports neighbor comparison counts. Completed duplicate clusters also
+check every member pair for explicit distinctions; a distinction makes the cluster
+an overlap candidate. This is a conservative candidate search, not exhaustive semantic analysis.
 Prose uses the existing bounded/redacted CardContextReader; partial/unsupported
 blocks and failed Notion/GitHub/First Mate reads do not establish absence. Source
 instructions are treated as data and cannot call tools or authorize actions.
@@ -87,7 +88,10 @@ operation is investigation, not a field edit. No exact metadata fix or substanti
 rewrite is silently inferred.
 
 Evidence revisions fingerprint content/edit versions independently of observation
-refresh times. Preconditions record source fingerprints, source edit versions and
+refresh times. Worker-link diagnostics also cite the relevant fleet home observation,
+execution identities and detector facts; their material evidence participates in
+the revision, and their freshness/coverage contributes to abstention.
+Preconditions record source fingerprints, source edit versions and
 the future need for explicit approval, reread/drift checks, preservation and
 readback/audit. `authorization: not-authorized` is descriptive; there is no apply
 function behind it. An audit cannot be submitted as a write command.
