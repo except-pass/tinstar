@@ -39,14 +39,16 @@ describe('Smart Search in the existing Overview', () => {
     const claim = scene.claims.find(claim => claim.cardId === planned.id && claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current')!
     expect(claim).toBeTruthy()
     const worker = scene.executions.find(worker => worker.id === claim.executionId)!
+    const taskId = worker.identity.task_id
+    if (taskId === null) throw new Error('Expected the linked worker fixture to have a task ID')
     const { container } = mount()
     act(() => { observed.send!(actionSchema.parse({ type: 'set-roadmap', expanded: false })) })
     const selector = `.ov-card[data-entity-id="${planned.id}"]`
     expect(container.querySelector(selector)).toBeNull()
     const before = cardIds(container)
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
-    search(kind === 'card' ? 'Release Coordinator' : worker.identity.task_id)
-    const result = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: kind === 'card' ? /Release Coordinator/ : new RegExp(worker.identity.task_id) })
+    search(kind === 'card' ? 'Release Coordinator' : taskId)
+    const result = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: kind === 'card' ? /Release Coordinator/ : new RegExp(taskId) })
     fireEvent.click(result)
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
     const selected = kind === 'card' ? container.querySelector(selector) : Array.from(container.querySelectorAll('.ov-execution')).find(element => element.getAttribute('data-entity-id') === worker.id)
