@@ -361,8 +361,10 @@ adapter writes only `First Mate tasks`, then reads the full record back and
 requires exact semantic equality. A concurrent append visible at reread is
 preserved. Explicit apply repairs free text, unparsable text without embedded
 identity fields, and wrong-schema or otherwise invalid JSON records, merging
-every recoverable exact v1 worker entry with the proven dispatch links. Valid
-entries in a partly invalid record or a nested record remain part of uniqueness
+every recoverable worker identity with the proven dispatch links. Recovery keeps
+the three validated identity fields even when an entry has extra metadata; an
+identity-bearing entry with missing or invalid identity fields prevents repair.
+Recovered entries in a partly invalid record or a nested record remain part of uniqueness
 and generation checks. Repeated identical entries collapse to one identity.
 Conflicting generations, repeated JSON keys, broken JSON containing identity
 fields, truncated/unreadable properties and oversized replacements still require
