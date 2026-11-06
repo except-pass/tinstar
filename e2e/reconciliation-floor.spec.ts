@@ -649,6 +649,7 @@ test('single-row toolbar Smart Search ranks, reveals one-hop clusters and restor
   await expect(results.getByRole('option')).toHaveCount(1)
   await expect(results).toContainText('Release Coordinator')
   await expect(results.locator('mark')).not.toHaveCount(0)
+  await screenshot(page, 'smart-search-desktop-fuzzy')
   await input.press('ArrowDown')
   await input.press('Enter')
   const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
@@ -663,6 +664,14 @@ test('single-row toolbar Smart Search ranks, reveals one-hop clusters and restor
   expect(await page.locator('.ov-workspace').evaluate(node => node.scrollTop)).toBeCloseTo(previousScroll, 0)
   await expect(page.locator('.ov')).toHaveAttribute('data-outer', 'machine')
   await screenshot(page, 'smart-search-desktop-restored')
+  for (const label of ['Smart Search (Ctrl or Command K)', 'Remove search text']) {
+    await page.keyboard.press('Control+k')
+    await input.fill('Release')
+    await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+    await page.getByRole('button', { name: label, exact: true }).press('Escape')
+    expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))).toEqual(beforeCards)
+    expect(await page.locator('.ov-workspace').evaluate(node => node.scrollTop)).toBeCloseTo(previousScroll, 0)
+  }
   await page.keyboard.press('Control+k')
   await input.fill('Roadmap: planned integration')
   const outside = results.getByRole('option').filter({ hasText: 'Roadmap: planned integration' })
@@ -672,6 +681,52 @@ test('single-row toolbar Smart Search ranks, reveals one-hop clusters and restor
   await expect(page.locator('.ov')).toHaveAttribute('data-preset', 'operational')
   await page.getByRole('button', { name: '← Back', exact: true }).click()
   await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveCount(0)
+})
+
+test('single-row toolbar Smart Search exact snippets, safe identifiers and explicit Initiative decisions', async ({ page }) => {
+  const proofNow = Date.parse('2026-11-06T00:00:00Z')
+  await page.clock.install({ time: proofNow })
+  const scene = fixtureScene({ now: proofNow })
+  for (const card of scene.cards) { delete card.source.properties.Initiative; card.ancestry = ['parent-only'] }
+  const card = scene.cards.find(card => card.id === fixtureId(2))!
+  card.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['explicit'], hasMore: false }
+  card.source.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision', 'Merge'], hasMore: false }
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  await page.keyboard.press('Control+k')
+  const input = page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true })
+  const results = page.getByRole('listbox', { name: 'Search results' })
+  const initiative = page.getByRole('combobox', { name: 'Search initiative', exact: true })
+  expect(await initiative.locator('option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value))).toEqual(['', 'explicit'])
+  await initiative.selectOption('explicit')
+  await page.getByRole('button', { name: 'Needs my decision', exact: true }).click()
+  await expect(results.getByRole('option')).toHaveCount(1)
+  await expect(results).toContainText(String(card.source.properties.Name!.value))
+  await screenshot(page, 'smart-search-explicit-decision')
+  await page.getByRole('button', { name: 'Remove initiative: explicit', exact: true }).click()
+  await page.getByRole('button', { name: 'Remove pattern Needs my decision', exact: true }).click()
+  // Deliver disposable source snapshots through the running browser's normal refresh.
+  const text = '  PR #29201; PR #2920 then oﬃce release'
+  for (const field of ['identifier', 'name', 'body']) {
+    scene.searchIndex = { notes: ['Disposable authorized source snapshot'], documents: [{ key: `card:${card.id}`, target: { kind: 'card', id: card.id }, title: field === 'name' ? text : 'NEM3', identifiers: field === 'identifier' ? [text, '0143'] : ['0143'], fields: [{ name: field === 'name' ? 'Name' : 'Description', source: 'Notion blocks', text: field === 'identifier' ? 'Known PR' : text }], observedAt: new Date(proofNow).toISOString(), expiresAt: new Date(proofNow + 60_000).toISOString(), coverage: 'fresh/complete' }] }
+    await page.reload()
+    await page.keyboard.press('Control+k')
+    await input.fill('"PR #2920"')
+    await expect(results.getByRole('option')).toHaveCount(1)
+    expect(await results.locator('mark').allTextContents()).toEqual('PR #2920'.split(''))
+    await input.fill('29201x')
+    await expect(results.getByRole('option')).toHaveCount(0)
+    await input.fill('0142')
+    await expect(results.getByRole('option')).toHaveCount(0)
+    await input.fill('0143')
+    await expect(results.getByRole('option')).toHaveCount(1)
+    if (field !== 'identifier') {
+      await input.fill('office')
+      expect(await results.locator('mark').allTextContents()).toEqual('oﬃce'.split(''))
+    }
+  }
+  await screenshot(page, 'smart-search-unicode-snippet')
 })
 
 test('single-row toolbar Smart Search patterns, evidence and mobile keyboard remain accessible', async ({ page }) => {
