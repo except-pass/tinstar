@@ -327,8 +327,11 @@ only with a nonempty `pr.url` and `current_state.detail` beginning with
 snapshot's recorded forge disposition, not a live PR lookup or title text.
 Inactive workers with merged, closed, missing or unrecognized PR evidence stay
 excluded.
-Malformed/unreadable declarations anywhere on the board prevent proving
-uniqueness. Fully read blank properties can be initialized only by explicit apply.
+Unreadable declarations anywhere on the board prevent proving uniqueness. The
+adapter reports malformed properties as `invalid-record` findings and audits
+their prior text. It can plan a repair for a fully read malformed property when
+exact dispatch evidence proves the links. Fully read blank properties can also
+be initialized by explicit apply.
 Changed generation and duplicate attempts require investigation, never an
 automatic anchor refresh. Existing confirmed links need no write.
 
@@ -356,9 +359,18 @@ credential and board scope, exactly as for `worker-links:report`.
 Each card is reread with its entire paginated property before merging. The
 adapter writes only `First Mate tasks`, then reads the full record back and
 requires exact semantic equality. A concurrent append visible at reread is
-preserved. A changed generation, invalid/unknown-schema/truncated/unreadable
-record or oversized replacement cannot be overwritten. Explicit apply can
-initialize a genuinely blank field; report-only cannot. Writes are serialized
+preserved. Explicit apply repairs free text, unparsable text without embedded
+identity fields, and wrong-schema or otherwise invalid JSON records, merging
+every recoverable worker identity with the proven dispatch links. Recovery keeps
+the three validated identity fields even when an entry has extra metadata; an
+identity-bearing entry with missing or invalid identity fields prevents repair.
+Recovered entries in a partly invalid record or a nested record remain part of uniqueness
+and generation checks. Repeated identical entries collapse to one identity.
+Conflicting generations, repeated JSON keys, broken JSON containing identity
+fields, truncated/unreadable properties and oversized replacements still require
+investigation: overwriting them could discard an existing link. A malformed
+property without dispatch authority is reported without inventing links.
+Report-only emits the proposed replacement and never writes it. Writes are serialized
 and limited to one PATCH attempt per second. Home and Notion freshness are
 rechecked after waits immediately before every PATCH attempt; expired coverage
 stops the batch. HTTP 429 Retry-After is honored
@@ -374,7 +386,11 @@ when no record was read), and `result`. Blank initialization hashes the empty
 string as the before state. Results include tier decisions, `planned`,
 `filtered`, `batch-limit`, `write-planned`, `verified`, `no-op`,
 `stop-prewrite-conflict`, `stop-uncertain-write` and `investigate-invalid-record`.
-No token, remote error body or raw prose is logged. New audit files use mode 0600.
+Invalid-record audits and repair plans include `priorText`, preserving the
+malformed property verbatim; their `beforeHash` hashes that text. A prewrite
+reread that discovers malformed text also emits a finding and audit before any
+replacement. No token, remote error body or other source prose is logged. Keep
+the audit private. New audit files use mode 0600.
 
 Dispatch-time triggering, substantive scheduled check-in reruns and investigation
 handoff/deduplication belong to the coordinator workflow, not this CLI.

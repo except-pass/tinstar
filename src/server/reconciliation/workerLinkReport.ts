@@ -39,7 +39,7 @@ interface BackfillRow {
 }
 
 function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: BackfillProposal[], notionCurrent: boolean,
-  records: Map<string, { mergeable: boolean; invalid: boolean }>, autoCoverage: boolean) {
+  records: Map<string, { mergeable: boolean; invalid: boolean }>, autoCoverage: boolean, repairCards: ReadonlySet<string>) {
   const operationalCard = (id: string) => {
     const card = scene.cards.find(card => card.id === id)?.source
     return !card || !card.archived && !card.in_trash && !['done', 'archived'].includes(String(card.properties.Status?.value).toLowerCase())
@@ -71,7 +71,9 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
       if (contradiction || invalid || dispatchConflict) { tier = 'conflicts'; reason = 'Source classification requires First Mate investigation; no write' }
       else if (!homeAvailable || !notionCurrent || cardIds.some(id => !records.get(id)?.mergeable)) {
         tier = 'unavailable'; reason = 'Home, Notion coverage or referenced declaration is unknown, stale, partial or unreadable'
-      } else if (confirmed) { tier = 'already confirmed'; reason = 'Existing Notion declaration matches the fresh worker identity; no write' }
+      } else if (confirmed && !(provenance.status === 'card' && repairCards.has(provenance.cardId))) {
+        tier = 'already confirmed'; reason = 'Existing Notion declaration matches the fresh worker identity; no write'
+      }
       else if (provenance.status === 'card') {
         const card = scene.cards.find(c => c.id === provenance.cardId)
         if (!autoCoverage || !card || !records.get(card.id)?.mergeable || !operationalCard(card.id) || typeof card.source.properties.Status?.value !== 'string') {
@@ -116,7 +118,7 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
 /** Report the Slice A classification at the snapshot's own evaluation time.
  * No process history or wall clock participates, so saved inputs are replayable.
  */
-export function buildWorkerLinkReport(input: SourceSnapshot) {
+export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: ReadonlySet<string> = new Set()) {
   const scene = reconcileScene(input, Date.parse(input.generatedAt))
   const intentions = scene.coverage.intentions
   const notionCurrent = ['fresh', 'partial'].includes(intentions.status) && !!input.intentions.data && !input.intentions.data.hasMore
@@ -160,11 +162,15 @@ export function buildWorkerLinkReport(input: SourceSnapshot) {
   const autoCoverage = complete(scene.coverage.intentions) && notionCurrent &&
     cards.every(({ mergeable }) => mergeable)
   const homes = groupBackfill(scene, proposals, notionCurrent, new Map(cards.map(({ card, declaration, mergeable }) =>
-    [card.id, { mergeable, invalid: declaration.status === 'invalid' }])), autoCoverage)
+    [card.id, { mergeable, invalid: declaration.status === 'invalid' }])), autoCoverage, repairCards)
   ordered(proposals)
   const merges = cards.filter(({ card }) => proposals.some(p => p.cardId === card.id)).map(({ card, declaration }) => {
-    const tasks: WorkerLink[] = [...(declaration.status === 'valid' ? declaration.tasks : []),
-      ...proposals.filter(p => p.cardId === card.id).map(p => ({ fm_home: p.fm_home, task_id: p.task_id, first_observed_spawn_gen: p.spawn_gen }))]
+    const tasks: WorkerLink[] = [...(declaration.status === 'valid' ? declaration.tasks : [])]
+    for (const proposal of proposals.filter(p => p.cardId === card.id)) {
+      if (!tasks.some(task => key(task.fm_home, task.task_id) === key(proposal.fm_home, proposal.task_id))) {
+        tasks.push({ fm_home: proposal.fm_home, task_id: proposal.task_id, first_observed_spawn_gen: proposal.spawn_gen })
+      }
+    }
     // Preserve every existing entry. Canonical ordering also makes coordinator
     // readback/diff review independent of source collection order.
     tasks.sort((a, b) => compare(key(a.fm_home, a.task_id), key(b.fm_home, b.task_id)))

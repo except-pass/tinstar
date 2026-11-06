@@ -92,6 +92,40 @@ export function readWorkerLinks(value: unknown): WorkerLinks {
   return parseWorkerLinks(text)
 }
 
+/** Coordinator-only recovery; the ordinary reader remains atomic and invalid.
+ * Keep exact valid identities from damaged records, without interpreting prose.
+ */
+export function recoverWorkerLinks(links: WorkerLinks, text: unknown): WorkerLink[] | undefined {
+  if (links.status !== 'invalid' || typeof text !== 'string' || text.length > MAX_WORKER_LINK_CHARS) return
+  const parsedLinks = parseWorkerLinks(text)
+  // Wire limit failures must not be turned into permission to overwrite.
+  if (parsedLinks.status !== 'invalid' || parsedLinks.reason !== links.reason) return
+  let parsed: unknown
+  try { parsed = JSON.parse(text) } catch {
+    // Broken JSON containing identity fields may conceal existing links. Retain
+    // it for investigation rather than risk deleting an unrecoverable sibling.
+    return /"(?:schema|tasks|fm_home|task_id|first_observed_spawn_gen)"\s*:/.test(text) ? undefined : []
+  }
+  // JSON.parse loses repeated keys; neither identity can safely be preferred.
+  if (duplicateJsonKeys(text)) return
+  const tasks: WorkerLink[] = []
+  const pending: unknown[] = [parsed]
+  while (pending.length) {
+    const value = pending.pop()
+    if (Array.isArray(value)) { for (const child of value) pending.push(child); continue }
+    const row = record(value)
+    if (['fm_home', 'task_id', 'first_observed_spawn_gen'].some(key => Object.hasOwn(row, key))) {
+      if (!canonicalHome(row.fm_home) || !identityString(row.task_id) || !identityString(row.first_observed_spawn_gen)) return
+      tasks.push({ fm_home: row.fm_home, task_id: row.task_id, first_observed_spawn_gen: row.first_observed_spawn_gen })
+    }
+    for (const child of Object.values(row)) if (child && typeof child === 'object') pending.push(child)
+  }
+  const unique = [...new Map(tasks.map(task => [JSON.stringify(task), task])).values()]
+  // Conflicting generations cannot be collapsed to a single v1 entry.
+  if (parseWorkerLinks(JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks: unique })).status !== 'valid') return
+  return unique
+}
+
 /** Complete wire replacement; validation and limits apply to the whole record. */
 export function workerLinkRecord(tasks: WorkerLink[]) {
   const record = { schema: WORKER_LINK_SCHEMA, tasks }

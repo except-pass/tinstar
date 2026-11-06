@@ -46,9 +46,9 @@ valid Notion declarations after ordinary source refresh.
 
 Eligibility requires a fresh complete relevant home, an operational worker with
 exact home/task/generation, a current complete configured Notion board, a present
-operational card and readable declarations across the board. Fully read blanks
-are unlinked, and therefore do not hide competing declarations; missing,
-unreadable, invalid and truncated records block automatic eligibility. Existing
+operational card and readable declarations across the board. Declaration
+eligibility and malformed-record recovery follow the
+[coordinator adapter rules](notion-worker-links.md#coordinator-adapter). Existing
 valid declarations on any other card, including historical cards, and any
 contradictory reference stop that worker. Unrelated partial Notion relations
 still allow prior positive read-only evidence but suppress this writer tier.
@@ -60,8 +60,9 @@ other credential holders from concurrent relationship edits during the pilot.
 There is no Notion compare-and-swap or distributed lock. Per-card ordering cannot
 protect against an external editor changing the property after its reread.
 
-Default mode only collects and reports. `--apply` explicitly authorizes blank
-initialization and requires both a token **file path** and `--max-cards 1..5`.
+Default mode only collects and reports. `--apply` explicitly authorizes writes
+under the [adapter repair rules](notion-worker-links.md#coordinator-adapter)
+and requires both a token **file path** and `--max-cards 1..5`.
 It processes one card at a time, adding at most ten worker references per run.
 Filters and batch limits queue remaining decisions for another invocation.
 
@@ -70,12 +71,10 @@ For each eligible card, the adapter:
 1. Checks that collected coverage has not expired, rereads the card and verifies
    its board, operational status and rich-text property type. Retrieves every
    property item through the paginated property endpoint, even for inline blanks.
-2. Validates the entire v1 record. Missing, unreadable, invalid, unknown-schema,
-   oversized or incomplete records cannot be initialized or overwritten. Only
-   a genuinely blank complete rich-text property may be initialized by this
-   explicit `--apply` invocation.
-3. Merges into the latest validated record, preserving every sibling and its
-   generation. An exact existing entry is a no-op. A different generation stops
+2. Validates the entire v1 record or recovers identities under the
+   [adapter repair rules](notion-worker-links.md#coordinator-adapter).
+3. Merges into the latest validated or recovered record, preserving every sibling and its
+   generation. An exact existing entry in a valid record is a no-op. A different generation stops
    the batch for investigation. A sibling appended since report collection is
    preserved by the full reread.
 4. Validates the complete replacement against 200,000 characters, 100 items and

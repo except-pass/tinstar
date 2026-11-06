@@ -118,22 +118,127 @@ describe('authorized coordinator adapter with fake Notion', () => {
     expect(result.stopped).toBe(false)
     expect(fake.patches).toHaveLength(1)
   })
-  it.each(['malformed', 'unknown-schema', 'unreadable-item', 'oversize-item', 'changed-generation', 'duplicate-entry'])(
+  it.each(['unreadable-item', 'oversize-item', 'changed-generation', 'duplicate-key', 'broken-v1', 'conflicting-entries', 'invalid-identity'])(
     'never overwrites %s returned by the full prewrite read', async condition => {
       const fake = fakeNotion()
       let chunks: unknown[] = []
-      if (condition === 'malformed') chunks = [{ text: { content: '{' } }]
-      if (condition === 'unknown-schema') chunks = [{ text: { content: '{"schema":"future","tasks":[]}' } }]
       if (condition === 'unreadable-item') chunks = [{}]
       if (condition === 'oversize-item') chunks = [{ text: { content: 'x'.repeat(2001) } }]
       if (condition === 'changed-generation') chunks = workerLinkRecord([link('linked-worker', 'old')]).properties[FIRST_MATE_TASKS].rich_text
-      if (condition === 'duplicate-entry') chunks = [{ text: { content: JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [link(), link()] }) } }]
+      if (condition === 'duplicate-key') chunks = [{ text: { content: '{"schema":"tinstar.fm-links.v1","tasks":[],"tasks":[]}' } }]
+      if (condition === 'invalid-identity') chunks = [{ text: { content: JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ task_id: 'sibling' }] }) } }]
+      if (condition === 'broken-v1') chunks = [{ text: { content: workerLinkRecord([link('sibling')]).json.slice(0, -1) } }]
+      if (condition === 'conflicting-entries') chunks = [{ text: { content: JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [link(), link('linked-worker', 'old')] }) } }]
       fake.properties.set(a, chunks)
       const { result, audit } = await run(source(), fake)
       expect(result.stopped).toBe(true)
       expect(fake.patches).toHaveLength(0)
       expect(audit.at(-1)).toMatchObject({ result: 'stop-prewrite-conflict', investigationKey: JSON.stringify(['card', a]) })
     })
+  it.each(['free text worker', '{', '{"schema":"future","tasks":[]}'])(
+    'reports, audits and repairs fully read malformed text %s only on apply', async text => {
+      const input = source(), fake = fakeNotion()
+      input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
+      fake.properties.set(a, [{ text: { content: text } }])
+      const dry = await run(input, fake, { apply: false })
+      expect(dry.result.plannedWrites).toHaveLength(1)
+      expect(fake.fetcher).not.toHaveBeenCalled()
+      expect(dry.result.report.findings).toContainEqual(expect.objectContaining({ detector: 'invalid-record', cardIds: [a] }))
+      expect(dry.audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: text, beforeHash: expect.any(String) }))
+      const applied = await run(input, fake)
+      expect(applied.result.stopped).toBe(false)
+      expect(fake.patches).toHaveLength(1)
+      expect(readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(a) })).toEqual({ status: 'valid', tasks: [link()] })
+      expect(applied.audit).toContainEqual(expect.objectContaining({ result: 'write-planned', priorText: text }))
+      expect(applied.audit.at(-1)?.result).toBe('verified')
+    })
+  it('audits a malformed value first discovered at the prewrite read', async () => {
+    const fake = fakeNotion(), text = 'old free text'
+    fake.properties.set(a, [{ plain_text: text }])
+    const { result, audit } = await run(source(), fake)
+    expect(result.stopped).toBe(false)
+    expect(result.report.findings).toContainEqual(expect.objectContaining({ detector: 'invalid-record', cardIds: [a] }))
+    expect(audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: text }))
+    expect(fake.patches).toHaveLength(1)
+  })
+  it.each(['extra-root', 'extra-entry', 'wrong-schema', 'nested-record', 'duplicate-entry'])(
+    'preserves exact existing entries while repairing %s and appending a proven worker', async condition => {
+      const sibling = link('sibling', 'original-generation'), input = source(), fake = fakeNotion()
+      const record = { schema: 'tinstar.fm-links.v1', tasks: [sibling] }
+      const text = JSON.stringify(condition === 'extra-root' ? { ...record, note: 'old text' } :
+        condition === 'wrong-schema' ? { ...record, schema: 'old' } :
+        condition === 'nested-record' ? { note: 'free text', record } :
+        { ...record, tasks: condition === 'duplicate-entry' ? [sibling, sibling] : [{ ...sibling, note: 'legacy' }] })
+      input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
+      fake.properties.set(a, [{ text: { content: text } }])
+      const dry = await run(input, fake, { apply: false })
+      expect(readWorkerLinks({ type: 'rich_text', rich_text: dry.result.plannedWrites[0]!.properties[FIRST_MATE_TASKS].rich_text })).toEqual({ status: 'valid', tasks: [sibling, link()] })
+      const { result } = await run(input, fake)
+      expect(result.stopped).toBe(false)
+      const readback = readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(a) })
+      expect(readback).toEqual({ status: 'valid', tasks: [sibling, link()] })
+    })
+  it.each(['fm_home', 'task_id', 'first_observed_spawn_gen'] as const)(
+    'refuses source recovery when an identity has invalid %s', async field => {
+      const input = source(), fake = fakeNotion()
+      const text = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ ...link('sibling'), [field]: '' }] })
+      input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
+      fake.properties.set(a, [{ text: { content: text } }])
+      for (const apply of [false, true]) {
+        const { result, audit } = await run(input, fake, { apply })
+        expect(result.plannedWrites).toEqual([])
+        expect(audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: text }))
+      }
+      expect(fake.fetcher).not.toHaveBeenCalled()
+    })
+  it('repairs a malformed record even when it already contains the proven worker', async () => {
+    const input = source(), fake = fakeNotion()
+    const text = JSON.stringify({ ...workerLinkRecord([link()]).record, note: 'invalid extra field' })
+    input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
+    fake.properties.set(a, [{ plain_text: text }])
+    const { result } = await run(input, fake)
+    expect(result.stopped).toBe(false)
+    expect(fake.patches).toHaveLength(1)
+    expect(result.report.merges).toEqual([expect.objectContaining({ cardId: a, status: 'ready-for-verification', record: workerLinkRecord([link()]).record })])
+    expect(readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(a) })).toEqual({ status: 'valid', tasks: [link()] })
+  })
+  it('reports each malformed property once when another card cannot be recovered', async () => {
+    const input = source(true)
+    input.intentions.data!.cards.find(c => c.id === a)!.properties[FIRST_MATE_TASKS]!.value = 'free text'
+    input.intentions.data!.cards.find(c => c.id === b)!.properties[FIRST_MATE_TASKS]!.value =
+      '{"schema":"tinstar.fm-links.v1","tasks":[],"tasks":[]}'
+    const { result, audit, fake } = await run(input)
+    expect(result.report.findings.filter(f => f.detector === 'invalid-record')).toHaveLength(2)
+    expect(audit.filter(entry => entry.result === 'investigate-invalid-record')).toHaveLength(2)
+    expect(fake.patches).toHaveLength(0)
+  })
+  it('preserves recovered competing primary links as conflicts', async () => {
+    const input = source(true), fake = fakeNotion()
+    const text = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ ...link(), note: 'legacy' }] })
+    input.intentions.data!.cards.find(c => c.id === b)!.properties[FIRST_MATE_TASKS]!.value = text
+    fake.properties.set(b, [{ plain_text: text }])
+    const { result } = await run(input, fake)
+    expect(result.plannedWrites).toEqual([])
+    expect(fake.patches.map(p => p.id)).toEqual([b])
+    expect(readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(b) })).toEqual({ status: 'valid', tasks: [link(), link('second')] })
+    expect(result.report.homes[0]!.tiers.conflicts.some(row => row.task_id === 'linked-worker')).toBe(true)
+  })
+  it('appends to a valid source record without destroying its original generation', async () => {
+    const sibling = link('historical-worker', 'old-generation'), input = source(), fake = fakeNotion([sibling])
+    input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = workerLinkRecord([sibling]).json
+    const { result } = await run(input, fake)
+    expect(result.stopped).toBe(false)
+    expect(readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(a) })).toEqual({ status: 'valid', tasks: [sibling, link()] })
+  })
+  it('reports malformed text without inventing authority from a title or URL', async () => {
+    const input = source(), fake = fakeNotion()
+    input.fleet[0]!.observation.data!.tasks[0]!.dispatchProvenance = parseDispatchProvenance([])
+    input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = 'worker free text'
+    const { result, audit } = await run(input, fake)
+    expect(fake.patches).toHaveLength(0)
+    expect(result.plannedWrites).toEqual([])
+    expect(audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: 'worker free text' }))
+  })
   it('stops the whole batch on readback mismatch, without blindly replaying', async () => {
     const fake = fakeNotion()
     fake.setFailReadback()
