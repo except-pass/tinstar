@@ -4,8 +4,9 @@ import { isIP } from 'node:net'
 import { z } from 'zod'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { getConfigRoot } from '../configRoot'
+import { notionPageId } from '../reconciliation/notion'
 import type { AuditEvidence, AuditProposal } from '../../shared/janitor'
-import { clean, fingerprint, stable, ids, pageUrl, prop, title } from './evidence'
+import { clean, fingerprint, stable, ids, pageUrl, prop, title, workKeys } from './evidence'
 import type { AuditInput, JanitorReport } from './report'
 
 // One contract generates the Ollama grammar and validates replies, including cached replies.
@@ -115,6 +116,43 @@ export function semanticPrompt(cluster: SemanticCluster) {
       ({ evidenceId, pageId, field, value, editedAt, freshness, coverage })) }) }]
 }
 
+const corroborationPolicy = 'deterministic-positive-v1'
+const corroborationAbstain = 'no-deterministic-corroboration:'
+
+/** Title similarity and a shared parent caused false discoveries in the live pilot.
+ * Require observed cross-card evidence, rather than accepting model assertions as corroboration.
+ * A relation supports review of overlap; it never overrides the existing parent/child distinctions.
+ */
+export function hasDeterministicCorroboration(cluster: SemanticCluster): boolean {
+  const pages = new Set(cluster.pages.map(p => p.id))
+  const keys = new Map<string, Set<string>>()
+  for (const evidence of cluster.evidence) {
+    if (!pages.has(evidence.pageId)) continue
+    const value = String(evidence.value)
+    if (['Link', 'Evidence'].includes(evidence.field) || evidence.field.startsWith('block:')) {
+      for (const key of workKeys(value)) {
+        const owners = keys.get(key) ?? new Set<string>()
+        owners.add(evidence.pageId); keys.set(key, owners)
+        if (owners.size > 1) return true
+      }
+    }
+    if (['Parent item', 'Sub-item'].includes(evidence.field)) {
+      // A direct observed relation between input pages qualifies; a shared outside parent does not.
+      const targets = value.match(/[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/gi) ?? []
+      if (targets.some(target => { const id = notionPageId(target); return id && id !== evidence.pageId && pages.has(id) })) return true
+    }
+    if (evidence.field.startsWith('block:') || ['Evidence', 'Next action', 'Next Action'].includes(evidence.field)) {
+      for (const clause of value.split(/[\n.!?](?:\s|$)/)) {
+        const assertion = /\b(?:replaces|superseded\s+by|replaced\s+by|duplicate\s+of)\s*[:—-]?\s*(?:https:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/[^\s<>"()]*?)?([a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})(?:\b|$)/i.exec(clause)
+        if (!assertion || /\b(?:not|never|no|if|possibly|maybe|whether|might|could)\b/i.test(clause.slice(0, assertion.index))) continue
+        const target = notionPageId(assertion[1])
+        if (target && target !== evidence.pageId && pages.has(target)) return true
+      }
+    }
+  }
+  return false
+}
+
 export function validateSemanticReply(value: unknown, cluster: SemanticCluster): SemanticReply {
   const reply = semanticReplySchema.parse(value)
   const pages = new Set(cluster.pages.map(p => p.id))
@@ -131,6 +169,10 @@ export function validateSemanticReply(value: unknown, cluster: SemanticCluster):
   // Only structured, verified references are allowed; free-text links/relations evade citation validation.
   const prose = [reply.reason, reply.abstainReason ?? '', ...reply.drafts.flatMap(d => [d.description, d.currentState, d.nextAction])].join('\n')
   if (/https?:\/\/|\b[0-9a-f]{32}\b|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i.test(prose)) throw new Error('unstructured-reference')
+  if (['possible_duplicate', 'possible_superseded', 'overlapping_scope'].includes(reply.classification) && !hasDeterministicCorroboration(cluster)) {
+    return { ...reply, classification: 'abstain', confidence: 'low', survivorId: null, drafts: [],
+      abstainReason: `${corroborationAbstain} model suggested ${reply.classification}; no shared canonical PR/Jira identifier, direct relation or explicit source assertion supports it. Needs review.` }
+  }
   return reply
 }
 
@@ -154,7 +196,7 @@ export interface SemanticResult {
     preview: Array<{ pageId: string; before: unknown; after: unknown }>; impact: 'review-only'; protected: string[];
     applyPreconditions: AuditProposal['applyPreconditions'] }>
   metrics: { modelCalls: number; modelTokens: number; tokenBudgetUsed: number; cacheHits: number; cacheMisses: number; schemaRejects: number; referenceRejects: number;
-    abstentions: number; externalInferenceCalls: 0; writeCalls: 0; runtimeMs: number; calls: CallMetric[] }
+    abstentions: number; corroborationAbstentions: number; externalInferenceCalls: 0; writeCalls: 0; runtimeMs: number; calls: CallMetric[] }
   warnings: string[]
 }
 
@@ -170,7 +212,7 @@ function endpointUrl(value: string) {
   return url.origin
 }
 const knownInjection = /ignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions|<\|(?:im_start|system)\|>|(?:^|\n)\s*(?:SYSTEM|DEVELOPER)\s*:/i
-const cacheKey = (cluster: SemanticCluster, endpoint: string, model: string, outputTokens: number) => fingerprint({ protocol, systemPrompt,
+const cacheKey = (cluster: SemanticCluster, endpoint: string, model: string, outputTokens: number) => fingerprint({ protocol, systemPrompt, corroborationPolicy,
   schema: semanticJsonSchema, endpoint, model, outputTokens, versions: cluster.versions, pages: cluster.pages,
   distinctions: cluster.distinctions, evidence: cluster.evidence.map(({ observedAt: _at, freshness: _fresh, ...e }) => e) })
 
@@ -184,10 +226,11 @@ export async function runSemanticPilot(clusters: SemanticCluster[], options: Sem
   for (const n of Object.values(limits)) if (!Number.isSafeInteger(n) || n < 1) throw new Error('Semantic budgets must be positive integers')
   const root = join(getConfigRoot(), 'janitor', 'semantic')
   const result: SemanticResult = { schema: protocol, mode: 'read-only', proposals: [], warnings: [], metrics: { modelCalls: 0, modelTokens: 0, tokenBudgetUsed: 0,
-    cacheHits: 0, cacheMisses: 0, schemaRejects: 0, referenceRejects: 0, abstentions: 0, externalInferenceCalls: 0, writeCalls: 0, runtimeMs: 0, calls: [] } }
+    cacheHits: 0, cacheMisses: 0, schemaRejects: 0, referenceRejects: 0, abstentions: 0, corroborationAbstentions: 0, externalInferenceCalls: 0, writeCalls: 0, runtimeMs: 0, calls: [] } }
   const started = performance.now()
   const emit = (cluster: SemanticCluster, outcome: string, reply: SemanticReply | null, reason: string | null, cacheHit = false) => {
     if (!reply || reply.classification === 'abstain') result.metrics.abstentions++
+    if (reply?.abstainReason?.startsWith(corroborationAbstain)) result.metrics.corroborationAbstentions++
     result.proposals.push({ proposal_id: `janitor:semantic:${fingerprint([cluster.id, reply?.classification ?? 'abstain']).slice(0, 24)}`,
       clusterId: cluster.id, origin: 'model', evidenceRevision: cacheKey(cluster, endpoint, model, limits.outputTokens), outcome,
       actionType: reply && reply.classification !== 'independent' && reply.classification !== 'abstain' ? reply.classification : null,

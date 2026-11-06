@@ -18,6 +18,7 @@ async function setup() {
   for (const c of cards) {
     c.properties.Name = { id: 'name', type: 'title', value: 'Verify component receipts', hasMore: false }
     c.properties['Parent item']!.value = []
+    c.properties.Link = { id: 'link', type: 'url', value: 'https://github.com/example/synthetic-control/pull/1', hasMore: false }
     c.properties['Next action'] = { id: 'next', type: 'rich_text', value: 'Review receipts', hasMore: false }
   }
   snapshot.intentions.data!.cards = cards
@@ -28,7 +29,7 @@ async function setup() {
 }
 function reply(c: SemanticCluster) {
   return { classification: 'possible_duplicate', confidence: 'medium', reason: 'The cited scopes match; ask the owner to compare receipts.', abstainReason: null,
-    citations: c.pages.map(p => ({ pageId: p.id, evidenceId: c.evidence.find(e => e.pageId === p.id)!.evidenceId })), survivorId: c.pages[0]!.id, drafts: [] }
+    citations: c.pages.map(p => ({ pageId: p.id, evidenceId: c.evidence.find(e => e.pageId === p.id && e.field === 'Name')!.evidenceId })), survivorId: c.pages[0]!.id, drafts: [] }
 }
 function transport(value: unknown, counters = { chats: 0 }) {
   return vi.fn<typeof fetch>(async (url, options) => {
@@ -58,6 +59,29 @@ describe('local semantic proposal boundary', () => {
     expect(() => validateSemanticReply({ ...valid, reason: `Replaced by ${fixtureId(900)}` }, cluster)).toThrow('unstructured-reference')
     expect(() => validateSemanticReply({ ...valid, drafts: [{ pageId: fixtureId(900), description: 'x', currentState: 'x', nextAction: 'x' }] }, cluster)).toThrow('ungrounded-reference')
     expect(() => validateSemanticReply({ ...valid, classification: 'possible_duplicate' }, { ...cluster, distinctions: ['Different slices'] })).toThrow('unsupported-classification')
+  })
+
+  it('downgrades title-only positives and a shared outside parent, while accepting observed canonical work and direct relation evidence', async () => {
+    const { cluster } = await setup()
+    const bare = { ...cluster, evidence: cluster.evidence.filter(e => e.field !== 'Link') }
+    for (const classification of ['possible_duplicate', 'possible_superseded', 'overlapping_scope']) {
+      const value = { ...reply(cluster), classification, survivorId: classification === 'possible_duplicate' ? cluster.pages[0]!.id : null }
+      expect(validateSemanticReply(value, bare)).toMatchObject({ classification: 'abstain', drafts: [], survivorId: null })
+      const sharedParent = { ...bare, evidence: [...bare.evidence, ...bare.pages.map(page => ({ ...bare.evidence[0]!, pageId: page.id,
+        field: 'Parent item', value: JSON.stringify([fixtureId(900)]) }))] }
+      expect(validateSemanticReply(value, sharedParent).classification).toBe('abstain')
+      expect(validateSemanticReply(value, cluster).classification).toBe(classification)
+    }
+    const linked = { ...bare, evidence: [...bare.evidence, { ...bare.evidence[0]!, field: 'Sub-item', value: JSON.stringify([bare.pages[1]!.id]) }] }
+    expect(validateSemanticReply({ ...reply(cluster), classification: 'overlapping_scope', survivorId: null }, linked).classification).toBe('overlapping_scope')
+    const positive = { ...bare, evidence: [...bare.evidence, { ...bare.evidence[0]!, field: 'block:assertion', value: `Duplicate of ${bare.pages[1]!.id}` }] }
+    expect(validateSemanticReply(reply(cluster), positive).classification).toBe('possible_duplicate')
+    expect(validateSemanticReply(reply(cluster), { ...positive, evidence: positive.evidence.map(e => ({ ...e, value: e.field === 'block:assertion' ? `Not a duplicate of ${bare.pages[1]!.id}` : e.value })) }).classification).toBe('abstain')
+    const fetcher = transport(reply(cluster))
+    const run = await runSemanticPilot([bare], {}, fetcher)
+    expect(run.metrics.corroborationAbstentions).toBe(1)
+    expect(run.proposals[0]).toMatchObject({ actionType: null, preview: [], proposedSurvivor: null })
+    expect((await runSemanticPilot([bare], {}, fetcher)).metrics).toMatchObject({ cacheHits: 1, modelCalls: 0, corroborationAbstentions: 1 })
   })
 
   it('retains explicit abstention and never emits drafts or an authoritative write contract', async () => {
@@ -94,7 +118,7 @@ describe('local semantic proposal boundary', () => {
     const refreshed = { ...cluster, evidence: cluster.evidence.map(e => ({ ...e, observedAt: '2026-11-07T00:00:00.000Z', freshness: 'stale' as const })) }
     expect((await runSemanticPilot([refreshed], {}, fetcher)).metrics.cacheHits).toBe(1)
     await runSemanticPilot([{ ...cluster, versions: cluster.versions.map(v => ({ ...v, sourceFingerprint: 'property-changed' })) }], {}, fetcher)
-    await runSemanticPilot([{ ...cluster, evidence: cluster.evidence.map(e => ({ ...e, value: 'changed evidence' })) }], {}, fetcher)
+    await runSemanticPilot([{ ...cluster, evidence: cluster.evidence.map(e => ({ ...e, value: e.field === 'Link' ? e.value : 'changed evidence' })) }], {}, fetcher)
     expect(counters.chats).toBe(3)
   })
 

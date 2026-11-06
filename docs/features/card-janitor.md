@@ -131,6 +131,10 @@ Omitted or partial evidence remains visible as incomplete coverage.
 [`semantic.ts`](../../src/server/janitor/semantic.ts) owns the strict Zod reply schema and generates the Ollama JSON Schema from that same contract.
 The client validates nested objects, enums, required fields, every cited page/evidence pair, survivor and draft targets against the actual cluster input.
 Missing citations, invented references, unsupported classifications and unstructured prose URLs/IDs are rejected.
+Duplicate, overlap and supersession suggestions also require deterministic corroboration from the input evidence: a shared canonical PR/Jira identifier, a direct observed relation between input pages, or an explicit source assertion naming a real input target.
+Matching titles and a shared outside parent do not qualify, because the live pilot showed that they can describe separate executions.
+A valid positive reply without corroboration becomes an explicit needs-review abstention, with no survivor or draft.
+The reply schema and ID validation still apply before this downgrade.
 Explicit deterministic distinctions prevent duplicate/supersession suggestions that erase sibling or parent/child boundaries.
 Known role/instruction override patterns in source prose cause abstention before inference; other prose is delimited as a JSON data envelope under a system policy that treats it as untrusted.
 These checks constrain references and available operations; semantic correctness still requires review and measured evaluation.
@@ -180,6 +184,9 @@ A budget-deferred or rejected case counts as abstention, with its separate outco
 Ollama prompt/evaluation durations report GPU-backed inference time; this is not an exclusive device-occupancy measurement or paid billing estimate.
 Read these rates alongside sample coverage and actual calls: all abstentions cannot demonstrate duplicate recall, and an absent positive control must be reported explicitly.
 Local samples/results contain company data and belong in private task evidence rather than git.
+The four positive-control pairs in [`semanticControls.ts`](../../test-fixtures/janitor/semanticControls.ts) are explicitly SYNTHETIC, with invented IDs/example PRs and paraphrased bodies in the same card structure.
+They pass through slice A and the same semantic pipeline; record their expected labels before a live control run and report their recall separately.
+Synthetic recall does not measure true-positive quality on the real board, which remains unmeasured when no confirmed real duplicate exists in the current candidate set.
 
 ## Verification
 

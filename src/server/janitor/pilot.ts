@@ -46,7 +46,7 @@ export async function evaluateJanitorSample(inputValue: unknown, sampleValue: un
     notes: sample.notes, cases, metrics: { ...result.metrics, sampleSize: cases.length, negativeCases, falsePositives,
       negativeFalsePositives, falsePositiveRate: negativeCases ? negativeFalsePositives / negativeCases : null,
       abstainRate: result.metrics.abstentions / cases.length,
-      modelAbstainRate: calls.length ? cases.filter(c => c.actual === 'abstain' && c.outcome === 'classified' && !c.cacheHit).length / calls.length : null,
+      modelAbstainRate: calls.length ? cases.filter(c => c.actual === 'abstain' && c.outcome === 'classified' && !c.cacheHit && !c.reason?.startsWith('no-deterministic-corroboration:')).length / calls.length : null,
       schemaRejectRate: calls.length ? result.metrics.schemaRejects / calls.length : null,
       referenceRejectRate: calls.length ? result.metrics.referenceRejects / calls.length : null,
       expectedMatches: cases.filter(c => c.expectedMatch).length,
