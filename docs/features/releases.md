@@ -38,9 +38,12 @@ GitHub supplies PR title, merged state/time and effective merge commit. Reads
 use the existing gh-axi scalar transport, at most four PR reads per refresh and
 no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.
-Failures retain visibly stale facts. The navigation badge is unknown (`?`) while
-any association's GitHub state is unresolved; it never presents a partial
-observation as a complete zero. Its eventual count is unique merged PRs awaiting
+Failures retain visibly stale facts. The navigation badge and page queue count
+are unknown (`?`) while any association's GitHub state is unresolved, the Notion
+association source is stale, partial or unavailable, or the local association
+audit is unreadable. Collection-level source warnings remain visible even when
+no PRs are known; an incomplete observation never becomes a complete zero.
+The eventual count is unique merged PRs awaiting
 production evidence, not cards or repeated group references.
 
 This first slice does not prove deployed-component identity. In Queue includes
