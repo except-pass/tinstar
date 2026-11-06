@@ -76,6 +76,37 @@ describe('deterministic read-only Janitor', () => {
     expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
   })
 
+  it.each(['slice', 'phase', 'part', 'milestone', 'u'])('retains explicit %s identities before duplicate classification', marker => {
+    for (const [left, right] of [['A', 'B'], ['B', 'C'], ['2', '3']]) {
+      const report = buildJanitorReport({ snapshot: source([
+        card(1, `Cleanup implementation ${marker} ${left}`, { Link: 'https://github.com/example/repo/pull/42' }),
+        card(2, `Cleanup implementation ${marker} ${right}`, { Link: 'https://github.com/example/repo/pull/42' }),
+      ]) })
+      expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
+      expect(report.distinctions).toContainEqual(expect.objectContaining({ pageIds: [fixtureId(1), fixtureId(2)],
+        reason: 'Named implementation slices differ; retain separate cards' }))
+    }
+  })
+
+  it('preserves lettered slice distinctions through duplicate cluster connections', () => {
+    const report = buildJanitorReport({ snapshot: source([
+      card(1, 'Cleanup implementation slice A', { Link: 'https://github.com/example/repo/pull/42' }),
+      card(2, 'Cleanup implementation slice B', { Link: 'https://github.com/example/repo/pull/42' }),
+      card(3, 'Cleanup implementation slice', { Link: 'https://github.com/example/repo/pull/42' }),
+    ]) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
+    expect(report.proposals.filter(p => p.category === 'overlaps')).toHaveLength(1)
+  })
+
+  it('recognizes the same lettered slice regardless of case', () => {
+    const report = buildJanitorReport({ snapshot: source([
+      card(1, 'Cleanup implementation slice A', { Link: 'https://github.com/example/repo/pull/42' }),
+      card(2, 'Cleanup implementation SLICE a', { Link: 'https://github.com/example/repo/pull/42' }),
+    ]) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(1)
+    expect(report.distinctions).toHaveLength(0)
+  })
+
   it('does not transitively convert a known parent/child distinction into duplicates', () => {
     const snapshot = source([card(1, 'Shared verification task'), card(2, 'Shared verification task', { 'Parent item': [fixtureId(1)] }), card(3, 'Shared verification task')])
     const report = buildJanitorReport({ snapshot })

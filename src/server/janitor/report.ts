@@ -106,7 +106,7 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
       /\b(?:writer|owned|reconciliation)\b/i.test(`${title(a)} ${title(b)}`)
     if (!identical && !sharedKeys.length && !(sharedTokens.length >= 3 && similarity >= 0.3) && !(separateRoles && sharedTokens.length >= 2)) continue
     const related = sceneById.get(left)!.ancestry.includes(right) || sceneById.get(right)!.ancestry.includes(left)
-    const slice = (value: string) => value.match(/\b(?:u|slice|phase|part|milestone)\s*(\d+)\b/i)?.[1]
+    const slice = (value: string) => value.match(/\b(?:u|slice|phase|part|milestone)\s*(\d+|[a-z])\b/i)?.[1]?.toLowerCase()
     const differentSlices = !!slice(title(a)) && !!slice(title(b)) && slice(title(a)) !== slice(title(b))
     const dateA = title(a).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0], dateB = title(b).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0]
     const differentRuns = !!dateA && !!dateB && dateA !== dateB
