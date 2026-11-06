@@ -67,7 +67,7 @@ export function dateBucket(value: string | null, now: number, checkIn = false) {
   return diff <= 7 - (weekday || 7) ? 'This week' : 'Later'
 }
 type Pair = { worker?: Execution; card?: SceneCard }
-function values(scene: FloorScene, pair: Pair, id: FloorField): string[] {
+export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField): string[] {
   const { worker: w, card: c } = pair
   let raw: unknown
   switch (id) {
@@ -147,8 +147,8 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
   for (const card of cards) if (!linkedCards.has(card.id)) pairs.push({ card })
   const visibleCards = new Set(cards.map(c => c.id)), groups = new Map<string, FloorGroup>(), memberships = new Map<string, Pair[]>()
   const buckets = (pair: Pair, id: FloorField | 'none') => id === 'none' ? ['All work'] : field(id).kind === 'date'
-    ? [...new Set((values(scene, pair, id).length ? values(scene, pair, id) : [null]).map(v => dateBucket(v, now, id === 'checkIn')))]
-    : values(scene, pair, id).length ? [...new Set(values(scene, pair, id))] : ['Unassigned / Unknown']
+    ? [...new Set((floorFieldValues(scene, pair, id).length ? floorFieldValues(scene, pair, id) : [null]).map(v => dateBucket(v, now, id === 'checkIn')))]
+    : floorFieldValues(scene, pair, id).length ? [...new Set(floorFieldValues(scene, pair, id))] : ['Unassigned / Unknown']
   for (const pair of pairs) for (const outerLabel of buckets(pair, organizer.outer)) for (const innerLabel of buckets(pair, organizer.inner)) {
     if (!pair.worker && (!pair.card || !visibleCards.has(pair.card.id))) continue
     const outerId = JSON.stringify(['floor', organizer.outer, outerLabel]), id = JSON.stringify([outerId, organizer.inner, innerLabel])
@@ -186,7 +186,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     const localPairs = memberships.get(group.id)!
     const workerOrder = new Map<string, string | number>(), cardOrder = new Map<string, string | number>()
     const compareScalar = (a: string | number, b: string | number) => typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b))
-    if (organizer.order !== 'operational') for (const pair of localPairs) for (const value of values(scene, pair, organizer.order)) {
+    if (organizer.order !== 'operational') for (const pair of localPairs) for (const value of floorFieldValues(scene, pair, organizer.order)) {
       const kind = field(organizer.order).kind
       const scalar = kind === 'date' ? dateTimestamp(value) : kind === 'priority' ? priorityRank(value) : value
       if (typeof scalar === 'number' && !Number.isFinite(scalar)) continue
@@ -202,7 +202,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     }
     const checkIns = new Map<string, number>()
     for (const pair of localPairs) {
-      const dates = values(scene, pair, 'checkIn').map(dateTimestamp).filter(Number.isFinite)
+      const dates = floorFieldValues(scene, pair, 'checkIn').map(dateTimestamp).filter(Number.isFinite)
       if (!dates.length) continue
       const earliest = Math.min(...dates)
       for (const id of [pair.worker?.id, pair.card?.id]) if (id) checkIns.set(id, Math.min(checkIns.get(id) ?? Infinity, earliest))

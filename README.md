@@ -12,13 +12,15 @@ For worker-to-card associations, see [Notion-owned worker links](docs/notion-wor
 
 Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text. Use the adjacent Pattern Dial for operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
+The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue. It reads GitHub merge evidence and keeps deployment unknown until component receipts are available. Local link/unlink edits retain owner/reason/time provenance and never write to Notion.
+
 The [Card Janitor CLI](docs/features/card-janitor.md) produces a read-only operational-card audit with cited cleanup candidates and offline JSON replay. It creates no Desk items and makes no model calls or Notion writes.
 
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
 Use the speech-bubble **Ask** icon in a task or worker header to open a blank question, or right-click a supported task field or relationship for an editable draft. Review the question, then send. Questions and answers appear first in **Your desk**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 
-The activity strip provides **Overview**, **Receipts** and **Workers**. Receipts and the worker switcher open in a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. Choose a worker in **Workers**, whose search narrows the list by id or project (Enter opens the first match), or use **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
+The activity strip provides **Overview**, **Releases**, **Receipts** and **Workers**. Receipts and the worker switcher open in a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. Choose a worker in **Workers**, whose search narrows the list by id or project (Enter opens the first match), or use **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
 A worker opens a live terminal with its objective, project, worktree, branch and pull request in a detail rail (**Details** on windows 1200px wide or narrower). In the collapsible prompt composer, **Ctrl+Enter** (or **Cmd+Enter**) pastes the prompt into the worker's pane and presses Enter. It retains recent prompts, stash slots and quick menu keys. Paste a screenshot or drop a file to upload it under the config root's `screenshots/` folder and insert its `@path`. Mark a worker **Direct** in the detail rail to indicate you are working with it yourself; First Mate receives an inbox note when the mark changes. A snapshot kind of `secondmate` shows a **Second mate** badge in that rail. Each worker keeps the same face and color across reloads.
 
@@ -28,6 +30,8 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 | URL | Opens |
 | --- | --- |
+| `/?view=releases` | Releases PR queue. |
+| `/?card=NOTION_PAGE_ID` | Reveal that authorized card in Overview. |
 | `/?q=text` | Overview; the legacy filter parameter is retained. |
 | `/?worker=TASK_ID` | That worker's detail, including on a fresh load. `TASK_ID` is the First Mate task id. |
 | `/?worker=TASK_ID&q=text` | That worker's detail. The legacy filter parameter is retained when you return to Overview. |

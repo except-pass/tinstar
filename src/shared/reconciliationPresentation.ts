@@ -8,7 +8,7 @@ import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/
 
 export type FloorScene = ReturnType<SceneReconciler['reconcile']> & { searchIndex?: SearchIndexRead; searchReadFailed?: boolean }
 export type Arrangement = keyof FloorScene['arrangements']
-export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 'you' | 'firstMate'
+export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 'you' | 'firstMate' | 'pull'
 export interface Target { kind: TargetKind; id: string }
 export const semanticId = (target: Target) => `${target.kind}:${target.id}`
 export const isException = (finding: Finding) => !['confirmed-link', 'legitimate-wait-planned', 'outside-coverage'].includes(finding.kind)
@@ -79,6 +79,7 @@ export function targetExists(scene: FloorScene, target: Target, state?: Presenta
     case 'manager': return scene.coverage.homes.some(home => home.source.home === target.id)
     case 'group': return Object.values(scene.arrangements).some(groups => groups.some(group => group.id === target.id)) || !!state && organizedGroups(scene, state, now).some(g => g.id === target.id || g.outerId === target.id)
     case 'you': case 'firstMate': return target.id === 'root'
+    case 'pull': return false // Releases owns PR selection; it is never an Overview worker/work node.
   }
 }
 export function targetInGroup(scene: FloorScene, group: Pick<SceneGroup, 'id' | 'cardIds' | 'executionIds' | 'claimIds' | 'homeIds'> & { outerId?: string }, target: Target): boolean {

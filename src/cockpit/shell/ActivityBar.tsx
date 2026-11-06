@@ -8,8 +8,11 @@ const tools: Array<{ mode: PanelTool; label: string; lines: string[]; icon: stri
   { mode: 'workers', label: 'Workers', lines: ['Workers'], icon: 'groups' },
 ]
 
-export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect }: {
+export function ActivityBar({ overviewActive, panelMode, counts, messageAttention = 0, onOverview, onSelect, releasesActive = false, releaseCount = null, onReleases }: {
   overviewActive: boolean
+  releasesActive?: boolean
+  releaseCount?: number | null
+  onReleases?: () => void
   panelMode: ContextPanelMode
   counts: Record<PanelTool, number>
   /** Messages that still need a retry. The receipt total stays a quiet tally. */
@@ -23,6 +26,10 @@ export function ActivityBar({ overviewActive, panelMode, counts, messageAttentio
       <span className="material-symbols-outlined" aria-hidden="true">dashboard</span>
       <span className="cockpit-activity-label"><span className="cockpit-activity-line">Overview</span></span>
     </button>
+    {onReleases && <button type="button" className={`cockpit-activity-button${releasesActive ? ' active' : ''}`} aria-current={releasesActive ? 'page' : undefined} aria-label={`Releases${releaseCount === null ? ', count unknown' : `, ${releaseCount} unique PRs awaiting production evidence`}`} title="Releases" onClick={onReleases}>
+      <span className="material-symbols-outlined" aria-hidden="true">rocket_launch</span><span className="cockpit-activity-label">Releases</span>
+      <span className="cockpit-activity-count is-quiet" aria-hidden="true">{releaseCount ?? '?'}</span>
+    </button>}
     {tools.map(tool => {
       const total = counts[tool.mode]
       const alert = tool.mode === 'messages' && messageAttention > 0

@@ -17,17 +17,17 @@ const exec = promisify(execFile)
 /** gh-axi's projected scalar response avoids retrieving bodies/reviews/transcripts.
  * Reject unsupported output as unknown rather than mistaking it for green checks.
  */
-async function github(path: string, projection: string): Promise<Record<string, unknown>> {
+export async function readGithubScalars(path: string, projection: string): Promise<Record<string, unknown>> {
   const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection], { timeout: 5_000, maxBuffer: 64 * 1024 })
   return Object.fromEntries(stdout.trim().split('\n').map(line => {
     const match = /^([a-z_]+): (.*)$/.exec(line)
     if (!match) throw new Error('Unsupported GitHub response')
     const value = match[2]!
-    return [match[1]!, /^(?:true|false|null|\d+)$/.test(value) ? JSON.parse(value) : value]
+    return [match[1]!, /^(?:true|false|null|\d+)$/.test(value) || value.startsWith('"') ? JSON.parse(value) : value]
   }))
 }
 
-async function readPull(url: string, read = github): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
+async function readPull(url: string, read = readGithubScalars): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {
   const pull = parsePullUrl(url)
   if (!pull) throw new Error('Unsupported PR URL')
   const info = await read(pull.apiPath, '{state,merged,draft,head:.head.sha,mergeable,mergeable_state}')
@@ -57,7 +57,7 @@ export class QueuePullReader {
   private cache = new Map<string, { value: PullReadiness; retryAt: number }>()
   private pending = new Map<string, Promise<PullReadiness>>()
   private cursor = 0
-  constructor(private readonly read = github, private readonly now = Date.now) {}
+  constructor(private readonly read = readGithubScalars, private readonly now = Date.now) {}
 
   async get(urls: string[]): Promise<Map<string, PullReadiness>> {
     const result = new Map<string, PullReadiness>()

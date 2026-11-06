@@ -10,7 +10,7 @@ export const notionPageId = (value: unknown): string | null =>
 const PROPERTY_NAMES = [
   'Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item',
   'Link', 'Waiting For', 'Delegated To', 'Next check-in', 'Due Date', 'Start Date', 'Priority', 'Area', 'Sub-area', 'Attention',
-  'Next action', 'Next Action', 'Evidence', 'Initiative', 'Epic', FIRST_MATE_TASKS,
+  'Next action', 'Next Action', 'Evidence', 'Initiative', 'Epic', 'GitHub', 'GitHub PRs', 'Pull requests', FIRST_MATE_TASKS,
 ]
 
 function property(value: unknown, name: string): { id: string | null; type: string | null; value: unknown; hasMore: boolean; workerLinks?: WorkerLinks } {
