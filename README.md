@@ -12,7 +12,7 @@ For worker-to-card associations, see [Notion-owned worker links](docs/notion-wor
 
 Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text or apply operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
-The [Card Janitor CLI](docs/features/card-janitor.md) produces a read-only operational-card audit with cited cleanup candidates and offline JSON replay. It creates no Desk items and makes no model calls or Notion writes.
+The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only operational-card audit, offline JSON replay and opt-in local semantic pilot.
 
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 

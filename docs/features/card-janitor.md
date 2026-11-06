@@ -78,7 +78,7 @@ instructions are treated as data and cannot call tools or authorize actions.
 
 ## Proposal contract and cost
 
-Each proposal carries a stable `proposal_id`, approved action type, involved
+Each deterministic proposal carries a stable `proposal_id`, approved action type, involved
 page IDs/URLs, cited property/block values, observation/edit freshness, rule,
 deterministic origin, confidence/abstention, proposed action, impact and protected
 history/relationships. Relation citations link observed and unavailable targets.
@@ -99,9 +99,10 @@ function behind it. An audit cannot be submitted as a write command.
 The reusable auditor caches derived features by property/content version in a
 bounded process-local cache. It still reevaluates time-sensitive observations and
 source health. Existing server caches bound source reads. Each standalone CLI
-starts with a fresh feature cache; saved input avoids all network reads. Metrics
+starts with a fresh feature cache; saved input avoids source network reads. Metrics
 include comparisons, context reads/budget, cache hits/misses and runtime, with
-model calls/tokens, external inference calls and writes equal to zero. There is
+model calls/tokens, external inference calls and writes equal to zero in the
+deterministic report. Opt-in semantic metrics are reported separately below. There is
 no new persistent daemon or nag loop. The existing Desk queue is only projected
 to record baseline decision counts; GitHub readiness is not refreshed or certified.
 
@@ -161,7 +162,8 @@ Cache identity includes card content/property fingerprints and edit versions, bo
 Observation-time/freshness refreshes alone do not re-ask unchanged clusters; returned citations still carry current snapshot freshness and future apply must reread the sources.
 Valid classifications, model abstentions and rejected replies are cached, so unchanged rejected output also avoids repeated inference.
 Network failures use backoff rather than a permanent cached verdict.
-Cache failure produces abstention and a visible warning while deterministic findings remain usable.
+Cache initialization failure produces abstention and a visible warning while deterministic findings remain usable.
+If persisting a completed reply fails, that reply remains in the result, a warning is reported and further uncached inference is deferred.
 If a process is killed, inspect `run.lock/owner.json` and confirm that process has exited before removing that runtime lock.
 Removing cached JSON deliberately permits reprocessing; it does not change source data.
 
