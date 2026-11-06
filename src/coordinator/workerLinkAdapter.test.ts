@@ -118,7 +118,7 @@ describe('authorized coordinator adapter with fake Notion', () => {
     expect(result.stopped).toBe(false)
     expect(fake.patches).toHaveLength(1)
   })
-  it.each(['unreadable-item', 'oversize-item', 'changed-generation', 'duplicate-key', 'broken-v1', 'conflicting-entries'])(
+  it.each(['unreadable-item', 'oversize-item', 'changed-generation', 'duplicate-key', 'broken-v1', 'conflicting-entries', 'invalid-identity'])(
     'never overwrites %s returned by the full prewrite read', async condition => {
       const fake = fakeNotion()
       let chunks: unknown[] = []
@@ -126,6 +126,7 @@ describe('authorized coordinator adapter with fake Notion', () => {
       if (condition === 'oversize-item') chunks = [{ text: { content: 'x'.repeat(2001) } }]
       if (condition === 'changed-generation') chunks = workerLinkRecord([link('linked-worker', 'old')]).properties[FIRST_MATE_TASKS].rich_text
       if (condition === 'duplicate-key') chunks = [{ text: { content: '{"schema":"tinstar.fm-links.v1","tasks":[],"tasks":[]}' } }]
+      if (condition === 'invalid-identity') chunks = [{ text: { content: JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ task_id: 'sibling' }] }) } }]
       if (condition === 'broken-v1') chunks = [{ text: { content: workerLinkRecord([link('sibling')]).json.slice(0, -1) } }]
       if (condition === 'conflicting-entries') chunks = [{ text: { content: JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [link(), link('linked-worker', 'old')] }) } }]
       fake.properties.set(a, chunks)
@@ -160,20 +161,35 @@ describe('authorized coordinator adapter with fake Notion', () => {
     expect(audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: text }))
     expect(fake.patches).toHaveLength(1)
   })
-  it.each(['extra-root', 'invalid-sibling', 'wrong-schema', 'nested-record', 'duplicate-entry'])(
+  it.each(['extra-root', 'extra-entry', 'wrong-schema', 'nested-record', 'duplicate-entry'])(
     'preserves exact existing entries while repairing %s and appending a proven worker', async condition => {
       const sibling = link('sibling', 'original-generation'), input = source(), fake = fakeNotion()
       const record = { schema: 'tinstar.fm-links.v1', tasks: [sibling] }
       const text = JSON.stringify(condition === 'extra-root' ? { ...record, note: 'old text' } :
         condition === 'wrong-schema' ? { ...record, schema: 'old' } :
         condition === 'nested-record' ? { note: 'free text', record } :
-        { ...record, tasks: [sibling, condition === 'duplicate-entry' ? sibling : { task_id: 'invalid' }] })
+        { ...record, tasks: condition === 'duplicate-entry' ? [sibling, sibling] : [{ ...sibling, note: 'legacy' }] })
       input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
       fake.properties.set(a, [{ text: { content: text } }])
+      const dry = await run(input, fake, { apply: false })
+      expect(readWorkerLinks({ type: 'rich_text', rich_text: dry.result.plannedWrites[0]!.properties[FIRST_MATE_TASKS].rich_text })).toEqual({ status: 'valid', tasks: [sibling, link()] })
       const { result } = await run(input, fake)
       expect(result.stopped).toBe(false)
       const readback = readWorkerLinks({ type: 'rich_text', rich_text: fake.properties.get(a) })
       expect(readback).toEqual({ status: 'valid', tasks: [sibling, link()] })
+    })
+  it.each(['fm_home', 'task_id', 'first_observed_spawn_gen'] as const)(
+    'refuses source recovery when an identity has invalid %s', async field => {
+      const input = source(), fake = fakeNotion()
+      const text = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ ...link('sibling'), [field]: '' }] })
+      input.intentions.data!.cards[0]!.properties[FIRST_MATE_TASKS]!.value = text
+      fake.properties.set(a, [{ text: { content: text } }])
+      for (const apply of [false, true]) {
+        const { result, audit } = await run(input, fake, { apply })
+        expect(result.plannedWrites).toEqual([])
+        expect(audit).toContainEqual(expect.objectContaining({ result: 'investigate-invalid-record', priorText: text }))
+      }
+      expect(fake.fetcher).not.toHaveBeenCalled()
     })
   it('repairs a malformed record even when it already contains the proven worker', async () => {
     const input = source(), fake = fakeNotion()
@@ -198,7 +214,7 @@ describe('authorized coordinator adapter with fake Notion', () => {
   })
   it('preserves recovered competing primary links as conflicts', async () => {
     const input = source(true), fake = fakeNotion()
-    const text = JSON.stringify({ ...workerLinkRecord([link()]).record, note: 'invalid' })
+    const text = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ ...link(), note: 'legacy' }] })
     input.intentions.data!.cards.find(c => c.id === b)!.properties[FIRST_MATE_TASKS]!.value = text
     fake.properties.set(b, [{ plain_text: text }])
     const { result } = await run(input, fake)

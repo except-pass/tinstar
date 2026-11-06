@@ -114,10 +114,11 @@ export function recoverWorkerLinks(links: WorkerLinks, text: unknown): WorkerLin
     const value = pending.pop()
     if (Array.isArray(value)) { for (const child of value) pending.push(child); continue }
     const row = record(value)
-    if (exactKeys(row, ['fm_home', 'task_id', 'first_observed_spawn_gen']) &&
-      canonicalHome(row.fm_home) && identityString(row.task_id) && identityString(row.first_observed_spawn_gen)) {
+    if (['fm_home', 'task_id', 'first_observed_spawn_gen'].some(key => Object.hasOwn(row, key))) {
+      if (!canonicalHome(row.fm_home) || !identityString(row.task_id) || !identityString(row.first_observed_spawn_gen)) return
       tasks.push({ fm_home: row.fm_home, task_id: row.task_id, first_observed_spawn_gen: row.first_observed_spawn_gen })
-    } else for (const child of Object.values(row)) if (child && typeof child === 'object') pending.push(child)
+    }
+    for (const child of Object.values(row)) if (child && typeof child === 'object') pending.push(child)
   }
   const unique = [...new Map(tasks.map(task => [JSON.stringify(task), task])).values()]
   // Conflicting generations cannot be collapsed to a single v1 entry.
