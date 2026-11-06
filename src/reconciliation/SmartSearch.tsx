@@ -41,7 +41,7 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
   const facets = (field: SearchFilter['facets'][number]['field']) => {
     if (field === 'machine') return [...new Set(scene.executions.flatMap(worker => worker.placement.machine ? [worker.placement.machine] : []))].map(value => ({ value, label: value }))
     if (field === 'manager') return [...new Set(scene.coverage.homes.map(home => homeLabel(home.source)))].map(value => ({ value, label: value }))
-    if (field === 'entity') return [...scene.cards.map(card => ({ value: card.id, label: String(card.source.properties.Name?.value || card.id) })), ...scene.executions.map(worker => ({ value: worker.id, label: worker.identity.task_id || worker.id }))]
+    if (field === 'entity') return [...scene.executions.map(worker => ({ value: worker.id, label: worker.identity.task_id || worker.id })), ...scene.cards.map(card => ({ value: card.id, label: String(card.source.properties.Name?.value || card.id) }))]
     const ids = new Set(scene.cards.flatMap(card => {
       const property = card.source.properties.Initiative
       const value = property && ['relation', 'select', 'rich_text'].includes(property.type ?? '') ? property.value : null
