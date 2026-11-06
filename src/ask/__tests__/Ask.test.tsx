@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Overview } from '../../reconciliation/Overview'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { preferencesKey } from '../../reconciliation/presentationPreferences'
 import { askItemSchema, type AskItem } from '../../shared/ask'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 
@@ -135,6 +136,47 @@ describe('one-card text Ask and Desk', () => {
     expect(desk).toHaveTextContent('Why is this waiting?')
     expect(desk).toHaveTextContent('New answer')
     expect(desk).not.toHaveTextContent('Archived deployment')
+  })
+  it.each([
+    ['compact', false, 'search'], ['compact', true, 'search'],
+    ['detailed', false, 'search'], ['detailed', true, 'search'],
+    ['compact', false, 'donut'], ['compact', true, 'donut'],
+    ['detailed', false, 'donut'], ['detailed', true, 'donut'],
+  ] as const)('reveals an excluded answer anchor in %s, history=%s, filter=%s', async (density, history, filter) => {
+    records = [{ ...seed(), dismissed_at: history ? new Date().toISOString() : null }]
+    localStorage.setItem('tinstar.overview.density', density)
+    const { container } = mount()
+    await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toBeTruthy())
+    if (filter === 'search') {
+      fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+      fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'no-such-anchor-xyz' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /^Cards statuses:/ }))
+      fireEvent.click(within(screen.getByRole('region', { name: 'Cards statuses' })).getByRole('button', { name: /Waiting For/ }))
+    }
+    expect(card(container)).toBeNull()
+    const before = JSON.parse(localStorage.getItem(preferencesKey)!)
+    const visibleBefore = [...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId)
+    if (history) fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
+    const answer = await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })
+    vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    fireEvent.click(answer)
+    expect(card(container)).toBeVisible()
+    expect(card(container)).toHaveClass('flashed')
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    const after = JSON.parse(localStorage.getItem(preferencesKey)!)
+    expect(after).toEqual(before)
+    expect([...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId).filter(id => id !== fixtureId(1))).toEqual(visibleBefore)
+    expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+  })
+  it('offers the original source when a retained card is trashed', async () => {
+    records = [seed()]
+    scene.cards.find(card => card.id === fixtureId(1))!.source.in_trash = true
+    const { container } = mount()
+    fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+    expect(card(container)).toBeNull()
+    expect(screen.getByRole('link', { name: 'Open the source task' })).toHaveAttribute('href', records[0]!.context.anchor.url)
   })
   it('shows the original source when its card is missing and keeps follow-ups correlated', async () => {
     const original = seed(); records = [original]; scene.cards = scene.cards.filter(card => card.id !== fixtureId(1))

@@ -30,7 +30,7 @@ export function AskCardAction({ cardId }: { cardId: string }) {
   const controls = useContext(Controls)
   return controls && <button type="button" className="ask-launch" onClick={() => controls.open(cardId)}>Ask First Mate about this task</button>
 }
-export function AskProvider({ scene, state, send, children }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; children: ReactNode }) {
+export function AskProvider({ scene, state, send, visibleCardIds, children }: { visibleCardIds: ReadonlySet<string>; scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; children: ReactNode }) {
   const [items, setItems] = useState<AskItem[]>([]), [error, setError] = useState<string | null>(null)
   const [composer, setComposer] = useState<{ cardId: string; parent?: AskItem; key: string } | null>(null)
   const [answer, setAnswer] = useState<AskItem | null>(null)
@@ -63,7 +63,7 @@ export function AskProvider({ scene, state, send, children }: { scene: FloorScen
       setItems(previous => [item, ...previous.filter(old => old.request_id !== item.request_id)])
       setComposer(null)
     }} />, document.body)}
-    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={scene.cards.some(card => card.id === currentAnswer.context.anchor.page_id)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.anchor.page_id, currentAnswer)} />, document.body)}
+    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={visibleCardIds.has(currentAnswer.context.anchor.page_id)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.anchor.page_id, currentAnswer)} />, document.body)}
   </Controls.Provider>
 }
 function useDialogFocus(returnCardId?: string) {

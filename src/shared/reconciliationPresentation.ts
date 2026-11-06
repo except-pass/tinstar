@@ -122,7 +122,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'set-search': next.search = action.search; next.searchReveal = null; break
     case 'clear-search': next.search = emptySearch(); next.searchReveal = null; break
     case 'restore-search-view': next = { ...next, ...action.view, searchReveal: null }; if (next.selection && !targetExists(scene, next.selection, next, now)) next.selection = null; break
-    case 'reveal-search': next.searchReveal = action.target; next.selection = null; next.exceptionsOnly = false; next.roadmapExpanded = true; next.collapsed = []; break
+    case 'reveal-search': next.navigation = null; next.searchReveal = action.target; next.selection = null; next.exceptionsOnly = false; next.roadmapExpanded = true; next.collapsed = []; break
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
     case 'set-donut-filter': next.donutFilter = { cards: [...new Set(action.filter.cards)], workers: [...new Set(action.filter.workers)] }; break
@@ -137,6 +137,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
       break
     }
     case 'navigate-card': {
+      next.searchReveal = { kind: 'card', id: action.cardId }
       next.selection = null
       next.navigation = { cardId: action.cardId, revision: state.revision + 1 }
       next.exceptionsOnly = false; next.roadmapExpanded = true
