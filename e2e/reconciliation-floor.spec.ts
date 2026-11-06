@@ -767,3 +767,94 @@ test('single-row toolbar Smart Search patterns, evidence and mobile keyboard rem
   await page.getByRole('button', { name: 'Clear Smart Search', exact: true }).click()
   await expect(page.locator('.ov-card')).toHaveCount(5)
 })
+
+for (const width of [1440, 390]) {
+  test(`compact Ask semantics and inbox at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const scene = fixtureScene(), source = scene.cards.find(card => card.id === fixtureId(1))!
+    source.source.properties.Priority = { id: 'priority', type: 'select', value: 'Medium', hasMore: false }
+    source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-01T12:00:00Z' }, hasMore: false }
+    source.source.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: 'Reviewer capacity', hasMore: false }
+    await page.addInitScript(() => localStorage.setItem('tinstar.overview.density', 'compact'))
+    await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+    await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { items: [], generatedAt: scene.generatedAt } } }))
+    await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
+    const submitted: Array<Record<string, unknown>> = []
+    const records: Array<Record<string, unknown>> = []
+    await page.route('**/api/ask/**', async route => {
+      const req = route.request(), body = req.method() === 'POST' ? req.postDataJSON() : null
+      if (req.url().endsWith('/requests') && body) {
+        submitted.push(body)
+        const id = crypto.randomUUID()
+        records.push({ request_id: id, conversation_id: id, question: body.question, input_mode: 'text', context: { anchor: { kind: 'work', page_id: body.card_id, label: 'Build live reconciliation', url: `https://www.notion.so/${body.card_id}`, observed_at: scene.generatedAt }, view: { scene: 'overview' }, field_key: body.field_key, field_value: body.field_value }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'The reviewer is preparing the next pass.', detail: 'Checked current source evidence.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
+        return route.fulfill({ json: { ok: true, data: records.at(-1) } })
+      }
+      return route.fulfill({ json: { ok: true, data: records } })
+    })
+    await page.goto(base)
+    const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`).first()
+    const frame = page.locator('.ov-item-frame').filter({ has: card }).first()
+    await expect(card).toHaveAttribute('aria-expanded', 'false')
+    expect((await card.boundingBox())!.height).toBe(29)
+    await expect(frame.getByRole('button', { name: 'Ask about this item', exact: true })).toBeVisible()
+    await expect(frame.getByRole('button', { name: 'Open in Inspector', exact: true })).toBeVisible()
+    await card.scrollIntoViewIfNeeded()
+    const before = await card.boundingBox()
+    const pathsBefore = await page.locator('.ov-connections .ov-line').evaluateAll(paths => paths.map(path => path.getAttribute('d')))
+    await frame.getByRole('button', { name: 'Ask about this item', exact: true }).click()
+    const question = page.getByRole('textbox', { name: 'Question', exact: true })
+    await expect(question).toBeFocused()
+    await expect(question).toHaveValue('')
+    expect(await card.boundingBox()).toEqual(before)
+    expect(await page.locator('.ov-connections .ov-line').evaluateAll(paths => paths.map(path => path.getAttribute('d')))).toEqual(pathsBefore)
+    const dialogBox = (await page.getByRole('dialog').boundingBox())!
+    expect(dialogBox.x).toBeGreaterThanOrEqual(0)
+    expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(width)
+    expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(900)
+    await question.fill('Line one')
+    await question.press('Shift+Enter')
+    await question.press('a')
+    await expect(question).toHaveValue('Line one\na')
+    expect(submitted).toHaveLength(0)
+    await question.press('Escape')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await card.click()
+    const fields = [
+      ['.ov-check', 'Why is this overdue?'],
+      ['.ov-task-status', 'Why is this task in this status? What is happening now?'],
+      ['.ov-context-field[title^="Waiting For:"]', "What's preventing this from moving forward?"],
+      ['.ov-owner', 'What is this owner doing on the task?'],
+      ['.ov-priority', 'Why does this task have this priority?'],
+      ['.ov-age', 'What changed in the last edit?'],
+      ['strong', "What's the current situation with this task?"],
+    ]
+    for (const [selector, draft] of fields) {
+      await card.locator(selector!).click({ button: 'right' })
+      await expect(question).toHaveValue(draft!)
+      expect(submitted).toHaveLength(0)
+      await question.press('Escape')
+    }
+    const line = page.locator('.ov-relationship-hit').first()
+    await line.focus()
+    await line.press('Enter')
+    await expect(question).toHaveValue('How are these two items related?')
+    await question.press('Escape')
+    const native = await page.getByRole('heading', { name: 'Your desk', exact: true }).evaluate(element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
+    expect(native).toBe(true)
+    await frame.getByRole('button', { name: 'Ask about this item', exact: true }).click()
+    await question.fill('Why is this waiting?')
+    await question.press('Enter')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    expect(submitted).toMatchObject([{ card_id: fixtureId(1), question: 'Why is this waiting?' }])
+    await page.reload()
+    if (width === 390) await page.getByRole('button', { name: 'Your desk', exact: true }).click()
+    const desk = page.getByLabel('Your desk', { exact: true })
+    await expect(desk.getByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
+    await expect(desk.getByText('The reviewer is preparing the next pass.')).toBeVisible()
+    for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) await expect(desk.getByText(text, { exact: true })).toHaveCount(0)
+    await expect(desk.getByRole('button', { name: 'Dismiss to history' })).toBeHidden()
+    await desk.getByRole('button', { name: /New answer.*Why is this waiting/ }).click()
+    await expect(card).toHaveClass(/flashed/)
+    await expect(page.getByRole('dialog')).toContainText('The reviewer is preparing the next pass.')
+  })
+}

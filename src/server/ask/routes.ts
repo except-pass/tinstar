@@ -77,12 +77,21 @@ export class AskApi {
         if (existing || parent) context = (existing ?? parent)!.context
         else {
           const scene = await this.sources.scene()
-          const card = scene.cards.find(card => card.id === input.card_id)
-          if (!card) throw new AskNotFound('Card unavailable in the authorized source')
-          const title = card.source.properties.Name?.value
-          context = { anchor: { kind: 'work', page_id: card.id, label: (typeof title === 'string' ? title : card.id).slice(0, 512), url: `https://www.notion.so/${card.id}`, observed_at: scene.coverage.intentions.observedAt, freshness: scene.coverage.intentions.status, expires_at: scene.coverage.intentions.expiresAt }, view: input.view }
+          const claim = input.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === input.target!.id) : undefined
+          const worker = input.target?.kind === 'execution' ? scene.executions.find(worker => worker.id === input.target!.id) : undefined
+          if (input.target && !(claim || worker)) throw new AskNotFound('Entity unavailable in the authorized source')
+          const card = scene.cards.find(card => card.id === (claim?.cardId ?? input.card_id))
+          if (!card && !worker) throw new AskNotFound('Card unavailable in the authorized source')
+          const title = card?.source.properties.Name?.value
+          const observation = worker?.observation ?? scene.coverage.intentions
+          context = { anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : `https://www.notion.so/${card!.id}`, observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
+            ...(input.target ? { target: input.target } : {}),
+            ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}),
+            ...(claim ? { relationship: { claim_id: claim.id, card_id: claim.cardId, execution_id: claim.executionId, sources: claim.sources, basis: claim.basis, verification: claim.verification } } : {}),
+          }
         }
-        if (input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
+        if (existing && (input.field_key !== context.field_key || input.field_value !== context.field_value)) throw new AskConflict('Question field differs from the original')
+        if (input.target ? input.target.kind !== context.target?.kind || input.target.id !== context.target.id : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
         return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
       }
       const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|retry)$/.exec(path)

@@ -5,9 +5,17 @@ export const pageIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const askViewSchema = z.object({
   scene: z.literal('overview'), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
 }).strict()
+export const askTargetSchema = z.object({ kind: z.enum(['execution', 'claim']), id: z.string().min(1).max(2048) }).strict()
+export type AskTarget = z.infer<typeof askTargetSchema>
+export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title'])
+export type AskField = z.infer<typeof askFieldSchema>
+const semanticContext = {
+  field_key: askFieldSchema.optional(), field_value: z.string().max(4000).optional(),
+}
 export const askContextSchema = z.object({
-  anchor: z.object({ kind: z.literal('work'), page_id: pageIdSchema, label: z.string().max(512), url: z.string().url(), observed_at: z.string().nullable(), freshness: z.enum(['fresh', 'partial', 'stale', 'unknown']).default('unknown'), expires_at: z.string().nullable().default(null) }).strict(),
-  view: askViewSchema,
+  anchor: z.object({ kind: z.enum(['work', 'worker', 'link']), page_id: z.string().min(1).max(2048), label: z.string().max(512), url: z.string().url().nullable(), observed_at: z.string().nullable(), freshness: z.enum(['fresh', 'partial', 'stale', 'unknown']).default('unknown'), expires_at: z.string().nullable().default(null) }).strict(),
+  view: askViewSchema, target: askTargetSchema.optional(), ...semanticContext,
+  relationship: z.object({ claim_id: z.string().max(2048), card_id: pageIdSchema, execution_id: z.string().max(2048), sources: z.array(z.string()), basis: z.enum(['explicit', 'inferred', 'textual']), verification: z.enum(['confirmed', 'unverified', 'conflicting']) }).strict().optional(),
 }).strict()
 export type AskContext = z.infer<typeof askContextSchema>
 export const askReplySchema = z.object({
@@ -33,9 +41,9 @@ export const askItemsSchema = z.array(askItemSchema)
 export type AskItem = z.infer<typeof askItemSchema>
 export const publicAsk = ({ owner: _owner, client_key: _key, note_id: _note, reply_cursor: _cursor, announced: _announced, ...item }: AskRecord): AskItem => item
 export const askCreateSchema = z.object({
-  client_key: z.string().uuid(), card_id: pageIdSchema, question: z.string().trim().min(1).max(4000),
+  client_key: z.string().uuid(), card_id: pageIdSchema.optional(), target: askTargetSchema.optional(), ...semanticContext, question: z.string().trim().min(1).max(4000),
   view: askViewSchema, follow_up_to: z.string().uuid().optional(),
-}).strict()
+}).strict().refine(input => !!input.card_id !== !!input.target, 'Choose one Ask entity')
 export const noteResultSchema = z.object({
   schema: z.literal('fm-inbox-note.v1'), outcome: z.enum(['created', 'replay']),
   id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/).refine(id => !id.includes('..')),

@@ -37,13 +37,11 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
     }}><small>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small>{cardStatus(card)}</small>}</button>
   }) : <h3>{requestText(item.title)}</h3>
   const readyCards = actionable.filter(item => item.cardIds.length > 0)
-  const next = selected?.cardIds.length ? readyCards.slice(readyCards.findIndex(item => item.id === selected.id) + 1, readyCards.findIndex(item => item.id === selected.id) + 4) : readyCards.slice(1, 4)
-  const secondary = queue?.items.filter(item => !ready(item)) ?? []
+  const next = readyCards.filter(item => item.id !== selected?.id)
   return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>
     {unavailable && <p role="status">Card not on the floor right now. <a href={`https://www.notion.so/${encodeURIComponent(unavailable)}`} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
     {cardId ? <><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}</> : <>
-      {!selected?.cardIds.length && <>{readyCards[0] ? deskCards(readyCards[0], true) : <p>No verified Notion card ready.</p>}</>}
-      {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{selected.cardIds.length ? 'Focused card' : 'First Mate requests'}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
+      {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{requestText(selected.title)}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
         {selected.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Read pull request' : e.kind === 'card' ? 'Read card' : 'Read evidence'} ↗</a>)}
         <div className="ov-queue-actions"><button type="button" disabled={index <= 0} onClick={() => send({ type: 'navigate-queue', direction: 'previous' })}>← Previous</button><button type="button" disabled={index >= items.length - 1} onClick={() => send({ type: 'navigate-queue', direction: 'next' })}>Next →</button></div>
@@ -65,9 +63,9 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
           </details>
         })}</section>
         <details><summary>Request sources & readiness</summary><pre>{JSON.stringify(selected, null, 2)}</pre></details>
-      </details> : <><h3>{!queue || error ? 'Desk unavailable' : state.queueItemId ? 'Selected request unavailable' : 'No verified request ready'}</h3><p>{!queue || error ? 'Last known requests stay available below.' : state.queueItemId ? 'Choose another request below.' : 'Requests that need verification or a prerequisite are available below.'}</p></>}
-      {next.length > 0 && <><h4>Coming up</h4>{next.map(item => <div key={item.id}>{item.cardIds.length ? deskCards(item) : <button className="ov-queue-next" type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}</button>}</div>)}</>}
-      {secondary.length > 0 && <details><summary>Later & needs verification · {secondary.length}</summary>{secondary.map(item => <div key={item.id}>{item.cardIds.length ? deskCards(item) : <button type="button" className="ov-queue-next" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}<small>Needs verification</small></button>}</div>)}</details>}
+      </details> : (error || state.queueItemId) && <p role="status">{error ? 'Requests could not refresh.' : 'Selected request unavailable'}</p>}
+      {next.length > 0 && <>{next.map(item => <div key={item.id}>{item.cardIds.length ? deskCards(item) : <button className="ov-queue-next" type="button" onClick={() => send({ type: 'open-queue', itemId: item.id })}>{requestText(item.title)}</button>}</div>)}</>}
+
     </>}
   </section>
 }

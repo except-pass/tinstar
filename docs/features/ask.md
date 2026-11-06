@@ -1,15 +1,31 @@
-# Ask First Mate: slice 1
+# Ask First Mate
 
 Slice 1 is one work card, text, **Sent / Delivered / Answered**, approved by
 First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
-This PR implements this approved slice of the parent card.
+The compact Ask/Inspect refinement reuses this request store and bridge.
 
 A left drag on a Notion task opens a text composer with that task's canonical
-page ID. The visible **Ask about a task** button provides the same action without
-a gesture; Detailed Inspector also has **Ask First Mate about this task**.
-Release opens the composer; only **Send question** sends. The task chip is
-removable and a task must be selected before sending. Right/voice, workers and
-relationships are later slices of the touch-to-ask card, not implemented here.
+page ID. Quiet Ask (speech bubble) and Inspect (panel) icons are always present
+in the existing Work/Worker header, including collapsed rows. Ask opens a blank,
+focused overlay for exactly that entity; Inspect opens its details. Card-body
+clicks still expand cards and their linked clusters. The overlay does not change
+card or relationship geometry and fits the phone viewport.
+
+Right-click a task title, status, next check-in, Waiting For, owner, priority or
+edit time for an editable deterministic draft. Right-click the background for a
+blank question; right-click a relationship for a draft about its two endpoints.
+Links and controls outside these targets keep their native context menus.
+Enter sends, Shift+Enter inserts a newline, Escape closes, and Send question is
+available for touch. Right-click never sends. The original left-swipe mapping is
+unchanged; voice is outside this refinement.
+
+The existing create endpoint still accepts `card_id` for work. An optional typed
+`target` identifies a canonical execution or claim instead. Optional `field_key`
+and `field_value` retain the clicked field; relationship endpoint IDs, basis,
+verification and provenance are resolved from the server scene, never supplied
+by the draft. Worker anchors retain the canonical execution ID in the legacy
+`anchor.page_id` slot and have no external Notion URL. Fresh authoritative state,
+not a draft or captured field value, remains First Mate's evidence.
 
 Movement under 12 CSS pixels stays a tap. At 12 pixels, left movement must be at
 least 1.4 times vertical movement to lock to text. Release requires 48 pixels.
@@ -18,9 +34,9 @@ horizontal overflow ancestor stays native; at its right edge, a left drag can
 open Ask. Use the visible action anywhere without changing the floor's scroll
 position. Pointer/touch cancellation never opens a composer.
 
-Operational decision/request items render before Ask questions in the existing
-Desk on desktop and mobile. The
-slice's states are **Sent** (Tin Star retained it), **Delivered** (First Mate
+Your Desk starts with readable question/answer records, followed by supported
+actionable decision/request records. Operational queue introductions and counts
+are omitted; decision controls and routing remain intact. The Ask states are **Sent** (Tin Star retained it), **Delivered** (First Mate
 captured its note), **Answered** (correlated primary reply), and **Failed** (known
 capture failure). No readiness/announcement/acknowledgement is misrepresented as
 investigation progress. A missing puller or slow answer leaves a visible delay
@@ -29,11 +45,12 @@ the note is delivered. New answers are unread; viewing marks them read. Dismiss
 moves only the Ask into searchable history. It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
-Tapping an item resolves its stable page ID against the current scene, invokes
+Tapping a work/link item resolves its stable page ID against the current scene, invokes
 existing [Desk navigation](overview.md) reveal/scroll/flash, and opens a compact answer
-sheet over the floor. Questions and answer previews are clamped at rest; **Full
-answer & evidence** expands the retained detail, references and suggestions. The
-compact sheet leaves the returned task visible above it on mobile. Active and
+sheet over the floor. Inbox questions and answer previews wrap legibly. The answer sheet stays compact
+at rest; **Full answer & evidence** expands the retained detail, references and suggestions. The
+compact sheet leaves the returned task visible above it on mobile. Worker
+answers reveal and highlight the exact originating execution. Active and
 history items use the same return path. A task that cannot be shown gets the
 captured canonical source link rather than another object. Follow-up creates a new request in the same
 conversation and retains the original captured context. No raw audio is stored.

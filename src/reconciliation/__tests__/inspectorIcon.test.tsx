@@ -46,7 +46,7 @@ describe('Open in Inspector', () => {
     const { container } = mount(density)
     const card = endpoint(container, kind)
     if (density === 'compact') {
-      expect(card.parentElement?.querySelector('.ov-open-inspector')).toBeNull()
+      expect(inspectorButton(card)).toBeTruthy()
       fireEvent.click(card)
     }
     const expanded = card.getAttribute('aria-expanded')
@@ -112,7 +112,7 @@ describe('Open in Inspector', () => {
       expanded = !expanded
       expect(card).toHaveAttribute('aria-expanded', String(expanded))
       expect(screen.queryByLabelText('Inspector')).toBeNull()
-      expect(card.parentElement?.querySelector('.ov-open-inspector') !== null).toBe(expanded)
+      expect(inspectorButton(card)).toBeTruthy()
     }
   })
 

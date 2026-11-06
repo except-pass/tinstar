@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState, type RefObject } from 'react'
 import type { FloorScene, Target } from './presentation'
+import { AskRelationshipHit } from '../ask/Ask'
 import { stale } from './overviewModel'
 
 interface Path { id: string; worker: string; card: string; d: string; uncertain: boolean }
@@ -45,6 +46,6 @@ export function CompactConnections({ canvas, scene, layout, expanded, collapsed,
     window.addEventListener('scroll', schedule, true)
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', schedule); window.removeEventListener('scroll', schedule, true) }
   }, [canvas, scene, layout, expanded, collapsed, now, readFailed])
-  return <svg className="ov-connections ov-compact-connections" aria-hidden="true">{paths.map(path => <path key={path.id} data-worker-id={path.worker} data-card-id={path.card} d={path.d}
-    className={`ov-line ov-${path.uncertain ? 'uncertain' : 'linked'}${focus ? focus.kind === 'execution' && focus.id === path.worker || focus.kind === 'card' && focus.id === path.card ? ' hot' : ' dim' : ''}`} />)}</svg>
+  return <svg className="ov-connections ov-compact-connections">{paths.map(path => <g key={path.id}><path data-worker-id={path.worker} data-card-id={path.card} d={path.d}
+    className={`ov-line ov-${path.uncertain ? 'uncertain' : 'linked'}${focus ? focus.kind === 'execution' && focus.id === path.worker || focus.kind === 'card' && focus.id === path.card ? ' hot' : ' dim' : ''}`} /><AskRelationshipHit claimId={path.id} d={path.d} /></g>)}</svg>
 }

@@ -87,7 +87,7 @@ describe('Ultra Compact Overview', () => {
     fireEvent.click(task(container, 1))
     open(worker(container, 'linked-worker')); open(worker(container, 'helper-worker'))
     expect(task(container, 1).querySelector('.ov-reference')).toBeTruthy()
-    expect(container.querySelectorAll('.ov-compact-connections path')).toHaveLength(4)
+    expect(container.querySelectorAll('.ov-compact-connections .ov-line')).toHaveLength(4)
   })
   it('reveals direct tasks excluded by a status filter and restores the filter on collapse', () => {
     scene.cards.find(c => c.id === fixtureId(6))!.source.properties.Status!.value = 'Backlog'

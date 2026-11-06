@@ -83,8 +83,8 @@ describe('one-card text Ask and Desk', () => {
     Object.defineProperty(workspace, 'clientWidth', { configurable: true, value: 300 })
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchEnd')
     expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ask about a task' })[0]!)
-    expect(screen.getByRole('combobox', { name: 'Task context' })).toBeVisible()
+    fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+    expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
   })
   it('submits the canonical card ID only after review, shows Sent, then survives a second mount', async () => {
     const first = mount()
@@ -114,6 +114,7 @@ describe('one-card text Ask and Desk', () => {
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute('href', 'https://example.test/evidence')
     fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).not.toHaveTextContent('New answer'))
+    fireEvent.click(screen.getByText('Actions', { selector: 'summary' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss to history' }))
     await waitFor(() => expect(within(screen.getByLabelText('Questions for First Mate')).queryByText('Why is this waiting?')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
@@ -190,4 +191,108 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
     await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, card_id: fixtureId(1) }))
   })
+})
+
+it.each([
+  ['.ov-check', 'next_check_in', 'Why is this overdue?'],
+  ['.ov-task-status', 'status', 'Why is this task in this status? What is happening now?'],
+  ['.ov-context-field[title^="Waiting For:"]', 'waiting_for', "What's preventing this from moving forward?"],
+  ['.ov-owner', 'owner', 'What is this owner doing on the task?'],
+  ['.ov-priority', 'priority', 'Why does this task have this priority?'],
+  ['.ov-age', 'last_edited', 'What changed in the last edit?'],
+  ['strong', 'title', "What's the current situation with this task?"],
+] as const)('right-click %s seeds an editable draft and exact typed field without sending', async (selector, field, draft) => {
+  const source = scene.cards.find(card => card.id === fixtureId(1))!
+  source.source.properties.Priority = { id: 'priority', type: 'select', value: 'Medium', hasMore: false }
+  source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-05T12:00:00Z' }, hasMore: false }
+  source.source.properties['Waiting For'] = { id: 'waiting', type: 'rich_text', value: 'Review capacity', hasMore: false }
+  const { container } = mount(), task = card(container)
+  fireEvent.click(task)
+  const clicked = task.querySelector(selector)!
+  expect(clicked).toBeTruthy()
+  const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(clicked, contextMenu)
+  expect(contextMenu.defaultPrevented).toBe(true)
+  const question = screen.getByRole('textbox', { name: 'Question' })
+  expect(question).toHaveValue(draft)
+  expect(question).toHaveFocus()
+  expect(requests).toHaveLength(0)
+  expect(task).toHaveAttribute('aria-expanded', 'true')
+  fireEvent.change(question, { target: { value: draft + ' Please explain.' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  const expectedValue = field === 'last_edited' ? source.source.last_edited_time : field === 'title' ? source.source.properties.Name!.value : field === 'next_check_in' ? JSON.stringify(source.source.properties['Next check-in']!.value) : field === 'waiting_for' ? 'Review capacity' : source.source.properties[{ status: 'Status', owner: 'Owner', priority: 'Priority' }[field]!]!.value
+  // Next check-in uses the same typed property formatter as the floor; the raw
+  // date object is represented by its start/end values rather than DOM text.
+  if (field !== 'next_check_in') expect(requests[0]!.field_value).toEqual(expectedValue)
+  else expect(requests[0]!.field_value).toContain('2026')
+  expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: field, question: draft + ' Please explain.' })
+})
+
+it('offers blank Ask for collapsed card and worker identities without expanding either', async () => {
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  expect(task).toHaveAttribute('aria-expanded', 'false')
+  fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
+  const worker = container.querySelector<HTMLElement>('.ov-execution')!
+  fireEvent.click(within(worker.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  const question = screen.getByRole('textbox', { name: 'Question' })
+  expect(question).toHaveValue('')
+  fireEvent.change(question, { target: { value: 'What is this worker doing?' } })
+  fireEvent.keyDown(question, { key: 'Enter', shiftKey: true })
+  expect(requests).toHaveLength(0)
+  fireEvent.keyDown(question, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: worker.dataset.entityId } })
+  expect(requests[0]).not.toHaveProperty('card_id')
+})
+
+it('right-click background stays blank and outside/link context menus stay native', () => {
+  const { container } = mount(), task = card(container)
+  const outside = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(screen.getByRole('heading', { name: 'Your desk' }), outside)
+  expect(outside.defaultPrevented).toBe(false)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.contextMenu(task)
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  const dialog = screen.getByRole('dialog')
+  fireEvent(dialog, new Event('cancel', { bubbles: false, cancelable: true }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const link = screen.getByRole('link', { name: 'Open Notion card ↗' })
+  const native = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(link, native)
+  expect(native.defaultPrevented).toBe(false)
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('right-click relationship carries its canonical claim identity, with keyboard and blank icon alternatives', async () => {
+  const { container } = mount()
+  const line = container.querySelector<SVGPathElement>('.ov-relationship-hit')!
+  expect(line).toBeTruthy()
+  fireEvent.contextMenu(line)
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
+  expect(requests).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'claim', id: line.dataset.claimId }, field_key: 'relationship' })
+  fireEvent.keyDown(line, { key: 'Enter' })
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
+})
+
+it('Desk starts with records and omits intro chrome; history dismissal is a secondary action', async () => {
+  records = [seed()]
+  mount()
+  const desk = screen.getByLabelText('Your desk')
+  await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
+  expect(desk.querySelector('.ask-desk')?.previousElementSibling).toBeNull()
+  for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) expect(within(desk).queryByText(text)).toBeNull()
+  expect(within(desk).queryByText(/Later & needs verification/)).toBeNull()
+  expect(within(desk).getByText('Review is pending')).toBeVisible()
+  expect(within(desk).getByText('Captured task')).toBeVisible()
+  expect(within(desk).getByText(/New answer/)).toBeVisible()
+  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).not.toBeVisible()
+  fireEvent.click(within(desk).getByText('Actions', { selector: 'summary' }))
+  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).toBeVisible()
 })
