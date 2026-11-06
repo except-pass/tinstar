@@ -13,7 +13,7 @@ import { QueuePanel } from './QueuePanel'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
 import { useSearchSession } from './useSearchSession'
-import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
+import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
@@ -121,7 +121,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     event.stopPropagation()
     send({ type: 'focus', target: item })
   }
-  return <div className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
+  return <div className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
     onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={toggle}>
@@ -318,7 +318,14 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   }, [deskMobile, selectedId])
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
-  const searchMatches = useMemo(() => scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, now])
+  const searchMatches = useMemo(() => scene && state.searchFocus ? directNeighbors(scene, state.searchFocus) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
+  const searchEdgeStyle = useMemo(() => {
+    if (!scene || !state.searchFocus || !searchMatches) return ''
+    const quote = (value: string) => '"' + value.replace(/["\\\n\r\f]/g, character => '\\' + character.charCodeAt(0).toString(16) + ' ') + '"'
+    const selectors = scene.claims.filter(link => link.basis === 'explicit' && link.verification === 'confirmed' && link.state === 'current' && searchMatches.has(`execution:${link.executionId}`) && searchMatches.has(`card:${link.cardId}`))
+      .map(link => `.ov-search-focused .ov-compact-connections [data-worker-id=${quote(link.executionId)}][data-card-id=${quote(link.cardId)}]`)
+    return `.ov-search-focused .ov-compact-connections .ov-line{opacity:.12}${selectors.length ? `${selectors.join(',')}{opacity:1;stroke-width:2}` : ''}`
+  }, [scene, state.searchFocus, searchMatches])
   const displayGroups = useMemo(() => density === 'compact' ? canonicalOverviewGroups(groups) : groups, [groups, density])
   useEffect(() => {
     if (search.isRestoring()) return
@@ -370,9 +377,9 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
   const visibleCardIds = new Set(displayGroups.filter(group => !state.collapsed.includes(semanticId(target('group', group.id))) && !state.collapsed.includes(semanticId(target('group', group.outerId)))).flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)))
-  return <AskProvider scene={scene} state={state} send={send} visibleCardIds={visibleCardIds}><div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
+  return <AskProvider scene={scene} state={state} send={send} visibleCardIds={visibleCardIds}><div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar searchControl={<SmartSearch scene={scene} state={state} send={send} now={now} open={search.open} activeSession={search.active} onOpen={search.begin} onApply={search.apply} onRestore={search.restore} onClear={search.clear} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
+      <FloorToolbar searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)
         if (value === 'compact' && state.selection) {
           const selected = state.selection
@@ -381,7 +388,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
         }
       }} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
+      <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${state.searchFocus ? ' ov-search-focused' : ''}`}>{searchEdgeStyle && <style>{searchEdgeStyle}</style>}<div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
@@ -391,7 +398,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
             {!collapsed && <div className="ov-inner">{children.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}</div>}
           </section>
         })}
-        {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection} />}
+        {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} />}
         {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? 'No relationship clusters match the search in this scope. Open Search for outside-view results and coverage.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
         {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>

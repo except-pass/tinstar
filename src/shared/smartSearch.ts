@@ -1,6 +1,6 @@
 import Fuse from 'fuse.js'
 import type { FloorScene, Target } from './reconciliationPresentation'
-import { sceneSearchDocuments, type SearchDocument, type SearchField } from './searchDocuments'
+import { sceneSearchDocuments, searchEntityDocuments, type SearchDocument, type SearchField } from './searchDocuments'
 import { verifiedLink, sceneWorkHealth, type Pattern } from './workHealth'
 import { homeLabel as homeLabelForSearch } from './reconciliationLabels'
 
@@ -172,11 +172,11 @@ export class SmartSearchIndex {
 // presentation's one-second clock or when the donuts request candidate counts.
 const indexes = new WeakMap<FloorScene, SmartSearchIndex>()
 export function updateSearchIndex(scene: FloorScene, index: SmartSearchIndex) {
-  index.update(scene.searchIndex?.documents ?? sceneSearchDocuments(scene)); indexes.set(scene, index)
+  index.update([...(scene.searchIndex?.documents ?? sceneSearchDocuments(scene)), ...searchEntityDocuments(scene)]); indexes.set(scene, index)
 }
 export function searchIndex(scene: FloorScene) {
   let index = indexes.get(scene)
-  if (!index) { index = new SmartSearchIndex(); index.update(scene.searchIndex?.documents ?? sceneSearchDocuments(scene)); indexes.set(scene, index) }
+  if (!index) { index = new SmartSearchIndex(); index.update([...(scene.searchIndex?.documents ?? sceneSearchDocuments(scene)), ...searchEntityDocuments(scene)]); indexes.set(scene, index) }
   return index
 }
 export const targetKey = (target: Target) => `${target.kind}:${target.id}`

@@ -10,7 +10,7 @@ Overview is the primary home: independent Workers and Notion cards share groups 
 
 For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.
 
-Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text or apply operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
+Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text. Use the adjacent Pattern Dial for operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
 The [Card Janitor CLI](docs/features/card-janitor.md) produces a read-only operational-card audit with cited cleanup candidates and offline JSON replay. It creates no Desk items and makes no model calls or Notion writes.
 

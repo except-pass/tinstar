@@ -32,9 +32,9 @@ export interface WorkHealth {
   unknown: number
   // null is unavailable evidence, never zero. These signals are not published
   // by the current source contract; a future reconciler can supply them.
-  runnable: null
-  activeResolverCount: null
-  lastProgressAt: null
+  runnable: number | null
+  activeResolverCount: number | null
+  lastProgressAt: string | null
   observedAt: string | null
   coverage: 'complete' | 'unknown'
   blockers: string[]
@@ -65,7 +65,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const sourceFresh = !readFailed && freshObservation(scene.coverage.intentions, now)
   const complete = sourceFresh && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
     scene.coverage.homes.every(home => freshObservation(home.observation, now)) &&
-    links.every(verifiedLink) && workers.every(worker => freshObservation(worker.observation, now) && worker.liveness !== 'liveness-not-observed')
+    workerIds.size === workers.length && links.every(verifiedLink) && workers.every(worker => freshObservation(worker.observation, now) && worker.liveness !== 'liveness-not-observed')
   const status = String(card.source.properties.Status?.value ?? '')
   const wait = String(card.source.properties['Waiting For']?.value ?? '').trim()
   const blockers = [...new Set(workers.flatMap(worker => worker.source.backlog.blocked_by ? [String(worker.source.backlog.blocked_by)] : []))]
@@ -97,14 +97,38 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
     patterns: {
       active: sourceFresh ? inProgress && !running ? uncertain('Runnable availability is not published; no verified running path observed') : boolean(inProgress && running > 0, running ? 'At least one verified running path' : 'Work is outside In Progress') : uncertain('Source unavailable or stale'),
       blocked: sourceFresh && workers.every(worker => freshObservation(worker.observation, now))
-        ? boolean(!!wait && (waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; resolver coverage unavailable — no Stalled inference`)
+        ? boolean(status.toLowerCase() === 'waiting for' && !!wait && (waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; resolver coverage unavailable — no Stalled inference`)
         : uncertain('Source unavailable or stale'),
       unstaffed: complete && (workers.length > 0 || absenceKnown) ? boolean(inProgress && workers.length === 0, 'Complete configured source and explicit accountability coverage; no verified assigned worker') : uncertain('Incomplete source, link or accountability coverage; no absence conclusion'),
       decision: sourceFresh ? boolean(decision || request, decision ? `Explicit Notion Will action: ${String(will)}` : request ? 'Published needs-decision request on a verified worker' : 'No explicit human decision request') : uncertain('Source unavailable or stale'),
-      stalled: sourceFresh && inProgress && running > 0 ? boolean(false, 'A verified worker is progressing') : uncertain('Runnable paths and active resolver coverage are not published'),
+      stalled: result(stalledOutcome({ inProgress, complete, workerCount: workers.length, running, runnable: null, activeResolverCount: null }), running > 0 ? 'A verified worker is progressing' : 'Runnable paths and active resolver coverage are not published'),
       idle: uncertain('Runnable assignment availability is not published; waiting is not proof of idle'),
       mismatch: uncertain('Tracked continuation coverage is not published'),
       stale: uncertain('Meaningful progress time is not published; heartbeat/check-in age is not progress'),
     },
   }
+}
+
+
+export const dialPatterns = ['all', 'stalled', 'blocked', 'decision', 'unstaffed', 'mismatch', 'stale', 'active'] as const
+export type DialPattern = typeof dialPatterns[number]
+export const dialNames: Record<DialPattern, string> = { all: 'All', ...patternNames, decision: 'Needs me', mismatch: 'Mismatch' }
+export const patternReminders: Record<DialPattern, string> = {
+  all: 'No operational pattern applied. See the board under your other filters.',
+  stalled: 'Work says In Progress, but no linked worker can advance it and no active resolver exists. Look for an unassigned blocker, missing wake-up, or stopped worker. Requires adequate fresh source/link coverage; one waiting + one running worker is NOT stalled.',
+  blocked: 'Work is Waiting For and its linked execution is waiting on a known dependency. Look for a real blocker, owner and next wake-up; blocked can be healthy.',
+  decision: 'Work explicitly requires your decision, merge or elevated action. Look at the required action and supporting evidence, never infer approval from a worker state.',
+  unstaffed: 'In Progress work with confirmed absence of a linked worker under adequate source coverage. Unknown/unverified links and stale source are not confidently unstaffed.',
+  mismatch: 'Notion work and worker execution disagree (e.g. Done work with running execution, In Progress with all terminal workers and no follow-on). Review before changing either state.',
+  stale: 'No meaningful work progress by the configured freshness/check-in rule. An activity heartbeat/card edit alone does not count as progress; distinguish from stale source telemetry.',
+  active: "In Progress work has a running/runnable path. One waiting worker doesn't make the whole task Stalled if another is advancing it.",
+}
+
+
+/** Unknown resolver/runnable coverage cannot prove a stall. The current source
+ * adapter deliberately passes null until those signals are actually published. */
+export function stalledOutcome(input: { inProgress: boolean; complete: boolean; workerCount: number; running: number; runnable: number | null; activeResolverCount: number | null }): PatternResult['outcome'] {
+  if (!input.inProgress || input.running > 0 || (input.runnable ?? 0) > 0 || (input.activeResolverCount ?? 0) > 0) return 'no-match'
+  if (!input.complete || input.runnable === null || input.activeResolverCount === null) return 'unavailable'
+  return input.workerCount > 0 ? 'match' : 'no-match'
 }

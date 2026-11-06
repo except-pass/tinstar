@@ -20,8 +20,9 @@ const searchViewSchema = z.object({
 }).strict()
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('set-search'), search: searchFilterSchema }).strict(),
+  z.object({ type: z.literal('set-pattern'), pattern: z.enum([patterns[0]!, ...patterns.slice(1)]).nullable() }).strict(),
   z.object({ type: z.literal('clear-search') }).strict(),
-  z.object({ type: z.literal('reveal-search'), target: targetSchema.refine(target => ['card', 'execution'].includes(target.kind)) }).strict(),
+  z.object({ type: z.literal('reveal-search'), target: targetSchema.refine(target => ['card', 'execution'].includes(target.kind)), targets: z.array(targetSchema).max(4096).optional() }).strict(),
   z.object({ type: z.literal('restore-search-view'), view: searchViewSchema }).strict(),
   z.object({ type: z.literal('set-organizer'), organizer: organizerSchema }).strict(),
   z.object({ type: z.literal('set-status-filter'), filter: statusFilterSchema }).strict(),
@@ -44,7 +45,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clear-selection') }).strict(),
 ])
 export const stateSchema = z.object({
-  search: searchFilterSchema.optional(), searchReveal: targetSchema.nullable().optional(),
+  search: searchFilterSchema.optional(), searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4096).optional(),
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
   donutFilter: donutFilterSchema.optional(), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),

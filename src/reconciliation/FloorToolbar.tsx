@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { cardStatusName, currentStatusOptions, defaultOrganizer, organizerPresets, organizerPreset, statusProjection, defaultStatusFilter, floorFields, operationalStatuses, type FloorField, type Organizer } from '../shared/floorOrganization'
 import { floorWorkerStatus, hasDonutFilter } from '../shared/floorStatus'
+import { PatternDial } from './PatternDial'
 import { StatusDonut, type StatusCount } from './StatusDonut'
 import type { OverviewDensity } from './overviewDensity'
 import type { FloorScene, PresentationAction, PresentationState, Target } from './presentation'
@@ -35,6 +36,7 @@ export function FloorToolbar({ scene, state, send, gaps, density, onDensityChang
       <div className="ov-preset-scroll" role="group" aria-label="Organizer presets">{(Object.keys(organizerPresets) as Array<keyof typeof organizerPresets>).map(preset => <button type="button" key={preset} aria-pressed={organizerPreset(organizer) === preset} onClick={() => send({ type: 'set-organizer', organizer: { ...organizerPresets[preset] } })}>By {preset === 'initiative' ? 'Initiative' : preset === 'machine' ? 'Machine' : 'Manager'}</button>)}</div>
       <button type="button" className="ov-customize-trigger" aria-label="Customize" aria-expanded={panel === 'customize'} aria-controls="floor-customize" onClick={event => { trigger.current = event.currentTarget; setPanel(panel === 'customize' ? null : 'customize') }}>⚙<span> Customize{!organizerPreset(organizer) ? ' •' : ''}</span></button>
       {searchControl}
+      <PatternDial scene={scene} state={state} send={send} now={now} />
       <div className="ov-filter-chips" aria-label="Selected statuses">{(['workers', 'cards'] as const).flatMap(domain => selection[domain].map(status => <button type="button" key={`${domain}:${status}`} title={`Remove ${domain}: ${status}`} aria-label={`Remove ${domain}: ${status}`} onClick={() => toggle(domain, status)}>{domain === 'cards' ? '▤' : '◇'} {status} ×</button>))}</div>
       <div className="ov-donuts">{(['workers', 'cards'] as const).map(domain => <StatusDonut key={domain} domain={domain} countNote={countNotes?.[domain]} counts={distribution(domain === 'cards' ? projection.cardCandidates.map(cardStatusName) : projection.workerCandidates.map(floorWorkerStatus))} selected={selection[domain]} visible={domain === 'cards' ? visibleCards ?? projection.cards.length : visibleWorkers ?? projection.workers.length} open={panel === domain} onOpen={() => { trigger.current = host.current?.querySelector<HTMLButtonElement>(`.ov-donut-trigger[aria-controls="ov-${domain}-statuses"]`) ?? null; if (panel === domain) close(); else setPanel(domain) }} onToggle={status => toggle(domain, status)} />)}</div>
       <button type="button" className="ov-clear-filters" aria-label="Clear all status selections" title="Clear all status selections" disabled={!hasDonutFilter(selection)} onClick={() => send({ type: 'clear-donut-filter' })}>×<span> Clear</span></button>
