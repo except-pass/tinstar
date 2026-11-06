@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../Overview'
 import { preferencesKey } from '../presentationPreferences'
-import type { FloorScene } from '../presentation'
+import type { FloorScene, PresentationAction } from '../presentation'
+import { actionSchema } from '../../shared/reconciliationCommands'
 
-const observed = vi.hoisted(() => ({ scene: null as unknown }))
+const observed = vi.hoisted(() => ({ scene: null as unknown, send: null as null | ((action: PresentationAction) => unknown) }))
 vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
+vi.mock('../usePresentation', async importOriginal => {
+  const original = await importOriginal<typeof import('../usePresentation')>()
+  return { usePresentation: (...args: Parameters<typeof original.usePresentation>) => {
+    const result = original.usePresentation(...args)
+    observed.send = result.send
+    return result
+  } }
+})
 vi.mock('../useDeskQueue', () => ({ useDeskQueue: () => ({ queue: fixtureQueue(), error: null }) }))
 vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
 let scene: FloorScene
@@ -24,6 +33,34 @@ const search = (value: string) => fireEvent.change(input(), { target: { value } 
 const cardIds = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.ov-card')].map(element => element.dataset.entityId)
 
 describe('Smart Search in the existing Overview', () => {
+  it.each(['card', 'worker'] as const)('reveals a planned %s cluster after set-roadmap(false), then restores visibility', kind => {
+    const planned = scene.cards.find(card => card.id === fixtureId(1))!
+    planned.expectation = 'wait-planned'
+    const claim = scene.claims.find(claim => claim.cardId === planned.id && claim.basis === 'explicit' && claim.verification === 'confirmed' && claim.state === 'current')!
+    expect(claim).toBeTruthy()
+    const worker = scene.executions.find(worker => worker.id === claim.executionId)!
+    const { container } = mount()
+    act(() => { observed.send!(actionSchema.parse({ type: 'set-roadmap', expanded: false })) })
+    const selector = `.ov-card[data-entity-id="${planned.id}"]`
+    expect(container.querySelector(selector)).toBeNull()
+    const before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    search(kind === 'card' ? 'Release Coordinator' : worker.identity.task_id)
+    const result = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: kind === 'card' ? /Release Coordinator/ : new RegExp(worker.identity.task_id) })
+    fireEvent.click(result)
+    expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
+    const selected = kind === 'card' ? container.querySelector(selector) : container.querySelector(`.ov-execution[data-entity-id="${worker.id}"]`)
+    expect(selected).toHaveAttribute('aria-expanded', 'true')
+    expect(selected).toHaveFocus()
+    if (kind === 'card') fireEvent.keyDown(window, { key: 'Escape' })
+    else fireEvent.click(screen.getByRole('button', { name: '← Back' }))
+    expect(container.querySelector(selector)).toBeNull()
+    expect(cardIds(container)).toEqual(before)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    expect(container.querySelector(selector)).toBeNull()
+  })
+
   it('offers only explicit Initiative values and excludes parent ancestry', () => {
     for (const card of scene.cards) {
       delete card.source.properties.Initiative
