@@ -61,7 +61,7 @@ export function AskProvider({ scene, state, send, visibleCardIds, children }: { 
   }
   const returnTo = (item: AskItem) => {
     setAnswer(item)
-    if (item.context.target?.kind === 'execution') {
+    if (item.context.target?.kind === 'execution' || item.context.target?.kind === 'claim') {
       send({ type: 'reveal-search', target: item.context.target })
       send({ type: 'flash', targets: [item.context.target] })
     } else if (scene.cards.some(card => card.id === item.context.anchor.page_id)) send({ type: 'navigate-card', cardId: item.context.anchor.page_id })
@@ -75,7 +75,7 @@ export function AskProvider({ scene, state, send, visibleCardIds, children }: { 
       setItems(previous => [item, ...previous.filter(old => old.request_id !== item.request_id)])
       setComposer(null)
     }} />, document.body)}
-    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={currentAnswer.context.target?.kind === 'execution' ? scene.executions.some(worker => worker.id === currentAnswer.context.target!.id) : visibleCardIds.has(currentAnswer.context.anchor.page_id)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.target ? { target: currentAnswer.context.target } : { cardId: currentAnswer.context.anchor.page_id }, currentAnswer)} />, document.body)}
+    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={currentAnswer.context.target?.kind === 'execution' ? scene.executions.some(worker => worker.id === currentAnswer.context.target!.id) : currentAnswer.context.target?.kind === 'claim' ? scene.claims.some(claim => claim.id === currentAnswer.context.target!.id && visibleCardIds.has(claim.cardId)) : visibleCardIds.has(currentAnswer.context.anchor.page_id)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.target ? { target: currentAnswer.context.target } : { cardId: currentAnswer.context.anchor.page_id }, currentAnswer)} />, document.body)}
   </Controls.Provider>
 }
 export function AskRelationshipHit({ claimId, d }: { claimId: string; d: string }) {

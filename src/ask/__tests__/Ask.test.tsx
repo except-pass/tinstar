@@ -334,3 +334,68 @@ it('opens blank Ask for a relationship from its Inspector connection control', a
   fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
   await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'claim', id: scene.claims.find(claim => claim.cardId === fixtureId(1))!.id } }))
 })
+
+it('hides Ask on historical Inspector connections while keeping supported connections actionable', () => {
+  const current = scene.claims.find(claim => claim.cardId === fixtureId(1))!
+  scene.claimHistory.push({ ...current, id: 'retained-history', state: 'historical' })
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const connections = [...screen.getByLabelText('Inspector').querySelectorAll<HTMLElement>('.ov-related')]
+  const history = connections.find(connection => within(connection).queryByText('History'))!
+  expect(history).toBeTruthy()
+  expect(within(history).queryByRole('button', { name: 'Ask about this item' })).toBeNull()
+  expect(within(connections.find(connection => within(connection).queryByText('Linked'))!).getByRole('button', { name: 'Ask about this item' })).toBeVisible()
+})
+
+it.each(['detailed', 'compact'] as const)('returns a retained claim answer to only its relationship in %s', async density => {
+  localStorage.setItem('tinstar.overview.density', density)
+  const claims = scene.claims.filter(claim => claim.cardId === fixtureId(1))
+  expect(claims.length).toBeGreaterThan(1)
+  const original = seed()
+  original.context.target = { kind: 'claim', id: claims[0]!.id }
+  original.context.anchor.kind = 'link'
+  records = [original]
+  const { container } = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const lines = [...container.querySelectorAll('.ov-line.flashed')]
+  expect(lines).toHaveLength(1)
+  expect(lines[0]!.parentElement!.querySelector('.ov-relationship-hit')).toHaveAttribute('data-claim-id', claims[0]!.id)
+  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+  expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+})
+
+it('returns an unverified Detailed relationship answer after reload and filtering', async () => {
+  localStorage.setItem('tinstar.overview.density', 'detailed')
+  const claim = scene.claims.find(claim => claim.cardId === fixtureId(1))!
+  scene.claims = scene.claims.filter(other => other.cardId !== claim.cardId || other.id === claim.id)
+  claim.verification = 'unverified'
+  const first = mount()
+  const line = first.container.querySelector<SVGPathElement>(`.ov-relationship-hit[data-claim-id="${claim.id}"]`)!
+  fireEvent.contextMenu(line)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(records).toHaveLength(1))
+  records[0] = { ...records[0]!, status: 'answered', reply: seed().reply }
+  first.unmount()
+  const { container } = mount()
+  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'excluded-relationship' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect(card(container)).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*How are these two items related/ }))
+  expect(card(container)).toBeVisible()
+  const returned = container.querySelector(`.ov-relationship-hit[data-claim-id="${claim.id}"]`)!
+  expect(returned.previousElementSibling).toHaveClass('flashed')
+  expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
+  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+})
+
+it('reports a missing relationship even when its card remains available', async () => {
+  const original = seed()
+  original.context.target = { kind: 'claim', id: 'missing-claim' }
+  original.context.anchor.kind = 'link'
+  records = [original]
+  const { container } = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  expect(screen.getByRole('dialog')).toHaveTextContent('no longer on the floor')
+  expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(0)
+})
