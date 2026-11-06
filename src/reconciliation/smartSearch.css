@@ -1,40 +1,54 @@
-/* Search must lift its organizer stacking context above the retained Inspector. */
+/* The toolbar remains one 48px row; transient surfaces do not consume floor space. */
 .ov-organizer:has(.ov-search-panel) { z-index:50; }
-.ov-smart-search { display:flex; align-items:center; min-width:0; gap:4px; }
+.ov-smart-search { position:relative; display:flex; align-items:center; flex:none; gap:3px; }
 .ov-search-trigger { white-space:nowrap; font-size:15px; }
-.ov-search-trigger span { font-size:11px; }
-.ov-search-chips { display:flex; min-width:0; max-width:240px; overflow-x:auto; gap:4px; scrollbar-width:none; }
-.ov-search-chips button { white-space:nowrap; max-width:150px; overflow:hidden; text-overflow:ellipsis; background:#1e3431; color:#9bd9ca; }
-.ov-search-back { white-space:nowrap; }
-.ov-search-panel { position:absolute; top:100%; left:8px; width:min(680px, calc(100% - 16px)); max-height:min(80vh, 820px); overflow:auto; z-index:45; padding:14px; background:#121a22; border:1px solid #344754; border-radius:10px; box-shadow:0 12px 38px #0009; color:#ced8df; font-size:12px; }
-.ov-search-panel header, .ov-search-panel footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.ov-search-input { display:block; margin-top:12px; }
-.ov-search-input input { display:block; margin:6px 0 12px; width:100%; padding:10px; font-size:15px; background:#0b1219; color:#e0ede8; border:1px solid #476b66; border-radius:6px; }
-.ov-search-patterns { display:flex; flex-wrap:wrap; gap:5px; }
-.ov-search-patterns button[aria-pressed="true"] { background:#2b5148; color:#b0ead6; }
-.ov-search-patterns button:disabled { opacity:.65; cursor:default; }
-.ov-search-facets { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-.ov-search-facets label { display:flex; flex-direction:column; gap:3px; flex:1; min-width:110px; text-transform:capitalize; }
-.ov-search-facets select { max-width:160px; background:#1a2631; color:#c9dbdf; border:1px solid #3a4c59; padding:4px; border-radius:4px; }
-.ov-search-note { color:#91a5b3; margin:10px 0; }
-#ov-search-results { display:flex; flex-direction:column; gap:3px; max-height:300px; overflow:auto; }
-#ov-search-results button { text-align:left; display:flex; flex-direction:column; padding:8px; gap:3px; border:1px solid transparent; width:100%; background:#17232c; }
-#ov-search-results button[aria-selected="true"] { background:#203b3b; border-color:#5d9d8d; }
-#ov-search-results small { color:#9bb0bf; }
-.ov-search-snippet { color:#c0d0d7; white-space:pre-wrap; overflow-wrap:anywhere; }
-.ov-search-snippet mark { color:#c9ffe6; background:#35604c; }
-.ov-search-why, .ov-search-coverage { margin-top:10px; color:#a3b7c2; overflow-wrap:anywhere; }
-.ov-search-why summary, .ov-search-coverage summary { cursor:pointer; padding:5px 0; }
-.ov-search-panel footer { margin-top:12px; }
-.ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:2px; }
-.ov .ov-search-panel button { font:12px/1.4 var(--ov-mono); padding:6px; min-height:30px; }
-.ov .ov-search-patterns button:disabled { opacity:.65; }
-.ov-search-context { opacity:.62; }
-@media (max-width:850px) {
+.ov-search-trigger span { font-size:10px; }
+.ov-search-back { white-space:nowrap; color:#9bd9ca!important; }
+.ov-search-panel { position:absolute; top:calc(100% + 10px); left:0; width:min(470px,calc(100vw - 100px)); z-index:45; background:#121e26; border:1px solid #3c5962; border-radius:8px; box-shadow:0 12px 38px #0009; color:#ced8df; font:12px var(--ov-mono); overflow:hidden; }
+.ov-search-input { display:flex; align-items:center; gap:8px; padding:9px; border-bottom:1px solid #314550; }
+.ov-search-input input { width:100%; min-width:0; padding:6px 0; font:13px var(--ov-mono); background:transparent; color:#e0ede8; border:0; outline:none; }
+.ov-search-panel p { padding:16px 12px; color:#91a5b3; font-size:11px; }
+#ov-search-results { display:flex; flex-direction:column; }
+.ov .ov-search-panel #ov-search-results button { text-align:left; display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:0; width:100%; background:transparent; min-height:45px; }
+#ov-search-results button[aria-selected="true"] { background:#203b3b!important; border-color:#497e72!important; }
+#ov-search-results button>span:last-child { display:flex; flex-direction:column; min-width:0; gap:3px; }
+#ov-search-results strong { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; }
+#ov-search-results small { color:#91a8b1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
+.ov-search-icon { color:#80bbaa; font-size:16px; }
+.ov-search-panel footer { display:flex; gap:16px; padding:8px 10px; border-top:1px solid #314550; color:#829ca6; font-size:9px; }
+.ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:-2px; }
+.ov .ov-item.ov-search-context { opacity:.25; }
+.ov .ov-item.ov-search-match { border-color:#69a88f; box-shadow:inset 2px 0 #69a88f; }
+.ov-pattern-dial { display:grid; grid-template-columns:minmax(0,1fr) minmax(95px,1.3fr) minmax(0,1fr); align-items:center; flex:0 1 290px; min-width:200px; height:38px; border:1px solid #304851; border-radius:7px; background:linear-gradient(90deg,#101d25,#1c3338 50%,#101d25); touch-action:pan-y; }
+.ov-toolbar .ov-pattern-dial button { border:0; background:transparent; display:flex; align-items:center; justify-content:center; gap:4px; height:36px; min-width:0; padding:0 4px; white-space:nowrap; }
+.ov-pattern-neighbor { color:#82969f!important; font-size:9px!important; }
+.ov-pattern-neighbor span { overflow:hidden; text-overflow:ellipsis; }
+.ov-pattern-selected { color:#c4ecdc!important; font-size:11px!important; }
+.ov-pattern-selected strong { white-space:nowrap; }
+.ov-pattern-selected>span { font-size:9px; color:#85aea3; }
+.ov-pattern-dial small { font:9px var(--ov-mono); flex:none; }
+.ov-pattern-dial button:focus-visible { outline:2px solid #85d2b8; outline-offset:-2px; border-radius:5px; }
+.ov-pattern-tooltip { position:fixed; z-index:100; width:min(330px,calc(100vw - 16px)); box-sizing:border-box; padding:12px; background:#152a30; color:#c4d5db; border:1px solid #507a76; border-radius:8px; box-shadow:0 8px 24px #0009; font:12px/1.5 ui-monospace,monospace; pointer-events:none; }
+.ov-pattern-tooltip p { margin:7px 0 0; }
+.ov-pattern-tooltip small { display:block; margin-top:8px; color:#a2b5bd; }
+.ov-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media(max-width:1200px) {
+  .ov-toolbar .ov-customize-trigger>span { display:none; }
+  .ov-pattern-dial { min-width:190px; }
+  .ov-preset-scroll { flex-shrink:1; }
+}
+@media(max-width:850px) {
   .ov-search-trigger span { display:none; }
-  .ov-search-chips { max-width:100px; }
-  /* The containing organizer already excludes the navigation rail. A fixed
-     viewport-left panel would put its input behind that sibling stacking layer. */
-  .ov-search-panel { position:absolute; top:8px; left:8px; width:calc(100% - 16px); max-height:calc(100dvh - 16px); z-index:70; }
-  .ov-search-facets select { max-width:140px; }
+  .ov-search-panel { position:fixed; top:60px; left:78px; width:calc(100vw - 88px); max-height:calc(100dvh - 76px); overflow:auto; }
+}
+@media(max-width:600px) {
+  .ov-pattern-dial { flex:none; width:180px; min-width:180px; grid-template-columns:minmax(0,1fr) 88px minmax(0,1fr); }
+  .ov-pattern-neighbor { font-size:8px!important; flex-direction:column; gap:1px!important; }
+  .ov-pattern-selected { font-size:10px!important; gap:3px!important; }
+  .ov-pattern-selected>span { display:none; }
+  .ov-toolbar { overflow-x:auto; scrollbar-width:none; }
+  .ov-toolbar .ov-preset-scroll { flex:none; width:76px; }
+  .ov-toolbar .ov-filter-chips { flex:none; max-width:55px; }
+  .ov-toolbar .ov-donut-key { display:none; }
+  .ov-search-panel { top:12px; padding-top:0; }
 }

@@ -62,7 +62,7 @@ ordering within each position. This preserves the shared floor's crossing
 reduction. This is presentation ordering only.
 
 Workers precede cards in the status donuts, selected-status chips, Inspector
-group summaries and connection pairs, and entity suggestions in Smart Search,
+group summaries and connection pairs,
 matching the floor's left-to-right column order.
 The two labelled status donuts use unique canonical current endpoints from the
 base scope. Activate a slice with click, Enter or Space to toggle it; text status
@@ -153,8 +153,8 @@ Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
-Unknown, not Finished. Selection and relationships never fade whole cards or
-serve as execution status.
+Unknown, not Finished. Search focus dimming is described in
+[Smart Search](#smart-search-core); it never represents execution status.
 
 Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
@@ -206,35 +206,46 @@ as an empty board. See the [source configuration reference](reconciliation-floor
 
 Card: [Tin Star: Smart Search — full-text/fuzzy Find, patterns & graph exploration](https://app.notion.com/p/40f50ce6d422816bb1e3df937c779ad2).
 
-Smart Search opens from the existing compact toolbar or Cmd/Ctrl+K. Find supports
-multi-token text across fields, literal quoted phrases, prefixes and Fuse.js typo
-matching. Ranking is exact identifier → exact name/title → title prefix → text
-relevance → fuzzy. Short words and numeric/technical identifiers never use fuzzy
-fallback; `0143` does not drift into adjacent IDs. Suggestions show a bounded
-highlighted excerpt and the field/source that matched.
+Smart Search opens a compact palette beside Search in the existing 48px toolbar
+with Cmd/Ctrl+K. It starts empty; typing shows at most eight suggestions with a
+name, entity type and short context. Find retains multi-token text, literal quoted
+phrases, prefixes and Fuse.js typo matching. Ranking is exact identifier → exact
+name/title → title prefix → text relevance → fuzzy. Short numeric/technical IDs
+never drift into neighboring IDs. Machines, managers and explicit Initiatives
+are named suggestions derived from the same authorized scene; PR matches keep
+their original card/worker target.
 
-Search is another predicate in the existing presentation/status projection.
-Text, named patterns and entity/initiative/machine/manager chips compose with AND
-on the same verified Work/Worker pair. Existing donut semantics stay OR within
-an axis and AND between axes; each histogram ignores its own status selection.
-Organizer presets still change only grouping/order; Operational/All/Custom stays
-authoritative. Matching seeds retain only direct explicit/current/confirmed
-neighbors; context is dimmed, canonical endpoints are counted once and the real
-SVG gutter is retained. No transitive component expansion or search-inferred link.
+Typing leaves Overview unchanged. Arrows/Enter or pointer/touch select a result,
+close the palette and spotlight the seed plus its direct verified neighbors in
+the existing Workers-left / Tasks-right graph. Unrelated rows stay visible and
+dimmed. The real SVG gutter and compact row density remain; no recursive fan-out
+or text-inferred connection is added. An outside-view result is temporarily
+revealed alongside the current rows, including planned work hidden by roadmap
+visibility. Clear search focus restores organizer, scope, donuts, density,
+expansions, scroll and selection. Escape first closes an open palette, then clears
+focus. Mobile Back dismisses the same transient layers. Focus is not persisted.
 
-Suggestions include authorized records outside the current view. They are labeled
-**Outside current view**; choosing one temporarily reveals its one-hop cluster,
-including planned cards when roadmap visibility is collapsed, without rewriting
-the base scope or donut selections. Arrows/Enter choose and
-focus a cluster inline. Escape or **Back** restores grouping, sort, filters,
-selection, density, roadmap visibility, expanded relationships and a semantic scroll anchor. **Apply
-filters** keeps the lens; **Clear Smart Search** removes its chips while restoring
-the underlying scope. Search conditions persist in existing browser preferences;
-transient reveal and excerpt text do not. Storage failure falls back to a working
-in-memory view. Recent builtin patterns are suggested; saved personal combinations,
-deeper pivots/breadcrumbs, URL state and a visual builder belong to the next slice.
-Phone search is a temporary viewport-bounded panel, adding no persistent row.
-Search does not send Ask requests or change Notion, assignment or execution state.
+The horizontal Pattern Dial shares the toolbar between Search and the two
+Workers/Cards status donuts. Its circular order is All → Stalled → Blocked →
+Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
+scroll horizontally or use Left/Right on the dial to move one detent. Vertical
+scroll is unaffected and trackpad momentum cannot race through several patterns.
+All clears only the pattern; other search/facet, donut and base-scope conditions
+remain. Pattern selection uses the existing search-filter reducer and persists
+with the ordinary view preferences.
+
+Center and neighbor counts preview unique matching work under the other filters,
+ignoring the dial's current pattern. They are overlapping predicates, not pie
+slices. `?` means insufficient evidence; `N+` means N confirmed matches with
+incomplete coverage. No unpublished signal is treated as zero. Hover/focus the
+center for a delayed reminder; tap to pin/unpin it. Outside/Escape dismisses the
+reminder without clearing the pattern. The tooltip takes precedence over graph
+focus dismissal, while an open search palette closes first. At narrow widths the
+single toolbar scrolls horizontally; the centered pattern stays legible and its
+neighbors retain touch targets.
+
+Search and patterns are read-only and never send Ask requests or change Notion,
+assignment or execution state.
 
 ### Index and source coverage
 
@@ -245,9 +256,9 @@ never wait for those reads. Prose is cached by canonical ID and Notion edit revi
 a changed revision invalidates the prose-reader TTL. Changed revisions and expired observations fall back to searchable metadata
 while prose retries with the ordinary source budget. The browser also drops
 expired body fields if its scene refresh fails. Removed authorized
-IDs are deleted from the returned index. Pending/partial/unsupported content is
-visible in **Index coverage**, rather than being represented as an exhaustive
-zero-hit search.
+IDs are deleted from the returned index. Pending/partial/unsupported content retains source coverage in the index;
+ordinary search shows bounded suggestions without a diagnostics panel. A no-hit
+message refers only to available records.
 
 Indexed metadata includes Notion names, IDs, URLs, Status/Owner/Priority/Waiting
 For/Initiative/Epic and useful published action/evidence fields; First Mate task
@@ -304,7 +315,7 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Pattern | Required evidence / current behavior |
 |---|---|
 | Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
-| Blocked | Explicit Waiting For plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
+| Blocked | Work status is Waiting For with a nonempty Waiting For field, plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
 | Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
@@ -312,8 +323,10 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
 
-Unsupported patterns are visibly unavailable with the missing evidence named;
-there are no guessed alarms. Multiple blocked workers retain a single Work
-cluster and deduplicated blocker identifiers. **Why matched?** lists concrete
-Work status, worker states/counts, observation times, link provenance and blocker
-identity. No active resolver is claimed without structured source evidence.
+The dial exposes missing evidence through unknown counts and the reminder,
+without disabled buttons or an additional patterns menu. Multiple blocked workers
+retain one Work cluster and deduplicated blocker identifiers. Detailed evidence
+remains in the shared health projection for tests and consumers; it is not a
+second results inventory. The pure stalled aggregate predicate accepts known
+runnable/resolver counts for contract tests; the current scene adapter passes
+null for both, so waiting workers alone never become a confident Stalled match.

@@ -4,6 +4,8 @@ import { homeLabel } from './reconciliationLabels'
 export interface SearchField { name: string; source: string; text: string }
 export interface SearchDocument {
   key: string
+  entity?: 'machine' | 'manager' | 'initiative'
+  focusTargets?: Target[]
   target: Target
   title: string
   identifiers: string[]
@@ -77,4 +79,32 @@ export function boundSearchDocuments(documents: SearchDocument[]): SearchIndexRe
     return { ...document, fields }
   })
   return { documents: bounded, notes: omitted ? ['Some excerpt text omitted by index size limits; identity metadata remains searchable.'] : [] }
+}
+
+/** Small named entities point at canonical seeds; only verified links add context. */
+export function searchEntityDocuments(scene: FloorScene): SearchDocument[] {
+  const entities = new Map<string, { title: string; entity: NonNullable<SearchDocument['entity']>; targets: Target[] }>()
+  const add = (entity: NonNullable<SearchDocument['entity']>, id: string, title: string, target: Target) => {
+    const key = `${entity}:${id}`, item = entities.get(key) ?? { title: searchText(title), entity, targets: [] }
+    if (!item.targets.some(value => value.kind === target.kind && value.id === target.id)) item.targets.push(target)
+    entities.set(key, item)
+  }
+  for (const worker of scene.executions.filter(worker => worker.kind !== 'secondmate')) {
+    const target: Target = { kind: 'execution', id: worker.id }
+    if (worker.placement.machine) add('machine', worker.placement.machine, worker.placement.machine, target)
+    const home = scene.coverage.homes.find(home => home.source.home === worker.home)
+    if (home) add('manager', worker.home, homeLabel(home.source), target)
+  }
+  for (const card of scene.cards.filter(card => !card.source.in_trash)) {
+    const property = card.source.properties.Initiative
+    if (!property || !['relation', 'select', 'rich_text'].includes(property.type ?? '')) continue
+    for (const value of Array.isArray(property.value) ? property.value : [property.value]) {
+      if (typeof value !== 'string' || !value.trim()) continue
+      const id = value.trim(), title = scalar(scene.cards.find(card => card.id === id)?.source.properties.Name?.value) || id
+      add('initiative', id, title, { kind: 'card', id: card.id })
+    }
+  }
+  return [...entities].map(([key, item]) => ({ key, title: item.title, entity: item.entity, focusTargets: item.targets,
+    target: item.targets[0]!, identifiers: [item.title], fields: [], observedAt: scene.generatedAt,
+    expiresAt: scene.coverage.intentions.expiresAt, coverage: 'Scene metadata' }))
 }

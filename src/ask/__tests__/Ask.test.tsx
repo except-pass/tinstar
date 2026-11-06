@@ -148,13 +148,10 @@ describe('one-card text Ask and Desk', () => {
   ] as const)('reveals an excluded answer anchor in %s, history=%s, filter=%s', async (density, history, filter) => {
     records = [{ ...seed(), dismissed_at: history ? new Date().toISOString() : null }]
     localStorage.setItem('tinstar.overview.density', density)
+    if (filter === 'search') localStorage.setItem(preferencesKey, JSON.stringify({ search: { query: 'no-such-anchor-xyz', patterns: [], facets: [] } }))
     const { container } = mount()
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toBeTruthy())
-    if (filter === 'search') {
-      fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-      fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'no-such-anchor-xyz' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
-    } else {
+    if (filter === 'donut') {
       fireEvent.click(screen.getByRole('button', { name: /^Cards statuses:/ }))
       fireEvent.click(within(screen.getByRole('region', { name: 'Cards statuses' })).getByRole('button', { name: /Waiting For/ }))
     }
@@ -307,9 +304,7 @@ it('returns a retained worker answer after remount to its exact filtered executi
   records = [answer]
   const first = mount(); first.unmount()
   const { container } = mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'unmatched-worker-query' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Workers: Blocked/ }))
   expect([...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)).toBeUndefined()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
   const returned = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)!
@@ -378,9 +373,7 @@ it('returns an unverified Detailed relationship answer after reload and filterin
   records[0] = { ...records[0]!, status: 'answered', reply: seed().reply }
   first.unmount()
   const { container } = mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'excluded-relationship' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Cards: Waiting For/ }))
   expect(card(container)).toBeNull()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*How are these two items related/ }))
   expect(card(container)).toBeVisible()
