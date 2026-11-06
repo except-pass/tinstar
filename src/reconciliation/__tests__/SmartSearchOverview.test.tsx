@@ -157,7 +157,7 @@ describe('compact search palette and temporary graph focus', () => {
     window.history.replaceState({ page: 'Overview' }, '', window.location.href)
     const go = vi.spyOn(window.history, 'go')
     const { container } = mount(), before = cardIds(container)
-    const saved = localStorage.getItem(preferencesKey)
+    const saved = { search: { query: '', patterns: [], facets: [] }, ...JSON.parse(localStorage.getItem(preferencesKey)!) }
     const viewport = container.querySelector('.ov-canvas')!.parentElement!
     viewport.scrollLeft = 21
     const nextPop = () => new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
@@ -176,7 +176,7 @@ describe('compact search palette and temporary graph focus', () => {
     expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
     expect(window.history.state).toEqual({ page: 'Overview' })
     expect(cardIds(container)).toEqual(before)
-    expect(localStorage.getItem(preferencesKey)).toBe(saved)
+    expect(JSON.parse(localStorage.getItem(preferencesKey)!)).toEqual(saved)
     expect(viewport.scrollLeft).toBe(21)
     choose('Release')
     const clear = nextPop()

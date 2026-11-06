@@ -315,7 +315,7 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Pattern | Required evidence / current behavior |
 |---|---|
 | Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
-| Blocked | Explicit Waiting For plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
+| Blocked | Work status is Waiting For with a nonempty Waiting For field, plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
 | Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
