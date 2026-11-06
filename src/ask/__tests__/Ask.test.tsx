@@ -63,6 +63,10 @@ describe('one-card text Ask and Desk', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100)
     expect(screen.queryByRole('dialog')).toBeNull()
+    // Chrome releases implicit touch pointer capture before emitting touchend.
+    const captureRelease = new Event('lostpointercapture', { bubbles: true })
+    Object.defineProperty(captureRelease, 'pointerId', { value: 7 })
+    fireEvent(task, captureRelease)
     touch(task, 'touchEnd', 30, 100)
     expect(screen.getByRole('dialog')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveFocus()

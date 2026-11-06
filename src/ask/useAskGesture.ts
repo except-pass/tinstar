@@ -40,6 +40,9 @@ export function useAskGesture(open: (() => void) | undefined) {
     }
     const pointerMove = (e: PointerEvent) => { if (e.pointerId === pointerId) move(e.clientX, e.clientY, e) }
     const pointerEnd = (e: PointerEvent) => { if (e.pointerId === pointerId) { end(); pointerId = null } }
+    // Touch has its own cancellation lifecycle; implicit touch capture release
+    // must not discard the gesture before touchend.
+    const pointerCancel = (e: PointerEvent) => { if (e.pointerId === pointerId) cancel() }
     const click = (e: MouseEvent) => { if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation() } }
     element.addEventListener('touchstart', touchStart, { passive: true })
     element.addEventListener('touchmove', touchMove, { passive: false })
@@ -48,15 +51,15 @@ export function useAskGesture(open: (() => void) | undefined) {
     element.addEventListener('pointerdown', pointerStart)
     element.addEventListener('pointermove', pointerMove)
     element.addEventListener('pointerup', pointerEnd)
-    element.addEventListener('pointercancel', cancel)
-    element.addEventListener('lostpointercapture', cancel)
+    element.addEventListener('pointercancel', pointerCancel)
+    element.addEventListener('lostpointercapture', pointerCancel)
     element.addEventListener('click', click, true)
     return () => {
       element.removeEventListener('touchstart', touchStart); element.removeEventListener('touchmove', touchMove)
       element.removeEventListener('touchend', end); element.removeEventListener('touchcancel', cancel)
       element.removeEventListener('pointerdown', pointerStart); element.removeEventListener('pointermove', pointerMove)
-      element.removeEventListener('pointerup', pointerEnd); element.removeEventListener('pointercancel', cancel)
-      element.removeEventListener('lostpointercapture', cancel); element.removeEventListener('click', click, true)
+      element.removeEventListener('pointerup', pointerEnd); element.removeEventListener('pointercancel', pointerCancel)
+      element.removeEventListener('lostpointercapture', pointerCancel); element.removeEventListener('click', click, true)
     }
   }, [!!open])
   return { ref, hint }
