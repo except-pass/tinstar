@@ -14,7 +14,15 @@ beforeAll(() => {
 })
 // Inspector regressions exercise the preserved Detailed presentation. Compact
 // interaction and its default are covered by ultraCompact.test.tsx.
-beforeEach(() => localStorage.setItem('tinstar.overview.density', 'detailed'))
+beforeEach(() => {
+  localStorage.setItem('tinstar.overview.density', 'detailed')
+  localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' } }))
+})
+const mount = () => {
+  const view = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  return view
+}
 afterEach(() => { cleanup(); localStorage.clear(); observed.error = null })
 
 it.each(['queued', 'held'])('retains independently visible %s cards and keeps wait evidence in details', state => {
@@ -22,7 +30,7 @@ it.each(['queued', 'held'])('retains independently visible %s cards and keeps wa
   Object.assign(sources.fleet[1]!.observation.data!.backlog![0]!, { state, hold_reason: 'Awaiting review capacity', blocked_by: 'review-task', hold_until: '2026-11-05T12:00:00Z' })
   const scene = new SceneReconciler().reconcile(sources)
   observed.scene = scene
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   const card = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
   expect(card.getAttribute('data-tone')).toBe('quiet')
   expect(container.querySelectorAll('.ov-worker-stack .ov-execution')).toHaveLength(5)
@@ -35,7 +43,7 @@ it.each(['queued', 'held'])('retains independently visible %s cards and keeps wa
 })
 it('keeps both source lists useful with connectors hidden and exposes both gaps', () => {
   observed.scene = fixtureScene()
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
   fireEvent.click(screen.getByRole('button', { name: 'Links' }))
   expect(container.querySelectorAll('.ov-connections')).toHaveLength(0)
@@ -50,7 +58,7 @@ it('keeps both source lists useful with connectors hidden and exposes both gaps'
 it('retains last known lists while suspending expired gap conclusions', () => {
   observed.scene = fixtureScene()
   observed.error = 'Read failed'
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   expect(screen.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(5)
   expect(container.querySelectorAll('.ov-card')).toHaveLength(5)
@@ -66,7 +74,7 @@ it('places finished and absent records in history rather than the current worker
   tasks[1]!.lastEventText = 'done [at=1]: finished but window open'
   tasks[2]!.endpoint.exists = false
   observed.scene = new SceneReconciler().reconcile(sources)
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(3)
   expect(container.querySelector('.ov-history')?.textContent).toContain('Worker history · 2')
   expect(container.querySelector('.ov-history')?.textContent).toContain('Finished')
@@ -98,10 +106,10 @@ function headerText(container: HTMLElement, label: RegExp) {
 
 it.each(groupings)('shows known workers and a partial warning for one partial home under %s grouping', (grouping, outer, inner) => {
   observed.scene = degradeHomes('partial')
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   arrange(outer, inner)
   expect(container.querySelectorAll('.ov-execution').length).toBeGreaterThan(0)
-  expect(container.textContent).toMatch(/\d+ workers/)
+  expect(container.textContent).toMatch(/(?:\d+ workers|WORKERS · \d+)/)
   expect(container.textContent).not.toContain('Workers unavailable')
   expect(container.textContent).not.toMatch(/(^|\s)0 workers/)
   expect(container.textContent).not.toMatch(/(^|\s)0 W/)
@@ -120,7 +128,7 @@ it.each(groupings)('shows known workers and a partial warning for one partial ho
 
 it.each(groupings)('shows known workers when one home is stale under %s grouping', (_grouping, outer, inner) => {
   observed.scene = degradeHomes('stale')
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   arrange(outer, inner)
   expect(container.querySelectorAll('.ov-execution').length).toBeGreaterThan(0)
   expect(container.textContent).not.toContain('Workers unavailable')
@@ -131,7 +139,7 @@ it.each(groupings)('shows known workers when one home is stale under %s grouping
 
 it.each(groupings)('shows global unavailability only when every home is unreadable under %s grouping', (_grouping, outer, inner) => {
   observed.scene = degradeHomes('down')
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   arrange(outer, inner)
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(0)
   expect(container.textContent).toContain('Workers unavailable')
@@ -149,10 +157,10 @@ it.each(groupings)('shows global unavailability only when every home is unreadab
 
 it.each(groupings)('shows ordinary worker counts when every home is readable under %s grouping', (grouping, outer, inner) => {
   observed.scene = degradeHomes('ready')
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   arrange(outer, inner)
   expect(screen.getByRole('button', { name: /Sources connected · Details/ })).toBeTruthy()
-  expect(container.textContent).toMatch(/\d+ workers/)
+  expect(container.textContent).toMatch(/(?:\d+ workers|WORKERS · \d+)/)
   expect(container.textContent).toContain('No linked worker')
   expect(container.textContent).not.toContain('Workers unavailable')
   expect(container.textContent).not.toMatch(/unknown worker/i)
@@ -163,7 +171,7 @@ it.each(groupings)('shows ordinary worker counts when every home is readable und
 
 it.each(groupings)('restores ordinary worker counts under %s grouping after a refresh', (_grouping, outer, inner) => {
   observed.scene = degradeHomes('partial')
-  const view = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const view = mount()
   arrange(outer, inner)
   expect(view.container.textContent).toMatch(/unknown worker/i)
   expect(screen.getByRole('button', { name: /Coverage incomplete · Details/ })).toBeTruthy()
@@ -173,13 +181,13 @@ it.each(groupings)('restores ordinary worker counts under %s grouping after a re
   expect(view.container.textContent).toContain('No linked worker')
   expect(view.container.textContent).not.toContain('Workers unavailable')
   expect(view.container.textContent).not.toMatch(/unknown worker/i)
-  expect(view.container.textContent).toMatch(/\d+ workers/)
+  expect(view.container.textContent).toMatch(/(?:\d+ workers|WORKERS · \d+)/)
   expect(view.container.querySelectorAll('.ov-execution').length).toBeGreaterThan(0)
 })
 
 it('keeps a partial home\'s workers visible beside fresh homes', () => {
   observed.scene = degradeHomes('partial', 1)
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   arrange('manager', 'none')
   expect(container.querySelectorAll('.ov-execution').length).toBeGreaterThan(0)
   expect(headerText(container, /hulk/i)).toContain('last known workers')
@@ -192,7 +200,7 @@ it('reports unavailable workers with a readable Notion feed', () => {
   const sources = fixtureSources()
   for (const home of sources.fleet) home.observation = { ...home.observation, data: null, status: 'unknown', coverage: 'unknown' }
   observed.scene = new SceneReconciler().reconcile(sources)
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   expect(container.querySelectorAll('.ov-card').length).toBeGreaterThan(0)
   expect(container.textContent).toContain('Workers unavailable')
   for (const header of container.querySelectorAll('.ov-group-head')) {
@@ -204,17 +212,17 @@ it('reports unavailable workers with a readable Notion feed', () => {
 })
 it('collapses shared groups without changing deduplicated headline counts', () => {
   observed.scene = fixtureScene()
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   fireEvent.change(screen.getByLabelText('Outer grouping'), { target: { value: 'manager' } })
-  expect(container.querySelector('.ov-intro')!.textContent).toContain('5 Notion cards')
+  expect(container.querySelector('.ov-headings')!.textContent).toContain('NOTION TASKS · 5')
   fireEvent.click(screen.getByRole('button', { name: /Collapse Hulk/i }))
-  expect(container.querySelector('.ov-intro')!.textContent).toContain('5 Notion cards')
+  expect(container.querySelector('.ov-headings')!.textContent).toContain('NOTION TASKS · 5')
   expect(container.querySelectorAll('.ov-execution')).toHaveLength(1)
 })
 it('clears mobile source diagnostics on close and subsequent worker selection', () => {
   observed.scene = fixtureScene()
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
-  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const { container } = mount()
   fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
   expect(screen.getByText('Source health')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))

@@ -39,6 +39,25 @@ async function present(page: Page, action: unknown, command_id: string) {
   expect(ack.outcome).toBe('applied')
   return { ack, args }
 }
+
+async function openCustomize(page: Page) {
+  const button = page.getByRole('button', { name: 'Customize', exact: true })
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click()
+}
+async function closeCustomize(page: Page) {
+  const button = page.getByRole('button', { name: 'Customize', exact: true })
+  if (await button.getAttribute('aria-expanded') === 'true') await button.click()
+}
+async function selectAdvanced(page: Page, label: string, value: string) {
+  await openCustomize(page)
+  await page.getByLabel(label, { exact: true }).selectOption(value)
+  await closeCustomize(page)
+}
+async function expectAdvanced(page: Page, label: string, value: string) {
+  await openCustomize(page)
+  await expect(page.getByLabel(label, { exact: true })).toHaveValue(value)
+  await closeCustomize(page)
+}
 // These regressions exercise the preserved rich presentation.
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
@@ -90,16 +109,16 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   expect(retry).toEqual(regroup.ack)
   const organizer = { outer: 'status', inner: 'machine', order: 'checkIn', direction: 'desc' }
   await present(page, { type: 'set-organizer', organizer }, 'shared-organizer')
-  await expect(page.getByLabel('Outer grouping')).toHaveValue('status')
-  await expect(page.getByLabel('Inner grouping')).toHaveValue('machine')
+  await expectAdvanced(page, 'Outer grouping', 'status')
+  await expectAdvanced(page, 'Inner grouping', 'machine')
   await expect(page.locator('.ov')).toHaveAttribute('data-direction', 'desc')
   const grouped = await call('get_scene', { scene_id: first })
   expect(grouped.records.groups.filter((g: { cardIds: string[] }) => g.cardIds.includes(fixtureId(1)))).toHaveLength(2)
   const group = grouped.records.groups.find((g: { cardIds: string[] }) => g.cardIds.includes(fixtureId(1)))
   expect((await call('read_record', { scene_id: first, target: { kind: 'group', id: group.id } })).outcome).toBe('available')
   await present(page, { type: 'set-status-filter', filter: { preset: 'all', statuses: [] } }, 'all-cards')
-  await expect(page.getByLabel('Status preset')).toHaveValue('all')
-  await expect(secondPage.getByLabel('Status preset')).toHaveValue('operational')
+  await expectAdvanced(page, 'Status preset', 'all')
+  await expectAdvanced(secondPage, 'Status preset', 'operational')
   await present(page, { type: 'set-sort', sort: 'activity' }, 'sort-activity')
   await present(page, { type: 'set-sort', sort: 'priority' }, 'sort-priority')
   await present(page, { type: 'set-links', visible: false }, 'hide-links')
@@ -153,7 +172,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   })
   await expect.poll(() => held).toBe(true)
   const competing = call('present_view', { scene_id: first, command_id: 'competing', expected_revision: revision, action: { type: 'set-arrangement', arrangement: 'initiative' } })
-  await page.getByLabel('Outer grouping').selectOption('manager')
+  await selectAdvanced(page, 'Outer grouping', 'manager')
   resume!()
   let competingAck = await competing
   if (competingAck.outcome === 'queued') await expect.poll(async () => { competingAck = await call('get_command', { scene_id: first, command_id: 'competing' }); return competingAck.outcome }).toBe('stale-revision')

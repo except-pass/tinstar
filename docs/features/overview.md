@@ -9,7 +9,7 @@ headers and 21px inner headers. Workers stay on the left and Notion tasks on
 the right, with real confirmed relationships in a dedicated gutter. Each
 canonical endpoint renders once across compact groups; reference badges name
 its other memberships. Unmatched records and unavailable sources keep their
-coverage labels. The toolbar offers **Detailed** for the original rich cards
+coverage labels. Customize offers **Detailed** for the original rich cards
 and Inspector interaction. Density persists across reloads in browser storage.
 Both columns remain side by side on narrow screens using horizontal scrolling.
 
@@ -27,19 +27,67 @@ Truncated text has a full title tooltip and a visible keyboard-focus tooltip;
 expanded titles and metadata wrap. Connectors follow measured anchors after
 expansion, sorting, filtering, group collapse, scrolling and resizing.
 Nested groups use an outer field label and deduplicated worker/task counts,
-with compact worker/task counts on each violet inner band. A compact toolbar controls both columns:
+with compact worker/task counts on each violet inner band. One 48px toolbar
+starts the floor immediately below it, without a separate title or controls row.
 
-- Outer groups by one field; Inner optionally subdivides it.
-- Order sorts workers ascending or descending, with deterministic ID ties and
-  blanks last. Task fields carry linked workers using the earliest value
-  ascending or latest descending among links in that subdivision. In both
-  densities, tasks follow the mean row position of their visible workers with
-  explicit, confirmed, current links within each rendered group. Equal positions
-  use Order then stable identity; tasks without such a link follow linked tasks
-  in Order.
-- Filters contains status checkboxes plus the existing gap and connection controls.
-- Fields reveals draggable chips; click a chip and choose a slot, or use the
-  keyboard-accessible toolbar selects. Reset restores the default view.
+| Preset | Outer | Inner | Order |
+| --- | --- | --- | --- |
+| By Initiative (default) | Initiative, alphabetical | Manager, alphabetical | Operational status |
+| By Machine | Machine, alphabetical | Initiative, alphabetical | Operational status |
+| By Manager | Manager, configured hierarchy then alphabetical | Initiative, alphabetical | Operational status |
+
+Configured parent-home relationships establish manager ancestry; names and task
+Owner never imply hierarchy. Unknown/Unassigned groups sort last. Each preset
+replaces the organizer slots and direction only; status selections, base scope,
+density and unrelated filter choices survive. Browser-local organizer settings
+remain authoritative on reload. Customize can override any slot, and closes
+without discarding edits. It exposes Outer, Inner, Order, direction, density,
+Operational/All cards/Custom, Filters (status checkboxes, gaps and links), Fields
+(draggable chips or keyboard slot controls), and Reset in a temporary popover.
+Operational status is available only in Order, not as a grouping field or Fields chip.
+Escape closes the popover and restores its trigger's focus.
+
+The authoritative worker and card attention orders, exact source labels and
+unknown-state handling live in [`floorStatus.ts`](../../src/shared/floorStatus.ts).
+The worker projection preserves observation/event precedence and exposes additional
+publisher states only when otherwise unknown; history remains separate.
+Within the same status, Next check-in ascending, display
+name and canonical ID settle ties. Worker check-in ties use the earliest linked
+card checkpoint in that subdivision. In both densities and under every preset,
+tasks follow the mean row position of their visible workers with explicit,
+confirmed, current links within each rendered group. Equal positions use the
+chosen Order then stable identity; tasks without such a link follow linked tasks
+in Order. Operational status and its tie-breakers remain the secondary task
+ordering within each position. This preserves the shared floor's crossing
+reduction. This is presentation ordering only.
+
+The two labelled status donuts use unique canonical current endpoints from the
+base scope. Activate a slice with click, Enter or Space to toggle it; text status
+menus expose the same choices and counts. Multiple selections within one donut
+are OR; selections across donuts are AND. A card selection shows matching cards
+and only their confirmed linked workers; a worker selection shows matching
+workers and only their confirmed linked cards. With both selected, only matching
+endpoints on valid current explicit confirmed links survive. Candidate,
+conflicting, historical and unavailable-endpoint references never supply links.
+
+Each donut's eligible distribution ignores its own selections and applies the
+opposite donut's selections, so other eligible statuses stay selectable. The
+labels show visible/eligible unique counts; column counts show the filtered
+unique nodes, independent of repeated group memberships. Selected statuses with
+zero candidates remain removable in the menu and inline chips. Clear is always
+in the toolbar and clears only these explicit selections, restoring the saved
+base scope and organizer. No filter-summary row is added. Empty results are
+labelled, and source health remains available from the toolbar indicator.
+Counts retain partial/last-known labels; an unavailable or uncertain empty worker
+scope displays unknown rather than asserting a verified zero.
+
+Without explicit donut selections, Operational retains independent and unmatched
+endpoints and its intentional hidden-task labels. Opening a relationship can
+reveal direct tasks through the base status scope; it never overrides explicit
+donut selections. Filtering never changes claim evidence or absence findings.
+Both donuts and the floor use the same canonical projection and presentation
+reducer; selections and organizer overrides persist in the existing browser
+preferences. Source refreshes recompute candidates from the current graph.
 
 Available Worker fields are Manager, Machine, Worker status and Last activity.
 Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-in,
@@ -47,8 +95,7 @@ Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
 in Unassigned / Unknown; parent chains never establish either.
-The initial and Reset organizer uses Initiative outer groups, Task Status inner
-bands, and Next check-in ascending. Explicitly saved browser choices take precedence
+The initial and Reset organizer uses the By Initiative preset. Explicitly saved browser choices take precedence
 on reload.
 
 Only explicit, non-conflicting canonical page-ID links carry endpoints between
@@ -94,8 +141,7 @@ and groups without a manager or machine axis use all configured homes. Partial c
 unmatched worker relationship Unknown worker instead of asserting No linked
 worker; absence conclusions remain suppressed.
 
-Expanded and Detailed worker cards show an identity avatar, title and a consistently placed Running,
-Waiting, Blocked, Finished or Unknown status at the top right. Confirmed linked
+Expanded and Detailed worker cards show an identity avatar, title and a consistently placed worker status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate

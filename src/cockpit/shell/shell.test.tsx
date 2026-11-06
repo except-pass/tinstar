@@ -48,7 +48,7 @@ describe('Overview shell and retained terminal navigation', () => {
   it('starts with one Overview and no legacy queue or Floor destination', async () => {
     fleetStub()
     render(<App />)
-    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Needs You|Floor/ })).toBeNull()
     expect(panelOpen()).toBe(false)
     expect(defaultPanelMode(null)).toBeNull()
@@ -94,7 +94,7 @@ describe('Overview shell and retained terminal navigation', () => {
     fireEvent.click(receipts)
     expect(screen.getByText('Noted')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
-    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
     expect(panelOpen()).toBe(false)
   })
   it('closes a narrow worker drawer after selection and Escape', async () => {
@@ -110,7 +110,7 @@ describe('Overview shell and retained terminal navigation', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(panelOpen()).toBe(false)
     act(() => { window.history.replaceState(null, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) })
-    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
   })
 })
 

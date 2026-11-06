@@ -115,3 +115,42 @@
 .ov-density-compact .ov-inline-expanded .ov-context-field,.ov-density-compact .ov-inline-expanded .ov-breadcrumb,.ov-density-compact .ov-inline-expanded .ov-worker-meta{white-space:normal;overflow:visible;overflow-wrap:anywhere}
 .ov-expansion-hint{font:9px var(--ov-mono);color:#9eb9c4;margin-top:8px}
 .ov-density-compact .ov-inline-expanded[data-open-root=true]{border-color:#649caa}
+
+/* One 48px floor toolbar; all advanced controls are temporary overlays. */
+.ov-organizer{z-index:10}
+.ov-toolbar{height:48px;min-height:48px;padding:0 8px;gap:5px;flex-wrap:nowrap;border-top:0}
+.ov-toolbar>button{white-space:nowrap;flex:none;padding:5px}
+.ov-preset-scroll{display:flex;gap:3px;flex:none;overflow-x:auto;scrollbar-width:none;min-width:0}
+.ov-preset-scroll>button{white-space:nowrap}
+.ov-toolbar .ov-filter-chips{display:flex;gap:3px;min-width:0;flex:1;overflow:auto;scrollbar-width:thin;align-items:center}
+.ov-filter-chips button{white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;font-size:9px;border-color:#41606d}
+.ov-donuts{display:flex;align-items:center;gap:12px;margin-left:auto;flex:none}
+.ov-donut-control{display:flex;align-items:center;gap:3px}
+.ov-donut{width:36px;height:36px;overflow:visible;flex:none}
+.ov-donut path{cursor:pointer;transition:stroke-width .1s}
+.ov-donut path:hover,.ov-donut path:focus-visible{stroke-width:11;outline:none;filter:drop-shadow(0 0 2px white)}
+.ov-donut .ov-slice-unselected{opacity:.45}
+.ov-toolbar .ov-donut-trigger{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:2px;border:0;font-size:9px;line-height:12px}
+.ov-donut-trigger b{color:#d5e6eb;font-size:10px;font-weight:500}
+.ov-donut-key{display:flex;flex-direction:column;gap:3px;margin-left:4px;font:8px var(--ov-mono);color:#9db6bf;max-width:120px}
+.ov-donut-key>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ov-donut-key i,.ov-donut-options i{display:inline-block;width:6px;height:6px;margin-right:4px;border-radius:50%;flex:none}
+.ov-donut-options>button{display:flex;width:100%;align-items:center;text-align:left;gap:5px;margin-top:3px}
+.ov-donut-options>button>b{margin-left:auto}
+.ov-donut-options>button[aria-pressed=true]{border-color:#6ebcae;background:#193b3b}
+.ov-donut-options{width:310px;max-height:min(70vh,550px);overflow:auto}
+.ov-customize{left:8px;right:auto;width:min(650px,calc(100% - 16px));max-height:calc(100vh - 80px);overflow:auto}
+.ov-advanced-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ov-advanced-controls .ov-slot{display:flex;flex:1 1 140px;flex-direction:column;align-items:stretch;gap:5px}
+.ov-advanced-controls select{background:#0c1a21;border:1px solid #35505b;color:var(--ov-ink);font:11px var(--ov-mono);padding:6px;max-width:100%}
+.ov-advanced-controls .ov-density-control{margin-left:0}
+.ov-advanced-filters{padding:12px 0 0;margin-top:12px;border-top:1px solid #35505b}
+.ov-advanced-controls button[aria-pressed=true]{border-color:#6ebcae;background:#193b3b}
+.ov-customize .ov-field-palette{padding:12px 0 0;margin-top:12px;border-top:1px solid #35505b;border-bottom:0}
+.ov-toolbar .ov-warning{color:var(--ov-amber)}
+@media(max-width:1600px){.ov-donut-key{display:none}}
+@media(max-width:1100px){.ov-toolbar{padding:0 5px;gap:3px}.ov-toolbar button{font-size:9px}.ov-preset-scroll{flex:0 1 auto}.ov-donuts{gap:6px}}
+@media(max-width:600px){.ov-toolbar{padding:0 4px}.ov-preset-scroll{flex:1}.ov-toolbar .ov-filter-chips{flex:0 1 50px}.ov-filter-chips button{font-size:8px}.ov-donuts{gap:3px}.ov-donut{width:25px;height:25px}.ov-donut-trigger b{font-size:9px}.ov-toolbar .ov-donut-trigger{font-size:8px}.ov-customize-trigger>span,.ov-clear-filters>span{display:none}.ov-toolbar .ov-customize-trigger,.ov-toolbar .ov-clear-filters{padding:4px;font-size:14px}}
+
+.ov-toolbar .ov-filter-chips:empty{display:none}
+@media(max-width:600px){.ov-count-note{display:none}}
