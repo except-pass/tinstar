@@ -24,6 +24,34 @@ const search = (value: string) => fireEvent.change(input(), { target: { value } 
 const cardIds = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.ov-card')].map(element => element.dataset.entityId)
 
 describe('Smart Search in the existing Overview', () => {
+  it.each(['Smart Search (Ctrl or Command K)', 'Remove search text', '← Back', 'Remove cards: Waiting For'])('restores the saved view on Escape from %s after Apply', label => {
+    localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'machine', inner: 'initiative', order: 'priority', direction: 'desc' }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] }, donutFilter: { cards: ['Waiting For'], workers: [] } }))
+    const { container } = mount()
+    const original = container.querySelector<HTMLElement>(`.ov-card[data-entity-id="${fixtureId(4)}"]`)!
+    fireEvent.click(original)
+    original.focus()
+    const viewport = container.querySelector('.ov-canvas')?.parentElement
+    if (!viewport) throw new Error('Missing Overview viewport')
+    viewport.scrollLeft = 21
+    const saved = JSON.parse(localStorage.getItem(preferencesKey)!)
+    const cards = cardIds(container)
+    fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+    search('Release')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    expect(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' })).toHaveFocus()
+    viewport.scrollLeft = 0
+    const target = screen.getByRole('button', { name: label })
+    target.focus()
+    fireEvent.keyDown(target, { key: 'Escape' })
+    expect(JSON.parse(localStorage.getItem(preferencesKey)!)).toEqual(saved)
+    expect(cardIds(container)).toEqual(cards)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveAttribute('aria-expanded', 'true')
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveFocus()
+    expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'compact')
+    expect(viewport.scrollLeft).toBe(21)
+    expect(screen.queryByRole('button', { name: '← Back' })).toBeNull()
+  })
+
   it('expands a previously collapsed Detailed result and restores its collapsed state on exit', () => {
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))

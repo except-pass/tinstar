@@ -88,7 +88,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   // An explicit Will action is authoritative; a status explanation mentioning a
   // decision is not. Structured needs-decision entries retain their provenance.
   const will = card.source.properties['Will action']?.value
-  const decision = typeof will === 'string' ? !!will.trim() && !/^(?:none|no|false|n\/a)$/i.test(will.trim()) : will === true
+  const decision = (Array.isArray(will) ? will : [will]).some(value => typeof value === 'string' ? !!value.trim() && !/^(?:none|no|false|n\/a)$/i.test(value.trim()) : value === true)
   const request = workers.some(worker => freshObservation(worker.observation, now) && worker.source.queue?.decisions.some(item => item.verb === 'needs-decision'))
   return {
     cardId, workerIds: workers.map(worker => worker.id), workerCount: workers.length, running, waiting, terminal, unknown,

@@ -10,7 +10,7 @@ import './smartSearch.css'
 function MatchSnippet({ hit }: { hit: SearchHit }) {
   const start = Math.max(0, (hit.ranges[0]?.[0] ?? 0) - 50), end = Math.min(hit.field.text.length, start + 180)
   const text = hit.field.text.slice(start, end)
-  return <span className="ov-search-snippet">{start ? '…' : ''}{[...text].map((character, offset) => hit.ranges.some(([a, b]) => start + offset >= a && start + offset <= b)
+  return <span className="ov-search-snippet">{start ? '…' : ''}{text.split('').map((character, offset) => hit.ranges.some(([a, b]) => start + offset >= a && start + offset <= b)
     ? <mark key={offset}>{character}</mark> : character)}{end < hit.field.text.length ? '…' : ''}</span>
 }
 

@@ -14,6 +14,21 @@ const doc = (id: string, title: string, text = '', identifiers = [id]): SearchDo
 afterEach(() => localStorage.clear())
 
 describe('deterministic Find', () => {
+  it.each([
+    ['PR #2920', '2920', '2920'],
+    ['  Release Coordinator', '"release coordinator"', 'Release Coordinator'],
+    ['oﬃce release', 'office', 'oﬃce'],
+    ['e\u0301 release', 'é', 'e\u0301'],
+    ['😀 Release', 'release', 'Release'],
+    ['  PR #2920', '"pr 2920"', 'PR #2920'],
+  ])('maps literal ranges to original text %s', (text, query, expected) => {
+    const index = new SmartSearchIndex()
+    index.update([doc('a', 'Other', text)])
+    const hit = index.search(query)[0]!
+    expect(hit.field.name).toBe('Description')
+    expect(hit.ranges.map(([a, b]) => hit.field.text.slice(a, b + 1)).join(' ')).toBe(expected)
+  })
+
   it('supports typo-tolerant multi-token names, prefix, phrases and mixed-field text', () => {
     const index = new SmartSearchIndex()
     index.update([doc('a', 'Release Coordinator', 'NEM3: fix HaveNoPermission error'), doc('b', 'Release notes', 'Coordinator summary')])
@@ -79,6 +94,14 @@ describe('deterministic Find', () => {
 })
 
 describe('health and graph predicates', () => {
+  it.each([{ tags: ['Decision'] }, { tags: ['Merge'] }, { tags: ['Decision', 'Merge'] }, { tags: [] }])('classifies published Will action tags $tags', ({ tags }) => {
+    const scene = fixtureScene({ now })
+    const card = scene.cards.find(card => card.id === fixtureId(2))!
+    card.source.properties['Will action'] = { id: 'will', type: 'multi_select', value: tags, hasMore: false }
+    expect(workHealth(scene, card.id, now).patterns.decision.outcome).toBe(tags.length ? 'match' : 'no-match')
+    expect(searchSeeds(scene, { ...emptySearch(), patterns: ['decision'] }, now).some(seed => seed.id === card.id)).toBe(tags.length > 0)
+  })
+
   it('never calls one waiting plus one running worker stalled; unsupported evidence stays null', () => {
     const scene = fixtureScene({ now })
     const helper = scene.executions.find(worker => worker.identity.task_id === 'helper-worker')!

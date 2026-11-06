@@ -30,7 +30,7 @@ export function FloorToolbar({ scene, state, send, gaps, density, onDensityChang
     if (value !== 'none' && !floorFields.some(f => f.id === value) || slot === 'order' && value === 'none') return
     send({ type: 'set-organizer', organizer: { ...organizer, [slot]: value } as Organizer })
   }
-  return <div ref={host} className="ov-organizer" onKeyDown={e => { if (e.key === 'Escape') { close(); setChosen(null); e.stopPropagation() } }}>
+  return <div ref={host} className="ov-organizer" onKeyDown={e => { if (e.key === 'Escape' && panel) { close(); setChosen(null); e.stopPropagation() } }}>
     <div className="ov-toolbar" role="toolbar" aria-label="Arrange work">
       <div className="ov-preset-scroll" role="group" aria-label="Organizer presets">{(Object.keys(organizerPresets) as Array<keyof typeof organizerPresets>).map(preset => <button type="button" key={preset} aria-pressed={organizerPreset(organizer) === preset} onClick={() => send({ type: 'set-organizer', organizer: { ...organizerPresets[preset] } })}>By {preset === 'initiative' ? 'Initiative' : preset === 'machine' ? 'Machine' : 'Manager'}</button>)}</div>
       <button type="button" className="ov-customize-trigger" aria-label="Customize" aria-expanded={panel === 'customize'} aria-controls="floor-customize" onClick={event => { trigger.current = event.currentTarget; setPanel(panel === 'customize' ? null : 'customize') }}>⚙<span> Customize{!organizerPreset(organizer) ? ' •' : ''}</span></button>
