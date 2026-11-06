@@ -27,6 +27,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "janitor:pilot": "tsx scripts/card-janitor-pilot.ts",
     "janitor:report": "tsx scripts/card-janitor-report.ts",
     "worker-links:report": "tsx scripts/worker-link-report.ts",
     "worker-links:adapter": "tsx scripts/worker-link-adapter.ts",
@@ -72,7 +73,8 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "squarify": "^1.1.0",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

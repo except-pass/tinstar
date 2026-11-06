@@ -4,9 +4,9 @@ Card: https://app.notion.com/p/40f50ce6d42281729453e9771630e63a
 
 Slice A is a repository CLI that proposes investigations of messy task cards. It
 uses the existing Tin Star Notion/fleet source snapshot and reconciliation
-projection. It makes no model calls, creates no Desk items, and has no Notion or
-First Mate writer. Review, persistent review decisions, application, scheduling
-and the local-model pilot are later slices.
+projection. By default it makes no model calls, creates no Desk items, and has no Notion or First Mate writer.
+Slice B adds an opt-in local semantic pilot over the same candidate clusters.
+Review, persistent review decisions, application and automatic scheduling are later slices.
 
 ## Run and replay
 
@@ -105,20 +105,93 @@ model calls/tokens, external inference calls and writes equal to zero. There is
 no new persistent daemon or nag loop. The existing Desk queue is only projected
 to record baseline decision counts; GitHub readiness is not refreshed or certified.
 
-The local-model pilot is blocked on assignment of the actual 4070 host and its
-reservation interface. The implementation host `hulk` exposes a T600 Laptop GPU
-over PCI, without `nvidia-smi` or Ollama; its VRAM is unverified. Slice A works
-without either GPU or model. No company data is sent to external inference.
+## Local semantic proposals (slice B)
+
+Run `janitor:report` with `--semantic` to append a separate `semantic` result to its JSON.
+The deterministic report still runs first and remains available when the model is unreachable, busy, timed out or rejects output.
+The default endpoint is the tailnet-only `http://eframe.taile890bc.ts.net:11434`, using `qwen3.5:9b`.
+Override these with `--endpoint` / `--model` or `TINSTAR_JANITOR_ENDPOINT` / `TINSTAR_JANITOR_MODEL`.
+Only credential-free loopback, private IPv4 or tailnet origins are accepted, and HTTP redirects are disabled to prevent company prose reaching a hosted endpoint.
+There is no hosted-model fallback or model tool interface.
+
+```bash
+npm run --silent janitor:report -- --input /tmp/janitor-input.json --semantic \
+  --model-calls 4 --model-tokens 32000 --model-time-ms 120000
+```
+
+Semantic retrieval uses slice A candidate clusters and its explicit distinctions, deduplicated by page membership.
+A singleton may attach up to two explicitly linked parent/sub-item pages already present in the source snapshot as supporting evidence, including historical work.
+This adds no historical scan or second title matcher.
+Only allowlisted source properties and bounded, already collected card prose enter the model request; worker records, transcripts and credentials are not needed.
+The existing credential scrubber and an email scrubber minimize local inputs.
+Requests contain at most eight cards and 20 KB of messages; larger clusters abstain rather than silently dropping cards.
+The first four available prose blocks per page supplement deterministic citations; each value is capped at 1200 characters.
+Omitted or partial evidence remains visible as incomplete coverage.
+
+[`semantic.ts`](../../src/server/janitor/semantic.ts) owns the strict Zod reply schema and generates the Ollama JSON Schema from that same contract.
+The client validates nested objects, enums, required fields, every cited page/evidence pair, survivor and draft targets against the actual cluster input.
+Missing citations, invented references, unsupported classifications and unstructured prose URLs/IDs are rejected.
+Explicit deterministic distinctions prevent duplicate/supersession suggestions that erase sibling or parent/child boundaries.
+Known role/instruction override patterns in source prose cause abstention before inference; other prose is delimited as a JSON data envelope under a system policy that treats it as untrusted.
+These checks constrain references and available operations; semantic correctness still requires review and measured evaluation.
+
+Results include stable proposal identity, source versions, cited evidence with freshness, confidence, explicit abstention, optional survivor and plain-language description/current-state/next-action drafts.
+Previews show the exact cited source before and the separate proposed draft after; they are not executable Notion property patches.
+The deterministic protected fields and unauthorized apply preconditions accompany every semantic proposal.
+Nothing changes status, ownership, links, history, the Desk or Notion.
+
+### Resources, admission and cache
+
+This is an operator-invoked opportunistic pilot, not an automatic GPU scheduler.
+Run after checking the host's CI reservations and GPU workload; automatic sweep/admission integration belongs to the ongoing janitor slice.
+An operator reservation marker supplied by `--busy-file` or `TINSTAR_JANITOR_BUSY_FILE` defers inference while it exists.
+Other resident Ollama models also defer the run.
+Requests are serial, with a config-home run lock preventing overlapping pilots sharing that home, two inference CPU threads, temperature zero, an 8192-token context and a 30-second model keep-alive.
+Defaults are four calls, a conservative 32000-token budget, 120 seconds per run and 45 seconds per request.
+Token admission reserves UTF-8 prompt bytes plus the output cap, while metrics separately report Ollama's actual token counts.
+Timeouts/unavailability stop additional requests for that run and persist exponential backoff from one minute to fifteen minutes; no retry storm or paid fallback occurs.
+
+Private runtime cache lives under `getConfigRoot()/janitor/semantic/`, honoring `TINSTAR_CONFIG_HOME`.
+It is never committed.
+Cache identity includes card content/property fingerprints and edit versions, bounded evidence content/coverage, model/endpoint and prompt/schema protocol.
+Observation-time/freshness refreshes alone do not re-ask unchanged clusters; returned citations still carry current snapshot freshness and future apply must reread the sources.
+Valid classifications, model abstentions and rejected replies are cached, so unchanged rejected output also avoids repeated inference.
+Network failures use backoff rather than a permanent cached verdict.
+Cache failure produces abstention and a visible warning while deterministic findings remain usable.
+If a process is killed, inspect `run.lock/owner.json` and confirm that process has exited before removing that runtime lock.
+Removing cached JSON deliberately permits reprocessing; it does not change source data.
+
+### Curated evaluation
+
+Save the audit input, then independently record 25-40 unique cluster labels before calling the model.
+[`pilot.ts`](../../src/server/janitor/pilot.ts) owns the sample schema: snapshot timestamp, label-recording timestamp, notes, and cases with cluster ID, expected classifications, review group and rationale.
+The runner rejects missing/duplicate candidate identities and mismatched snapshots before inference.
+Use separate cases for duplicate candidates, sibling work, independent work, historical supporting work and stale-looking active cards; an unknown ground truth is an abstention label, never an invented duplicate.
+
+```bash
+npm run --silent janitor:pilot -- --input /tmp/janitor-input.json \
+  --sample /tmp/janitor-labels.json --output /tmp/janitor-evaluation.json \
+  --max-calls 30 --max-tokens 1000000 --max-time-ms 900000
+```
+
+The evaluation preserves labels, source/sample fingerprints, results and per-call latency.
+It reports false suggestions, false-positive rate on negative cases, total and model-only abstention, schema/reference reject rates, cache hits and actual tokens.
+A budget-deferred or rejected case counts as abstention, with its separate outcome retained.
+Ollama prompt/evaluation durations report GPU-backed inference time; this is not an exclusive device-occupancy measurement or paid billing estimate.
+Read these rates alongside sample coverage and actual calls: all abstentions cannot demonstrate duplicate recall, and an absent positive control must be reported explicitly.
+Local samples/results contain company data and belong in private task evidence rather than git.
 
 ## Verification
 
-Behavioral tests execute the report, reusable auditor and CLI, including a spawned
+Behavioral tests execute the report, reusable auditor, semantic runner, sample evaluator and CLI, including a spawned
 offline replay. They cover operational exclusions, exact duplicate clusters,
 parent/child and sibling distinctions, differing worker-link roles and dated
 runs, explicit/negated/unknown-target supersession, published waits/prose actions,
 invalid/date-only check-ins, stale/partial/failed sources, stable identity versus
 evidence drift, cache reuse, 145-card comparison bounds, and a GET-only context
-budget with zero inference/writes. Run:
+budget with zero inference/writes by default.
+Semantic stubs also cover strict schemas, hallucinated IDs, injected prose, abstention, persistent cache reuse/drift, concurrent admission, workload deferral, unavailable-model fallback and prelabelled evaluation metrics.
+Run:
 
 ```bash
 npm exec -- vitest run --exclude='e2e/**' src/server/janitor/__tests__
