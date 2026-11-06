@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { buildWorkerLinkReport, type BackfillProposal } from '../server/reconciliation/workerLinkReport'
 import type { SourceSnapshot } from '../server/reconciliation'
 import { notionPageId } from '../server/reconciliation/notion'
-import { FIRST_MATE_TASKS, isBlankWorkerLinks, readWorkerLinks, workerLinkRecord, type WorkerLink, type WorkerLinks } from '../server/reconciliation/workerLinks'
+import { FIRST_MATE_TASKS, isBlankWorkerLinks, readWorkerLinks, recoverWorkerLinks, workerLinkRecord, type WorkerLink, type WorkerLinks } from '../server/reconciliation/workerLinks'
 import { record } from '../server/reconciliation/values'
 import { declaredLinks } from '../server/reconciliation/scene'
 
@@ -14,6 +14,7 @@ export interface AdapterAudit {
   afterHash: string | null
   result: string
   investigationKey?: string
+  priorText?: string
 }
 export interface AdapterOptions {
   apply?: boolean
@@ -27,17 +28,43 @@ const identityKey = (link: WorkerLink) => JSON.stringify([link.fm_home, link.tas
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const asLink = (p: BackfillProposal): WorkerLink => ({ fm_home: p.fm_home, task_id: p.task_id, first_observed_spawn_gen: p.spawn_gen })
 
-function mergeLinks(before: WorkerLinks, additions: WorkerLink[]) {
-  if (before.status !== 'valid' && !isBlankWorkerLinks(before)) throw new Error('unmergeable')
-  const tasks = before.status === 'valid' ? [...before.tasks] : []
-  const beforeHash = hash(before.status === 'valid' ? workerLinkRecord(tasks).json : '')
+function mergeLinks(before: WorkerLinks, additions: WorkerLink[], text?: unknown) {
+  const recovered = recoverWorkerLinks(before, text)
+  if (before.status !== 'valid' && !isBlankWorkerLinks(before) && !recovered) throw new Error('unmergeable')
+  const tasks = before.status === 'valid' ? [...before.tasks] : [...(recovered ?? [])]
+  const priorText = recovered ? text as string : undefined
+  const beforeHash = hash(priorText ?? (before.status === 'valid' ? workerLinkRecord(tasks).json : ''))
   for (const addition of additions) {
     const existing = tasks.find(task => identityKey(task) === identityKey(addition))
     if (existing && existing.first_observed_spawn_gen !== addition.first_observed_spawn_gen) throw new Error('generation-conflict')
     if (!existing) tasks.push(addition)
   }
   const merged = workerLinkRecord(tasks)
-  return { merged, beforeHash, afterHash: hash(merged.json) }
+  return { merged, beforeHash, afterHash: hash(merged.json), priorText }
+}
+
+function adapterReport(input: SourceSnapshot) {
+  const original = buildWorkerLinkReport(input)
+  const repairs = new Set<string>()
+  const cards = input.intentions.data?.cards.map(card => {
+    const property = card.properties[FIRST_MATE_TASKS]
+    const recovered = property?.type === 'rich_text' && !property.hasMore
+      ? recoverWorkerLinks(declaredLinks(card), property.value) : undefined
+    if (!recovered) return card
+    repairs.add(card.id)
+    return { ...card, properties: { ...card.properties, [FIRST_MATE_TASKS]: {
+      ...property!, workerLinks: { status: 'valid' as const, tasks: recovered },
+    } } }
+  })
+  if (!repairs.size) return original
+  // Reclassify using every recoverable declaration, so sibling/competing links
+  // participate in the same exact-identity safety rules as ordinary records.
+  const report = buildWorkerLinkReport({ ...input, intentions: { ...input.intentions,
+    data: { ...input.intentions.data!, cards: cards! } } }, repairs)
+  report.findings.push(...original.findings.filter(f => f.detector === 'invalid-record' && f.cardIds.some(id => repairs.has(id))))
+  return { ...report, coverage: { ...report.coverage,
+    cards: original.coverage.cards.map(card => ({ ...card, repairable: repairs.has(card.cardId) })),
+  } }
 }
 
 /** A coordinator runs one invocation per board at a time. No server route imports this writer. */
@@ -48,7 +75,7 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
   if (options.apply && !options.transport) throw new Error('Apply transport required')
   const now = options.now ?? Date.now
   // Age the saved coverage again at execution, rather than trusting an old report.
-  const report = buildWorkerLinkReport({ ...input, generatedAt: new Date(now()).toISOString() })
+  const report = adapterReport({ ...input, generatedAt: new Date(now()).toISOString() })
   const filters = options.cards?.map(id => {
     const normalized = notionPageId(id)
     if (!normalized) throw new Error('Invalid --card id')
@@ -57,9 +84,9 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
   const decisions: AdapterAudit[] = []
   const plannedWrites: Array<{ cardId: string; properties: ReturnType<typeof workerLinkRecord>['properties'] }> = []
   async function audit(cardId: string | null, identities: WorkerLink[], result: string, beforeHash: string | null = null,
-    afterHash: string | null = null, investigationKey?: string) {
+    afterHash: string | null = null, investigationKey?: string, priorText?: string) {
     const entry = { time: new Date(now()).toISOString(), cardId, identities, beforeHash, afterHash, result,
-      ...(investigationKey ? { investigationKey } : {}) }
+      ...(investigationKey ? { investigationKey } : {}), ...(priorText === undefined ? {} : { priorText }) }
     await options.audit(entry)
     decisions.push(entry)
   }
@@ -74,7 +101,11 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
     }
   }
   for (const finding of report.findings.filter(f => f.detector === 'invalid-record')) {
-    for (const cardId of finding.cardIds) await audit(cardId, [], 'investigate-invalid-record', null, null, JSON.stringify(['card', cardId]))
+    for (const cardId of finding.cardIds) {
+      const text = input.intentions.data?.cards.find(c => c.id === cardId)?.properties[FIRST_MATE_TASKS]?.value
+      await audit(cardId, [], 'investigate-invalid-record', typeof text === 'string' ? hash(text) : null,
+        null, JSON.stringify(['card', cardId]), typeof text === 'string' ? text : undefined)
+    }
   }
   const eligible = report.homes.flatMap(home => home.tiers['eligible auto-write'].flatMap(row => row.proposals))
   const cardIds = [...new Set(eligible.map(p => p.cardId))].sort()
@@ -88,9 +119,9 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
     if (!options.apply) {
       const card = input.intentions.data!.cards.find(c => c.id === cardId)!
       try {
-        const plan = mergeLinks(declaredLinks(card), additions)
+        const plan = mergeLinks(declaredLinks(card), additions, card.properties[FIRST_MATE_TASKS]?.value)
         plannedWrites.push({ cardId, properties: plan.merged.properties })
-        await audit(cardId, additions, 'planned', plan.beforeHash, plan.afterHash)
+        await audit(cardId, additions, 'planned', plan.beforeHash, plan.afterHash, undefined, plan.priorText)
       } catch { await audit(cardId, additions, 'stop-prewrite-conflict', null, null, JSON.stringify(['card', cardId])) }
       continue
     }
@@ -100,18 +131,26 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
     let attempted = false
     try {
       const assertEligible = () => {
-        const current = buildWorkerLinkReport({ ...input, generatedAt: new Date(now()).toISOString() })
+        const current = adapterReport({ ...input, generatedAt: new Date(now()).toISOString() })
         const stillEligible = current.homes.flatMap(h => h.tiers['eligible auto-write'].flatMap(r => r.proposals))
         if (additions.some(link => !stillEligible.some(p => p.cardId === cardId && JSON.stringify(asLink(p)) === JSON.stringify(link)))) throw new Error('coverage-expired')
       }
       assertEligible()
       const before = await transport.read(cardId)
-      const plan = mergeLinks(before.links, additions)
+      if (before.links.status === 'invalid') {
+        if (!report.findings.some(f => f.detector === 'invalid-record' && f.cardIds.includes(cardId))) {
+          report.findings.push({ detector: 'invalid-record', classification: 'unverified-conflicting', cardIds: [cardId],
+            executionIds: [], homeIds: [], reason: `${FIRST_MATE_TASKS}: ${before.links.reason}` })
+        }
+        await audit(cardId, [], 'investigate-invalid-record', typeof before.text === 'string' ? hash(before.text) : null,
+          null, JSON.stringify(['card', cardId]), before.text)
+      }
+      const plan = mergeLinks(before.links, additions, before.text)
       const { merged } = plan
       beforeHash = plan.beforeHash; afterHash = plan.afterHash
       if (beforeHash === afterHash) { await audit(cardId, additions, 'no-op', beforeHash, afterHash); continue }
       // Durable audit must succeed before the property PATCH can begin.
-      await audit(cardId, additions, 'write-planned', beforeHash, afterHash)
+      await audit(cardId, additions, 'write-planned', beforeHash, afterHash, undefined, plan.priorText)
       await transport.write(cardId, merged.properties, () => {
         assertEligible()
         attempted = true
@@ -129,7 +168,7 @@ export async function runWorkerLinkAdapter(input: SourceSnapshot, options: Adapt
 }
 
 export interface NotionLinkTransport {
-  read(cardId: string): Promise<{ links: WorkerLinks }>
+  read(cardId: string): Promise<{ links: WorkerLinks; text?: string }>
   write(cardId: string, properties: ReturnType<typeof workerLinkRecord>['properties'], beforePatch: () => void): Promise<void>
 }
 
@@ -207,7 +246,8 @@ export function notionLinkTransport(token: string, dataSourceId: string, fetcher
           items.push(row.rich_text)
         }
         if (items.length > 100) throw new Error('Property exceeds Notion limits')
-        if (!body.has_more) return { links: readWorkerLinks({ type: 'rich_text', rich_text: items }) }
+        if (!body.has_more) return { links: readWorkerLinks({ type: 'rich_text', rich_text: items }),
+          text: items.map(item => { const rich = record(item); return rich.plain_text ?? record(rich.text).content }).join('') }
         if (typeof body.next_cursor !== 'string' || !body.next_cursor || body.next_cursor === cursor) throw new Error('Property pagination incomplete')
         cursor = body.next_cursor
       }
