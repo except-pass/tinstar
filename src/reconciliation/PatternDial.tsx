@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { dialNames, dialPatterns, patternReminders, sceneWorkHealth, type DialPattern } from '../shared/workHealth'
+import { dialNames, dialPatterns, freshObservation, patternReminders, sceneWorkHealth, type DialPattern } from '../shared/workHealth'
 import { emptySearch } from '../shared/smartSearch'
 import { isPlanned, type FloorScene, type PresentationAction, type PresentationState } from './presentation'
 import { overviewGroups } from './overviewModel'
@@ -11,9 +11,11 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
   const base = { ...state, search: { ...(state.search ?? emptySearch()), patterns: [] }, searchReveal: null, searchFocus: undefined }
   const ids = new Set(overviewGroups(scene, base, now, !!scene.searchReadFailed).flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)))
   const health = sceneWorkHealth(scene, now).filter(item => ids.has(item.cardId))
+  const sourceUnknown = !!scene.searchReadFailed || !freshObservation(scene.coverage.intentions, now)
+  const workersUnknown = !scene.coverage.homes.length || scene.coverage.homes.some(home => !freshObservation(home.observation, now))
   return Object.fromEntries(dialPatterns.map(pattern => [pattern, {
     count: pattern === 'all' ? ids.size : health.filter(item => item.patterns[pattern].outcome === 'match').length,
-    unknown: pattern === 'all' ? scene.searchReadFailed || scene.coverage.intentions.status !== 'fresh' || scene.coverage.intentions.coverage !== 'complete' || !!scene.coverage.intentions.expiresAt && Date.parse(scene.coverage.intentions.expiresAt) <= now : health.some(item => item.patterns[pattern].outcome === 'unavailable'),
+    unknown: sourceUnknown || (pattern === 'all' ? !!state.donutFilter?.workers.length && workersUnknown : workersUnknown || health.some(item => item.patterns[pattern].outcome === 'unavailable')),
   }])) as Record<DialPattern, { count: number; unknown: boolean }>
 }
 

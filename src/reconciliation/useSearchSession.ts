@@ -90,16 +90,20 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+  const onPop = useRef<() => void>(() => {})
+  onPop.current = () => {
+    if (ignorePop.current) { ignorePop.current = false; return }
+    if (!snapshot.current) return
+    historyEntries.current = Math.max(0, historyEntries.current - 1)
+    if (open) dismiss(false); else restore(false, false)
+  }
   useEffect(() => {
-    const back = () => {
-      if (ignorePop.current) { ignorePop.current = false; return }
-      if (!snapshot.current) return
-      historyEntries.current = Math.max(0, historyEntries.current - 1)
-      if (open) dismiss(false); else restore(false, false)
-    }
+    // App also renders on popstate. Keep this listener installed while that
+    // render commits, rather than removing it midway through event dispatch.
+    const back = () => onPop.current()
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
-  })
+  }, [])
   return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), apply: () => setOpen(false), choose: (target: Target, targets: Target[] = [target]) => {
     send({ type: 'reveal-search', target, targets }); setRoots(targets)
     const cluster = scene ? directNeighbors(scene, targets) : new Set([semanticId(target)])

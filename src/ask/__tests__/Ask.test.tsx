@@ -148,13 +148,10 @@ describe('one-card text Ask and Desk', () => {
   ] as const)('reveals an excluded answer anchor in %s, history=%s, filter=%s', async (density, history, filter) => {
     records = [{ ...seed(), dismissed_at: history ? new Date().toISOString() : null }]
     localStorage.setItem('tinstar.overview.density', density)
+    if (filter === 'search') localStorage.setItem(preferencesKey, JSON.stringify({ search: { query: 'no-such-anchor-xyz', patterns: [], facets: [] } }))
     const { container } = mount()
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toBeTruthy())
-    if (filter === 'search') {
-      fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-      fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'no-such-anchor-xyz' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
-    } else {
+    if (filter === 'donut') {
       fireEvent.click(screen.getByRole('button', { name: /^Cards statuses:/ }))
       fireEvent.click(within(screen.getByRole('region', { name: 'Cards statuses' })).getByRole('button', { name: /Waiting For/ }))
     }

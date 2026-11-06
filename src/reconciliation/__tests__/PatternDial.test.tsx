@@ -101,6 +101,8 @@ describe('source-truthful aggregate previews', () => {
     expect(patternPreviews(scene, initialPresentation(), now).stalled).toEqual({ count: 0, unknown: true })
     scene.coverage.intentions.coverage = 'partial'
     expect(patternPreviews(scene, initialPresentation(), now).all.unknown).toBe(true)
+    scene.cards = []; scene.executions = []; scene.claims = []
+    expect(patternPreviews(scene, initialPresentation(), now).blocked).toEqual({ count: 0, unknown: true })
     const missing = fixtureScene({ now }); missing.executions = []
     expect(workHealth(missing, fixtureId(1), now).patterns.unstaffed.outcome).toBe('unavailable')
   })
