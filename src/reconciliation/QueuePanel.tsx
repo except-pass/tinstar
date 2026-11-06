@@ -17,7 +17,15 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   const selected = queue?.items.find(item => item.id === state.queueItemId) ?? (!state.queueItemId ? actionable[0] : undefined)
   const index = items.findIndex(item => item.id === selected?.id)
   const cardId = state.queueCardId
-  const requestText = (value: string) => /ask-user\s+findings=|(?:^|\s)\/(?:home|tmp|srv)\/|\b(?:needs-readiness-verification|liveness-not-observed)\b/.test(value) ? 'First Mate request' : value.replace(/^[a-z-]+\s+(?:\[[^\]]+\]\s*)+:?\s*/i, '')
+  const requestText = (value: string) => {
+    // First Mate stores hold text in a base64 envelope; show its human text while
+    // leaving the original source and response anchor intact for routing.
+    if (value.startsWith('fm-hold-v1:')) {
+      try { value = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(value.slice('fm-hold-v1:'.length)), char => char.charCodeAt(0))) }
+      catch { return 'Open the source request to read this decision.' }
+    }
+    return /ask-user\s+findings=|(?:^|\s)\/(?:home|tmp|srv)\/|\b(?:needs-readiness-verification|liveness-not-observed)\b/.test(value) ? 'First Mate request' : value.replace(/^[a-z-]+\s+(?:\[[^\]]+\]\s*)+:?\s*/i, '')
+  }
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
   useEffect(() => {
     setContext(null)
@@ -36,8 +44,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
       setUnavailable(null); send({ type: 'navigate-card', cardId: id })
     }}><small>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small>{cardStatus(card)}</small>}</button>
   }) : <h3>{requestText(item.title)}</h3>
-  const readyCards = actionable.filter(item => item.cardIds.length > 0)
-  const next = readyCards.filter(item => item.id !== selected?.id)
+  const next = actionable.filter(item => item.id !== selected?.id)
   return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>
     {unavailable && <p role="status">Card not on the floor right now. <a href={`https://www.notion.so/${encodeURIComponent(unavailable)}`} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
     {cardId ? <><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p key={block.id}>{block.text}</p>)}</> : <>

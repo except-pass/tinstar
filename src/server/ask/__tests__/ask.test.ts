@@ -209,7 +209,10 @@ it('persists semantic fields, exact worker identities and server-resolved relati
   reload()
   const retained = (await call('requests')).data.data.find((item: { request_id: string }) => item.request_id === id)
   expect(retained).toMatchObject({ status: 'answered', context: { target: relationshipInput.target, relationship: { card_id: claim.cardId, execution_id: claim.executionId } } })
-  const follow = await call('requests', { ...relationshipInput, client_key: randomUUID(), follow_up_to: id, question: 'What changed?' })
+  const followInput = { ...relationshipInput, client_key: randomUUID(), follow_up_to: id, question: 'What changed?', field_key: undefined, field_value: undefined }
+  const follow = await call('requests', followInput)
   expect(follow.data.data.conversation_id).toBe(id)
   expect(follow.data.data.context).toEqual(retained.context)
+  reload()
+  expect((await call('requests', followInput)).data.data.request_id).toBe(follow.data.data.request_id)
 })

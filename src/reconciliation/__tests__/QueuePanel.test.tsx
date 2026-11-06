@@ -142,3 +142,14 @@ it('reconciles selected source membership for rendering and subsequent navigatio
     unmount()
   } finally { vi.unstubAllGlobals() }
 })
+
+it('shows human hold text and every ready request as inbox records without exposing an encoded summary', () => {
+  const queue = fixtureQueue(), now = Date.now(), selected = queue.items[0]!
+  selected.cardIds = []
+  selected.title = 'fm-hold-v1:' + btoa('Choose the next review pass')
+  selected.action = selected.title
+  const { container } = render(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={{ ...initialPresentation(), queueItemId: selected.id }} send={vi.fn()} queue={queue} error={null} now={now} />)
+  expect(container.querySelector('.ov-selected-request > summary')).toHaveTextContent('Choose the next review pass')
+  expect(container.querySelector('.ov-selected-request > summary')).not.toHaveTextContent('fm-hold-v1:')
+  expect(screen.queryByText(/Later & needs verification/)).toBeNull()
+})

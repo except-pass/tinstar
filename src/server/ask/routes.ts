@@ -90,7 +90,7 @@ export class AskApi {
             ...(claim ? { relationship: { claim_id: claim.id, card_id: claim.cardId, execution_id: claim.executionId, sources: claim.sources, basis: claim.basis, verification: claim.verification } } : {}),
           }
         }
-        if (existing && (input.field_key !== context.field_key || input.field_value !== context.field_value)) throw new AskConflict('Question field differs from the original')
+        if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value)) throw new AskConflict('Question field differs from the original')
         if (input.target ? input.target.kind !== context.target?.kind || input.target.id !== context.target.id : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
         return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
       }

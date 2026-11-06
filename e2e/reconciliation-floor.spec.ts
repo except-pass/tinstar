@@ -839,7 +839,7 @@ for (const width of [1440, 390]) {
     await line.press('Enter')
     await expect(question).toHaveValue('How are these two items related?')
     await question.press('Escape')
-    const native = await page.getByRole('heading', { name: 'Your desk', exact: true }).evaluate(element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
+    const native = await page.getByRole('button', { name: 'By Initiative', exact: true }).evaluate(element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
     expect(native).toBe(true)
     await frame.getByRole('button', { name: 'Ask about this item', exact: true }).click()
     await question.fill('Why is this waiting?')
