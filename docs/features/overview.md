@@ -233,8 +233,9 @@ Search does not send Ask requests or change Notion, assignment or execution stat
 `SearchDocumentCollector` adds safe card prose through the existing bounded Notion
 reader, up to four cards per 20-second refresh in the background. Scene responses
 never wait for those reads. Prose is cached by canonical ID and Notion edit revision;
-a changed revision invalidates the prose-reader TTL. Failed reads retain labeled
-last-known text and retry with the ordinary source budget. Removed authorized
+a changed revision invalidates the prose-reader TTL. Changed revisions and expired observations fall back to searchable metadata
+while prose retries with the ordinary source budget. The browser also drops
+expired body fields if its scene refresh fails. Removed authorized
 IDs are deleted from the returned index. Pending/partial/unsupported content is
 visible in **Index coverage**, rather than being represented as an exhaustive
 zero-hit search.

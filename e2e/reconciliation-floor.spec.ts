@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Locator } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -18,6 +18,10 @@ let server: ChildProcess
 let root: string
 let base: string
 
+
+async function inspectEntity(page: Page, entity: Locator) {
+  await page.locator('.ov-item-frame').filter({ has: entity }).first().getByRole('button', { name: 'Open in Inspector', exact: true }).click()
+}
 
 async function openCustomize(page: Page) {
   const button = page.getByRole('button', { name: 'Customize', exact: true })
@@ -166,8 +170,8 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await expectAdvanced(page, 'Outer grouping', 'checkIn')
   await expect(page.locator('.ov')).toHaveAttribute('data-direction', 'desc')
   const candidate = page.locator('.ov-execution').filter({ hasText: 'Candidate relationship' })
-  await expect(candidate.locator('..').locator('..').locator('.ov-empty-col')).toHaveText('Task link unverified')
-  await expect(candidate.locator('..').locator('..').locator('.ov-gutter')).toHaveText('unverified')
+  await expect(page.locator('.ov-pair').filter({ has: candidate }).locator('.ov-empty-col')).toHaveText('Task link unverified')
+  await expect(page.locator('.ov-pair').filter({ has: candidate }).locator('.ov-gutter')).toHaveText('unverified')
   await expect(linked).toHaveCount(0)
   await expect(page.locator('.ov-execution')).toHaveCount(5)
   await clickAdvanced(page, 'Fields', true)
@@ -219,7 +223,7 @@ test('realistic volume, last-known data and failed refresh suspend absence findi
   await expect(page.locator('.ov-card')).toHaveCount(857)
   await expect(page.locator('.ov-execution')).toHaveCount(85)
   await expect(page.locator('.ov-item.ov-gap,.ov-item.ov-orphan')).toHaveCount(0)
-  await page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`).click()
+  await inspectEntity(page, page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`))
   failed = true
   await page.clock.fastForward(20_001)
   await expect(page.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
@@ -237,7 +241,7 @@ for (const state of ['queued', 'held']) {
     await page.goto(base)
     const card = page.locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)
     await expect(card).toHaveAttribute('data-tone', 'quiet')
-    await card.click()
+    await inspectEntity(page, card)
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Awaiting review capacity')
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('review-task')
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('2026-11-05T12:00:00Z')
@@ -271,7 +275,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await expect(task.locator('.ov-breadcrumb')).toHaveText('Unassigned')
   const desk = page.getByRole('complementary', { name: 'Your desk' })
   const queueId = await desk.locator('.ov-queue').getAttribute('data-queue-item-id')
-  await task.click()
+  await inspectEntity(page, task)
   await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Full source card body')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Last touched byWill')
@@ -288,7 +292,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await page.clock.fastForward(61_001)
   await expect(running.locator('.status-running')).toBeVisible()
   await expect(running.locator('.ov-freshness')).toHaveAttribute('aria-label', 'Last known observation')
-  await running.click()
+  await inspectEntity(page, running)
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Latest activity')
   await expect(desk.getByLabel('Desk queue')).toBeVisible()
   await expect(running).toHaveCSS('opacity', '1')
@@ -487,10 +491,10 @@ test('Notion declarations draw confirmed edges without worker-side assignment me
   const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
   await expect(page.locator('.ov-group').filter({ has: card }).locator('.ov-line.ov-linked')).toHaveCount(2)
   await expect(card).not.toContainText('First Mate tasks')
-  await card.click()
-  await expect(page.getByLabel('Inspector')).toContainText('Connections & history')
+  await inspectEntity(page, card)
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Connections & history')
   await page.getByText('Evidence & diagnostics', { exact: true }).click()
-  await expect(page.getByLabel('Inspector')).toContainText('notion.First Mate tasks')
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('notion.First Mate tasks')
   await screenshot(page, 'notion-owned-confirmed-links-fixture')
 })
 
@@ -687,6 +691,7 @@ test('single-row toolbar Smart Search patterns, evidence and mobile keyboard rem
   await panel.getByRole('button', { name: 'Blocked', exact: true }).click()
   await panel.getByRole('combobox', { name: 'Search machine', exact: true }).selectOption('Hulk')
   await expect(page.getByRole('button', { name: 'Remove machine: Hulk', exact: true })).toHaveCount(1)
+  await expect(panel.getByRole('combobox', { name: 'Search machine', exact: true })).toHaveValue('Hulk')
   await expect(panel.getByRole('listbox')).toContainText('Waiting for input')
   await panel.getByText(/Why matched\?/).click()
   await expect(panel).toContainText('Input from reviewer')

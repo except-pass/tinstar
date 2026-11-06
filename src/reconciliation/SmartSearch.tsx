@@ -26,7 +26,7 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
   })
   const health = useMemo(() => open ? scene.cards.map(card => workHealth(scene, card.id, now)) : [], [scene, now, open])
   const seeds = useMemo(() => open && (filter.patterns.length || filter.facets.length) ? directNeighbors(scene, searchSeeds(scene, filter, now)) : new Set<string>(), [scene, filter, now, open])
-  const hits = useMemo(() => open ? searchIndex(scene).search(filter.query).filter(hit => !filter.patterns.length && !filter.facets.length || seeds.has(hit.document.key)).slice(0, 30) : [], [scene, filter, seeds, open])
+  const hits = useMemo(() => open ? searchIndex(scene).search(filter.query, now).filter(hit => !filter.patterns.length && !filter.facets.length || seeds.has(hit.document.key)).slice(0, 30) : [], [scene, filter, seeds, open, now])
   const base = useMemo(() => open ? statusProjection(scene, { ...state, search: emptySearch(), searchReveal: null }, now) : { cards: [], workers: [] }, [scene, state, now, open])
   const baseKeys = new Set([...base.cards.map(card => `card:${card.id}`), ...base.workers.map(worker => `execution:${worker.id}`)])
   useEffect(() => { if (open) input.current?.focus({ preventScroll: true }) }, [open])
@@ -48,7 +48,8 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
     }))
     return [...ids].map(value => ({ value, label: String(scene.cards.find(card => card.id === value)?.source.properties.Name?.value || value) }))
   }
-  const activeHit = hits[Math.min(active, hits.length - 1)]
+  const activeIndex = Math.max(0, Math.min(active, hits.length - 1))
+  const activeHit = hits[activeIndex]
   const matchedCardIds = activeHit ? activeHit.document.target.kind === 'card' ? [activeHit.document.target.id] : scene.claims.filter(link => link.executionId === activeHit.document.target.id && link.verification === 'confirmed' && link.state === 'current' && link.basis === 'explicit').map(link => link.cardId) : []
   return <div className="ov-smart-search">
     <button ref={trigger} type="button" className="ov-search-trigger" aria-label="Smart Search (Ctrl or Command K)" aria-keyshortcuts="Control+k Meta+k" aria-expanded={open} aria-controls="ov-search-panel" onClick={onOpen}>⌕<span> Search</span></button>
@@ -64,7 +65,7 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
     }}>
       <header><strong>Smart Search</strong><button type="button" aria-label="Back to previous Overview" onClick={onRestore}>×</button></header>
       <label className="ov-search-input">Find names, IDs and text
-        <input ref={input} role="combobox" aria-label="Find names, IDs and text" aria-autocomplete="list" aria-expanded="true" aria-controls="ov-search-results" aria-activedescendant={activeHit ? `ov-search-hit-${Math.min(active, hits.length - 1)}` : undefined} value={filter.query} maxLength={512} placeholder={'Names, IDs, "exact phrase"…'} onChange={event => change({ ...filter, query: event.target.value })} onKeyDown={event => {
+        <input ref={input} role="combobox" aria-label="Find names, IDs and text" aria-autocomplete="list" aria-expanded="true" aria-controls="ov-search-results" aria-activedescendant={activeHit ? `ov-search-hit-${activeIndex}` : undefined} value={filter.query} maxLength={512} placeholder={'Names, IDs, "exact phrase"…'} onChange={event => change({ ...filter, query: event.target.value })} onKeyDown={event => {
           if (event.nativeEvent.isComposing) return
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setActive(value => Math.max(0, Math.min(hits.length - 1, value + (event.key === 'ArrowDown' ? 1 : -1)))) }
           if (event.key === 'Enter' && activeHit) { event.preventDefault(); onChoose(activeHit.document.target) }
@@ -75,9 +76,9 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
         const reason = patternDefinitions[pattern].unavailable ?? (available ? patternDefinitions[pattern].rule : health[0]?.patterns[pattern].evidence.at(-1) ?? 'No authorized work observations')
         return <button type="button" key={pattern} disabled={!available && !filter.patterns.includes(pattern)} aria-pressed={filter.patterns.includes(pattern)} title={reason} onClick={() => togglePattern(pattern)}>{patternNames[pattern]}{!available ? ' · unavailable' : ''}{recent.includes(pattern) ? ' ↺' : ''}</button>
       })}</div>
-      <div className="ov-search-facets">{(['entity', 'initiative', 'machine', 'manager'] as const).map(field => <label key={field}>{field}<select aria-label={`Search ${field}`} value="" onChange={event => { if (event.target.value) change({ ...filter, facets: [...filter.facets.filter(facet => facet.field !== field), { field, value: event.target.value }] }) }}><option value="">Any {field}</option>{facets(field).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>)}</div>
+      <div className="ov-search-facets">{(['entity', 'initiative', 'machine', 'manager'] as const).map(field => <label key={field}>{field}<select aria-label={`Search ${field}`} value={filter.facets.find(facet => facet.field === field)?.value ?? ''} onChange={event => change({ ...filter, facets: [...filter.facets.filter(facet => facet.field !== field), ...(event.target.value ? [{ field, value: event.target.value }] : [])] })}><option value="">Any {field}</option>{facets(field).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>)}</div>
       <p className="ov-search-note">AND across chips. Search uses verified relationships. Select an outside-view result to reveal it temporarily.</p>
-      <div id="ov-search-results" role="listbox" aria-label="Search results">{hits.map((hit, index) => <button type="button" role="option" id={`ov-search-hit-${index}`} aria-selected={index === active} key={hit.document.key} onFocus={() => setActive(index)} onMouseEnter={() => setActive(index)} onClick={() => onChoose(hit.document.target)}>
+      <div id="ov-search-results" role="listbox" aria-label="Search results">{hits.map((hit, index) => <button type="button" role="option" id={`ov-search-hit-${index}`} aria-selected={index === activeIndex} key={hit.document.key} onFocus={() => setActive(index)} onMouseEnter={() => setActive(index)} onClick={() => onChoose(hit.document.target)}>
         <strong>{hit.document.target.kind === 'card' ? '▤' : '◇'} {hit.document.title}</strong>
         {!baseKeys.has(hit.document.key) && <small>Outside current view</small>}
         <MatchSnippet hit={hit} /><small>{hit.field.name} · {hit.field.source} · {scene.searchReadFailed ? 'last known · scene read unavailable' : hit.document.coverage}{hit.document.expiresAt && Date.parse(hit.document.expiresAt) <= now ? ' · stale' : ''}</small>

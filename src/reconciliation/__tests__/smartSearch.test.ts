@@ -10,7 +10,7 @@ import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
 
 const now = Date.parse('2026-11-06T00:00:00Z')
 const doc = (id: string, title: string, text = '', identifiers = [id]): SearchDocument => ({ key: `card:${id}`, target: { kind: 'card', id }, title, identifiers,
-  fields: [{ name: 'Description', source: 'Notion blocks', text }], coverage: 'fresh/complete', observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString() })
+  fields: [{ name: 'Description', source: 'Notion blocks', text }], coverage: 'fresh/complete', observedAt: new Date(now).toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() })
 afterEach(() => localStorage.clear())
 
 describe('deterministic Find', () => {
@@ -44,6 +44,16 @@ describe('deterministic Find', () => {
     const scene = fixtureScene({ now })
     index.update(sceneSearchDocuments(scene))
     expect(index.search('linked-worker')[0]?.document.target.kind).toBe('execution')
+  })
+  it('drops expired prose even on a retained scene and rebuilds it only from a refreshed authorized observation', () => {
+    const index = new SmartSearchIndex(), document = doc('a', 'Release work', 'HaveNoPermission')
+    document.expiresAt = new Date(now + 1000).toISOString()
+    index.update([document])
+    expect(index.search('HaveNoPermission', now)).toHaveLength(1)
+    expect(index.search('HaveNoPermission', now + 1001)).toEqual([])
+    expect(index.search('Release', now + 1001)).toHaveLength(1)
+    index.update([{ ...document, expiresAt: new Date(now + 5000).toISOString() }])
+    expect(index.search('HaveNoPermission', now + 1001)).toHaveLength(1)
   })
   it('redacts credential literals and bounds excerpts while retaining canonical identity', () => {
     const secret = 'ghp_12345678901234567890'

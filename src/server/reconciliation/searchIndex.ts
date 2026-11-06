@@ -30,7 +30,7 @@ export class SearchDocumentCollector {
         void this.read(card.id, card.source.last_edited_time).then(result => {
           this.prose.set(card.id, { version: card.source.last_edited_time, result })
         }).catch(() => {
-          // Keep the previous text labeled stale when a refresh fails.
+          // Preserve the cache; changed/expired versions fall back to metadata.
         }).finally(() => { this.pending.delete(card.id) })
       }
     }
@@ -42,14 +42,16 @@ export class SearchDocumentCollector {
       const cached = this.prose.get(card.id)
       if (!cached || !['available', 'partial'].includes(cached.result.outcome)) continue
       const current = cached.version === card.source.last_edited_time
+      // A changed/expired Notion observation cannot certify cached prose.
+      // Return searchable metadata while a bounded background read catches up.
+      if (!current || scene.coverage.intentions.status !== 'fresh' || !document.expiresAt || Date.parse(document.expiresAt) <= this.now()) continue
       const text = searchText(cached.result.blocks?.map(block => block.text).join('\n'))
-      // Bodies are assigned their own field and provenance, never mistaken for
-      // the full source or comments. Version changes retain labeled old text.
-      if (text) document.fields.push({ name: current ? 'Description / card prose' : 'Description / last-known prose (stale)', source: `Notion blocks · ${cached.result.observedAt ?? 'time unknown'}`, text })
+      // Bodies retain their own field and provenance, never comments/history.
+      if (text) document.fields.push({ name: 'Description / card prose', source: `Notion blocks · ${cached.result.observedAt ?? 'time unknown'}`, text })
       if (current && cached.result.outcome === 'available') ready++; else partial++
     }
     const result = boundSearchDocuments(documents)
-    result.notes.push(`Card prose: ${ready} available, ${partial} partial/stale, ${scene.cards.length - ready - partial} unavailable or pending. Background reads are bounded to four cards per refresh.`,
+    result.notes.push(`Card prose: ${ready} available, ${partial} partial, ${scene.cards.length - ready - partial} unavailable or pending. Background reads are bounded to four cards per refresh.`,
       'Comments, raw logs and transcripts are not indexed. PR titles and historical errors are searchable only when present in published fields.')
     return result
   }

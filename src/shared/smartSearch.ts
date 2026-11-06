@@ -32,7 +32,15 @@ export class SmartSearchIndex {
       this.fuse.add(document); this.records.set(document.key, { document, fingerprint })
     }
   }
-  search(query: string): SearchHit[] {
+  search(query: string, now = Date.now()): SearchHit[] {
+    // A retained scene can outlive a failed network read. Drop body prose at
+    // the source expiry even then, rather than searching old sensitive prose
+    // indefinitely. Published scene metadata remains a labeled fallback.
+    const records = [...this.records.values()]
+    const expired = (document: SearchDocument) => document.target.kind === 'card' &&
+      (!document.expiresAt || Date.parse(document.expiresAt) <= now) && document.fields.some(field => field.source.startsWith('Notion blocks'))
+    if (records.some(record => expired(record.document))) this.update(records.map(({ document }) => expired(document)
+      ? { ...document, fields: document.fields.filter(field => !field.source.startsWith('Notion blocks')) } : document))
     const cached = this.results.get(query)
     if (cached) return cached
     const parts = tokens(query), q = normalized(query.replaceAll('"', '')).replace(/^#(?=\d+$)/, '')
@@ -112,7 +120,7 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
   const cache = seedCache.get(scene) ?? new Map<string, { until: number; seeds: Target[] }>()
   const key = JSON.stringify(search), cached = cache.get(key)
   if (cached && now < cached.until) return cached.seeds
-  const hits = searchIndex(scene).search(search.query), hitKeys = new Set(hits.map(hit => hit.document.key))
+  const hits = searchIndex(scene).search(search.query, now), hitKeys = new Set(hits.map(hit => hit.document.key))
   const seeds = new Map<string, Target>()
   const health = new Map(scene.cards.map(card => [card.id, workHealth(scene, card.id, now)]))
   const add = (target: Target) => seeds.set(targetKey(target), target)
