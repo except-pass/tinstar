@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import type { FloorScene } from './presentation'
+import { SmartSearchIndex, updateSearchIndex } from '../shared/smartSearch'
 
 /** Sequential, bounded polling. A failure retains the labeled last-known scene. */
 export function useFloorScene() {
+  const search = useRef<SmartSearchIndex>()
+  if (!search.current) search.current = new SmartSearchIndex()
   const [scene, setScene] = useState<FloorScene | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now)
@@ -19,9 +22,9 @@ export function useFloorScene() {
         if (!response.ok) throw new Error('read failed')
         const body = await response.json() as { ok: boolean; data?: FloorScene }
         if (!body.ok || !body.data) throw new Error('scene missing')
-        if (!stopped) { setScene(body.data); setError(null); setNow(Date.now()) }
+        if (!stopped) { updateSearchIndex(body.data, search.current!); setScene(body.data); setError(null); setNow(Date.now()) }
       } catch {
-        if (!stopped) setError('Scene read unavailable. Last-known records are retained; absence conclusions are suspended.')
+        if (!stopped) { setScene(current => current ? { ...current, searchReadFailed: true } : current); setError('Scene read unavailable. Last-known records are retained; absence conclusions are suspended.') }
       } finally {
         clearTimeout(deadline)
         if (!stopped) timer = setTimeout(() => void read(), 20_000)

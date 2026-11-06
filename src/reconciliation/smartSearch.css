@@ -1,0 +1,34 @@
+.ov-smart-search { display:flex; align-items:center; min-width:0; gap:4px; }
+.ov-search-trigger { white-space:nowrap; font-size:15px; }
+.ov-search-trigger span { font-size:11px; }
+.ov-search-chips { display:flex; min-width:0; max-width:240px; overflow-x:auto; gap:4px; scrollbar-width:none; }
+.ov-search-chips button { white-space:nowrap; max-width:150px; overflow:hidden; text-overflow:ellipsis; background:#1e3431; color:#9bd9ca; }
+.ov-search-back { white-space:nowrap; }
+.ov-search-panel { position:absolute; top:100%; left:8px; width:min(680px, calc(100% - 16px)); max-height:min(80vh, 820px); overflow:auto; z-index:45; padding:14px; background:#121a22; border:1px solid #344754; border-radius:10px; box-shadow:0 12px 38px #0009; color:#ced8df; font-size:12px; }
+.ov-search-panel header, .ov-search-panel footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.ov-search-input { display:block; margin-top:12px; }
+.ov-search-input input { display:block; margin:6px 0 12px; width:100%; padding:10px; font-size:15px; background:#0b1219; color:#e0ede8; border:1px solid #476b66; border-radius:6px; }
+.ov-search-patterns { display:flex; flex-wrap:wrap; gap:5px; }
+.ov-search-patterns button[aria-pressed="true"] { background:#2b5148; color:#b0ead6; }
+.ov-search-patterns button:disabled { opacity:.65; cursor:default; }
+.ov-search-facets { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.ov-search-facets label { display:flex; flex-direction:column; gap:3px; flex:1; min-width:110px; text-transform:capitalize; }
+.ov-search-facets select { max-width:160px; background:#1a2631; color:#c9dbdf; border:1px solid #3a4c59; padding:4px; border-radius:4px; }
+.ov-search-note { color:#91a5b3; margin:10px 0; }
+#ov-search-results { display:flex; flex-direction:column; gap:3px; max-height:300px; overflow:auto; }
+#ov-search-results button { text-align:left; display:flex; flex-direction:column; padding:8px; gap:3px; border:1px solid transparent; width:100%; background:#17232c; }
+#ov-search-results button[aria-selected="true"] { background:#203b3b; border-color:#5d9d8d; }
+#ov-search-results small { color:#9bb0bf; }
+.ov-search-snippet { color:#c0d0d7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.ov-search-snippet mark { color:#c9ffe6; background:#35604c; }
+.ov-search-why, .ov-search-coverage { margin-top:10px; color:#a3b7c2; overflow-wrap:anywhere; }
+.ov-search-why summary, .ov-search-coverage summary { cursor:pointer; padding:5px 0; }
+.ov-search-panel footer { margin-top:12px; }
+.ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:2px; }
+.ov-search-context { opacity:.62; }
+@media (max-width:850px) {
+  .ov-search-trigger span { display:none; }
+  .ov-search-chips { max-width:100px; }
+  .ov-search-panel { position:fixed; top:8px; left:8px; width:calc(100vw - 16px); max-height:calc(100dvh - 16px); z-index:70; }
+  .ov-search-facets select { max-width:140px; }
+}
