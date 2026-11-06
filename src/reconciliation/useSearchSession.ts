@@ -38,8 +38,7 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     const saved = snapshot.current
     if (saved) {
       const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
-      send({ type: 'restore-search-view', view: { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
-      send({ type: 'set-search', search: clear ? emptySearch() : saved.state.search ?? emptySearch() })
+      send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
       setRoots(saved.roots); setDetails(saved.details); setDensity(saved.density); saveOverviewDensity(saved.density)
       restorePending.current = saved
     } else if (clear) send({ type: 'clear-search' })
