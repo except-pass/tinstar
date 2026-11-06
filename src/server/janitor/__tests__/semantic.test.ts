@@ -182,6 +182,16 @@ describe('local semantic proposal boundary', () => {
     expect(JSON.parse(await readFile(join(root, 'janitor/semantic/backoff.json'), 'utf8')).retryAt).toBeGreaterThan(Date.now())
   })
 
+  it('contacts the model when the request timeout equals the run budget', async () => {
+    const { root, cluster } = await setup()
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(0.5)
+    const counters = { chats: 0 }
+    const result = await runSemanticPilot([cluster], { maxRunMs: 1000, timeoutMs: 1000 }, transport(reply(cluster), counters))
+    expect(counters.chats).toBe(1)
+    expect(result.proposals[0]).toMatchObject({ outcome: 'classified', reply: { classification: 'possible_duplicate' } })
+    await expect(readFile(join(root, 'janitor/semantic/backoff.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('times out a local model request without losing a typed abstention', async () => {
     const { cluster } = await setup()
     const fetcher: typeof fetch = async (url, options) => {

@@ -291,7 +291,7 @@ export async function runSemanticPilot(clusters: SemanticCluster[], options: Sem
           try { await stat(busyFile); defer = 'operator-workload-reservation'; emit(cluster, 'abstain', null, defer); continue }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
         }
-        const signal = AbortSignal.timeout(Math.max(1, Math.min(remaining, limits.timeoutMs)))
+        const signal = AbortSignal.timeout(Math.max(1, Math.floor(Math.min(remaining, limits.timeoutMs))))
         const ps = await fetcher(`${endpoint}/api/ps`, { method: 'GET', redirect: 'error', signal })
         if (!ps.ok) throw new Error('model-unavailable')
         const running = await ps.json() as { models?: Array<{ name: string }> }
