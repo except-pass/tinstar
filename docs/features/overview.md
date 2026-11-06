@@ -61,6 +61,9 @@ in Order. Operational status and its tie-breakers remain the secondary task
 ordering within each position. This preserves the shared floor's crossing
 reduction. This is presentation ordering only.
 
+Workers precede cards in the status donuts, selected-status chips, Inspector
+group summaries and connection pairs, and entity suggestions in Smart Search,
+matching the floor's left-to-right column order.
 The two labelled status donuts use unique canonical current endpoints from the
 base scope. Activate a slice with click, Enter or Space to toggle it; text status
 menus expose the same choices and counts. Multiple selections within one donut

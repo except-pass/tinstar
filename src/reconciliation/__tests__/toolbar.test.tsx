@@ -35,6 +35,10 @@ describe('single-row Overview toolbar', () => {
     expect(screen.getByRole('button', { name: 'Clear all status selections' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Cards statuses: 5 visible, 5 eligible' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Workers statuses: 5 visible, 5 eligible' })).toBeTruthy()
+    expect([...container.querySelectorAll('.ov-donut-trigger')].map(el => el.getAttribute('aria-label'))).toEqual([
+      'Workers statuses: 5 visible, 5 eligible',
+      'Cards statuses: 5 visible, 5 eligible',
+    ])
   })
   it('offers Operational status only in Order and rejects grouping drops', () => {
     mount()
@@ -127,6 +131,7 @@ describe('single-row Overview toolbar', () => {
     const { container } = mount()
     expect(cardIds(container)).toEqual([])
     expect(container.querySelectorAll('.ov-execution')).toHaveLength(0)
+    expect([...container.querySelectorAll('.ov-filter-chips button')].map(el => el.getAttribute('aria-label'))).toEqual(['Remove workers: Running', 'Remove cards: Waiting For'])
     expect(screen.getByText('No linked records match these status selections.')).toBeTruthy()
     expect(slice('Workers: Blocked, 1')).toHaveAttribute('aria-pressed', 'false')
     expect(slice('Cards: In Progress, 2')).toHaveAttribute('aria-pressed', 'false')
