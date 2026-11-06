@@ -41,8 +41,8 @@ options.
 ## Scope and evidence
 
 The audit reuses the Overview's **operational preset** (not custom filters or
-temporary selected/linked cards): In Progress, Queued, Waiting, Waiting For,
-Waiting for Prod Release, Ready for Review, In review, Delegated to person.
+temporary selected/linked cards), defined by `operationalStatuses` in
+[`src/shared/floorOrganization.ts`](../../src/shared/floorOrganization.ts).
 Archived and trashed pages are excluded. The JSON lists every included page ID,
 counts by included/excluded status, source counts, timestamps, schema/relation
 omissions and independent fleet source health. Missing/unsupported statuses are
@@ -66,8 +66,10 @@ All six categories have explicit candidate and unknown-coverage results:
 | Check-in metadata | Missing, malformed or past published dates, using the board's New York date-only semantics. No working-hour/business-morning policy or PM Bot verdict is recreated; no commitment is reset. |
 | Ownership/links | Missing supported Owner/Name, hierarchy issues, truncated relations, invalid URL fields and the existing authoritative worker-link diagnostics. Unknown worker is not proof of missing assignment; Janitor proposes no assignment or repair. |
 
-Title neighbor retrieval is deterministic, limited to eight ranked neighbors per
-card. Large common-word buckets are windowed; the audit reports actual comparison
+Title neighbor retrieval is deterministic: each card selects up to eight ranked
+neighbors, and pairs selected by either card are deduplicated. A card can therefore
+participate in more than eight comparisons. Large common-word buckets are windowed;
+the audit reports actual comparison
 counts. This is a conservative candidate search, not exhaustive semantic analysis.
 Prose uses the existing bounded/redacted CardContextReader; partial/unsupported
 blocks and failed Notion/GitHub/First Mate reads do not establish absence. Source
