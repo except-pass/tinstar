@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
+import { SceneReconciler } from '../../server/reconciliation/scene'
 import { SmartSearchIndex, directNeighbors, emptySearch, searchSeeds } from '../../shared/smartSearch'
 import { boundSearchDocuments, sceneSearchDocuments, searchText, type SearchDocument } from '../../shared/searchDocuments'
 import { workHealth } from '../../shared/workHealth'
@@ -14,6 +15,40 @@ const doc = (id: string, title: string, text = '', identifiers = [id]): SearchDo
 afterEach(() => localStorage.clear())
 
 describe('deterministic Find', () => {
+  it('cold-builds a bounded 150-card prose index within the interactive startup budget', () => {
+    const sources = fixtureSources({ now, size: 143 })
+    let remaining = 30
+    for (const home of sources.fleet) {
+      home.observation.data!.tasks = home.observation.data!.tasks.slice(0, remaining)
+      remaining -= home.observation.data!.tasks.length
+    }
+    const scene = new SceneReconciler().reconcile(sources)
+    const documents = boundSearchDocuments(sceneSearchDocuments(scene).map(document => ({ ...document,
+      fields: [...document.fields, { name: 'Description', source: 'Notion blocks', text:
+        (`Bounded fixture prose for ${document.title}. Plan the migration, check errors and publish evidence. `).repeat(120) }],
+    }))).documents
+    expect(scene.cards).toHaveLength(150)
+    expect(scene.executions).toHaveLength(30)
+    expect(documents.reduce((total, document) => total + document.fields.reduce((length, field) => length + field.text.length, 0), 0)).toBeGreaterThan(1_000_000)
+    const index = new SmartSearchIndex(), started = performance.now()
+    index.update(documents)
+    // The expected build is ~125 ms; allow substantial CI variance while
+    // rejecting the multi-second eager-offset regression.
+    expect(performance.now() - started).toBeLessThan(450)
+    expect(index.search('Roadmap', now).some(hit => hit.document.target.id === fixtureId(5))).toBe(true)
+  }, 10_000)
+
+  it('preserves original fuzzy ranges across Unicode expansion and incremental replacement', () => {
+    const index = new SmartSearchIndex()
+    index.update([doc('a', 'Other', '  PR #2920 then oﬃce coordinator')])
+    const before = index.search('ofice')[0]!
+    expect(before.field.name).toBe('Description')
+    index.update([doc('a', 'Other', 'Changed oﬃce coordinator')])
+    const after = index.search('ofice')[0]!
+    expect(after.ranges.map(([a, b]) => after.field.text.slice(a, b + 1)).join(' ')).toBe('oﬃce')
+    expect(before.ranges.map(([a, b]) => before.field.text.slice(a, b + 1)).join(' ')).toBe('oﬃce')
+  })
+
   it.each([
     ['PR #2920', '2920', '2920'],
     ['  Release Coordinator', '"release coordinator"', 'Release Coordinator'],

@@ -268,6 +268,11 @@ phrases, snippets and provenance. Changed documents update their postings; the
 small Fuse vocabulary is rebuilt only when its words change. Health queries share
 ephemeral canonical-ID joins within each query rather than repeatedly scanning
 all cards, findings and workers. Neither index is another scene/source of truth.
+Original-text highlight offsets are computed lazily when a suggestion's ranges
+are read, with literal field maps reused and fuzzy maps limited to matching words.
+Index construction and graph filtering do not segment every excerpt or vocabulary
+word. A bounded 150-card / 30-worker prose regression test checks cold construction
+against a 450 ms budget while retaining Unicode and exact-identifier offset tests.
 
 The browser incrementally removes/upserts changed semantic document IDs on live
 scene refreshes. Clock ticks do not rebuild the index. Missing index data falls

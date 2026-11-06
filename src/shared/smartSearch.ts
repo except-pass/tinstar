@@ -13,10 +13,11 @@ export const emptySearch = (): SearchFilter => ({ query: '', patterns: [], facet
 export const hasSearch = (search?: SearchFilter) => !!search && !!(search.query.trim() || search.patterns.length || search.facets.length)
 export interface SearchHit { document: SearchDocument; rank: number; field: SearchField; ranges: Array<[number, number]> }
 const normalized = (value: string) => value.normalize('NFKC').toLowerCase().replace(/\bpr\s*#?\s*(\d+)\b/g, 'pr $1').trim()
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 function mappedText(value: string) {
   let text = ''
   let offsets: Array<[number, number]> = []
-  for (const { segment, index } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)) {
+  for (const { segment, index } of graphemes.segment(value)) {
     const part = segment.normalize('NFKC')
     text += part
     offsets.push(...Array.from({ length: part.length }, () => [index, index + segment.length - 1] as [number, number]))
@@ -53,8 +54,8 @@ function literalOccurrence(text: string, term: string) {
 /** Mutable disposable index: changed documents alone are removed/upserted.
  * Rebuild is just construction from a current authorized scene. */
 export class SmartSearchIndex {
-  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; offsets: Array<[number, number]> }> }>()
-  private vocabulary = new Map<string, Map<string, { field: SearchField; offsets: Array<[number, number]> }>>()
+  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; range: (start: number, end: number) => [number, number] }> }>()
+  private vocabulary = new Map<string, Map<string, { field: SearchField; word: string; offset: number }>>()
   private results = new Map<string, SearchHit[]>()
   // Match a deduplicated vocabulary, then follow postings to original fields.
   // Scanning every multi-kilobyte excerpt with Bitap on every keystroke caused
@@ -83,13 +84,21 @@ export class SmartSearchIndex {
       const terms = new Set<string>()
       const fields = [{ name: 'Identifier', source: 'Canonical source ID', text: document.identifiers.join(' · ') },
         { name: 'Name', source: document.target.kind === 'card' ? 'Notion property' : 'First Mate snapshot', text: document.title }, ...document.fields]
-        .map(field => { const { text, offsets } = mappedText(field.text); return { field, text, offsets } })
+        .map(field => {
+          let offsets: Array<[number, number]> | undefined
+          return { field, text: normalized(field.text), range: (start: number, end: number): [number, number] => {
+            // Keep normalization cheap during construction and filtering. Only
+            // a rendered snippet needs its original Unicode/punctuation map.
+            offsets ??= mappedText(field.text).offsets
+            return [offsets[start]![0], offsets[end]![1]]
+          } }
+        })
       for (const { field } of fields.slice(1)) for (const match of field.text.matchAll(/[\p{L}\p{N}]+/gu)) {
-        const { text: word, offsets } = mappedText(match[0])
+        const word = normalized(match[0])
         if (word.length < 4 || terms.has(word)) continue
         let postings = this.vocabulary.get(word)
         if (!postings) { postings = new Map(); this.vocabulary.set(word, postings); vocabularyChanged = true }
-        postings.set(document.key, { field, offsets: offsets.map(([a, b]) => [a + match.index!, b + match.index!]) }); terms.add(word)
+        postings.set(document.key, { field, word: match[0], offset: match.index! }); terms.add(word)
       }
       this.records.set(document.key, { document, fingerprint, terms, fields })
       this.results.clear()
@@ -109,7 +118,7 @@ export class SmartSearchIndex {
     if (cached) return cached
     const parts = tokens(query), q = normalized(query.replaceAll('"', '')).replace(/^#(?=\d+$)/, '')
     if (!parts.length) return [...this.records.values()].map(({ document }) => ({ document, rank: 0, field: document.fields[0] ?? { name: 'Name', source: 'Scene', text: document.title }, ranges: [] }))
-    const fuzzy = new Map<string, Map<string, { score: number; field: SearchField; ranges: Array<[number, number]> }>>()
+    const fuzzy = new Map<string, Map<string, { score: number; field: SearchField; ranges: () => Array<[number, number]> }>>()
     for (const part of parts) {
       // Short words and numeric/technical identifiers must never drift to a
       // nearby ID. Prefix and exact matching still operate below.
@@ -118,32 +127,39 @@ export class SmartSearchIndex {
         for (const [key, posting] of this.vocabulary.get(hit.item) ?? []) {
           const entries = fuzzy.get(key) ?? new Map(), score = hit.score ?? 1
           if (score >= (entries.get(part.text)?.score ?? Infinity)) continue
-          const ranges = hit.matches?.[0]?.indices.map(([a, b]) => [posting.offsets[a]![0], posting.offsets[b]![1]] as [number, number]) ?? []
+          const ranges = () => {
+            const offsets = mappedText(posting.word).offsets
+            return hit.matches?.[0]?.indices.map(([a, b]) => [offsets[a]![0] + posting.offset, offsets[b]![1] + posting.offset] as [number, number]) ?? []
+          }
           entries.set(part.text, { score, field: posting.field, ranges }); fuzzy.set(key, entries)
         }
       }
     }
     const hits: SearchHit[] = []
     for (const { document, fields } of this.records.values()) {
-      let field = fields[1]!.field, ranges: Array<[number, number]> = [], usedFuzzy = false, relevance = 0, found = true
+      let field = fields[1]!.field, usedFuzzy = false, relevance = 0, found = true
+      const ranges: Array<() => Array<[number, number]>> = []
       for (const part of parts) {
         const occurrence = fields.map(candidate => ({ candidate, at: literalOccurrence(candidate.text, part.text) })).find(match => match.at >= 0)
         if (occurrence) {
           const { candidate, at } = occurrence
           if (!ranges.length) field = candidate.field
-          if (candidate.field === field) ranges.push([candidate.offsets[at]![0], candidate.offsets[at + part.text.length - 1]![1]])
+          if (candidate.field === field) ranges.push(() => [candidate.range(at, at + part.text.length - 1)])
           relevance += candidate.field.name === 'Name' ? 0 : 0.1
         } else {
           const approximate = fuzzy.get(document.key)?.get(part.text)
           if (!approximate) { found = false; break }
           usedFuzzy = true; relevance += approximate.score
-          if (!ranges.length) { field = approximate.field; ranges = approximate.ranges }
+          if (!ranges.length) { field = approximate.field; ranges.push(approximate.ranges) }
         }
       }
       if (!found) continue
       const title = normalized(document.title)
       const rank = document.identifiers.some(id => normalized(id) === q) ? 0 : title === q ? 1 : !usedFuzzy && title.startsWith(q) ? 2 : usedFuzzy ? 4 + relevance / parts.length : 3 + relevance / parts.length
-      hits.push({ document, rank, field, ranges })
+      let originalRanges: Array<[number, number]> | undefined
+      // Graph filtering reads identities without paying to highlight every
+      // match. The UI accesses ranges only for its bounded suggestion list.
+      hits.push({ document, rank, field, get ranges() { return originalRanges ??= ranges.flatMap(resolve => resolve()) } })
     }
     hits.sort((a, b) => a.rank - b.rank || a.document.title.localeCompare(b.document.title) || a.document.key.localeCompare(b.document.key))
     this.results.set(query, hits)
