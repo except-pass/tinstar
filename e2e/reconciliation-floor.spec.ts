@@ -52,6 +52,7 @@ async function clickAdvanced(page: Page, name: string, keepOpen = false) {
  * donut hole; hit-testing first also detects decorative overlays stealing input. */
 async function clickStatusSlice(page: Page, name: string) {
   const slice = page.getByRole('button', { name, exact: true })
+  await slice.scrollIntoViewIfNeeded()
   const point = await slice.evaluate(element => {
     const path = element as SVGPathElement
     const midpoint = path.getPointAtLength(path.getTotalLength() / 2)
@@ -611,6 +612,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await expect(page.getByRole('button', { name: 'By Machine', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(slice('Cards: In Progress, 2')).toHaveAttribute('aria-pressed', 'true')
   const clear = page.getByRole('button', { name: 'Clear all status selections' })
+  await clear.scrollIntoViewIfNeeded()
   const clearBox = (await clear.boundingBox())!
   expect(clearBox.x).toBeGreaterThanOrEqual(0)
   expect(clearBox.x + clearBox.width).toBeLessThanOrEqual(viewport.width)
@@ -743,7 +745,12 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   await expect(panel).toHaveCount(0)
   await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(1)
   await screenshot(page, 'smart-search-phone-focus')
-  await page.keyboard.press('Escape')
+  await page.keyboard.press('Control+k')
+  await page.goBack()
+  await expect(panel).toHaveCount(0)
+  await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(1)
+  await page.goBack()
+  await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(0)
   const center = page.locator('.ov-pattern-selected'), dial = page.getByRole('group', { name: 'Operational pattern dial', exact: true })
   await center.focus(); await center.press('ArrowRight')
   await expect(center).toContainText('Stalled')
@@ -761,8 +768,12 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
   await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
   await expect(center).toContainText('Needs me')
-  await dial.dispatchEvent('pointerdown', { pointerType: 'touch', clientX: 100, clientY: 10 })
-  await dial.dispatchEvent('pointerup', { pointerType: 'touch', clientX: 160, clientY: 12 })
+  const box = (await center.boundingBox())!, client = await page.context().newCDPSession(page)
+  const touch = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] })
+  await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...touch, x: touch.x + 55 }] })
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await client.detach()
   await expect(center).toContainText('Blocked')
   await dial.dispatchEvent('wheel', { deltaX: 0, deltaY: 100 })
   await expect(center).toContainText('Blocked')
