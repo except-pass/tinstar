@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fixtureId, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
+import type { FloorScene } from '../src/shared/reconciliationPresentation'
 
 async function freePort() {
   const server = createServer()
@@ -686,7 +687,7 @@ test('single-row toolbar Smart Search ranks, reveals one-hop clusters and restor
 test('single-row toolbar Smart Search exact snippets, safe identifiers and explicit Initiative decisions', async ({ page }) => {
   const proofNow = Date.parse('2026-11-06T00:00:00Z')
   await page.clock.install({ time: proofNow })
-  const scene = fixtureScene({ now: proofNow })
+  const scene: FloorScene = fixtureScene({ now: proofNow })
   for (const card of scene.cards) { delete card.source.properties.Initiative; card.ancestry = ['parent-only'] }
   const card = scene.cards.find(card => card.id === fixtureId(2))!
   card.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['explicit'], hasMore: false }
