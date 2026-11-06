@@ -62,7 +62,7 @@ ordering within each position. This preserves the shared floor's crossing
 reduction. This is presentation ordering only.
 
 Workers precede cards in the status donuts, selected-status chips, Inspector
-group summaries and connection pairs, and entity suggestions in Smart Search,
+group summaries and connection pairs,
 matching the floor's left-to-right column order.
 The two labelled status donuts use unique canonical current endpoints from the
 base scope. Activate a slice with click, Enter or Space to toggle it; text status
@@ -153,8 +153,8 @@ Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
-Unknown, not Finished. Selection and relationships never fade whole cards or
-serve as execution status.
+Unknown, not Finished. Search focus dimming is described in
+[Smart Search](#smart-search-core); it never represents execution status.
 
 Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
