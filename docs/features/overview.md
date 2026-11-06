@@ -81,10 +81,11 @@ labelled, and source health remains available from the toolbar indicator.
 Counts retain partial/last-known labels; an unavailable or uncertain empty worker
 scope displays unknown rather than asserting a verified zero.
 
-Without explicit donut selections, Operational retains independent and unmatched
-endpoints and its intentional hidden-task labels. Opening a relationship can
+Without explicit donut or search predicates, Operational retains independent and
+unmatched endpoints and its intentional hidden-task labels. Opening a relationship can
 reveal direct tasks through the base status scope; it never overrides explicit
-donut selections. Filtering never changes claim evidence or absence findings.
+donut or search predicates. Selecting a Smart Search suggestion uses the temporary
+reveal described below. Filtering never changes claim evidence or absence findings.
 Both donuts and the floor use the same canonical projection and presentation
 reducer; selections and organizer overrides persist in the existing browser
 preferences. Source refreshes recompute candidates from the current graph.
@@ -219,9 +220,10 @@ SVG gutter is retained. No transitive component expansion or search-inferred lin
 
 Suggestions include authorized records outside the current view. They are labeled
 **Outside current view**; choosing one temporarily reveals its one-hop cluster,
-without rewriting the base scope or donut selections. Arrows/Enter choose and
+including planned cards when roadmap visibility is collapsed, without rewriting
+the base scope or donut selections. Arrows/Enter choose and
 focus a cluster inline. Escape or **Back** restores grouping, sort, filters,
-selection, density, expanded relationships and a semantic scroll anchor. **Apply
+selection, density, roadmap visibility, expanded relationships and a semantic scroll anchor. **Apply
 filters** keeps the lens; **Clear Smart Search** removes its chips while restoring
 the underlying scope. Search conditions persist in existing browser preferences;
 transient reveal and excerpt text do not. Storage failure falls back to a working

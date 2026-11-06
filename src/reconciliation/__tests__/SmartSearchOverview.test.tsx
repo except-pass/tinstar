@@ -49,7 +49,7 @@ describe('Smart Search in the existing Overview', () => {
     const result = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: kind === 'card' ? /Release Coordinator/ : new RegExp(worker.identity.task_id) })
     fireEvent.click(result)
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
-    const selected = kind === 'card' ? container.querySelector(selector) : container.querySelector(`.ov-execution[data-entity-id="${worker.id}"]`)
+    const selected = kind === 'card' ? container.querySelector(selector) : Array.from(container.querySelectorAll('.ov-execution')).find(element => element.getAttribute('data-entity-id') === worker.id)
     expect(selected).toHaveAttribute('aria-expanded', 'true')
     expect(selected).toHaveFocus()
     if (kind === 'card') fireEvent.keyDown(window, { key: 'Escape' })

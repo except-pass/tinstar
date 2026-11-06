@@ -695,6 +695,7 @@ test('single-row toolbar Smart Search exact snippets, safe identifiers and expli
   await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
+  await expect(page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true })).toBeVisible()
   await page.keyboard.press('Control+k')
   const input = page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true })
   const results = page.getByRole('listbox', { name: 'Search results' })
@@ -713,6 +714,7 @@ test('single-row toolbar Smart Search exact snippets, safe identifiers and expli
   for (const field of ['identifier', 'name', 'body']) {
     scene.searchIndex = { notes: ['Disposable authorized source snapshot'], documents: [{ key: `card:${card.id}`, target: { kind: 'card', id: card.id }, title: field === 'name' ? text : 'NEM3', identifiers: field === 'identifier' ? [text, '0143'] : ['0143'], fields: [{ name: field === 'name' ? 'Name' : 'Description', source: 'Notion blocks', text: field === 'identifier' ? 'Known PR' : text }], observedAt: new Date(proofNow).toISOString(), expiresAt: new Date(proofNow + 60_000).toISOString(), coverage: 'fresh/complete' }] }
     await page.reload()
+    await expect(page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true })).toBeVisible()
     await page.keyboard.press('Control+k')
     await input.fill('"PR #2920"')
     await expect(results.getByRole('option')).toHaveCount(1)
