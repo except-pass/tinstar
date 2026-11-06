@@ -42,7 +42,7 @@ const tokens = (query: string) => [...normalized(query).matchAll(/"([^"]+)"|(\S+
 /** Mutable disposable index: changed documents alone are removed/upserted.
  * Rebuild is just construction from a current authorized scene. */
 export class SmartSearchIndex {
-  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; offsets: Array<[number, number]>; words: Set<string> }> }>()
+  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; offsets: Array<[number, number]>; words: Map<string, number> }> }>()
   private vocabulary = new Map<string, Map<string, { field: SearchField; offsets: Array<[number, number]> }>>()
   private results = new Map<string, SearchHit[]>()
   // Match a deduplicated vocabulary, then follow postings to original fields.
@@ -72,7 +72,7 @@ export class SmartSearchIndex {
       const terms = new Set<string>()
       const fields = [{ name: 'Identifier', source: 'Canonical source ID', text: document.identifiers.join(' · ') },
         { name: 'Name', source: document.target.kind === 'card' ? 'Notion property' : 'First Mate snapshot', text: document.title }, ...document.fields]
-        .map(field => { const { text, offsets } = mappedText(field.text); return { field, text, offsets, words: new Set(text.match(/[\p{L}\p{N}]+/gu) ?? []) } })
+        .map(field => { const { text, offsets } = mappedText(field.text); return { field, text, offsets, words: new Map([...text.matchAll(/[\p{L}\p{N}]+/gu)].map(match => [match[0], match.index!])) } })
       for (const { field } of fields.slice(1)) for (const match of field.text.matchAll(/[\p{L}\p{N}]+/gu)) {
         const { text: word, offsets } = mappedText(match[0])
         if (word.length < 4 || terms.has(word)) continue
@@ -118,8 +118,9 @@ export class SmartSearchIndex {
       for (const part of parts) {
         const candidate = fields.find(value => /^\d+$/.test(part.text) ? value.words.has(part.text) : value.text.includes(part.text))
         if (candidate) {
-          if (!ranges.length) { field = candidate.field; const at = candidate.text.indexOf(part.text); ranges = at < 0 ? [] : [[candidate.offsets[at]![0], candidate.offsets[at + part.text.length - 1]![1]]] }
-          else if (candidate.field === field) { const at = candidate.text.indexOf(part.text); if (at >= 0) ranges.push([candidate.offsets[at]![0], candidate.offsets[at + part.text.length - 1]![1]]) }
+          const at = /^\d+$/.test(part.text) ? candidate.words.get(part.text)! : candidate.text.indexOf(part.text)
+          if (!ranges.length) field = candidate.field
+          if (candidate.field === field) ranges.push([candidate.offsets[at]![0], candidate.offsets[at + part.text.length - 1]![1]])
           relevance += candidate.field.name === 'Name' ? 0 : 0.1
         } else {
           const approximate = fuzzy.get(document.key)?.get(part.text)

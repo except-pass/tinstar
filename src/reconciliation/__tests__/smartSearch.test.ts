@@ -29,6 +29,20 @@ describe('deterministic Find', () => {
     expect(hit.ranges.map(([a, b]) => hit.field.text.slice(a, b + 1)).join(' ')).toBe(expected)
   })
 
+  it.each(['identifier', 'name', 'body'])('highlights accepted numeric tokens in %s fields', source => {
+    const text = '  PR #12920; PR #2920'
+    const index = new SmartSearchIndex()
+    index.update([doc('a', source === 'name' ? text : 'Other', source === 'body' ? text : '', source === 'identifier' ? [text] : ['a'])])
+    for (const query of ['2920', 'PR 2920']) {
+      const hit = index.search(query)[0]!
+      expect(hit.field.text).toBe(text)
+      const numeric = hit.ranges.filter(([a, b]) => hit.field.text.slice(a, b + 1) === '2920')
+      expect(numeric).toEqual([[text.lastIndexOf('2920'), text.length - 1]])
+    }
+    index.update([doc('a', 'Other', 'PR #12920; x2920; 2920x')])
+    expect(index.search('2920')).toEqual([])
+  })
+
   it('supports typo-tolerant multi-token names, prefix, phrases and mixed-field text', () => {
     const index = new SmartSearchIndex()
     index.update([doc('a', 'Release Coordinator', 'NEM3: fix HaveNoPermission error'), doc('b', 'Release notes', 'Coordinator summary')])
