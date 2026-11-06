@@ -681,6 +681,7 @@ test('single-row toolbar Smart Search patterns, evidence and mobile keyboard rem
   await page.goto(base)
   await page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true }).click()
   const panel = page.getByRole('region', { name: 'Smart Search', exact: true })
+  expect(await panel.getByRole('combobox', { name: 'Find names, IDs and text', exact: true }).evaluate(element => { const rect = element.getBoundingClientRect(); return document.elementFromPoint(rect.left + 4, rect.top + rect.height / 2) === element })).toBe(true)
   await expect(panel.getByRole('button', { name: 'Stalled · unavailable', exact: true })).toBeDisabled()
   await expect(panel.getByRole('button', { name: 'Stale · unavailable', exact: true })).toBeDisabled()
   await panel.getByRole('button', { name: 'Blocked', exact: true }).click()

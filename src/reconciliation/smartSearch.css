@@ -25,10 +25,14 @@
 .ov-search-why summary, .ov-search-coverage summary { cursor:pointer; padding:5px 0; }
 .ov-search-panel footer { margin-top:12px; }
 .ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:2px; }
+.ov .ov-search-panel button { font:12px/1.4 var(--ov-mono); padding:6px; min-height:30px; }
+.ov .ov-search-patterns button:disabled { opacity:.65; }
 .ov-search-context { opacity:.62; }
 @media (max-width:850px) {
   .ov-search-trigger span { display:none; }
   .ov-search-chips { max-width:100px; }
-  .ov-search-panel { position:fixed; top:8px; left:8px; width:calc(100vw - 16px); max-height:calc(100dvh - 16px); z-index:70; }
+  /* The containing organizer already excludes the navigation rail. A fixed
+     viewport-left panel would put its input behind that sibling stacking layer. */
+  .ov-search-panel { position:absolute; top:8px; left:8px; width:calc(100% - 16px); max-height:calc(100dvh - 16px); z-index:70; }
   .ov-search-facets select { max-width:140px; }
 }
