@@ -67,8 +67,9 @@ host trust boundary; do not expose the backend through an unauthenticated proxy
 that preserves a client-supplied header. CORS is not authentication. Tauri/direct
 local access without the trusted owner header cannot use this owner Desk.
 
-An allowed browser origin plus `X-Tinstar-UI: 1` is required in addition to owner
-identity. No browser-provided principal is accepted in submission bodies. The
+Browser requests require `X-Tinstar-UI: 1` in addition to owner identity. Any
+supplied Origin must be allowlisted; an absent Origin is accepted. No
+browser-provided principal is accepted in submission bodies. The
 bridge uses its own bearer token and accepts no browser Origin. The configured
 owner boundary and bearer authentication are deliberately separate. The bridge
 token grants access to all Ask requests and answers in this instance, so give it
