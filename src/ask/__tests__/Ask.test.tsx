@@ -304,9 +304,7 @@ it('returns a retained worker answer after remount to its exact filtered executi
   records = [answer]
   const first = mount(); first.unmount()
   const { container } = mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'unmatched-worker-query' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Workers: Blocked/ }))
   expect([...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)).toBeUndefined()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
   const returned = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)!
@@ -375,9 +373,7 @@ it('returns an unverified Detailed relationship answer after reload and filterin
   records[0] = { ...records[0]!, status: 'answered', reply: seed().reply }
   first.unmount()
   const { container } = mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'excluded-relationship' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Cards: Waiting For/ }))
   expect(card(container)).toBeNull()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*How are these two items related/ }))
   expect(card(container)).toBeVisible()
