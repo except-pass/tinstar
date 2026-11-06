@@ -5,6 +5,26 @@ import { SceneReconciler } from '../../server/reconciliation/scene'
 import { applyPresentationAction, initialPresentation, semanticId, type Target } from '../presentation'
 
 describe('shared semantic presentation transitions', () => {
+  it('reveals only the navigated card through search, donuts and collapsed ancestors', () => {
+    const now = Date.parse('2026-11-04T17:00:00Z'), scene = fixtureScene({ now })
+    const base = initialPresentation()
+    const groups = organizedGroups(scene, base, now)
+    const collapsed = groups.flatMap(group => [semanticId({ kind: 'group', id: group.id }), semanticId({ kind: 'group', id: group.outerId })])
+    const state = { ...base, collapsed, search: { query: 'no-such-anchor-xyz', patterns: [], facets: [] }, donutFilter: { cards: ['Waiting For'], workers: ['no-match'] } }
+    expect(organizedGroups(scene, state, now)).toHaveLength(0)
+    const next = applyPresentationAction(state, { type: 'navigate-card', cardId: fixtureId(1) }, scene, now).state
+    const revealed = organizedGroups(scene, next, now)
+    expect([...new Set(revealed.flatMap(group => group.cardIds))]).toEqual([fixtureId(1)])
+    expect(revealed.flatMap(group => group.executionIds)).toEqual([])
+    for (const group of revealed) {
+      expect(next.collapsed).not.toContain(semanticId({ kind: 'group', id: group.id }))
+      expect(next.collapsed).not.toContain(semanticId({ kind: 'group', id: group.outerId }))
+    }
+    expect(next.search).toEqual(state.search)
+    expect(next.donutFilter).toEqual(state.donutFilter)
+    const changed = applyPresentationAction(next, { type: 'set-search', search: state.search }, scene, now).state
+    expect(organizedGroups(scene, changed, now)).toHaveLength(0)
+  })
   it('preserves selection and reveals its managers/groups across shared organizer fields', () => {
     const now = Date.parse('2026-11-04T17:00:00Z')
     const scene = fixtureScene({ now })

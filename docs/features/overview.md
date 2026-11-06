@@ -175,15 +175,18 @@ separately. Closing the Inspector restores focus to the floor card.
 Your desk shows a focused ready Notion card and the next few, with conditional
 and unverified cards in a secondary section. The [queue reference](reconciliation-queue.md)
 owns readiness, source identity and per-source response controls.
+The Desk also contains personal Ask questions after the operational queue;
+the [Ask reference](ask.md) owns question submission, answers and history.
 Clicking a Desk card navigates by canonical task ID without opening the Inspector
 or moving the queue position: it expands the required groups and can reveal the
-card through the base status scope when no explicit donut or search predicates
-apply, then scrolls and focuses the first matching floor
+card through base status, search and donut exclusions using a temporary exception
+for that card only, then scrolls and focuses the first matching floor
 reference deterministically, then flashes the card and its current confirmed
 explicit worker connections. A persistent highlight and navigation reveal remain
-after the flash until another Desk target or Reset. Saved grouping, order and
-status choices stay intact. If the card is missing from the current scene, the
-Desk reports that it is not on the floor and offers that clicked card's own
+after the flash. Another Desk target replaces the reveal; changing or clearing
+search, restoring the search view, or Reset clears it. Saved grouping, order,
+search and status choices stay intact during navigation. If the card is missing
+from the current scene, the Desk reports that it is not on the floor and offers that clicked card's own
 Notion link. Navigation never answers, dismisses or writes a source record;
 Answer/Dismiss remain separate explicit controls. Mobile Desk navigation returns
 to the floor; reduced motion uses static highlighting.

@@ -75,12 +75,16 @@ describe('canonical relationship-aware status projection', () => {
     expect(JSON.stringify(scene)).toBe(source)
     expect(before).not.toBe(source)
   })
-  it('composes base scope, ignores navigation/expansion reveals during explicit filtering, and clears to the exact prior base', () => {
+  it('composes base scope, reveals only the navigation anchor through explicit filtering, and preserves the prior base', () => {
     const scene = fanout(), base = { ...initialPresentation(), statusFilter: { preset: 'custom' as const, statuses: ['Waiting For'] }, exceptionsOnly: false, linksVisible: false }
     let state = applyPresentationAction(base, { type: 'set-donut-filter', filter: { cards: [], workers: ['Running'] } }, scene, now).state
-    state = applyPresentationAction(state, { type: 'navigate-card', cardId: fixtureId(1) }, scene, now).state
     expect(statusProjection(scene, state, now).cards).toEqual([])
     expect(overviewGroups(scene, state, now, false, expandedRelationships(scene, [{ kind: 'execution', id: worker(scene, 'linked-worker').id }])).flatMap(g => g.cards)).toEqual([])
+    state = applyPresentationAction(state, { type: 'navigate-card', cardId: fixtureId(1) }, scene, now).state
+    expect(ids(statusProjection(scene, state, now).cards)).toEqual([fixtureId(1)])
+    expect([...new Set(ids(overviewGroups(scene, state, now, false, expandedRelationships(scene, [{ kind: 'execution', id: worker(scene, 'linked-worker').id }])).flatMap(g => g.cards)))]).toEqual([fixtureId(1)])
+    expect(state.donutFilter).toEqual({ cards: [], workers: ['Running'] })
+    expect(state.statusFilter).toEqual(base.statusFilter)
     const clear = applyPresentationAction(state, { type: 'clear-donut-filter' }, scene, now).state
     expect(clear.organizer).toEqual(base.organizer)
     expect(clear.statusFilter).toEqual(base.statusFilter)

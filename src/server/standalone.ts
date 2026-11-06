@@ -5,6 +5,7 @@ import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, un
 import httpProxy from 'http-proxy'
 import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import { ReconciliationMcp } from './reconciliation/mcp'
+import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { QuotaAxiPoller } from './quota/poller'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
@@ -69,6 +70,7 @@ export function startServer(opts: ServerOptions) {
   const fleet = new CockpitFleet()
   const reconciliation = new ReconciliationSources()
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
+  const asks = new AskApi(reconciliation)
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()
@@ -132,6 +134,7 @@ export function startServer(opts: ServerOptions) {
     try {
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
+      if (await asks.handle(req, res)) return
       if (await reconciliationMcp.handle(req, res)) return
       if (await handleReconciliationRequest(reconciliation, req, res)) return
       if (await handleScreenshotUpload(req, res, { configRoot: getConfigRoot() })) return

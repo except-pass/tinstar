@@ -261,3 +261,16 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
     fetchMock.mockRestore()
   }
 })
+
+it('keeps operational requests before Ask questions in the shared Desk', () => {
+  observed.scene = fixtureScene()
+  render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
+  const desk = screen.getByLabelText('Your desk')
+  const questions = within(desk).getByLabelText('Questions for First Mate')
+  const operational = desk.querySelector('.ov-queue')!
+  expect(operational).not.toBeNull()
+  expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Your desk' }))
+  expect(desk).toHaveClass('mobile-open')
+  expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})
