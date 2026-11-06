@@ -32,6 +32,7 @@ test('50 PRs: repository sort, 10 selections, keyboard inline detail, head refre
   })
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
+    if (url.pathname === '/api/quota') { await route.fulfill({ json: { providers: [], checkedAt: null, fetchedAt: null, commandError: null } }); return }
     const data = url.pathname === '/api/pulls' ? { pulls: inventory(), repositories: [{ repository: 'alpha/repo', status: 'fresh', complete: true, observedAt: new Date().toISOString(), error: null }], warnings: [], associationsComplete: true }
       : url.pathname === '/api/pulls/detail' ? { head, state: 'open', body: `Description at ${head.slice(0, 8)}`, bodyTruncated: false, additions: 7, deletions: 2, files: 3, checks: 'failed', reviews: [], review: 'No approval observed', reviewsComplete: true, freshness: 'fresh', observedAt: new Date().toISOString(), error: null }
         : url.pathname === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
@@ -45,7 +46,7 @@ test('50 PRs: repository sort, 10 selections, keyboard inline detail, head refre
   await expect(page.locator('.pr-row')).toHaveCount(50)
   const rail = page.getByRole('navigation', { name: 'Activity' })
   await expect(rail.getByRole('button', { name: /Receipts|Workers/ })).toHaveCount(0)
-  await expect(rail.getByRole('button', { name: 'PRs' })).toHaveAttribute('aria-current', 'page')
+  await expect(rail.getByRole('button', { name: 'PRs', exact: true })).toHaveAttribute('aria-current', 'page')
   await page.getByRole('button', { name: 'Repository ↑' }).click()
   await expect(page.locator('.pr-row').first()).toContainText('zeta/repo')
   await page.getByRole('button', { name: 'Repository ↓' }).click()
