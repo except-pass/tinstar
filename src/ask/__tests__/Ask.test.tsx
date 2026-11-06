@@ -33,7 +33,9 @@ beforeEach(() => {
       if (body) {
         requests.push(body)
         const row = { ...seed(), question: body.question, status: 'sent' as const, reply: null }
-        row.context.anchor.page_id = body.card_id
+        row.context.anchor.page_id = body.target?.kind === 'execution' ? body.target.id : body.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === body.target.id)!.cardId : body.card_id
+        if (body.target) { row.context.target = body.target; row.context.anchor.kind = body.target.kind === 'execution' ? 'worker' : 'link' }
+        if (body.field_key) { row.context.field_key = body.field_key; row.context.field_value = body.field_value }
         records.push(row); data = row
       } else data = records
     }
@@ -295,4 +297,40 @@ it('Desk starts with records and omits intro chrome; history dismissal is a seco
   expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).not.toBeVisible()
   fireEvent.click(within(desk).getByText('Actions', { selector: 'summary' }))
   expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).toBeVisible()
+})
+
+it('returns a retained worker answer after remount to its exact filtered execution and highlights it', async () => {
+  const worker = scene.executions.find(worker => worker.identity.task_id === 'linked-worker')!
+  const answer = seed()
+  answer.context.target = { kind: 'execution', id: worker.id }
+  answer.context.anchor = { ...answer.context.anchor, kind: 'worker', page_id: worker.id, label: 'Captured worker', url: null }
+  records = [answer]
+  const first = mount(); first.unmount()
+  const { container } = mount()
+  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'unmatched-worker-query' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect([...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)).toBeUndefined()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const returned = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)!
+  expect(returned).toHaveClass('flashed')
+  expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  expect(screen.getByRole('dialog')).toHaveTextContent('Captured worker')
+  fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What has changed?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: worker.id }, follow_up_to: answer.request_id }))
+})
+
+it('opens blank Ask for a relationship from its Inspector connection control', async () => {
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const relationship = screen.getByLabelText('Inspector').querySelector('.ov-related')!
+  fireEvent.click(within(relationship as HTMLElement).getByRole('button', { name: 'Ask about this item' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  expect(screen.getByRole('dialog')).toHaveTextContent('Relationship')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'Explain this relationship.' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'claim', id: scene.claims.find(claim => claim.cardId === fixtureId(1))!.id } }))
 })
