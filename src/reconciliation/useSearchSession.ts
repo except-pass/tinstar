@@ -104,7 +104,8 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
   }, [])
-  return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), apply: () => setOpen(false), choose: (target: Target, targets: Target[] = [target]) => {
+  return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
+    leaveHistory(Math.max(0, historyEntries.current - 1))
     send({ type: 'reveal-search', target, targets }); setRoots(targets)
     const cluster = scene ? directNeighbors(scene, targets) : new Set([semanticId(target)])
     setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)

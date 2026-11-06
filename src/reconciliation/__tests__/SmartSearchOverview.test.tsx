@@ -152,6 +152,43 @@ describe('compact search palette and temporary graph focus', () => {
     expect(cardIds(container)).toEqual(before)
   })
 
+  it('replaces successive mobile focus without orphaning history or leaving Overview', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    window.history.replaceState({ page: 'Overview' }, '', window.location.href)
+    const go = vi.spyOn(window.history, 'go')
+    const { container } = mount(), before = cardIds(container)
+    const saved = localStorage.getItem(preferencesKey)
+    const viewport = container.querySelector('.ov-canvas')!.parentElement!
+    viewport.scrollLeft = 21
+    const nextPop = () => new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    const choose = (query: string) => {
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+      search(query)
+      fireEvent.keyDown(input(), { key: 'Enter' })
+    }
+    choose('Release')
+    const replacement = nextPop()
+    choose('Roadmap: planned integration')
+    await act(async () => { await replacement })
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveClass('ov-search-match')
+    const back = nextPop()
+    await act(async () => { window.history.back(); await back })
+    expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
+    expect(window.history.state).toEqual({ page: 'Overview' })
+    expect(cardIds(container)).toEqual(before)
+    expect(localStorage.getItem(preferencesKey)).toBe(saved)
+    expect(viewport.scrollLeft).toBe(21)
+    choose('Release')
+    const clear = nextPop()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    await act(async () => { await clear })
+    expect(window.history.state).toEqual({ page: 'Overview' })
+    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
+    expect(cardIds(container)).toEqual(before)
+    expect(go.mock.calls).toEqual([[-1], [-1]])
+  })
+
   it('restores Detailed collapsed state and density, and handles mobile Back in two levels', () => {
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
