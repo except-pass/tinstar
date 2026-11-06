@@ -55,6 +55,18 @@ describe('deterministic Find', () => {
     index.update([{ ...document, expiresAt: new Date(now + 5000).toISOString() }])
     expect(index.search('HaveNoPermission', now + 1001)).toHaveLength(1)
   })
+  it('retains shared fuzzy vocabulary for remaining records and refreshes match provenance on metadata-only updates', () => {
+    const index = new SmartSearchIndex(), first = doc('a', 'Release Coordinator'), remaining = doc('b', 'Release notes')
+    index.update([first, remaining])
+    expect(index.search('releese')).toHaveLength(2)
+    index.update([remaining])
+    expect(index.search('releese').map(hit => hit.document.target.id)).toEqual(['b'])
+    const refreshed = { ...remaining, observedAt: '2026-11-06T01:00:00Z', coverage: 'stale/unknown' }
+    index.update([refreshed])
+    expect(index.search('releese')[0]!.document).toMatchObject({ observedAt: refreshed.observedAt, coverage: refreshed.coverage })
+    index.update([doc('b', 'Inventory')])
+    expect(index.search('releese')).toEqual([])
+  })
   it('redacts credential literals and bounds excerpts while retaining canonical identity', () => {
     const secret = 'ghp_12345678901234567890'
     expect(searchText(`failure ${secret} token=abcdefghijklmnop`)).toBe('failure [credential omitted] token=[credential omitted]')

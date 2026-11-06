@@ -1,7 +1,7 @@
 import Fuse from 'fuse.js'
 import type { FloorScene, Target } from './reconciliationPresentation'
 import { sceneSearchDocuments, type SearchDocument, type SearchField } from './searchDocuments'
-import { verifiedLink, workHealth, type Pattern } from './workHealth'
+import { verifiedLink, sceneWorkHealth, type Pattern } from './workHealth'
 import { homeLabel as homeLabelForSearch } from './reconciliationLabels'
 
 export interface SearchFilter {
@@ -18,19 +18,48 @@ const tokens = (query: string) => [...normalized(query).matchAll(/"([^"]+)"|(\S+
 /** Mutable disposable index: changed documents alone are removed/upserted.
  * Rebuild is just construction from a current authorized scene. */
 export class SmartSearchIndex {
-  private records = new Map<string, { document: SearchDocument; fingerprint: string }>()
+  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; words: Set<string> }> }>()
+  private vocabulary = new Map<string, Map<string, { field: SearchField; offset: number }>>()
   private results = new Map<string, SearchHit[]>()
-  private fuse = new Fuse<SearchDocument>([], { keys: ['title', 'fields.text'], threshold: 0.35, ignoreLocation: true, includeMatches: true, includeScore: true })
+  // Match a deduplicated vocabulary, then follow postings to original fields.
+  // Scanning every multi-kilobyte excerpt with Bitap on every keystroke caused
+  // 225–489ms queries at the documented text budgets.
+  private fuse = new Fuse<string>([], { threshold: 0.35, ignoreLocation: true, includeMatches: true, includeScore: true })
   update(documents: SearchDocument[]) {
-    const incoming = new Set(documents.map(document => document.key))
-    for (const key of this.records.keys()) if (!incoming.has(key)) { this.fuse.remove(document => document.key === key); this.records.delete(key); this.results.clear() }
-    for (const document of documents) {
-      const fingerprint = JSON.stringify(document)
-      if (this.records.get(document.key)?.fingerprint === fingerprint) continue
-      this.results.clear()
-      this.fuse.remove(item => item.key === document.key)
-      this.fuse.add(document); this.records.set(document.key, { document, fingerprint })
+    let vocabularyChanged = false
+    const remove = (key: string) => {
+      for (const word of this.records.get(key)?.terms ?? []) {
+        const postings = this.vocabulary.get(word)!
+        postings.delete(key)
+        if (!postings.size) { this.vocabulary.delete(word); vocabularyChanged = true }
+      }
+      this.records.delete(key); this.results.clear()
     }
+    const incoming = new Set(documents.map(document => document.key))
+    for (const key of this.records.keys()) if (!incoming.has(key)) remove(key)
+    for (const document of documents) {
+      const fingerprint = JSON.stringify([document.title, document.identifiers, document.fields])
+      const previous = this.records.get(document.key)
+      if (previous?.fingerprint === fingerprint) {
+        if (previous.document !== document) { previous.document = document; this.results.clear() }
+        continue
+      }
+      remove(document.key)
+      const terms = new Set<string>()
+      const fields = [{ name: 'Identifier', source: 'Canonical source ID', text: document.identifiers.join(' · ') },
+        { name: 'Name', source: document.target.kind === 'card' ? 'Notion property' : 'First Mate snapshot', text: document.title }, ...document.fields]
+        .map(field => { const text = normalized(field.text); return { field, text, words: new Set(text.match(/[\p{L}\p{N}]+/gu) ?? []) } })
+      for (const { field } of fields.slice(1)) for (const match of field.text.matchAll(/[\p{L}\p{N}]+/gu)) {
+        const word = normalized(match[0])
+        if (word.length < 4 || terms.has(word)) continue
+        let postings = this.vocabulary.get(word)
+        if (!postings) { postings = new Map(); this.vocabulary.set(word, postings); vocabularyChanged = true }
+        postings.set(document.key, { field, offset: match.index! }); terms.add(word)
+      }
+      this.records.set(document.key, { document, fingerprint, terms, fields })
+      this.results.clear()
+    }
+    if (vocabularyChanged) this.fuse.setCollection([...this.vocabulary.keys()])
   }
   search(query: string, now = Date.now()): SearchHit[] {
     // A retained scene can outlive a failed network read. Drop body prose at
@@ -51,27 +80,23 @@ export class SmartSearchIndex {
       // nearby ID. Prefix and exact matching still operate below.
       if (part.exact || part.text.length < 4 || /\d|[\/_#]/.test(part.text)) continue
       for (const hit of this.fuse.search(part.text)) {
-        const match = hit.matches?.find(value => value.key === 'fields.text') ?? hit.matches?.[0]
-        const field = match?.key === 'fields.text' ? hit.item.fields[match.refIndex ?? 0] : { name: 'Name', source: 'Scene', text: hit.item.title }
-        if (!field) continue
-        const entries = fuzzy.get(hit.item.key) ?? new Map()
-        entries.set(part.text, { score: hit.score ?? 1, field, ranges: match ? match.indices.map(([a, b]) => [a, b] as [number, number]) : [] }); fuzzy.set(hit.item.key, entries)
+        for (const [key, posting] of this.vocabulary.get(hit.item) ?? []) {
+          const entries = fuzzy.get(key) ?? new Map(), score = hit.score ?? 1
+          if (score >= (entries.get(part.text)?.score ?? Infinity)) continue
+          const ranges = hit.matches?.[0]?.indices.map(([a, b]) => [a + posting.offset, b + posting.offset] as [number, number]) ?? []
+          entries.set(part.text, { score, field: posting.field, ranges }); fuzzy.set(key, entries)
+        }
       }
     }
     const hits: SearchHit[] = []
-    for (const { document } of this.records.values()) {
-      const fields: SearchField[] = [{ name: 'Identifier', source: 'Canonical source ID', text: document.identifiers.join(' · ') }, { name: 'Name', source: document.target.kind === 'card' ? 'Notion property' : 'First Mate snapshot', text: document.title }, ...document.fields]
-      let field = fields[1]!, ranges: Array<[number, number]> = [], usedFuzzy = false, relevance = 0, found = true
+    for (const { document, fields } of this.records.values()) {
+      let field = fields[1]!.field, ranges: Array<[number, number]> = [], usedFuzzy = false, relevance = 0, found = true
       for (const part of parts) {
-        const candidate = fields.find(value => {
-          const text = normalized(value.text)
-          if (/^\d+$/.test(part.text)) return text.split(/[^\p{L}\p{N}]+/u).includes(part.text)
-          return text.includes(part.text)
-        })
+        const candidate = fields.find(value => /^\d+$/.test(part.text) ? value.words.has(part.text) : value.text.includes(part.text))
         if (candidate) {
-          if (!ranges.length) { field = candidate; const at = normalized(candidate.text).indexOf(part.text); ranges = at < 0 ? [] : [[at, at + part.text.length - 1]] }
-          else if (candidate === field) { const at = normalized(candidate.text).indexOf(part.text); if (at >= 0) ranges.push([at, at + part.text.length - 1]) }
-          relevance += candidate.name === 'Name' ? 0 : 0.1
+          if (!ranges.length) { field = candidate.field; const at = candidate.text.indexOf(part.text); ranges = at < 0 ? [] : [[at, at + part.text.length - 1]] }
+          else if (candidate.field === field) { const at = candidate.text.indexOf(part.text); if (at >= 0) ranges.push([at, at + part.text.length - 1]) }
+          relevance += candidate.field.name === 'Name' ? 0 : 0.1
         } else {
           const approximate = fuzzy.get(document.key)?.get(part.text)
           if (!approximate) { found = false; break }
@@ -122,13 +147,14 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
   if (cached && now < cached.until) return cached.seeds
   const hits = searchIndex(scene).search(search.query, now), hitKeys = new Set(hits.map(hit => hit.document.key))
   const seeds = new Map<string, Target>()
-  const health = new Map(scene.cards.map(card => [card.id, workHealth(scene, card.id, now)]))
+  const health = new Map(search.patterns.length ? sceneWorkHealth(scene, now).map(item => [item.cardId, item]) : [])
+  const cards = new Map(scene.cards.map(card => [card.id, card])), workers = new Map(scene.executions.map(worker => [worker.id, worker]))
   const add = (target: Target) => seeds.set(targetKey(target), target)
   const pairs: Array<{ cardId?: string; workerId?: string }> = scene.claims.filter(verifiedLink).map(link => ({ cardId: link.cardId, workerId: link.executionId }))
   for (const card of scene.cards) pairs.push({ cardId: card.id })
   for (const worker of scene.executions) pairs.push({ workerId: worker.id })
   for (const pair of pairs) {
-    const card = scene.cards.find(item => item.id === pair.cardId), worker = scene.executions.find(item => item.id === pair.workerId)
+    const card = pair.cardId ? cards.get(pair.cardId) : undefined, worker = pair.workerId ? workers.get(pair.workerId) : undefined
     if (search.patterns.length && (!card || !search.patterns.every(pattern => health.get(card.id)?.patterns[pattern].outcome === 'match'))) continue
     const matches = search.facets.every(facet => {
       switch (facet.field) {

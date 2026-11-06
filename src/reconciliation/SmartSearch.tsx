@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { directNeighbors, emptySearch, hasSearch, searchIndex, searchSeeds, type SearchFilter, type SearchHit } from '../shared/smartSearch'
 import { homeLabel } from '../shared/reconciliationLabels'
-import { patternDefinitions, patternNames, patterns, workHealth, type Pattern } from '../shared/workHealth'
+import { patternDefinitions, patternNames, patterns, sceneWorkHealth, type Pattern } from '../shared/workHealth'
 import { statusProjection } from '../shared/floorOrganization'
 import { readJSON, writeJSON } from '../lib/uiPrefs'
 import type { FloorScene, PresentationAction, PresentationState, Target } from './presentation'
@@ -24,7 +24,7 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
     const saved = readJSON<unknown>('tinstar.search.recent-patterns', [])
     return Array.isArray(saved) ? saved.filter((item): item is Pattern => typeof item === 'string' && patterns.includes(item as Pattern)).slice(0, 5) : []
   })
-  const health = useMemo(() => open ? scene.cards.map(card => workHealth(scene, card.id, now)) : [], [scene, now, open])
+  const health = useMemo(() => open ? sceneWorkHealth(scene, now) : [], [scene, now, open])
   const seeds = useMemo(() => open && (filter.patterns.length || filter.facets.length) ? directNeighbors(scene, searchSeeds(scene, filter, now)) : new Set<string>(), [scene, filter, now, open])
   const hits = useMemo(() => open ? searchIndex(scene).search(filter.query, now).filter(hit => !filter.patterns.length && !filter.facets.length || seeds.has(hit.document.key)).slice(0, 30) : [], [scene, filter, seeds, open, now])
   const base = useMemo(() => open ? statusProjection(scene, { ...state, search: emptySearch(), searchReveal: null }, now) : { cards: [], workers: [] }, [scene, state, now, open])

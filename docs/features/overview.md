@@ -260,6 +260,14 @@ existing `fuse.js` dependency (7.3.0 measured at 24,313 minified / 8,435 gzip by
 before production tree shaking); no additional database/service or query DSL.
 Queries are text plus typed conditions, never arbitrary or model-generated SQL.
 
+The browser normalizes literal fields once, indexes a deduplicated word vocabulary
+with postings to original fields, and applies Fuse to that vocabulary. This avoids
+running fuzzy scans over every long excerpt per keystroke while preserving literal
+phrases, snippets and provenance. Changed documents update their postings; the
+small Fuse vocabulary is rebuilt only when its words change. Health queries share
+ephemeral canonical-ID joins within each query rather than repeatedly scanning
+all cards, findings and workers. Neither index is another scene/source of truth.
+
 The browser incrementally removes/upserts changed semantic document IDs on live
 scene refreshes. Clock ticks do not rebuild the index. Missing index data falls
 back to scene metadata; an absent cache rebuilds from the current snapshot. Source

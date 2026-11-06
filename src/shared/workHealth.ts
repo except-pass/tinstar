@@ -41,12 +41,27 @@ export interface WorkHealth {
   patterns: Record<Pattern, PatternResult>
 }
 
+/** Ephemeral joins over the canonical scene, shared within one health query. */
+function healthContext(scene: FloorScene) {
+  const links = new Map<string, Claim[]>()
+  for (const link of scene.claims) {
+    const entries = links.get(link.cardId) ?? []; entries.push(link); links.set(link.cardId, entries)
+  }
+  return { cards: new Map(scene.cards.map(card => [card.id, card])), workers: new Map(scene.executions.map(worker => [worker.id, worker])), links,
+    gaps: new Set(scene.findings.filter(finding => finding.kind === 'task-execution-gap').flatMap(finding => finding.cardIds)) }
+}
+
+export function sceneWorkHealth(scene: FloorScene, now: number, readFailed = scene.searchReadFailed ?? false): WorkHealth[] {
+  const context = healthContext(scene)
+  return scene.cards.map(card => workHealth(scene, card.id, now, readFailed, context))
+}
+
 /** Shared read-only execution-health contract. No scheduler or prose inference. */
-export function workHealth(scene: FloorScene, cardId: string, now: number, readFailed = scene.searchReadFailed ?? false): WorkHealth {
-  const card = scene.cards.find(item => item.id === cardId)!
-  const links = scene.claims.filter(link => link.cardId === cardId)
+export function workHealth(scene: FloorScene, cardId: string, now: number, readFailed = scene.searchReadFailed ?? false, context = healthContext(scene)): WorkHealth {
+  const card = context.cards.get(cardId)!
+  const links = context.links.get(cardId) ?? []
   const workerIds = new Set(links.filter(verifiedLink).map(link => link.executionId))
-  const workers = scene.executions.filter(worker => workerIds.has(worker.id))
+  const workers = [...workerIds].flatMap(id => context.workers.get(id) ?? [])
   const sourceFresh = !readFailed && freshObservation(scene.coverage.intentions, now)
   const complete = sourceFresh && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
     scene.coverage.homes.every(home => freshObservation(home.observation, now)) &&
@@ -61,7 +76,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const inProgress = status.toLowerCase() === 'in progress'
   // The reconciler additionally requires explicit per-card home accountability;
   // globally complete configured homes alone are not a census of the farm.
-  const absenceKnown = scene.findings.some(finding => finding.kind === 'task-execution-gap' && finding.cardIds.includes(cardId))
+  const absenceKnown = context.gaps.has(cardId)
   const evidence = [`Work status: ${status || 'unknown'}`, `${workers.length} verified workers: ${running} running, ${waiting} waiting, ${terminal} terminal, ${unknown} unknown`,
     `Notion observation: ${scene.coverage.intentions.observedAt ?? 'unknown'} (${scene.coverage.intentions.status}/${scene.coverage.intentions.coverage})`,
     ...workers.map(worker => `${worker.identity.task_id}: ${worker.liveness}; observed ${worker.observation.observedAt ?? 'unknown'} (${worker.observation.status}/${worker.observation.coverage})`),
