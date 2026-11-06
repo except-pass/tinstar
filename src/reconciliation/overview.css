@@ -154,3 +154,5 @@
 
 .ov-toolbar .ov-filter-chips:empty{display:none}
 @media(max-width:600px){.ov-count-note{display:none}}
+
+.ov-desk-title{display:flex;align-items:center;gap:8px}.ov-desk-tools{display:flex;gap:4px;margin-left:auto}.ov-desk-tools button{padding:4px;border:0;background:none}.ov-desk-tools .material-symbols-outlined{font-size:20px}

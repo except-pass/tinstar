@@ -1,3 +1,4 @@
+import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -61,15 +62,16 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await page.goto(base)
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: /Needs You|Floor/ })).toHaveCount(0)
+    await expect(page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: /Receipts|Workers/ })).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: 'Jump to worker' })).toHaveCount(0)
 
-    await page.getByRole('button', { name: 'Receipts' }).click()
+    await page.getByRole('button', { name: 'Message receipts' }).click()
     await expect(page.getByText('No messages yet.')).toBeVisible()
 
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await expect(page.getByRole('textbox', { name: 'Jump to worker' })).toBeVisible()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(1)
     await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
@@ -87,10 +89,11 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.getByRole('button', { name: /Needs You|Floor/ })).toHaveCount(0)
+    await expect(page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: /Receipts|Workers/ })).toHaveCount(0)
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
     await page.setViewportSize({ width: 1200, height: 800 })
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context')).toBeVisible()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(1)
     await expect(page.locator('.cockpit-context-title span')).toHaveCSS('border-top-width', '1px')
@@ -106,15 +109,15 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     expect(await page.locator('.cockpit-activity').evaluate(bar => {
       if (bar.scrollWidth > bar.clientWidth + 1) return false
       const barBox = bar.getBoundingClientRect()
-      const lines = Array.from(bar.querySelectorAll('.cockpit-activity-line'))
+      const lines = Array.from(bar.querySelectorAll('.cockpit-activity-label'))
       const words = lines.map(line => line.textContent)
-      return words.join(' ') === 'Overview Receipts Workers' && lines.every(line => {
+      return words.join(' ') === 'Overview PRs Releases' && lines.every(line => {
         const box = line.getBoundingClientRect()
         return box.width > 8 && box.left >= barBox.left - 1 && box.right <= barBox.right + 1
       })
     })).toBe(true)
     await page.screenshot({ path: test.info().outputPath('shell-616-closed.png') })
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context')).toBeVisible()
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Close panel' })).toBeVisible()
@@ -122,16 +125,16 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     expect(backdrop).toBeTruthy()
     await page.mouse.click(backdrop!.x + backdrop!.width - 12, backdrop!.y + 40)
     await expect(page.locator('.cockpit-context')).toBeHidden()
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await page.keyboard.press('Escape')
     await expect(page.locator('.cockpit-context')).toBeHidden()
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.locator('iframe[title="alpha terminal"]')).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: test.info().outputPath('shell-616-worker.png') })
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
     await expect(page.getByTestId('prompt-composer').locator('textarea')).toBeAttached()
     expect(await page.evaluate(() => {
@@ -144,7 +147,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     })).not.toContain('other')
     await page.locator('.cockpit-worker-button', { hasText: 'alpha' }).click()
     await expect(page.locator('.cockpit-context')).toBeHidden()
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()
     await page.getByRole('button', { name: 'Close panel' }).click()
     await expect(page.locator('.cockpit-context')).toBeHidden()

@@ -7,7 +7,7 @@ export interface FilterableWorker {
 }
 
 export interface OverviewLocation {
-  page?: 'releases'
+  page?: 'releases' | 'pulls'
   card?: string
   /** First Mate task id, or null when the overview is showing. */
   worker: string | null
@@ -71,7 +71,7 @@ export function readOverviewSearch(search: string): OverviewLocation {
   const home = params.get('home')
   return worker && worker.trim()
     ? { worker, home: home || null, key: null, q: params.get('q') ?? '' }
-    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(params.get('view') === 'releases' ? { page: 'releases' as const } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
+    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(['releases', 'pulls'].includes(params.get('view') ?? '') ? { page: params.get('view') as 'releases' | 'pulls' } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
 }
 
 /** Merge the overview params into the current query string, preserving anything else. */
@@ -83,7 +83,7 @@ export function writeOverviewSearch(currentSearch: string, next: OverviewLocatio
   else params.delete('home')
   if (next.q.trim()) params.set('q', next.q)
   else params.delete('q')
-  if (next.page === 'releases' && !next.worker) params.set('view', 'releases')
+  if (next.page && !next.worker) params.set('view', next.page)
   else params.delete('view')
   if (next.card && !next.page && !next.worker) params.set('card', next.card)
   else params.delete('card')
