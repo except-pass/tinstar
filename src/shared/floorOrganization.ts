@@ -2,6 +2,7 @@ import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownSt
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene, PresentationState } from './reconciliationPresentation'
 import { homeLabel } from './reconciliationLabels'
+import { directNeighbors, hasSearch, searchSeeds } from './smartSearch'
 
 export const floorFields = [
   { id: 'manager', label: 'Manager', source: 'worker', kind: 'category' },
@@ -101,9 +102,13 @@ export interface FloorGroup {
  * survive. No source record or claim is rewritten by this projection. */
 export function statusProjection(scene: FloorScene, state: PresentationState, now: number) {
   const selection = state.donutFilter ?? { cards: [], workers: [] }
-  const explicit = hasDonutFilter(selection)
-  const workers = [...new Map(scene.executions.filter(activeWorker).map(w => [w.id, w])).values()]
-  const cards = [...new Map(scene.cards.filter(c => !c.source.archived && !c.source.in_trash && (
+  const searching = hasSearch(state.search)
+  const seeds = searching ? directNeighbors(scene, searchSeeds(scene, state.search!, now)) : null
+  const reveal = directNeighbors(scene, state.searchReveal ? [state.searchReveal] : [])
+  const explicit = hasDonutFilter(selection) || searching || reveal.size > 0
+  const workers = [...new Map(scene.executions.filter(w => (activeWorker(w) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
+  const cards = [...new Map(scene.cards.filter(c => !c.source.in_trash && (!c.source.archived || reveal.has(`card:${c.id}`)) && (!seeds || seeds.has(`card:${c.id}`) || reveal.has(`card:${c.id}`)) && (
+    reveal.has(`card:${c.id}`) ||
     matchesStatus(c, state.statusFilter ?? defaultStatusFilter()) || !explicit && (
       state.navigation?.cardId === c.id || state.selection?.kind === 'card' && state.selection.id === c.id ||
       state.flash && state.flash.until > now && state.flash.ids.includes(`card:${c.id}`)
@@ -119,8 +124,8 @@ export function statusProjection(scene: FloorScene, state: PresentationState, no
   const cardCandidates = cards.filter(c => !selection.workers.length || linkedCards.has(c.id))
   return {
     explicit, workerCandidates, cardCandidates,
-    workers: workerCandidates.filter(w => selectedWorkers.has(w.id)),
-    cards: cardCandidates.filter(c => selectedCards.has(c.id)),
+    workers: workers.filter(w => reveal.has(`execution:${w.id}`) || workerCandidates.includes(w) && selectedWorkers.has(w.id)),
+    cards: cards.filter(c => reveal.has(`card:${c.id}`) || cardCandidates.includes(c) && selectedCards.has(c.id)),
   }
 }
 

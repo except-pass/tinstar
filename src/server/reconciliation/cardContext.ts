@@ -1,20 +1,28 @@
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
 
+export interface CardContextRead {
+  outcome: 'available' | 'partial' | 'unavailable'
+  observedAt?: string
+  blocks: Array<{ id: string; type: string; text: string }>
+  message?: string
+  omissions?: string
+}
+
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private cache = new Map<string, { until: number; value: Promise<unknown> }>()
+  private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
-  get(id: string) {
+  get(id: string, revision?: string) {
     const cached = this.cache.get(id)
-    if (cached && cached.until > Date.now()) return cached.value
+    if (cached && cached.until > Date.now() && (revision === undefined || revision === cached.revision)) return cached.value
     if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
-    const value = this.read(id).catch(() => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
-    this.cache.set(id, { until: Date.now() + 60_000, value })
+    const value = this.read(id).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
+    this.cache.set(id, { until: Date.now() + 60_000, revision, value })
     return value
   }
-  private async read(id: string) {
+  private async read(id: string): Promise<CardContextRead> {
     if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
     const blocks: Array<{ id: string; type: string; text: string }> = []

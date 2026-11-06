@@ -11,6 +11,7 @@ import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
+import { SearchDocumentCollector } from './searchIndex'
 
 export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot']>>
 
@@ -21,6 +22,7 @@ export class ReconciliationSources {
   private context
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
+  private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig()) {
     this.context = new CardContextReader(config.notion)
@@ -48,7 +50,10 @@ export class ReconciliationSources {
 
   async card(id: string) { return this.context.get(id) }
 
-  async scene() { return this.reconciler.reconcile(await this.snapshot()) }
+  async scene() {
+    const scene = this.reconciler.reconcile(await this.snapshot())
+    return { ...scene, searchIndex: this.search.get(scene) }
+  }
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 

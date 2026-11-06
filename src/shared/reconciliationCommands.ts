@@ -1,5 +1,8 @@
 import { z } from 'zod'
 import type { PresentationAction, PresentationState } from './reconciliationPresentation'
+import { patterns } from './workHealth'
+
+export const searchFilterSchema = z.object({ query: z.string().max(512), patterns: z.array(z.enum([patterns[0]!, ...patterns.slice(1)])).max(8), facets: z.array(z.object({ field: z.enum(['initiative', 'machine', 'manager', 'entity']), value: z.string().min(1).max(2048) }).strict()).max(32) }).strict()
 
 export const fieldSchema = z.enum(['manager', 'machine', 'workerStatus', 'activity', 'initiative', 'epic', 'status', 'owner', 'priority', 'checkIn', 'due', 'edited', 'area', 'subArea'])
 export const organizerSchema = z.object({ outer: z.union([fieldSchema, z.literal('none')]), inner: z.union([fieldSchema, z.literal('none')]), order: z.union([fieldSchema, z.literal('operational')]), direction: z.enum(['asc', 'desc']) }).strict()
@@ -8,7 +11,18 @@ export const statusFilterSchema = z.object({ preset: z.enum(['operational', 'all
 export const donutFilterSchema = z.object({ cards: z.array(z.string().max(256)).max(256), workers: z.array(z.string().max(256)).max(256) }).strict()
 
 export const targetSchema = z.object({ kind: z.enum(['card', 'execution', 'claim', 'manager', 'group', 'you', 'firstMate']), id: z.string().min(1).max(2048) }).strict()
+const searchViewSchema = z.object({
+  search: searchFilterSchema.optional(),
+  selection: targetSchema.nullable(), collapsed: z.array(z.string().max(2048)).max(4096),
+  navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
+  exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
+  donutFilter: donutFilterSchema.optional(), linksVisible: z.boolean().optional(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), sort: z.enum(['activity', 'priority']).optional(),
+}).strict()
 export const actionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('set-search'), search: searchFilterSchema }).strict(),
+  z.object({ type: z.literal('clear-search') }).strict(),
+  z.object({ type: z.literal('reveal-search'), target: targetSchema.refine(target => ['card', 'execution'].includes(target.kind)) }).strict(),
+  z.object({ type: z.literal('restore-search-view'), view: searchViewSchema }).strict(),
   z.object({ type: z.literal('set-organizer'), organizer: organizerSchema }).strict(),
   z.object({ type: z.literal('set-status-filter'), filter: statusFilterSchema }).strict(),
   z.object({ type: z.literal('set-donut-filter'), filter: donutFilterSchema }).strict(),
@@ -30,6 +44,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clear-selection') }).strict(),
 ])
 export const stateSchema = z.object({
+  search: searchFilterSchema.optional(), searchReveal: targetSchema.nullable().optional(),
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
   donutFilter: donutFilterSchema.optional(), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),

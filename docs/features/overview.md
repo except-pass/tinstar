@@ -18,8 +18,8 @@ the selected endpoint and all directly confirmed current counterparts expand
 inline. Expansion is one hop; it never recursively opens a connected component.
 Several relationship roots can remain open. Click a root again to close it;
 a counterpart shared by another open root stays expanded. Expanded rows label
-whether clicking opens or closes their own relationship. Direct tasks hidden
-by a status filter are temporarily revealed. Opening a relationship reopens only
+whether clicking opens or closes their own relationship. Direct tasks can be
+temporarily revealed under the scope rules below. Opening a relationship reopens only
 groups containing that root or its immediate counterparts; previously opened
 relationships do not reopen groups you collapsed. Sorting and grouping retain
 expansion by canonical ID.
@@ -81,10 +81,11 @@ labelled, and source health remains available from the toolbar indicator.
 Counts retain partial/last-known labels; an unavailable or uncertain empty worker
 scope displays unknown rather than asserting a verified zero.
 
-Without explicit donut selections, Operational retains independent and unmatched
-endpoints and its intentional hidden-task labels. Opening a relationship can
+Without explicit donut or search predicates, Operational retains independent and
+unmatched endpoints and its intentional hidden-task labels. Opening a relationship can
 reveal direct tasks through the base status scope; it never overrides explicit
-donut selections. Filtering never changes claim evidence or absence findings.
+donut or search predicates. Selecting a Smart Search suggestion uses the temporary
+reveal described below. Filtering never changes claim evidence or absence findings.
 Both donuts and the floor use the same canonical projection and presentation
 reducer; selections and organizer overrides persist in the existing browser
 preferences. Source refreshes recompute candidates from the current graph.
@@ -94,7 +95,8 @@ Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-
 Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
-in Unassigned / Unknown; parent chains never establish either.
+in Unassigned / Unknown; parent chains never establish either. Initiative search
+options and matching use this same explicit-property contract.
 The initial and Reset organizer uses the By Initiative preset. Explicitly saved browser choices take precedence
 on reload.
 
@@ -102,7 +104,8 @@ Only explicit, non-conflicting canonical page-ID links carry endpoints between
 groups. Textual/equal-title candidates remain diagnostics. Multiple references
 retain one canonical entity ID. Each group and the headline deduplicate counts.
 Independent workers/tasks retain Unassigned / Unknown membership. A missing or
-hidden task never removes a current worker. Finished/offline workers stay in
+hidden task never removes a current worker when no explicit donut or search
+predicates apply. Finished/offline workers stay in
 expandable history, including last-known final reports after source expiry.
 
 Date groups use America/New_York calendar buckets: Overdue, Today, Tomorrow,
@@ -173,8 +176,9 @@ Your desk shows a focused ready Notion card and the next few, with conditional
 and unverified cards in a secondary section. The [queue reference](reconciliation-queue.md)
 owns readiness, source identity and per-source response controls.
 Clicking a Desk card navigates by canonical task ID without opening the Inspector
-or moving the queue position: it expands the required groups, reveals the card
-through saved status filters, scrolls and focuses the first matching floor
+or moving the queue position: it expands the required groups and can reveal the
+card through the base status scope when no explicit donut or search predicates
+apply, then scrolls and focuses the first matching floor
 reference deterministically, then flashes the card and its current confirmed
 explicit worker connections. A persistent highlight and navigation reveal remain
 after the flash until another Desk target or Reset. Saved grouping, order and
@@ -193,3 +197,119 @@ For a private development preview, build with `npm run build:all` and run the
 standalone backend with an isolated `TINSTAR_CONFIG_HOME`, explicit loopback host
 and preview port. Source access failures remain visible; they are never treated
 as an empty board. See the [source configuration reference](reconciliation-floor.md#run-and-configure).
+
+## Smart Search core
+
+Card: [Tin Star: Smart Search — full-text/fuzzy Find, patterns & graph exploration](https://app.notion.com/p/40f50ce6d422816bb1e3df937c779ad2).
+
+Smart Search opens from the existing compact toolbar or Cmd/Ctrl+K. Find supports
+multi-token text across fields, literal quoted phrases, prefixes and Fuse.js typo
+matching. Ranking is exact identifier → exact name/title → title prefix → text
+relevance → fuzzy. Short words and numeric/technical identifiers never use fuzzy
+fallback; `0143` does not drift into adjacent IDs. Suggestions show a bounded
+highlighted excerpt and the field/source that matched.
+
+Search is another predicate in the existing presentation/status projection.
+Text, named patterns and entity/initiative/machine/manager chips compose with AND
+on the same verified Work/Worker pair. Existing donut semantics stay OR within
+an axis and AND between axes; each histogram ignores its own status selection.
+Organizer presets still change only grouping/order; Operational/All/Custom stays
+authoritative. Matching seeds retain only direct explicit/current/confirmed
+neighbors; context is dimmed, canonical endpoints are counted once and the real
+SVG gutter is retained. No transitive component expansion or search-inferred link.
+
+Suggestions include authorized records outside the current view. They are labeled
+**Outside current view**; choosing one temporarily reveals its one-hop cluster,
+including planned cards when roadmap visibility is collapsed, without rewriting
+the base scope or donut selections. Arrows/Enter choose and
+focus a cluster inline. Escape or **Back** restores grouping, sort, filters,
+selection, density, roadmap visibility, expanded relationships and a semantic scroll anchor. **Apply
+filters** keeps the lens; **Clear Smart Search** removes its chips while restoring
+the underlying scope. Search conditions persist in existing browser preferences;
+transient reveal and excerpt text do not. Storage failure falls back to a working
+in-memory view. Recent builtin patterns are suggested; saved personal combinations,
+deeper pivots/breadcrumbs, URL state and a visual builder belong to the next slice.
+Phone search is a temporary viewport-bounded panel, adding no persistent row.
+Search does not send Ask requests or change Notion, assignment or execution state.
+
+### Index and source coverage
+
+`searchDocuments.ts` projects authorized scene records into allowlisted fields.
+`SearchDocumentCollector` adds safe card prose through the existing bounded Notion
+reader, up to four cards per 20-second refresh in the background. Scene responses
+never wait for those reads. Prose is cached by canonical ID and Notion edit revision;
+a changed revision invalidates the prose-reader TTL. Changed revisions and expired observations fall back to searchable metadata
+while prose retries with the ordinary source budget. The browser also drops
+expired body fields if its scene refresh fails. Removed authorized
+IDs are deleted from the returned index. Pending/partial/unsupported content is
+visible in **Index coverage**, rather than being represented as an exhaustive
+zero-hit search.
+
+Indexed metadata includes Notion names, IDs, URLs, Status/Owner/Priority/Waiting
+For/Initiative/Epic and useful published action/evidence fields; First Mate task
+and attempt IDs, worker/manager/machine names, branch and PR URL, current state,
+state explanation and bounded published activity/hold/blocker summaries. Known
+PR numbers are parsed from published URLs, never used to create relationships.
+PR titles/errors are searchable only if present in the collected fields. Comments,
+raw logs, transcripts, briefs, files, code blocks and embeds are not indexed.
+Card prose exclusions/partial reads inherit the existing reader's ten-request,
+four-level and response-size bounds.
+
+Likely credential literals are redacted before new search text reaches the
+browser. Excerpt text is capped at 8,192 characters per entity and 2,097,152
+characters total; identity/title metadata remains available when excerpt budgets
+are exhausted, and omissions are disclosed. Never persist the index in browser
+storage. Use the existing configured source/origin authorization; a search match
+never authorizes another source or card. The disposable browser index reuses the
+existing `fuse.js` dependency (7.3.0 measured at 24,313 minified / 8,435 gzip bytes,
+before production tree shaking); no additional database/service or query DSL.
+Queries are text plus typed conditions, never arbitrary or model-generated SQL.
+
+The browser normalizes literal fields once, indexes a deduplicated word vocabulary
+with postings to original fields, and applies Fuse to that vocabulary. This avoids
+running fuzzy scans over every long excerpt per keystroke while preserving literal
+phrases, snippets and provenance. Changed documents update their postings; the
+small Fuse vocabulary is rebuilt only when its words change. Health queries share
+ephemeral canonical-ID joins within each query rather than repeatedly scanning
+all cards, findings and workers. Neither index is another scene/source of truth.
+Original-text highlight offsets are computed lazily when a suggestion's ranges
+are read, with literal field maps reused and fuzzy maps limited to matching words.
+Index construction and graph filtering do not segment every excerpt or vocabulary
+word. A bounded 150-card / 30-worker prose regression test checks cold construction
+against a 450 ms budget while retaining Unicode and exact-identifier offset tests.
+
+The browser incrementally removes/upserts changed semantic document IDs on live
+scene refreshes. Clock ticks do not rebuild the index. Missing index data falls
+back to scene metadata; an absent cache rebuilds from the current snapshot. Source
+failure/expiry retains last-known search hits with freshness labels while absence
+and health conclusions are suspended. Search predicates/results are cached only
+until the next source observation expiry or new scene, with bounded query caches.
+
+### Shared execution-health contract
+
+`src/shared/workHealth.ts` is a pure view projection for Tin Star and a future
+First Mate liveness reconciler. It returns canonical verified worker IDs/count,
+running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
+`null` for unpublished runnable/resolver/progress evidence, and per-pattern
+`match`, `no-match` or `unavailable` plus concrete evidence. Null never means zero.
+The existing liveness precedence and authoritative source/link coverage remain
+unchanged. This feature implements no recovery, watchdog or scheduling behavior.
+
+The inspectable builtin definitions live in `patternDefinitions`:
+
+| Pattern | Required evidence / current behavior |
+|---|---|
+| Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
+| Blocked | Explicit Waiting For plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
+| Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
+| Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
+| Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
+| Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
+| State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
+| Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
+
+Unsupported patterns are visibly unavailable with the missing evidence named;
+there are no guessed alarms. Multiple blocked workers retain a single Work
+cluster and deduplicated blocker identifiers. **Why matched?** lists concrete
+Work status, worker states/counts, observation times, link provenance and blocker
+identity. No active resolver is claimed without structured source evidence.

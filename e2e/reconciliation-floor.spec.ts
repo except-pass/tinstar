@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Locator } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fixtureId, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
+import type { FloorScene } from '../src/shared/reconciliationPresentation'
 
 async function freePort() {
   const server = createServer()
@@ -18,6 +19,10 @@ let server: ChildProcess
 let root: string
 let base: string
 
+
+async function inspectEntity(page: Page, entity: Locator) {
+  await page.locator('.ov-item-frame').filter({ has: entity }).first().getByRole('button', { name: 'Open in Inspector', exact: true }).click()
+}
 
 async function openCustomize(page: Page) {
   const button = page.getByRole('button', { name: 'Customize', exact: true })
@@ -166,8 +171,8 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await expectAdvanced(page, 'Outer grouping', 'checkIn')
   await expect(page.locator('.ov')).toHaveAttribute('data-direction', 'desc')
   const candidate = page.locator('.ov-execution').filter({ hasText: 'Candidate relationship' })
-  await expect(candidate.locator('..').locator('..').locator('.ov-empty-col')).toHaveText('Task link unverified')
-  await expect(candidate.locator('..').locator('..').locator('.ov-gutter')).toHaveText('unverified')
+  await expect(page.locator('.ov-pair').filter({ has: candidate }).locator('.ov-empty-col')).toHaveText('Task link unverified')
+  await expect(page.locator('.ov-pair').filter({ has: candidate }).locator('.ov-gutter')).toHaveText('unverified')
   await expect(linked).toHaveCount(0)
   await expect(page.locator('.ov-execution')).toHaveCount(5)
   await clickAdvanced(page, 'Fields', true)
@@ -219,7 +224,7 @@ test('realistic volume, last-known data and failed refresh suspend absence findi
   await expect(page.locator('.ov-card')).toHaveCount(857)
   await expect(page.locator('.ov-execution')).toHaveCount(85)
   await expect(page.locator('.ov-item.ov-gap,.ov-item.ov-orphan')).toHaveCount(0)
-  await page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`).click()
+  await inspectEntity(page, page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`))
   failed = true
   await page.clock.fastForward(20_001)
   await expect(page.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
@@ -237,7 +242,7 @@ for (const state of ['queued', 'held']) {
     await page.goto(base)
     const card = page.locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)
     await expect(card).toHaveAttribute('data-tone', 'quiet')
-    await card.click()
+    await inspectEntity(page, card)
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Awaiting review capacity')
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('review-task')
     await expect(page.getByLabel('Inspector', { exact: true })).toContainText('2026-11-05T12:00:00Z')
@@ -271,7 +276,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await expect(task.locator('.ov-breadcrumb')).toHaveText('Unassigned')
   const desk = page.getByRole('complementary', { name: 'Your desk' })
   const queueId = await desk.locator('.ov-queue').getAttribute('data-queue-item-id')
-  await task.click()
+  await inspectEntity(page, task)
   await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Full source card body')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Last touched byWill')
@@ -288,7 +293,7 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await page.clock.fastForward(61_001)
   await expect(running.locator('.status-running')).toBeVisible()
   await expect(running.locator('.ov-freshness')).toHaveAttribute('aria-label', 'Last known observation')
-  await running.click()
+  await inspectEntity(page, running)
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Latest activity')
   await expect(desk.getByLabel('Desk queue')).toBeVisible()
   await expect(running).toHaveCSS('opacity', '1')
@@ -487,10 +492,10 @@ test('Notion declarations draw confirmed edges without worker-side assignment me
   const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
   await expect(page.locator('.ov-group').filter({ has: card }).locator('.ov-line.ov-linked')).toHaveCount(2)
   await expect(card).not.toContainText('First Mate tasks')
-  await card.click()
-  await expect(page.getByLabel('Inspector')).toContainText('Connections & history')
+  await inspectEntity(page, card)
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Connections & history')
   await page.getByText('Evidence & diagnostics', { exact: true }).click()
-  await expect(page.getByLabel('Inspector')).toContainText('notion.First Mate tasks')
+  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('notion.First Mate tasks')
   await screenshot(page, 'notion-owned-confirmed-links-fixture')
 })
 
@@ -620,4 +625,145 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await expect(page.locator('.ov')).toHaveAttribute('data-order', 'due')
   expect((await toolbar.boundingBox())!.height).toBe(48)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('single-row toolbar Smart Search ranks, reveals one-hop clusters and restores scroll and filters', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const proofNow = Date.parse('2026-11-06T00:00:00Z')
+  await page.clock.install({ time: proofNow })
+  const scene = fixtureScene({ now: proofNow, size: 143 })
+  scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Name!.value = 'Release Coordinator'
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.addInitScript(() => localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'machine', inner: 'none', order: 'operational', direction: 'asc' } })))
+  await page.goto(base)
+  await expect(page.locator('.ov')).toHaveAttribute('data-density', 'compact')
+  const beforeCards = await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))
+  const toolbarHeight = await page.locator('.ov-toolbar').evaluate(node => node.getBoundingClientRect().height)
+  await page.locator('.ov-workspace').evaluate(node => { node.scrollTop = 420 })
+  const previousScroll = await page.locator('.ov-workspace').evaluate(node => node.scrollTop)
+  await page.keyboard.press('Control+k')
+  const input = page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true })
+  await expect(input).toBeFocused()
+  await input.fill('releese coordnator')
+  const results = page.getByRole('listbox', { name: 'Search results' })
+  await expect(results.getByRole('option')).toHaveCount(1)
+  await expect(results).toContainText('Release Coordinator')
+  await expect(results.locator('mark')).not.toHaveCount(0)
+  await screenshot(page, 'smart-search-desktop-fuzzy')
+  await input.press('ArrowDown')
+  await input.press('Enter')
+  const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
+  await expect(card).toHaveCount(1)
+  await expect(card).toBeFocused()
+  await expect(card).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator('.ov-execution')).toHaveCount(2)
+  await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', toolbarHeight)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.ov-card')).toHaveCount(beforeCards.length)
+  expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))).toEqual(beforeCards)
+  expect(await page.locator('.ov-workspace').evaluate(node => node.scrollTop)).toBeCloseTo(previousScroll, 0)
+  await expect(page.locator('.ov')).toHaveAttribute('data-outer', 'machine')
+  await screenshot(page, 'smart-search-desktop-restored')
+  for (const label of ['Smart Search (Ctrl or Command K)', 'Remove search text']) {
+    await page.keyboard.press('Control+k')
+    await input.fill('Release')
+    await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+    await page.getByRole('button', { name: label, exact: true }).press('Escape')
+    expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))).toEqual(beforeCards)
+    expect(await page.locator('.ov-workspace').evaluate(node => node.scrollTop)).toBeCloseTo(previousScroll, 0)
+  }
+  await page.keyboard.press('Control+k')
+  await input.fill('Roadmap: planned integration')
+  const outside = results.getByRole('option').filter({ hasText: 'Roadmap: planned integration' })
+  await expect(outside).toContainText('Outside current view')
+  await outside.click()
+  await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveCount(1)
+  await expect(page.locator('.ov')).toHaveAttribute('data-preset', 'operational')
+  await page.getByRole('button', { name: '← Back', exact: true }).click()
+  await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveCount(0)
+})
+
+test('single-row toolbar Smart Search exact snippets, safe identifiers and explicit Initiative decisions', async ({ page }) => {
+  const proofNow = Date.parse('2026-11-06T00:00:00Z')
+  await page.clock.install({ time: proofNow })
+  const scene: FloorScene = fixtureScene({ now: proofNow })
+  for (const card of scene.cards) { delete card.source.properties.Initiative; card.ancestry = ['parent-only'] }
+  const card = scene.cards.find(card => card.id === fixtureId(2))!
+  card.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['explicit'], hasMore: false }
+  card.source.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision', 'Merge'], hasMore: false }
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  await expect(page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true })).toBeVisible()
+  await page.keyboard.press('Control+k')
+  const input = page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true })
+  const results = page.getByRole('listbox', { name: 'Search results' })
+  const initiative = page.getByRole('combobox', { name: 'Search initiative', exact: true })
+  await expect(initiative).toBeVisible()
+  expect(await initiative.locator('option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value))).toEqual(['', 'explicit'])
+  await initiative.selectOption('explicit')
+  await page.getByRole('button', { name: 'Needs my decision', exact: true }).click()
+  await expect(results.getByRole('option')).toHaveCount(1)
+  await expect(results).toContainText(String(card.source.properties.Name!.value))
+  await screenshot(page, 'smart-search-explicit-decision')
+  await page.getByRole('button', { name: 'Remove initiative: explicit', exact: true }).click()
+  await page.getByRole('button', { name: 'Remove pattern Needs my decision', exact: true }).click()
+  // Deliver disposable source snapshots through the running browser's normal refresh.
+  const text = '  PR #29201; PR #2920 then oﬃce release'
+  for (const field of ['identifier', 'name', 'body']) {
+    scene.searchIndex = { notes: ['Disposable authorized source snapshot'], documents: [{ key: `card:${card.id}`, target: { kind: 'card', id: card.id }, title: field === 'name' ? text : 'NEM3', identifiers: field === 'identifier' ? [text, '0143'] : ['0143'], fields: [{ name: field === 'name' ? 'Name' : 'Description', source: 'Notion blocks', text: field === 'identifier' ? 'Known PR' : text }], observedAt: new Date(proofNow).toISOString(), expiresAt: new Date(proofNow + 60_000).toISOString(), coverage: 'fresh/complete' }] }
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true })).toBeVisible()
+    await page.keyboard.press('Control+k')
+    await input.fill('"PR #2920"')
+    await expect(results.getByRole('option')).toHaveCount(1)
+    expect(await results.locator('mark').allTextContents()).toEqual('PR #2920'.split(''))
+    await input.fill('29201x')
+    await expect(results.getByRole('option')).toHaveCount(0)
+    await input.fill('0142')
+    await expect(results.getByRole('option')).toHaveCount(0)
+    await input.fill('0143')
+    await expect(results.getByRole('option')).toHaveCount(1)
+    if (field !== 'identifier') {
+      await input.fill('office')
+      expect(await results.locator('mark').allTextContents()).toEqual('oﬃce'.split(''))
+    }
+  }
+  await screenshot(page, 'smart-search-unicode-snippet')
+})
+
+test('single-row toolbar Smart Search patterns, evidence and mobile keyboard remain accessible', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const proofNow = Date.parse('2026-11-06T00:00:00Z')
+  await page.clock.install({ time: proofNow })
+  const scene = fixtureScene({ now: proofNow })
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  await page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true }).click()
+  const panel = page.getByRole('region', { name: 'Smart Search', exact: true })
+  expect(await panel.getByRole('combobox', { name: 'Find names, IDs and text', exact: true }).evaluate(element => { const rect = element.getBoundingClientRect(); return document.elementFromPoint(rect.left + 4, rect.top + rect.height / 2) === element })).toBe(true)
+  await expect(panel.getByRole('button', { name: 'Stalled · unavailable', exact: true })).toBeDisabled()
+  await expect(panel.getByRole('button', { name: 'Stale · unavailable', exact: true })).toBeDisabled()
+  await panel.getByRole('button', { name: 'Blocked', exact: true }).click()
+  await panel.getByRole('combobox', { name: 'Search machine', exact: true }).selectOption('Hulk')
+  await expect(page.getByRole('button', { name: 'Remove machine: Hulk', exact: true })).toHaveCount(1)
+  await expect(panel.getByRole('combobox', { name: 'Search machine', exact: true })).toHaveValue('Hulk')
+  await expect(panel.getByRole('listbox')).toContainText('Waiting for input')
+  await panel.getByText(/Why matched\?/).click()
+  await expect(panel).toContainText('Input from reviewer')
+  await screenshot(page, 'smart-search-phone-pattern')
+  const bounds = await panel.boundingBox()
+  expect(bounds!.x).toBeGreaterThanOrEqual(0)
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await panel.getByRole('button', { name: 'Apply filters', exact: true }).click()
+  await expect(page.locator('.ov-card')).toHaveCount(1)
+  await expect(page.locator('.ov-execution')).toHaveCount(1)
+  await page.reload()
+  await expect(page.locator('.ov-card')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Clear Smart Search', exact: true }).click()
+  await expect(page.locator('.ov-card')).toHaveCount(5)
 })
