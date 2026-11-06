@@ -39,7 +39,7 @@ describe('search session organizer selection restoration', () => {
       act(() => result.current.session.begin())
       act(() => result.current.send({ type: 'set-search', search: { ...emptySearch(), query: 'no-such-record' } }))
       expect(organizedGroups(scene, result.current.state, Date.now()).some(group => group[level] === target.id)).toBe(false)
-      act(() => result.current.session.apply())
+      act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }))
       act(() => {
         if (exit === 'Escape') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
         else if (exit === 'Back') result.current.session.restore()
