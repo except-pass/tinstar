@@ -43,6 +43,26 @@ describe('deterministic Find', () => {
     expect(index.search('2920')).toEqual([])
   })
 
+  it.each(['identifier', 'name', 'body'])('matches and highlights exact quoted numeric phrases in %s fields', source => {
+    const document = (text: string) => doc('a', source === 'name' ? text : 'Other', source === 'body' ? text : '', source === 'identifier' ? [text] : ['a'])
+    const index = new SmartSearchIndex()
+    for (const query of ['"PR #2920"', '"PR 2920"']) {
+      for (const near of ['PR #29201', 'PR #2920x', 'xPR #29201']) {
+        index.update([document(near)])
+        expect(index.search(query)).toEqual([])
+      }
+      const text = '  PR #29201; PR #2920'
+      index.update([document(text)])
+      const hit = index.search(query)[0]!
+      expect(hit.field.text).toBe(text)
+      expect(hit.ranges).toEqual([[text.lastIndexOf('PR'), text.length - 1]])
+      expect(hit.field.text.slice(hit.ranges[0]![0], hit.ranges[0]![1] + 1)).toBe('PR #2920')
+    }
+    index.update([document('  Release Coordinator ﬃx')])
+    const phrase = index.search('"release coordinator ffix"')[0]!
+    expect(phrase.field.text.slice(phrase.ranges[0]![0], phrase.ranges[0]![1] + 1)).toBe('Release Coordinator ﬃx')
+  })
+
   it('supports typo-tolerant multi-token names, prefix, phrases and mixed-field text', () => {
     const index = new SmartSearchIndex()
     index.update([doc('a', 'Release Coordinator', 'NEM3: fix HaveNoPermission error'), doc('b', 'Release notes', 'Coordinator summary')])

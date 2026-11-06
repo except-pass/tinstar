@@ -39,10 +39,21 @@ function mappedText(value: string) {
 }
 const tokens = (query: string) => [...normalized(query).matchAll(/"([^"]+)"|(\S+)/g)].map(match => ({ text: (match[1] ?? match[2]!).replace(/^#(?=\d+$)/, ''), exact: match[1] !== undefined }))
 
+function literalOccurrence(text: string, term: string) {
+  const numbers = [...term.matchAll(/[\p{L}\p{N}]+/gu)].filter(match => /^\d+$/.test(match[0]))
+  for (let at = text.indexOf(term); at >= 0; at = text.indexOf(term, at + 1)) {
+    if (numbers.every(match => {
+      const start = at + match.index!, end = start + match[0].length
+      return !/[\p{L}\p{N}]$/u.test(text.slice(0, start)) && !/^[\p{L}\p{N}]/u.test(text.slice(end))
+    })) return at
+  }
+  return -1
+}
+
 /** Mutable disposable index: changed documents alone are removed/upserted.
  * Rebuild is just construction from a current authorized scene. */
 export class SmartSearchIndex {
-  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; offsets: Array<[number, number]>; words: Map<string, number> }> }>()
+  private records = new Map<string, { document: SearchDocument; fingerprint: string; terms: Set<string>; fields: Array<{ field: SearchField; text: string; offsets: Array<[number, number]> }> }>()
   private vocabulary = new Map<string, Map<string, { field: SearchField; offsets: Array<[number, number]> }>>()
   private results = new Map<string, SearchHit[]>()
   // Match a deduplicated vocabulary, then follow postings to original fields.
@@ -72,7 +83,7 @@ export class SmartSearchIndex {
       const terms = new Set<string>()
       const fields = [{ name: 'Identifier', source: 'Canonical source ID', text: document.identifiers.join(' · ') },
         { name: 'Name', source: document.target.kind === 'card' ? 'Notion property' : 'First Mate snapshot', text: document.title }, ...document.fields]
-        .map(field => { const { text, offsets } = mappedText(field.text); return { field, text, offsets, words: new Map([...text.matchAll(/[\p{L}\p{N}]+/gu)].map(match => [match[0], match.index!])) } })
+        .map(field => { const { text, offsets } = mappedText(field.text); return { field, text, offsets } })
       for (const { field } of fields.slice(1)) for (const match of field.text.matchAll(/[\p{L}\p{N}]+/gu)) {
         const { text: word, offsets } = mappedText(match[0])
         if (word.length < 4 || terms.has(word)) continue
@@ -116,9 +127,9 @@ export class SmartSearchIndex {
     for (const { document, fields } of this.records.values()) {
       let field = fields[1]!.field, ranges: Array<[number, number]> = [], usedFuzzy = false, relevance = 0, found = true
       for (const part of parts) {
-        const candidate = fields.find(value => /^\d+$/.test(part.text) ? value.words.has(part.text) : value.text.includes(part.text))
-        if (candidate) {
-          const at = /^\d+$/.test(part.text) ? candidate.words.get(part.text)! : candidate.text.indexOf(part.text)
+        const occurrence = fields.map(candidate => ({ candidate, at: literalOccurrence(candidate.text, part.text) })).find(match => match.at >= 0)
+        if (occurrence) {
+          const { candidate, at } = occurrence
           if (!ranges.length) field = candidate.field
           if (candidate.field === field) ranges.push([candidate.offsets[at]![0], candidate.offsets[at + part.text.length - 1]![1]])
           relevance += candidate.field.name === 'Name' ? 0 : 0.1
