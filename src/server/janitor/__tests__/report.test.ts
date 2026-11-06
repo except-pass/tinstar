@@ -88,6 +88,47 @@ describe('deterministic read-only Janitor', () => {
     }
   })
 
+  it.each([
+    ['Phase 1 cleanup implementation slice A', 'Phase 1 cleanup implementation slice B'],
+    ['Phase 1 cleanup implementation slice 2', 'Phase 1 cleanup implementation slice 3'],
+    ['Slice A cleanup implementation phase 1', 'Slice A cleanup implementation phase 2'],
+    ['Phase 1 cleanup implementation slice A', 'SLICE b cleanup implementation PHASE 1'],
+    ['Phase 1 cleanup part A milestone 2 u 3', 'Phase 1 cleanup part A milestone 2 u 4'],
+    ['Phase 1 cleanup part A milestone 2', 'Phase 1 cleanup part A milestone 3'],
+    ['Phase 1 cleanup part A', 'Phase 1 cleanup part B'],
+    ['Phase 1 cleanup slice A slice 2', 'Phase 1 cleanup slice A slice 3'],
+  ])('preserves compound identities: %s versus %s', (left, right) => {
+    const report = buildJanitorReport({ snapshot: source([
+      card(1, left, { Link: 'https://github.com/example/repo/pull/42' }),
+      card(2, right, { Link: 'https://github.com/example/repo/pull/42' }),
+    ]) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
+    expect(report.distinctions).toContainEqual(expect.objectContaining({ pageIds: [fixtureId(1), fixtureId(2)],
+      reason: 'Named implementation slices differ; retain separate cards' }))
+  })
+
+  it('keeps matching compound identities eligible for duplicate detection', () => {
+    const report = buildJanitorReport({ snapshot: source([
+      card(1, 'Phase 1 cleanup implementation slice A slice 2', { Link: 'https://github.com/example/repo/pull/42' }),
+      card(2, 'PHASE 1 cleanup implementation SLICE a SLICE 2', { Link: 'https://github.com/example/repo/pull/42' }),
+    ]) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(1)
+    expect(report.distinctions).toHaveLength(0)
+  })
+
+  it.each([['A', 'B'], ['2', '3']])('preserves compound slice %s/%s beyond sampled neighbors', (left, right) => {
+    const cards = Array.from({ length: 18 }, (_, i) => card(i + 1, 'Phase 1 cleanup implementation slice',
+      { Link: 'https://github.com/example/repo/pull/42' }))
+    cards[0]!.properties.Name!.value += ` ${left}`
+    cards[17]!.properties.Name!.value += ` ${right}`
+    const report = buildJanitorReport({ snapshot: source(cards) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
+    expect(report.proposals.some(p => p.category === 'overlaps' && p.pages.length === 18)).toBe(true)
+    expect(report.distinctions).toContainEqual(expect.objectContaining({ pageIds: [fixtureId(1), fixtureId(18)],
+      reason: 'Named implementation slices differ; retain separate cards' }))
+    expect(report.metrics.comparedPairs).toBeLessThanOrEqual(18 * 8)
+  })
+
   it('preserves lettered slice distinctions through duplicate cluster connections', () => {
     const report = buildJanitorReport({ snapshot: source([
       card(1, 'Cleanup implementation slice A', { Link: 'https://github.com/example/repo/pull/42' }),

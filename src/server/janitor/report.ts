@@ -97,8 +97,16 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
   const separation = (left: string, right: string) => {
     const a = byId.get(left)!, b = byId.get(right)!, fa = derived.get(left)!, fb = derived.get(right)!
     const related = sceneById.get(left)!.ancestry.includes(right) || sceneById.get(right)!.ancestry.includes(left)
-    const slice = (value: string) => value.match(/\b(?:u|slice|phase|part|milestone)\s*(\d+|[a-z])\b/i)?.[1]?.toLowerCase()
-    const differentSlices = !!slice(title(a)) && !!slice(title(b)) && slice(title(a)) !== slice(title(b))
+    const slices = (value: string) => {
+      const markers = new Map<string, string[]>()
+      for (const match of value.toLowerCase().matchAll(/\b(u|slice|phase|part|milestone)\s*(\d+|[a-z])\b/g)) {
+        markers.set(match[1]!, [...(markers.get(match[1]!) ?? []), match[2]!])
+      }
+      return markers
+    }
+    const slicesA = slices(title(a)), slicesB = slices(title(b))
+    const differentSlices = [...slicesA].some(([kind, identities]) => identities.some((identity, index) =>
+      slicesB.get(kind)?.[index] !== undefined && slicesB.get(kind)![index] !== identity))
     const dateA = title(a).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0], dateB = title(b).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0]
     if (related) return 'Explicit ancestor/child relationship; retain separate cards'
     if (dateA && dateB && dateA !== dateB) return 'Different explicitly dated runs; retain separate cards'
