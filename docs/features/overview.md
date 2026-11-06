@@ -166,8 +166,8 @@ Done, Archived, Backlog, Todo, Not started, Planned and Spare tokens display
 Not applicable; other statuses distinguish missing, upcoming, overdue and
 invalid checkpoints using the calendar rules above.
 
-Expanded Detailed cards and expanded Ultra Compact rows carry an Open in Inspector
-control that opens the separate Inspector while Your desk remains available. Clicking
+Task and worker headers carry an Inspect panel icon in both densities, including
+collapsed rows. It opens the separate Inspector while Your desk remains available. Clicking
 the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection
 and activity history, evidence and safe source links. Next to Open Notion card, Copy link
 copies that card's URL. Task prose loads on demand;
@@ -175,11 +175,9 @@ partial content labels omissions and unavailable content offers the source link.
 Worker terminal links use the exact-home resolver and open the safe viewer
 separately. Closing the Inspector restores focus to the floor card.
 
-Your desk shows a focused ready Notion card and the next few, with conditional
-and unverified cards in a secondary section. The [queue reference](reconciliation-queue.md)
-owns readiness, source identity and per-source response controls.
-The Desk also contains personal Ask questions after the operational queue;
-the [Ask reference](ask.md) owns question submission, answers and history.
+The [Ask reference](ask.md) owns the Desk inbox layout, question submission,
+answers and history. The [queue reference](reconciliation-queue.md) owns
+operational request visibility, readiness, source identity and per-source response controls.
 Clicking a Desk card navigates by canonical task ID without opening the Inspector
 or moving the queue position: it expands the required groups and can reveal the
 card through base status, search and donut exclusions using a temporary exception

@@ -16,7 +16,7 @@ The [Card Janitor CLI](docs/features/card-janitor.md) produces a read-only opera
 
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
-To ask First Mate about one Notion task, swipe left on its card or choose **Ask about a task**, review the text, then send. Your question and its answer appear in **Your desk**; opening the item returns to the task. This requires the owner-authenticated Ask setup and outbound puller described in the [Ask reference](docs/features/ask.md).
+Use the speech-bubble **Ask** icon in a task or worker header to open a blank question, or right-click a supported task field or relationship for an editable draft. Review the question, then send. Questions and answers appear first in **Your desk**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 
 The activity strip provides **Overview**, **Receipts** and **Workers**. Receipts and the worker switcher open in a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. Choose a worker in **Workers**, whose search narrows the list by id or project (Enter opens the first match), or use **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 

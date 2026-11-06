@@ -5,15 +5,16 @@ First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
 The compact Ask/Inspect refinement reuses this request store and bridge.
 
 A left drag on a Notion task opens a text composer with that task's canonical
-page ID. Quiet Ask (speech bubble) and Inspect (panel) icons are always present
-in the existing Work/Worker header, including collapsed rows. Ask opens a blank,
-focused overlay for exactly that entity; Inspect opens its details. Card-body
-clicks still expand cards and their linked clusters. The overlay does not change
+page ID. The Ask speech-bubble icon in the existing Work/Worker header opens a blank,
+focused overlay for exactly that entity. [Overview](overview.md) describes Inspect
+and card expansion. The overlay does not change
 card or relationship geometry and fits the phone viewport.
 
 Right-click a task title, status, next check-in, Waiting For, owner, priority or
 edit time for an editable deterministic draft. Right-click the background for a
 blank question; right-click a relationship for a draft about its two endpoints.
+Relationship paths also support Enter/Space, and Inspector connections expose
+Ask only for claims in the current scene claims collection, not claim history.
 Links and controls outside these targets keep their native context menus.
 Enter sends, Shift+Enter inserts a newline, Escape closes, and Send question is
 available for touch. Right-click never sends. The original left-swipe mapping is
@@ -42,12 +43,16 @@ capture failure). No readiness/announcement/acknowledgement is misrepresented as
 investigation progress. A missing puller or slow answer leaves a visible delay
 message; retry uses the same logical request ID. Wake failure is shown even when
 the note is delivered. New answers are unread; viewing marks them read. Dismiss
-moves only the Ask into searchable history. It does not dismiss a decision,
+under the secondary Actions menu moves only the Ask into searchable history.
+It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
-Tapping a work/link item resolves its stable page ID against the current scene, invokes
-existing [Desk navigation](overview.md) reveal/scroll/flash, and opens a compact answer
-sheet over the floor. Inbox questions and answer previews wrap legibly. The answer sheet stays compact
+Opening an item reveals its originating context and opens a compact answer
+sheet over the floor. Work items use existing [Desk navigation](overview.md).
+Link items retain the exact claim ID, reveal its endpoints and scroll to its card;
+the flash targets that relationship, including unverified Detailed lines, rather
+than every confirmed connection on the card. Inbox questions and answer previews
+wrap legibly. The answer sheet stays compact
 at rest; **Full answer & evidence** expands the retained detail, references and suggestions. The
 compact sheet leaves the returned task visible above it on mobile. Worker
 answers reveal and highlight the exact originating execution. Active and
@@ -206,16 +211,16 @@ and MCP behavior remains part of the regression suite.
 
 The remaining parent-card items are follow-up slices:
 
-- Worker context with stable logical identity and observed attempt/home; verified
-  Link context with provenance and both endpoints, explicit relationship targets,
-  and removable additional context chips.
+- Worker context enriched with observed attempt/home beyond the execution ID
+  anchor; removable additional context chips beyond the single originating
+  Work, Worker or Link context.
 - Right-drag voice entry, activation-only microphone permission, transcription
   review/edit, text fallback and discoverable accessible voice controls.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery; unified priority for decisions, unread answers,
   investigations and failures.
-- Worker/Link return navigation and highlighting of both endpoints and the link,
-  with truthful reassignment, stale, missing and inaccessible context handling.
+- Richer reassignment, stale and inaccessible context handling beyond the
+  current scene availability check and captured source-link fallback.
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
   physical iPhone Safari and Android Chrome touch/microphone verification remains
   an explicit review gate when devices are available.

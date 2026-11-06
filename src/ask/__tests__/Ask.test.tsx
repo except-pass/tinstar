@@ -365,12 +365,13 @@ it.each(['detailed', 'compact'] as const)('returns a retained claim answer to on
 })
 
 it('returns an unverified Detailed relationship answer after reload and filtering', async () => {
+  localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'none', inner: 'none', order: 'checkIn', direction: 'asc' } }))
   localStorage.setItem('tinstar.overview.density', 'detailed')
   const claim = scene.claims.find(claim => claim.cardId === fixtureId(1))!
   scene.claims = scene.claims.filter(other => other.cardId !== claim.cardId || other.id === claim.id)
   claim.verification = 'unverified'
   const first = mount()
-  const line = first.container.querySelector<SVGPathElement>(`.ov-relationship-hit[data-claim-id="${claim.id}"]`)!
+  const line = [...first.container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
   fireEvent.contextMenu(line)
   fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
   await waitFor(() => expect(records).toHaveLength(1))
@@ -383,7 +384,7 @@ it('returns an unverified Detailed relationship answer after reload and filterin
   expect(card(container)).toBeNull()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*How are these two items related/ }))
   expect(card(container)).toBeVisible()
-  const returned = container.querySelector(`.ov-relationship-hit[data-claim-id="${claim.id}"]`)!
+  const returned = [...container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
   expect(returned.previousElementSibling).toHaveClass('flashed')
   expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
   expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
