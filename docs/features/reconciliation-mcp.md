@@ -47,7 +47,7 @@ Localhost is the default. For a remote client, the operator must explicitly bind
 
 Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `group`, `you` and `firstMate`. Use IDs returned by reads, never title matching. Executions retain First Mate home/task/attempt identity. Claims distinguish confirmed, textual, inferred and conflicting relationships.
 
-`present_view` requires `scene_id`, `command_id`, `expected_revision`, and `action`; optional `ttl_ms` is 500–15000 (default 8000). Actions:
+`present_view` requires `scene_id`, `command_id`, `expected_revision`, and `action`; optional `ttl_ms` is 500–15000 (default 8000). The authoritative action shapes and validation bounds, including Smart Search conditions, reveal, clear and view restoration, live in [`actionSchema` and `searchFilterSchema`](../../src/shared/reconciliationCommands.ts). The following lists the non-search actions:
 
 ```text
 {type:"set-organizer", organizer:{outer:field|"none", inner:field|"none", order:field|"operational", direction:"asc"|"desc"}}

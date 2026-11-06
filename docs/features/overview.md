@@ -94,7 +94,8 @@ Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-
 Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
-in Unassigned / Unknown; parent chains never establish either.
+in Unassigned / Unknown; parent chains never establish either. Initiative search
+options and matching use this same explicit-property contract.
 The initial and Reset organizer uses the By Initiative preset. Explicitly saved browser choices take precedence
 on reload.
 
@@ -293,7 +294,7 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Blocked | Explicit Waiting For plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
-| Stalled | Requires absence of running/runnable paths and an active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
+| Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |

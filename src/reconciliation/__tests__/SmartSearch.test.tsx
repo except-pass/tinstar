@@ -29,8 +29,8 @@ describe('Smart Search in the existing Overview', () => {
       delete card.source.properties.Initiative
       card.ancestry = ['parent-only']
     }
-    scene.cards[0]!.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['  explicit  '], hasMore: false }
-    scene.cards[1]!.source.properties.Initiative = { id: 'initiative', type: 'multi_select', value: ['unsupported'], hasMore: false }
+    scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['  explicit  '], hasMore: false }
+    scene.cards.find(card => card.id === fixtureId(2))!.source.properties.Initiative = { id: 'initiative', type: 'multi_select', value: ['unsupported'], hasMore: false }
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
     const select = screen.getByRole('combobox', { name: 'Search initiative' })
@@ -41,7 +41,7 @@ describe('Smart Search in the existing Overview', () => {
   })
 
   it.each(['Smart Search (Ctrl or Command K)', 'Remove search text', '← Back', 'Remove cards: Waiting For'])('restores the saved view on Escape from %s after Apply', label => {
-    localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'machine', inner: 'initiative', order: 'priority', direction: 'desc' }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] }, donutFilter: { cards: ['Waiting For'], workers: [] } }))
+    localStorage.setItem(preferencesKey, JSON.stringify({ search: { query: '', patterns: [], facets: [] }, organizer: { outer: 'machine', inner: 'initiative', order: 'priority', direction: 'desc' }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] }, donutFilter: { cards: ['Waiting For'], workers: [] } }))
     const { container } = mount()
     const original = container.querySelector<HTMLElement>(`.ov-card[data-entity-id="${fixtureId(4)}"]`)!
     fireEvent.click(original)
