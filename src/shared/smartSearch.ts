@@ -198,8 +198,9 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
         case 'manager': { const source = scene.coverage.homes.find(home => home.source.home === worker?.home)?.source; return !!source && homeLabelForSearch(source) === facet.value }
         case 'entity': return card?.id === facet.value || worker?.identity.task_id === facet.value || worker?.id === facet.value
         case 'initiative': {
-          const value = card?.source.properties.Initiative?.value
-          return Array.isArray(value) ? value.includes(facet.value) : value === facet.value || !!card?.ancestry.includes(facet.value)
+          const property = card?.source.properties.Initiative
+          const value = property && ['relation', 'select', 'rich_text'].includes(property.type ?? '') ? property.value : null
+          return (Array.isArray(value) ? value : [value]).some(id => typeof id === 'string' && !!id.trim() && id.trim() === facet.value)
         }
       }
     })

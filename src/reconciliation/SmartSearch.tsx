@@ -43,8 +43,9 @@ export function SmartSearch({ scene, state, send, now, open, activeSession, onOp
     if (field === 'manager') return [...new Set(scene.coverage.homes.map(home => homeLabel(home.source)))].map(value => ({ value, label: value }))
     if (field === 'entity') return [...scene.cards.map(card => ({ value: card.id, label: String(card.source.properties.Name?.value || card.id) })), ...scene.executions.map(worker => ({ value: worker.id, label: worker.identity.task_id || worker.id }))]
     const ids = new Set(scene.cards.flatMap(card => {
-      const value = card.source.properties.Initiative?.value
-      return [...card.ancestry, ...(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : typeof value === 'string' ? [value] : [])]
+      const property = card.source.properties.Initiative
+      const value = property && ['relation', 'select', 'rich_text'].includes(property.type ?? '') ? property.value : null
+      return (Array.isArray(value) ? value : [value]).filter((id): id is string => typeof id === 'string' && !!id.trim()).map(id => id.trim())
     }))
     return [...ids].map(value => ({ value, label: String(scene.cards.find(card => card.id === value)?.source.properties.Name?.value || value) }))
   }

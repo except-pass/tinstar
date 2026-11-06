@@ -24,6 +24,22 @@ const search = (value: string) => fireEvent.change(input(), { target: { value } 
 const cardIds = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.ov-card')].map(element => element.dataset.entityId)
 
 describe('Smart Search in the existing Overview', () => {
+  it('offers only explicit Initiative values and excludes parent ancestry', () => {
+    for (const card of scene.cards) {
+      delete card.source.properties.Initiative
+      card.ancestry = ['parent-only']
+    }
+    scene.cards[0]!.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['  explicit  '], hasMore: false }
+    scene.cards[1]!.source.properties.Initiative = { id: 'initiative', type: 'multi_select', value: ['unsupported'], hasMore: false }
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+    const select = screen.getByRole('combobox', { name: 'Search initiative' })
+    expect(within(select).getAllByRole('option').map(option => (option as HTMLOptionElement).value)).toEqual(['', 'explicit'])
+    fireEvent.change(select, { target: { value: 'explicit' } })
+    expect(screen.getByRole('button', { name: 'Remove initiative: explicit' })).toBeTruthy()
+    expect(within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: /Release Coordinator/ })).toBeTruthy()
+  })
+
   it.each(['Smart Search (Ctrl or Command K)', 'Remove search text', '← Back', 'Remove cards: Waiting For'])('restores the saved view on Escape from %s after Apply', label => {
     localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'machine', inner: 'initiative', order: 'priority', direction: 'desc' }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] }, donutFilter: { cards: ['Waiting For'], workers: [] } }))
     const { container } = mount()

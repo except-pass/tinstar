@@ -128,6 +128,25 @@ describe('deterministic Find', () => {
 })
 
 describe('health and graph predicates', () => {
+  it.each([
+    { type: 'relation', value: ['  explicit  ', 'other'], matches: true },
+    { type: 'select', value: '  explicit  ', matches: true },
+    { type: 'rich_text', value: '  explicit  ', matches: true },
+    { type: 'multi_select', value: ['explicit'], matches: false },
+    { type: 'relation', value: [], matches: false },
+  ])('uses explicit Initiative $type values without ancestry fallback', ({ type, value, matches }) => {
+    const scene = fixtureScene({ now })
+    for (const card of scene.cards) delete card.source.properties.Initiative
+    const card = scene.cards.find(card => card.id === fixtureId(2))!
+    card.ancestry = ['parent-only']
+    card.source.properties.Initiative = { id: 'initiative', type, value, hasMore: false }
+    const seeds = (initiative: string) => searchSeeds(scene, { ...emptySearch(), facets: [{ field: 'initiative', value: initiative }] }, now)
+    expect(seeds('parent-only')).toEqual([])
+    expect(seeds('explicit').some(seed => seed.id === card.id)).toBe(matches)
+    delete card.source.properties.Initiative
+    expect(searchSeeds({ ...scene }, { ...emptySearch(), facets: [{ field: 'initiative', value: 'parent-only' }] }, now)).toEqual([])
+  })
+
   it.each([{ tags: ['Decision'] }, { tags: ['Merge'] }, { tags: ['Decision', 'Merge'] }, { tags: [] }])('classifies published Will action tags $tags', ({ tags }) => {
     const scene = fixtureScene({ now })
     const card = scene.cards.find(card => card.id === fixtureId(2))!
