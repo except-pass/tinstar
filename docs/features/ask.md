@@ -30,12 +30,12 @@ moves only the Ask into searchable history. It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
 Tapping an item resolves its stable page ID against the current scene, invokes
-existing semantic navigate-card reveal/scroll/flash, and opens a compact answer
+existing [Desk navigation](overview.md) reveal/scroll/flash, and opens a compact answer
 sheet over the floor. Questions and answer previews are clamped at rest; **Full
 answer & evidence** expands the retained detail, references and suggestions. The
-compact sheet leaves the returned task visible above it on mobile. Current grouping and filters remain intact; the navigation
-exception reveals the task. A missing task gets the captured canonical source
-link rather than another object. Follow-up creates a new request in the same
+compact sheet leaves the returned task visible above it on mobile. Active and
+history items use the same return path. A task that cannot be shown gets the
+captured canonical source link rather than another object. Follow-up creates a new request in the same
 conversation and retains the original captured context. No raw audio is stored.
 
 ## Configuration and trust boundary
