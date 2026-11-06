@@ -10,6 +10,7 @@ import { AskApi } from '../routes'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
 import { fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
+import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 
 const exec = promisify(execFile)
@@ -22,7 +23,11 @@ const note = (id: string, noteId = 'note-1', announced = true) => ({ schema: 'fm
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined }; if (root) await rm(root, { recursive: true, force: true }); resetOriginAllowlistForTests() })
 async function setup() {
   root = await mkdtemp(join(tmpdir(), 'tinstar-ask-'))
-  let api = new AskApi({ scene: async () => fixtureScene() }, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }))
+  const sources = { scene: async () => {
+    const scene = fixtureScene()
+    return { ...scene, searchIndex: boundSearchDocuments(sceneSearchDocuments(scene)) }
+  } }
+  let api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }))
   server = createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -34,7 +39,7 @@ async function setup() {
     return { status: response.status, data: await response.json() }
   }
   const bridge = (body?: unknown) => call('bridge', body, { Authorization: `Bearer ${token}` })
-  const reload = () => { api = new AskApi({ scene: async () => fixtureScene() }, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token })) }
+  const reload = () => { api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token })) }
   return { call, bridge, reload, base }
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
