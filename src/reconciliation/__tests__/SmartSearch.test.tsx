@@ -27,7 +27,7 @@ describe('Smart Search in the existing Overview', () => {
   it('expands a previously collapsed Detailed result and restores its collapsed state on exit', () => {
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Detailed', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
     const selector = `.ov-card[data-entity-id="${fixtureId(1)}"]`
     fireEvent.click(container.querySelector(selector)!)
