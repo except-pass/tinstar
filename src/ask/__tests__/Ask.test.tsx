@@ -33,7 +33,9 @@ beforeEach(() => {
       if (body) {
         requests.push(body)
         const row = { ...seed(), question: body.question, status: 'sent' as const, reply: null }
-        row.context.anchor.page_id = body.card_id
+        row.context.anchor.page_id = body.target?.kind === 'execution' ? body.target.id : body.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === body.target.id)!.cardId : body.card_id
+        if (body.target) { row.context.target = body.target; row.context.anchor.kind = body.target.kind === 'execution' ? 'worker' : 'link' }
+        if (body.field_key) { row.context.field_key = body.field_key; row.context.field_value = body.field_value }
         records.push(row); data = row
       } else data = records
     }
@@ -83,8 +85,8 @@ describe('one-card text Ask and Desk', () => {
     Object.defineProperty(workspace, 'clientWidth', { configurable: true, value: 300 })
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchEnd')
     expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ask about a task' })[0]!)
-    expect(screen.getByRole('combobox', { name: 'Task context' })).toBeVisible()
+    fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+    expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
   })
   it('submits the canonical card ID only after review, shows Sent, then survives a second mount', async () => {
     const first = mount()
@@ -114,6 +116,7 @@ describe('one-card text Ask and Desk', () => {
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute('href', 'https://example.test/evidence')
     fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).not.toHaveTextContent('New answer'))
+    fireEvent.click(screen.getByText('Actions', { selector: 'summary' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss to history' }))
     await waitFor(() => expect(within(screen.getByLabelText('Questions for First Mate')).queryByText('Why is this waiting?')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
@@ -190,4 +193,210 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
     await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, card_id: fixtureId(1) }))
   })
+})
+
+it.each([
+  ['.ov-check', 'next_check_in', 'Why is this overdue?'],
+  ['.ov-task-status', 'status', 'Why is this task in this status? What is happening now?'],
+  ['.ov-context-field[title^="Waiting For:"]', 'waiting_for', "What's preventing this from moving forward?"],
+  ['.ov-owner', 'owner', 'What is this owner doing on the task?'],
+  ['.ov-priority', 'priority', 'Why does this task have this priority?'],
+  ['.ov-age', 'last_edited', 'What changed in the last edit?'],
+  ['strong', 'title', "What's the current situation with this task?"],
+] as const)('right-click %s seeds an editable draft and exact typed field without sending', async (selector, field, draft) => {
+  const source = scene.cards.find(card => card.id === fixtureId(1))!
+  source.source.properties.Priority = { id: 'priority', type: 'select', value: 'Medium', hasMore: false }
+  source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-05T12:00:00Z' }, hasMore: false }
+  source.source.properties['Waiting For'] = { id: 'waiting', type: 'rich_text', value: 'Review capacity', hasMore: false }
+  const { container } = mount(), task = card(container)
+  fireEvent.click(task)
+  const clicked = task.querySelector(selector)!
+  expect(clicked).toBeTruthy()
+  const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(clicked, contextMenu)
+  expect(contextMenu.defaultPrevented).toBe(true)
+  const question = screen.getByRole('textbox', { name: 'Question' })
+  expect(question).toHaveValue(draft)
+  expect(question).toHaveFocus()
+  expect(requests).toHaveLength(0)
+  expect(task).toHaveAttribute('aria-expanded', 'true')
+  fireEvent.change(question, { target: { value: draft + ' Please explain.' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  const expectedValue = field === 'last_edited' ? source.source.last_edited_time : field === 'title' ? source.source.properties.Name!.value : field === 'next_check_in' ? JSON.stringify(source.source.properties['Next check-in']!.value) : field === 'waiting_for' ? 'Review capacity' : source.source.properties[{ status: 'Status', owner: 'Owner', priority: 'Priority' }[field]!]!.value
+  // Next check-in uses the same typed property formatter as the floor; the raw
+  // date object is represented by its start/end values rather than DOM text.
+  if (field !== 'next_check_in') expect(requests[0]!.field_value).toEqual(expectedValue)
+  else expect(requests[0]!.field_value).toContain('2026')
+  expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: field, question: draft + ' Please explain.' })
+})
+
+it('offers blank Ask for collapsed card and worker identities without expanding either', async () => {
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  expect(task).toHaveAttribute('aria-expanded', 'false')
+  fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
+  const worker = container.querySelector<HTMLElement>('.ov-execution')!
+  fireEvent.click(within(worker.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  const question = screen.getByRole('textbox', { name: 'Question' })
+  expect(question).toHaveValue('')
+  fireEvent.change(question, { target: { value: 'What is this worker doing?' } })
+  fireEvent.keyDown(question, { key: 'Enter', shiftKey: true })
+  expect(requests).toHaveLength(0)
+  fireEvent.keyDown(question, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: worker.dataset.entityId } })
+  expect(requests[0]).not.toHaveProperty('card_id')
+})
+
+it('right-click background stays blank and outside/link context menus stay native', () => {
+  const { container } = mount(), task = card(container)
+  const outside = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(screen.getByRole('heading', { name: 'Your desk' }), outside)
+  expect(outside.defaultPrevented).toBe(false)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.contextMenu(task)
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  const dialog = screen.getByRole('dialog')
+  fireEvent(dialog, new Event('cancel', { bubbles: false, cancelable: true }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const link = screen.getByRole('link', { name: 'Open Notion card ↗' })
+  const native = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  fireEvent(link, native)
+  expect(native.defaultPrevented).toBe(false)
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('right-click relationship carries its canonical claim identity, with keyboard and blank icon alternatives', async () => {
+  const { container } = mount()
+  const line = container.querySelector<SVGPathElement>('.ov-relationship-hit')!
+  expect(line).toBeTruthy()
+  fireEvent.contextMenu(line)
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
+  expect(requests).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'claim', id: line.dataset.claimId }, field_key: 'relationship' })
+  fireEvent.keyDown(line, { key: 'Enter' })
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
+})
+
+it('Desk starts with records and omits intro chrome; history dismissal is a secondary action', async () => {
+  records = [seed()]
+  mount()
+  const desk = screen.getByLabelText('Your desk')
+  await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
+  expect(desk.querySelector('.ask-desk')?.previousElementSibling).toBeNull()
+  for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) expect(within(desk).queryByText(text)).toBeNull()
+  expect(within(desk).queryByText(/Later & needs verification/)).toBeNull()
+  expect(within(desk).getByText('Review is pending')).toBeVisible()
+  expect(within(desk).getByText('Captured task')).toBeVisible()
+  expect(within(desk).getByText(/New answer/)).toBeVisible()
+  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).not.toBeVisible()
+  fireEvent.click(within(desk).getByText('Actions', { selector: 'summary' }))
+  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).toBeVisible()
+})
+
+it('returns a retained worker answer after remount to its exact filtered execution and highlights it', async () => {
+  const worker = scene.executions.find(worker => worker.identity.task_id === 'linked-worker')!
+  const answer = seed()
+  answer.context.target = { kind: 'execution', id: worker.id }
+  answer.context.anchor = { ...answer.context.anchor, kind: 'worker', page_id: worker.id, label: 'Captured worker', url: null }
+  records = [answer]
+  const first = mount(); first.unmount()
+  const { container } = mount()
+  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'unmatched-worker-query' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect([...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)).toBeUndefined()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const returned = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)!
+  expect(returned).toHaveClass('flashed')
+  expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  expect(screen.getByRole('dialog')).toHaveTextContent('Captured worker')
+  fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What has changed?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: worker.id }, follow_up_to: answer.request_id }))
+})
+
+it('opens blank Ask for a relationship from its Inspector connection control', async () => {
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const relationship = screen.getByLabelText('Inspector').querySelector('.ov-related')!
+  fireEvent.click(within(relationship as HTMLElement).getByRole('button', { name: 'Ask about this item' }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+  expect(screen.getByRole('dialog')).toHaveTextContent('Relationship')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'Explain this relationship.' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'claim', id: scene.claims.find(claim => claim.cardId === fixtureId(1))!.id } }))
+})
+
+it('hides Ask on historical Inspector connections while keeping supported connections actionable', () => {
+  const current = scene.claims.find(claim => claim.cardId === fixtureId(1))!
+  scene.claimHistory.push({ ...current, id: 'retained-history', state: 'historical' })
+  const { container } = mount(), task = card(container)
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  const connections = [...screen.getByLabelText('Inspector').querySelectorAll<HTMLElement>('.ov-related')]
+  const history = connections.find(connection => within(connection).queryByText('History'))!
+  expect(history).toBeTruthy()
+  expect(within(history).queryByRole('button', { name: 'Ask about this item' })).toBeNull()
+  expect(within(connections.find(connection => within(connection).queryByText('Linked'))!).getByRole('button', { name: 'Ask about this item' })).toBeVisible()
+})
+
+it.each(['detailed', 'compact'] as const)('returns a retained claim answer to only its relationship in %s', async density => {
+  localStorage.setItem('tinstar.overview.density', density)
+  const claims = scene.claims.filter(claim => claim.cardId === fixtureId(1))
+  expect(claims.length).toBeGreaterThan(1)
+  const original = seed()
+  original.context.target = { kind: 'claim', id: claims[0]!.id }
+  original.context.anchor.kind = 'link'
+  records = [original]
+  const { container } = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const lines = [...container.querySelectorAll('.ov-line.flashed')]
+  expect(lines).toHaveLength(1)
+  expect(lines[0]!.parentElement!.querySelector('.ov-relationship-hit')).toHaveAttribute('data-claim-id', claims[0]!.id)
+  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+  expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+})
+
+it('returns an unverified Detailed relationship answer after reload and filtering', async () => {
+  localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'none', inner: 'none', order: 'checkIn', direction: 'asc' } }))
+  localStorage.setItem('tinstar.overview.density', 'detailed')
+  const claim = scene.claims.find(claim => claim.cardId === fixtureId(1))!
+  scene.claims = scene.claims.filter(other => other.cardId !== claim.cardId || other.id === claim.id)
+  claim.verification = 'unverified'
+  const first = mount()
+  const line = [...first.container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
+  fireEvent.contextMenu(line)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(records).toHaveLength(1))
+  records[0] = { ...records[0]!, status: 'answered', reply: seed().reply }
+  first.unmount()
+  const { container } = mount()
+  fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'excluded-relationship' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+  expect(card(container)).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*How are these two items related/ }))
+  expect(card(container)).toBeVisible()
+  const returned = [...container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
+  expect(returned.previousElementSibling).toHaveClass('flashed')
+  expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
+  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+})
+
+it('reports a missing relationship even when its card remains available', async () => {
+  const original = seed()
+  original.context.target = { kind: 'claim', id: 'missing-claim' }
+  original.context.anchor.kind = 'link'
+  records = [original]
+  const { container } = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  expect(screen.getByRole('dialog')).toHaveTextContent('no longer on the floor')
+  expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(0)
 })

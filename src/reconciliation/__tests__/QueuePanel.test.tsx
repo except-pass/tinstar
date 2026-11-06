@@ -5,12 +5,12 @@ import { fixtureQueue, fixtureScene, fixtureViewerWorkers } from '../../../test-
 import { initialPresentation } from '../presentation'
 import { QueuePanel } from '../QueuePanel'
 afterEach(cleanup)
-it('keeps unverified requests secondary and updates readiness when selected evidence expires', () => {
+it('omits operational queue summaries and updates readiness when selected evidence expires', () => {
   const now = Date.now(), queue = fixtureQueue(now), send = vi.fn()
   const state = { ...initialPresentation(), queueItemId: queue.items.find(item => item.readiness === 'ready-now')!.id }
   const { rerender } = render(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={state} send={send} queue={queue} error={null} now={now} />)
   expect(screen.queryByText('No verified request ready')).toBeNull()
-  expect(screen.getByText(/Later & needs verification/)).toBeTruthy()
+  expect(screen.queryByText(/Later & needs verification/)).toBeNull()
   rerender(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={state} send={send} queue={queue} error={null} now={now + 61_000} />)
   expect(screen.getByText('Needs verification', { selector: '.ov-eyebrow' })).toBeTruthy()
   expect(send).not.toHaveBeenCalled()
@@ -141,4 +141,15 @@ it('reconciles selected source membership for rendering and subsequent navigatio
     expect(result.current.state.queueItemId).not.toBe('pr:canonical')
     unmount()
   } finally { vi.unstubAllGlobals() }
+})
+
+it('shows human hold text and every ready request as inbox records without exposing an encoded summary', () => {
+  const queue = fixtureQueue(), now = Date.now(), selected = queue.items[0]!
+  selected.cardIds = []
+  selected.title = 'fm-hold-v1:' + btoa('Choose the next review pass')
+  selected.action = selected.title
+  const { container } = render(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={{ ...initialPresentation(), queueItemId: selected.id }} send={vi.fn()} queue={queue} error={null} now={now} />)
+  expect(container.querySelector('.ov-selected-request > summary')).toHaveTextContent('Choose the next review pass')
+  expect(container.querySelector('.ov-selected-request > summary')).not.toHaveTextContent('fm-hold-v1:')
+  expect(screen.queryByText(/Later & needs verification/)).toBeNull()
 })

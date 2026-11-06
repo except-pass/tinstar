@@ -9,3 +9,19 @@
  * expands only on request; lengthy questions/replies must not hide the flash. */
 .ask-preview strong,.ask-preview p,.ask-answer-question,.ask-answer-summary,.ask-answer h2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .ask-answer-question{-webkit-line-clamp:1}.ask-answer h2{font-size:14px;line-height:1.4}.ask-answer>p,.ask-answer>h3{margin:6px 0;font-size:14px;line-height:1.4}.ask-answer details{margin:6px 0}.ask-answer summary{cursor:pointer;color:#a5e7ec}.ask-answer footer{margin-top:10px}.ask-answer[data-expanded=true] .ask-answer-question,.ask-answer[data-expanded=true] .ask-answer-summary{display:block}.ask-preview span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* The dialog lives in the top layer; opening it never changes floor geometry. */
+.ask-dialog{box-sizing:border-box;max-height:calc(100dvh - 24px)}
+.ask-dialog textarea,.ask-dialog select{box-sizing:border-box;max-width:100%}
+.ask-dialog textarea{max-height:40dvh}
+.ask-desk .ask-preview strong,.ask-desk .ask-preview p{display:block;overflow:visible;font:14px/1.5 system-ui;white-space:normal}
+.ask-desk .ask-preview strong{font-weight:650;margin:8px 0}
+.ask-desk .ask-preview span{white-space:normal;overflow:visible;font:12px/1.5 system-ui}
+.ask-desk .ask-preview small{font:12px/1.5 system-ui}
+.ask-desk article[data-unread=true]{border-left:2px solid #63cfb0;padding-left:10px}
+.ask-desk article[data-unread=true] small{color:#8aebcd}
+.ask-desk .ask-item-actions{margin:6px 0 0}
+.ask-desk .ask-item-actions summary{font:12px/1.5 system-ui;margin:0;color:#8aa8b5}
+.ask-desk .ask-history{margin-top:12px;background:none;border:0;padding:5px 0;font:12px/1.5 system-ui}
+.ask-desk .ask-preview .ask-open{color:#8ce5eb;margin-top:6px;font-size:12px}
+.ov-relationship-hit:focus-visible{outline:none;stroke:#00f0ff55}

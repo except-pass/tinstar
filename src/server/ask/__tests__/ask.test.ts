@@ -181,3 +181,38 @@ it('checks the standalone puller CLI security and retry behavior', async () => {
   const result = await exec('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_ask_puller.py'])
   expect(result.stderr).toContain('OK')
 })
+
+it('persists semantic fields, exact worker identities and server-resolved relationship provenance on the existing Ask path', async () => {
+  const { call, bridge, reload } = await setup()
+  const scene = fixtureScene(), claim = scene.claims.find(claim => claim.cardId === fixtureId(1))!, worker = scene.executions[0]!
+  const status = await call('requests', { ...input(), field_key: 'status', field_value: 'In Progress' })
+  expect(status.status).toBe(200)
+  expect(status.data.data.context).toMatchObject({ anchor: { kind: 'work', page_id: fixtureId(1) }, field_key: 'status', field_value: 'In Progress' })
+  const workerInput = { client_key: randomUUID(), target: { kind: 'execution', id: worker.id }, question: 'What is this worker doing?', view }
+  const first = await call('requests', workerInput)
+  expect(first.status).toBe(200)
+  expect(first.data.data.context).toMatchObject({ anchor: { kind: 'worker', page_id: worker.id }, target: workerInput.target })
+  const relationshipInput = { client_key: randomUUID(), target: { kind: 'claim', id: claim.id }, question: 'How are these two items related?', field_key: 'relationship', field_value: claim.id, view }
+  const link = await call('requests', relationshipInput)
+  expect(link.status).toBe(200)
+  expect(link.data.data.context).toMatchObject({ anchor: { kind: 'link', page_id: claim.cardId }, target: relationshipInput.target, relationship: { claim_id: claim.id, card_id: claim.cardId, execution_id: claim.executionId, sources: claim.sources, basis: claim.basis, verification: claim.verification } })
+  reload()
+  expect((await call('requests', relationshipInput)).data.data.request_id).toBe(link.data.data.request_id)
+  expect((await call('requests', { ...relationshipInput, target: { kind: 'execution', id: worker.id } })).status).toBe(409)
+  expect((await call('requests', { ...relationshipInput, field_value: 'different' })).status).toBe(409)
+  expect((await call('requests', { ...workerInput, client_key: randomUUID(), target: { kind: 'execution', id: 'unknown' } })).status).toBe(404)
+  expect((await call('requests', { ...relationshipInput, client_key: randomUUID(), relationship: { card_id: fixtureId(99) } })).status).toBe(400)
+  expect((await bridge()).data.data.pending).toHaveLength(3)
+  const id = link.data.data.request_id
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Verified the two real endpoints.', cursor: '1' } })
+  reload()
+  const retained = (await call('requests')).data.data.find((item: { request_id: string }) => item.request_id === id)
+  expect(retained).toMatchObject({ status: 'answered', context: { target: relationshipInput.target, relationship: { card_id: claim.cardId, execution_id: claim.executionId } } })
+  const followInput = { ...relationshipInput, client_key: randomUUID(), follow_up_to: id, question: 'What changed?', field_key: undefined, field_value: undefined }
+  const follow = await call('requests', followInput)
+  expect(follow.data.data.conversation_id).toBe(id)
+  expect(follow.data.data.context).toEqual(retained.context)
+  reload()
+  expect((await call('requests', followInput)).data.data.request_id).toBe(follow.data.data.request_id)
+})

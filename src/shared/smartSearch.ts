@@ -183,6 +183,7 @@ export const targetKey = (target: Target) => `${target.kind}:${target.id}`
 export function directNeighbors(scene: FloorScene, roots: readonly Target[]) {
   const keys = new Set(roots.map(targetKey))
   for (const root of roots) for (const claim of scene.claims) {
+    if (root.kind === 'claim' && root.id === claim.id) { keys.add(`execution:${claim.executionId}`); keys.add(`card:${claim.cardId}`) }
     if (!verifiedLink(claim)) continue
     if (root.kind === 'card' && root.id === claim.cardId) keys.add(`execution:${claim.executionId}`)
     if (root.kind === 'execution' && root.id === claim.executionId) keys.add(`card:${claim.cardId}`)
