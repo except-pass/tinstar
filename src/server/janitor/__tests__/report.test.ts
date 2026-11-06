@@ -98,6 +98,80 @@ describe('deterministic read-only Janitor', () => {
     expect(report.proposals.filter(p => p.category === 'overlaps')).toHaveLength(1)
   })
 
+  it.each(['slices', 'ancestry', 'dates', 'identifiers', 'roles'])('checks %s across a completed group beyond sampled neighbors', kind => {
+    const link = 'https://github.com/example/repo/pull/42'
+    const other = 'https://github.com/example/repo/pull/43'
+    const cards = Array.from({ length: 18 }, (_, i) => card(i + 1, 'Cleanup implementation verification', { Link: link }))
+    if (kind === 'slices') {
+      cards[0]!.properties.Name!.value = 'Cleanup implementation slice A'
+      cards[17]!.properties.Name!.value = 'Cleanup implementation slice B'
+      for (const c of cards.slice(1, 17)) c.properties.Name!.value = 'Cleanup implementation slice'
+    } else if (kind === 'ancestry') cards[17]!.properties['Parent item']!.value = [fixtureId(1)]
+    else if (kind === 'dates') {
+      cards[0]!.properties.Name!.value += ' 2026-11-02'
+      cards[17]!.properties.Name!.value += ' 2026-11-03'
+      for (const c of cards.slice(1, 17)) c.properties.Name!.value += ' 2026'
+    } else if (kind === 'identifiers') {
+      cards[0]!.properties.Name!.value += ' alpha'
+      cards[17]!.properties.Name!.value += ' beta'
+      cards[17]!.properties.Link!.value = other
+      for (const c of cards.slice(1, 17)) c.properties.Link!.value = `${link} ${other}`
+    } else {
+      cards[0]!.properties.Name!.value += ' writer'
+      cards[17]!.properties.Name!.value += ' recovery'
+    }
+    const report = buildJanitorReport({ snapshot: source(cards) })
+    expect(report.proposals.filter(p => p.category === 'duplicates')).toHaveLength(0)
+    expect(report.proposals.some(p => p.category === 'overlaps' && p.pages.length === 18)).toBe(true)
+    expect(report.distinctions.some(d => d.pageIds.includes(fixtureId(1)) && d.pageIds.includes(fixtureId(18)))).toBe(true)
+    expect(report.metrics.comparedPairs).toBeLessThanOrEqual(18 * 8)
+  })
+
+  it('fingerprints worker spawn evidence and propagates partial fleet health', () => {
+    const snapshot = fixtureSources({ now })
+    const home = snapshot.fleet[1]!
+    const task = home.observation.data!.tasks[0]!
+    task.identity.spawn_gen = 'conflicting-2'
+    const diagnostic = () => buildJanitorReport({ snapshot }).proposals.find(p => p.rule === 'worker-link:spawn-evidence')!
+    const first = diagnostic()
+    expect(first).toBeDefined()
+    expect(first.evidence.some(e => e.field.startsWith('worker-link-home:') && JSON.stringify(e.value).includes('conflicting-2'))).toBe(true)
+    task.identity.spawn_gen = 'conflicting-3'
+    const drift = diagnostic()
+    expect(drift.proposal_id).toBe(first.proposal_id)
+    expect(drift.evidenceRevision).not.toBe(first.evidenceRevision)
+    expect(drift.applyPreconditions.evidenceRevision).not.toBe(first.applyPreconditions.evidenceRevision)
+    home.observation.status = 'partial'
+    home.observation.coverage = 'partial'
+    const partial = diagnostic()
+    expect(partial.evidence.some(e => e.field.startsWith('worker-link-home:') && e.freshness === 'partial' && e.coverage === 'partial')).toBe(true)
+    expect(partial.abstainReason).toContain('partial/stale/unavailable')
+    expect(partial.evidenceRevision).not.toBe(drift.evidenceRevision)
+    home.observation.status = 'unknown'
+    home.observation.coverage = 'unknown'
+    home.observation.data = null
+    const unavailable = buildJanitorReport({ snapshot })
+    expect(unavailable.proposals.some(p => p.rule.includes('spawn-evidence') || p.rule.includes('declared-absent'))).toBe(false)
+    expect(unavailable.categories['ownership-or-links'].unknown.some(u => u.reason.includes('unknown/unknown'))).toBe(true)
+  })
+
+  it('cites complete-home absence and unavailable historical-link evidence', () => {
+    const snapshot = fixtureSources({ now })
+    const home = snapshot.fleet[1]!
+    snapshot.fleet = [home]
+    home.observation.data!.tasks = []
+    const first = buildJanitorReport({ snapshot }).proposals.find(p => p.rule === 'worker-link:declared-absent')!
+    expect(first.evidence.some(e => e.field.startsWith('worker-link-home:') && e.coverage === 'complete')).toBe(true)
+    const linked = snapshot.intentions.data!.cards.find(c => c.id === fixtureId(1))!
+    linked.properties.Owner!.value = 'Will'
+    home.observation.data = null
+    home.observation.status = 'unknown'
+    home.observation.coverage = 'unknown'
+    const historical = buildJanitorReport({ snapshot }).proposals.find(p => p.rule === 'worker-link:historical-link')!
+    expect(historical.evidence.some(e => e.field.startsWith('worker-link-home:') && e.freshness === 'unknown')).toBe(true)
+    expect(historical.abstainReason).toContain('partial/stale/unavailable')
+  })
+
   it('recognizes the same lettered slice regardless of case', () => {
     const report = buildJanitorReport({ snapshot: source([
       card(1, 'Cleanup implementation slice A', { Link: 'https://github.com/example/repo/pull/42' }),

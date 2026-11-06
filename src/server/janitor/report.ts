@@ -94,31 +94,37 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
   const pairs = neighbors(cards, derived)
   const distinctions: Array<{ pageIds: string[]; reason: string }> = []
   const edges: Record<'duplicates' | 'overlaps', Array<[string, string]>> = { duplicates: [], overlaps: [] }
-  for (const [left, right] of pairs) {
-    metrics.comparedPairs++
-    categories.duplicates.examinedPairs++; categories.overlaps.examinedPairs++
+  const separation = (left: string, right: string) => {
     const a = byId.get(left)!, b = byId.get(right)!, fa = derived.get(left)!, fb = derived.get(right)!
-    const sharedTokens = fa.tokens.filter(t => fb.tokens.includes(t))
-    const sharedKeys = fa.identifiers.filter(t => fb.identifiers.includes(t))
-    const identical = !!fa.normalizedTitle && fa.normalizedTitle === fb.normalizedTitle
-    const similarity = sharedTokens.length / Math.max(1, new Set([...fa.tokens, ...fb.tokens]).size)
-    const separateRoles = /\b(?:recovery|backfill)\b/i.test(title(a)) !== /\b(?:recovery|backfill)\b/i.test(title(b)) &&
-      /\b(?:writer|owned|reconciliation)\b/i.test(`${title(a)} ${title(b)}`)
-    if (!identical && !sharedKeys.length && !(sharedTokens.length >= 3 && similarity >= 0.3) && !(separateRoles && sharedTokens.length >= 2)) continue
     const related = sceneById.get(left)!.ancestry.includes(right) || sceneById.get(right)!.ancestry.includes(left)
     const slice = (value: string) => value.match(/\b(?:u|slice|phase|part|milestone)\s*(\d+|[a-z])\b/i)?.[1]?.toLowerCase()
     const differentSlices = !!slice(title(a)) && !!slice(title(b)) && slice(title(a)) !== slice(title(b))
     const dateA = title(a).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0], dateB = title(b).match(/\b20\d{2}-\d{2}-\d{2}\b/)?.[0]
-    const differentRuns = !!dateA && !!dateB && dateA !== dateB
-    if (related || differentSlices || differentRuns) {
-      distinctions.push({ pageIds: [left, right], reason: related ? 'Explicit ancestor/child relationship; retain separate cards' : differentRuns ? 'Different explicitly dated runs; retain separate cards' : 'Named implementation slices differ; retain separate cards' })
-      continue
+    if (related) return 'Explicit ancestor/child relationship; retain separate cards'
+    if (dateA && dateB && dateA !== dateB) return 'Different explicitly dated runs; retain separate cards'
+    if (differentSlices) return 'Named implementation slices differ; retain separate cards'
+    if (fa.identifiers.length && fb.identifiers.length && !fa.identifiers.some(key => fb.identifiers.includes(key)) && fa.normalizedTitle !== fb.normalizedTitle)
+      return 'Different canonical work identifiers; overlap alone does not establish duplication'
+    if (/\b(?:recovery|backfill)\b/i.test(title(a)) !== /\b(?:recovery|backfill)\b/i.test(title(b)) &&
+      /\b(?:writer|owned|reconciliation)\b/i.test(`${title(a)} ${title(b)}`))
+      return 'Writer/reconciliation and recovery/backfill roles differ; clarify boundaries, do not merge on similarity'
+    return null
+  }
+  for (const [left, right] of pairs) {
+    metrics.comparedPairs++
+    categories.duplicates.examinedPairs++; categories.overlaps.examinedPairs++
+    const fa = derived.get(left)!, fb = derived.get(right)!
+    const sharedTokens = fa.tokens.filter(t => fb.tokens.includes(t))
+    const sharedKeys = fa.identifiers.filter(t => fb.identifiers.includes(t))
+    const identical = !!fa.normalizedTitle && fa.normalizedTitle === fb.normalizedTitle
+    const similarity = sharedTokens.length / Math.max(1, new Set([...fa.tokens, ...fb.tokens]).size)
+    const reason = separation(left, right)
+    const separateRoles = !!reason?.includes('roles differ')
+    if (!identical && !sharedKeys.length && !(sharedTokens.length >= 3 && similarity >= 0.3) && !(separateRoles && sharedTokens.length >= 2)) continue
+    if (reason) {
+      distinctions.push({ pageIds: [left, right], reason })
+      if (!separateRoles) continue
     }
-    if (fa.identifiers.length && fb.identifiers.length && !sharedKeys.length && !identical) {
-      distinctions.push({ pageIds: [left, right], reason: 'Different canonical work identifiers; overlap alone does not establish duplication' })
-      continue
-    }
-    if (separateRoles) distinctions.push({ pageIds: [left, right], reason: 'Writer/reconciliation and recovery/backfill roles differ; clarify boundaries, do not merge on similarity' })
     if (!separateRoles && (identical || sharedKeys.length && similarity >= 0.7)) edges.duplicates.push([left, right])
     else edges.overlaps.push([left, right])
   }
@@ -133,6 +139,11 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
     }
     for (const group of groups) {
       const involved = sorted([...group]).map(id => byId.get(id)!)
+      if (category === 'duplicates') for (let i = 0; i < involved.length; i++) for (let j = i + 1; j < involved.length; j++) {
+        const pageIds = [involved[i]!.id, involved[j]!.id]
+        const reason = separation(pageIds[0]!, pageIds[1]!)
+        if (reason && !distinctions.some(d => stable(d.pageIds) === stable(pageIds))) distinctions.push({ pageIds, reason })
+      }
       const matching = edges[category].filter(([a, b]) => group.has(a) && group.has(b))
       const tokens = sorted(matching.flatMap(([a, b]) => derived.get(a)!.tokens.filter(t => derived.get(b)!.tokens.includes(t))))
       const keys = sorted(matching.flatMap(([a, b]) => derived.get(a)!.identifiers.filter(t => derived.get(b)!.identifiers.includes(t))))
@@ -220,10 +231,26 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
   for (const finding of scene.findings.filter(f => f.workerLinkDetectors?.length)) {
     const involved = finding.cardIds.map(id => byId.get(id)).filter((c): c is AuditCard => !!c)
     if (!involved.some(c => operational.has(c.id))) continue
+    const diagnostics = scene.findings.filter(f => stable(sorted(f.cardIds)) === stable(sorted(finding.cardIds)) &&
+      stable(sorted(f.workerLinkDetectors ?? [])) === stable(sorted(finding.workerLinkDetectors ?? [])))
+    const executions = scene.executions.filter(e => diagnostics.some(f => f.executionIds.includes(e.id)))
+    const homeIds = sorted([...diagnostics.flatMap(f => f.homeIds), ...executions.map(e => e.home)])
+    const extra = involved.flatMap(card => homeIds.map(homeId => {
+      const home = scene.coverage.homes.find(h => h.source.home === homeId)
+      const observation = home?.observation
+      return { pageId: card.id, url: pageUrl(card), field: `worker-link-home:${homeId}`,
+        value: { home: homeId, status: observation?.status ?? 'unknown', coverage: observation?.coverage ?? 'unknown',
+          detectors: diagnostics.map(f => ({ kind: f.kind, reason: f.reason, detectors: sorted(f.workerLinkDetectors ?? []),
+            cardIds: sorted(f.cardIds), executionIds: sorted(f.executionIds), homeIds: sorted(f.homeIds) })).sort((a, b) => compare(stable(a), stable(b))),
+          executions: executions.filter(e => e.home === homeId).map(e => ({ id: e.id, identity: e.identity,
+            cardReferences: [...e.source.cardReferences].sort((a, b) => compare(stable(a), stable(b))) })).sort((a, b) => compare(a.id, b.id)) },
+        observedAt: observation?.observedAt ?? null, editedAt: card.last_edited_time,
+        freshness: observation?.status ?? 'unknown', coverage: observation?.coverage ?? 'unknown' } satisfies AuditEvidence
+    }))
     add('ownership-or-links', `worker-link:${sorted(finding.workerLinkDetectors ?? []).join(',')}`, involved,
       `Existing reconciliation diagnostic: ${finding.reason}`, ['Name', 'First Mate tasks'],
       'Route this diagnostic to the existing worker-link reconciliation owner; Janitor must not infer, repair or write an assignment',
-      'Reconciliation owns link authority; unknown worker is not proof of missing assignment')
+      'Reconciliation owns link authority; unknown worker is not proof of missing assignment', extra)
   }
   for (const home of scene.coverage.homes) if (home.observation.status !== 'fresh' || home.observation.coverage !== 'complete') {
     unknown('ownership-or-links', [], `Existing fleet source ${home.source.label ?? home.source.home}: ${home.observation.status}/${home.observation.coverage}; worker-link coverage remains unknown`)
