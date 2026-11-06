@@ -27,6 +27,28 @@ async function setup() {
 }
 const headers = { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.com' }
 describe('Releases HTTP boundary', () => {
+  it('allows the UI handshake in desktop preflight without bypassing owner authorization', async () => {
+    const { base, payload } = await setup()
+    const Origin = 'https://tauri.localhost'
+    const preflight = await fetch(`${base}/api/releases/associations`, { method: 'OPTIONS', headers: {
+      Origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-tinstar-ui',
+    } })
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('access-control-allow-origin')).toBe(Origin)
+    expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase().split(/,\s*/)).toEqual(expect.arrayContaining(['content-type', 'x-tinstar-ui']))
+    expect((await fetch(`${base}/api/releases/associations`, { method: 'POST', headers: { ...headers, Origin }, body: JSON.stringify(payload) })).status).toBe(200)
+    expect((await fetch(`${base}/api/releases/associations`, { method: 'POST', headers: { ...headers, Origin, 'Tailscale-User-Login': 'other@example.com' }, body: JSON.stringify(payload) })).status).toBe(403)
+  })
+  it('keeps an unreadable empty local audit incomplete at collection level', async () => {
+    const { base, api, scene } = await setup()
+    scene.cards = []
+    vi.spyOn(api.store, 'read').mockRejectedValue(new Error('Unreadable audit'))
+    const { data } = await (await fetch(`${base}/api/releases`, { headers })).json()
+    expect(data.pulls).toEqual([])
+    expect(data.associationsComplete).toBe(false)
+    expect(data.associationsWritable).toBe(false)
+    expect(data.warnings).toContain('Local association audit unavailable; manual associations cannot be verified')
+  })
   it('allows read-only collection and owner local link/unlink without Notion or GitHub mutation', async () => {
     const { base, payload, api, read } = await setup()
     const before = await (await fetch(`${base}/api/releases`)).json()

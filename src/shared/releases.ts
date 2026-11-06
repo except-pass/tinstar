@@ -32,6 +32,7 @@ export interface ReleasesRead {
   generatedAt: string; pulls: ReleasePull[]
   unassociatedCards: Array<{ id: string; title: string; reason: string }>
   warnings: string[]
+  associationsComplete: boolean
   associationsWritable: boolean
 }
 export const activeReleaseLinks = (pull: ReleasePull) => pull.links.filter(link => link.active)
@@ -47,6 +48,8 @@ export function declaredPulls(card: SceneCard): PullIdentity[] {
 
 /** PR/card edges are independent of worker assignment and retain audit history after unlink. */
 export function releaseAssociations(scene: FloorScene, events: AssociationEvent[] = []): ReleasesRead {
+  const associationsComplete = scene.coverage.intentions.status === 'fresh' && scene.coverage.intentions.coverage === 'complete'
+  const warnings = associationsComplete ? [] : ['Notion association source is stale, partial or unavailable']
   const pulls = new Map<string, ReleasePull>()
   const ensure = (identity: PullIdentity) => {
     let pull = pulls.get(identity.id)
@@ -82,11 +85,11 @@ export function releaseAssociations(scene: FloorScene, events: AssociationEvent[
       if (!card) pull.exceptions.push(`Linked card unavailable: ${link.cardId}`)
       if (link.events.at(-1)?.action === 'link' && !card) pull.exceptions.push('Manual association conflicts with current card coverage')
     }
-    if (scene.coverage.intentions.status !== 'fresh') pull.exceptions.push('Notion association source is stale or unavailable')
+    pull.exceptions.push(...warnings)
   }
   const associated = new Set([...pulls.values()].flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
   return { generatedAt: scene.generatedAt, pulls: [...pulls.values()].sort((a, b) => a.id.localeCompare(b.id)),
     unassociatedCards: scene.cards.filter(card => !card.source.in_trash && !card.source.archived && card.source.properties.Status?.value === 'Waiting for Prod Release' && !associated.has(card.id))
       .map(card => ({ id: card.id, title: String(card.source.properties.Name?.value ?? card.id), reason: 'Waiting for Prod Release without an explicit PR association' })),
-    warnings: [], associationsWritable: false }
+    warnings, associationsComplete, associationsWritable: false }
 }

@@ -27,7 +27,7 @@ export class ReleasesApi {
     const path = (req.url ?? '').split('?')[0]
     if (!['/api/releases', '/api/releases/associations'].includes(path!)) return false
     const allowlist = currentOriginAllowlist(), origin = req.headers.origin
-    const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
+    const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI', 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
     const peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
@@ -41,7 +41,7 @@ export class ReleasesApi {
         try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
         const data = releaseAssociations(scene, events)
         data.associationsWritable = writable && !warning
-        if (warning) { data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
+        if (warning) { data.associationsComplete = false; data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
         const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
         for (const pull of data.pulls) {
           Object.assign(pull, observations.get(pull.url))

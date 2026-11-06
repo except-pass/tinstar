@@ -17,6 +17,18 @@ beforeEach(() => {
 afterEach(cleanup)
 const mount = () => render(<Releases data={data} error={null} refresh={vi.fn()} />)
 describe('PR-first Releases', () => {
+  it('shows an unknown total for incomplete empty sources and retained failed reads', () => {
+    data.pulls = []
+    data.associationsComplete = false
+    data.warnings = ['Notion association source unavailable']
+    const view = mount()
+    expect(screen.getByText('Releases').querySelector('small')).toHaveTextContent('?')
+    expect(screen.getByText(/Sources unavailable or incomplete/)).toBeTruthy()
+    expect(screen.getByText('Notion association source unavailable')).toBeTruthy()
+    data.associationsComplete = true
+    view.rerender(<Releases data={data} error="Read failed" refresh={vi.fn()} />)
+    expect(screen.getByText('Releases').querySelector('small')).toHaveTextContent('?')
+  })
   it('keeps one PR row per group reference, canonical selection and same-row direct card/GitHub links', () => {
     const { container } = mount()
     const rows = container.querySelectorAll('[data-pull-id]')

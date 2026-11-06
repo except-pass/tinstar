@@ -13,7 +13,7 @@ import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
 import { useReleases } from './releases/useReleases'
-import { queuedPulls } from './releases/model'
+import { releaseQueueCount } from './releases/model'
 
 interface FleetData { ready: boolean; workers: Worker[]; attention: AttentionCard[]; errors: string[] }
 type Terminal = { state: 'live'; port: number; pid: number | null } | { state: 'unavailable'; reason: string }
@@ -294,7 +294,7 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} releasesActive={overviewLocation.page === 'releases'} releaseCount={releases.data && !releases.error && !releases.data.pulls.some(pull => pull.freshness !== 'fresh') ? queuedPulls(releases.data.pulls).length : null} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: '', page: 'releases' }, 'push') }} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
+    <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: '', page: 'releases' }, 'push') }} panelMode={panelMode} counts={{ needs: attention.length, messages: messages.length, workers: workers.length }} messageAttention={messages.filter(messageNeedsAttention).length} onOverview={openOverview} onSelect={selectPanel} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
 

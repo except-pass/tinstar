@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId } from '../../../test-fixtures/reconciliation/scenes'
 import { activeReleaseLinks, releaseAssociations, releasePull, type AssociationEvent } from '../../shared/releases'
-import { filterReleases, queuedPulls, releaseDocuments, releaseGroups } from '../model'
+import { filterReleases, queuedPulls, releaseQueueCount, releaseDocuments, releaseGroups } from '../model'
 import { SmartSearchIndex } from '../../shared/smartSearch'
 import { releaseFixture } from './fixtures'
 
@@ -9,6 +9,30 @@ import { releaseFixture } from './fixtures'
 const event = (overrides: Partial<AssociationEvent> = {}): AssociationEvent => ({ id: 'event', pull: 'https://github.com/owner/repo/pull/1', cardId: fixtureId(1), action: 'unlink', actor: 'owner@example.com', at: new Date().toISOString(), reason: 'Incorrect original declaration', ...overrides })
 
 describe('release associations and queue projection', () => {
+  it('withholds counts for empty failed, partial and stale association sources', () => {
+    const scene = releaseFixture()
+    scene.cards = []
+    expect(releaseQueueCount(releaseAssociations(scene))).toBe(0)
+    for (const status of ['unknown', 'partial', 'stale'] as const) {
+      scene.coverage.intentions.status = status
+      const data = releaseAssociations(scene)
+      expect(data.associationsComplete).toBe(false)
+      expect(data.warnings.length).toBeGreaterThan(0)
+      expect(releaseQueueCount(data)).toBeNull()
+    }
+    scene.coverage.intentions.status = 'fresh'
+    scene.coverage.intentions.coverage = 'partial'
+    expect(releaseQueueCount(releaseAssociations(scene))).toBeNull()
+  })
+  it('counts only with complete associations, fresh GitHub and a successful request', () => {
+    const data = releaseAssociations(releaseFixture())
+    expect(releaseQueueCount(data)).toBeNull()
+    data.pulls.forEach(pull => Object.assign(pull, { state: 'merged', freshness: 'fresh' }))
+    expect(releaseQueueCount(data)).toBe(2)
+    expect(releaseQueueCount(data, 'Read failed')).toBeNull()
+    data.associationsComplete = false
+    expect(releaseQueueCount(data)).toBeNull()
+  })
   it('normalizes explicit repository/PR identities and rejects non-PR or hostile URLs', () => {
     expect(releasePull('https://github.com/Owner/Repo/pull/12/?tab=files#diff')).toMatchObject({ id: 'owner/repo#12', url: 'https://github.com/owner/repo/pull/12' })
     for (const url of ['http://github.com/a/b/pull/1', 'https://github.com.evil/a/b/pull/1', 'https://x@github.com/a/b/pull/1', 'https://github.com/a/b/pull/0', 'https://github.com/a/b/issues/1']) expect(releasePull(url)).toBeNull()

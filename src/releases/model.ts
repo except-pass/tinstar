@@ -1,6 +1,6 @@
 import type { FloorScene } from '../shared/reconciliationPresentation'
 import { floorFieldValues } from '../shared/floorOrganization'
-import { activeReleaseLinks, type ReleasePull } from '../shared/releases'
+import { activeReleaseLinks, type ReleasePull, type ReleasesRead } from '../shared/releases'
 import type { SearchDocument } from '../shared/searchDocuments'
 import { searchText, sceneSearchDocuments } from '../shared/searchDocuments'
 
@@ -9,6 +9,8 @@ export const releaseFilters: ReleaseFilter[] = ['In Queue', 'Verify in Prod', 'S
 // Until component reconciliation is available, no observation certifies shipment.
 export const releaseState = (pull: ReleasePull) => pull.exceptions.length ? 'Exception' : pull.state === 'merged' ? 'Deployment unknown' : 'Merge unknown'
 export const queuedPulls = (pulls: ReleasePull[]) => pulls.filter(pull => pull.state === 'merged' && pull.freshness === 'fresh')
+export const releaseQueueCount = (data: ReleasesRead | null, error: string | null = null): number | null =>
+  data?.associationsComplete && !error && data.pulls.every(pull => pull.freshness === 'fresh') ? queuedPulls(data.pulls).length : null
 export function filterReleases(pulls: ReleasePull[], filter: ReleaseFilter) {
   if (filter === 'Exceptions') return pulls.filter(pull => pull.exceptions.length > 0)
   if (filter === 'In Queue') return pulls.filter(pull => pull.state === 'merged' || pull.state === 'unknown')

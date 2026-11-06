@@ -5,7 +5,7 @@ import { useFloorScene } from '../reconciliation/useFloorScene'
 import { SmartSearch } from '../reconciliation/SmartSearch'
 import { initialPresentation, type Target, type FloorScene } from '../shared/reconciliationPresentation'
 import { activeReleaseLinks, type ReleasePull, type ReleasesRead } from '../shared/releases'
-import { filterReleases, queuedPulls, releaseDocuments, releaseFilters, releaseGroups, releaseState, type ReleaseFilter } from './model'
+import { filterReleases, releaseQueueCount, releaseDocuments, releaseFilters, releaseGroups, releaseState, type ReleaseFilter } from './model'
 import '../reconciliation/overview.css'
 import './releases.css'
 
@@ -74,13 +74,13 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
   return <AskProvider scene={scene} state={state} visibleCardIds={new Set(visible.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))} send={action => {
     if (action.type === 'navigate-card') window.location.assign(cardHref(action.cardId))
   }}><section className="ov-root rel-root" aria-label="Releases">
-    <header className="ov-toolbar rel-toolbar"><strong>Releases <small>{queuedPulls(data.pulls).length}{data.pulls.some(pull => pull.freshness !== 'fresh') ? '+' : ''}</small></strong>
+    <header className="ov-toolbar rel-toolbar"><strong>Releases <small>{releaseQueueCount(data, warning) ?? '?'}</small></strong>
       <div className="ov-preset-buttons"><button type="button" aria-pressed={preset === 'initiative'} onClick={() => setPreset('initiative')}>Initiative → Epic</button><button type="button" aria-pressed={preset === 'repository'} onClick={() => setPreset('repository')}>Repository</button></div>
       <SmartSearch scope="releases" scene={scene} state={state} now={now} documents={documents} open={searchOpen} focused={!!focus} onOpen={() => setSearchOpen(true)} onDismiss={() => setSearchOpen(false)} onRestore={restoreFocus} onChoose={choose} />
       <div className="rel-filters">{releaseFilters.map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setFocus(null) }}>{value}{value === 'Exceptions' ? ` (${data.pulls.filter(pull => pull.exceptions.length).length + data.unassociatedCards.length})` : ''}</button>)}</div>
       <button type="button" onClick={() => setDrawer(null)}>Link PR</button>
     </header>
-    <details className="rel-sync"><summary>{warning ? 'Sources unavailable · last known' : 'Production sync: awaiting deployment evidence'} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories</summary>
+    <details className="rel-sync"><summary>{warning || !data.associationsComplete ? 'Sources unavailable or incomplete · last known' : 'Production sync: awaiting deployment evidence'} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories</summary>
       {warning && <p role="alert">{warning}</p>}{data.warnings.map(message => <p key={message}>{message}</p>)}
       {[...new Set(data.pulls.map(pull => pull.repository))].map(repo => <p key={repo}>{repo} · deployed version unknown · last successful reconciliation: none</p>)}
       <p>GitHub observations and link provenance are available in each row. Shipment requires a verified production component receipt.</p>
