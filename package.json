@@ -27,6 +27,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "janitor:report": "tsx scripts/card-janitor-report.ts",
     "worker-links:report": "tsx scripts/worker-link-report.ts",
     "worker-links:adapter": "tsx scripts/worker-link-adapter.ts",
     "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
