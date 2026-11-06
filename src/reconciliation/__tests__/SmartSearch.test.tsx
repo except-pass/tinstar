@@ -24,6 +24,22 @@ const search = (value: string) => fireEvent.change(input(), { target: { value } 
 const cardIds = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.ov-card')].map(element => element.dataset.entityId)
 
 describe('Smart Search in the existing Overview', () => {
+  it('expands a previously collapsed Detailed result and restores its collapsed state on exit', () => {
+    const { container } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Detailed', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    const selector = `.ov-card[data-entity-id="${fixtureId(1)}"]`
+    fireEvent.click(container.querySelector(selector)!)
+    expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    search('Release')
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'false')
+    expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'detailed')
+  })
   it('opens with Ctrl/Cmd K, searches with highlighted field evidence and focuses one-hop results with Enter', () => {
     const { container } = mount()
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })

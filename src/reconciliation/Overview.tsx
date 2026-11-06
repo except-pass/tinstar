@@ -302,7 +302,7 @@ export function Overview({ workers, submit, messages }: { messages: OutboxMessag
   const canvas = useRef<HTMLDivElement>(null)
   const [deskMobile, setDeskMobile] = useState(false)
   const root = useRef<HTMLDivElement>(null), previousSelection = useRef<string | null>(null)
-  const search = useSearchSession({ state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const search = useSearchSession({ scene, state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
   const deskPanel = useRef<HTMLElement>(null), previousDeskOpen = useRef(false)
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => {

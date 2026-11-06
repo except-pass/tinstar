@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
-import { emptySearch } from '../shared/smartSearch'
-import { semanticId, type PresentationAction, type PresentationState, type Target } from './presentation'
+import { directNeighbors, emptySearch } from '../shared/smartSearch'
+import { semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
 
 interface Snapshot {
@@ -16,7 +16,8 @@ interface Snapshot {
 }
 
 /** One temporary focus lens over the existing reducer, with semantic restore. */
-export function useSearchSession({ state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+export function useSearchSession({ scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+  scene: FloorScene | null
   state: PresentationState; send: (action: PresentationAction) => void; canvas: RefObject<HTMLDivElement>; root: RefObject<HTMLDivElement>
   details: string[]; setDetails: Dispatch<SetStateAction<string[]>>
   roots: Target[]; setRoots: Dispatch<SetStateAction<Target[]>>; density: OverviewDensity; setDensity: Dispatch<SetStateAction<OverviewDensity>>
@@ -74,6 +75,8 @@ export function useSearchSession({ state, send, canvas, root, roots, setRoots, d
     return () => window.removeEventListener('keydown', onKey)
   })
   return { isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), apply: () => setOpen(false), choose: (target: Target) => {
-    send({ type: 'reveal-search', target }); setRoots([target]); setOpen(false)
+    send({ type: 'reveal-search', target }); setRoots([target])
+    const cluster = scene ? directNeighbors(scene, [target]) : new Set([semanticId(target)])
+    setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)
   } }
 }
