@@ -1,5 +1,6 @@
 import type { FloorScene } from './reconciliationPresentation'
 import { operationalStatuses } from './floorOrganization'
+import type { PullDeployment, ReleaseDryRun } from './releaseReconciliation'
 import type { SceneCard } from '../server/reconciliation/scene'
 
 export interface PullIdentity { id: string; repository: string; number: number; url: string }
@@ -27,6 +28,8 @@ export interface ReleasePull extends PullIdentity {
   observedAt: string | null
   freshness: 'fresh' | 'stale' | 'unknown'
   exceptions: string[]
+  readError?: string
+  deployment?: PullDeployment
 }
 export interface ReleasesRead {
   generatedAt: string; pulls: ReleasePull[]
@@ -34,6 +37,8 @@ export interface ReleasesRead {
   warnings: string[]
   associationsComplete: boolean
   associationsWritable: boolean
+  githubSync?: { status: 'pending' | 'ok' | 'error'; errors: string[] }
+  reconciliation?: ReleaseDryRun
 }
 export const activeReleaseLinks = (pull: ReleasePull) => pull.links.filter(link => link.active)
 

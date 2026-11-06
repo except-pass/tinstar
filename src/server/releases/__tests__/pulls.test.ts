@@ -27,4 +27,21 @@ describe('bounded read-only release PR observations', () => {
     const invalid = new ReleasePullReader(vi.fn().mockResolvedValue({ ...merged, merge_commit_sha: null }))
     expect((await invalid.get([url(2)])).get(url(2))).toMatchObject({ state: 'unknown', mergeSha: null })
   })
+  it('distinguishes a missing executable and failed reads from pending observations, then clears the error on recovery', async () => {
+    let now = Date.now()
+    const read = vi.fn().mockRejectedValue(Object.assign(new Error('private stderr'), { code: 'ENOENT' }))
+    const reader = new ReleasePullReader(read, () => now)
+    const initial = (await reader.get([url(1)] )).get(url(1))!
+    expect(initial.readError).toContain('gh-axi is unavailable on the server PATH')
+    expect(JSON.stringify(initial)).not.toContain('private stderr')
+    now += 61_000; read.mockResolvedValue(merged)
+    expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ freshness: 'fresh', state: 'merged' })
+    expect((await reader.get([url(1)])).get(url(1))!.readError).toBeUndefined()
+    now += 601_000; read.mockRejectedValue(new Error('private access detail'))
+    const failed = (await reader.get([url(1)])).get(url(1))!
+    expect(failed.freshness).toBe('stale')
+    expect(failed.readError).toContain('GitHub read failed')
+    expect(JSON.stringify(failed)).not.toContain('private access detail')
+  })
+
 })

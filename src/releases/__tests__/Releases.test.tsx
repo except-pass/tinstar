@@ -23,7 +23,7 @@ describe('PR-first Releases', () => {
     data.warnings = ['Notion association source unavailable']
     const view = mount()
     expect(screen.getByText('Releases').querySelector('small')).toHaveTextContent('?')
-    expect(screen.getByText(/Sources unavailable or incomplete/)).toBeTruthy()
+    expect(screen.getByText(/Sync incomplete/)).toBeTruthy()
     expect(screen.getByText('Notion association source unavailable')).toBeTruthy()
     data.associationsComplete = true
     view.rerender(<Releases data={data} error="Read failed" refresh={vi.fn()} />)
@@ -68,4 +68,24 @@ describe('PR-first Releases', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Shipped' }))
     expect(screen.getByText('No verified production evidence available yet.')).toBeTruthy()
   })
+  it('shows reader failures prominently in production sync rather than silently pending', () => {
+    data.githubSync = { status: 'error', errors: ['gh-axi is unavailable on the server PATH; configure the service PATH'] }
+    mount()
+    expect(screen.getByText(/Sync error: gh-axi unavailable on server PATH/)).toBeTruthy()
+    expect(screen.getByRole('alert')).toHaveTextContent('configure the service PATH')
+  })
+  it('surfaces opt-in verification separately from unflagged dry-run completion without executing either transition', () => {
+    const pull = data.pulls[0]!, cards = pull.links.map(link => link.cardId)
+    pull.deployment = { state: 'shipped', verificationRequired: true, targets: [] }
+    data.reconciliation = { mode: 'dry-run', id: 'report', sourceStatus: 'fresh', collectedAt: new Date().toISOString(), lastSuccessfulAt: null, warnings: [], targets: [], cards: cards.map((cardId, index) => ({ cardId, status: 'Waiting for Prod Release', owner: index ? 'Firstmate' : 'Will', requiredPulls: [pull.url], requiresProductionVerification: !index, decision: index ? 'would-complete' : 'would-verify', eligible: !!index, reasons: [], receiptIds: [] })) }
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Verify in Prod' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect owner/repo#1' })[0]!)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Dry run: Requires production verification')).toBeTruthy()
+    expect(within(dialog).getByText('Dry run: Would mark Done')).toBeTruthy()
+    expect(within(dialog).getAllByText('No Notion or Desk transition is performed.')).toHaveLength(2)
+    expect(within(dialog).queryByRole('button', { name: /mark Done|complete card/i })).toBeNull()
+  })
+
 })

@@ -10,7 +10,7 @@ export const notionPageId = (value: unknown): string | null =>
 const PROPERTY_NAMES = [
   'Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item',
   'Link', 'Waiting For', 'Delegated To', 'Next check-in', 'Due Date', 'Start Date', 'Priority', 'Area', 'Sub-area', 'Attention',
-  'Next action', 'Next Action', 'Evidence', 'Initiative', 'Epic', 'GitHub', 'GitHub PRs', 'Pull requests', FIRST_MATE_TASKS,
+  'Next action', 'Next Action', 'Evidence', 'Initiative', 'Epic', 'GitHub', 'GitHub PRs', 'Pull requests', 'Requires production verification', FIRST_MATE_TASKS,
 ]
 
 function property(value: unknown, name: string): { id: string | null; type: string | null; value: unknown; hasMore: boolean; workerLinks?: WorkerLinks } {
@@ -22,6 +22,7 @@ function property(value: unknown, name: string): { id: string | null; type: stri
   else if (type === 'title' || type === 'rich_text') result = Array.isArray(p[type])
     ? p[type].map(v => text(record(v).plain_text) ?? text(record(record(v).text).content) ?? '').join('') : null
   else if (type === 'relation') result = Array.isArray(p.relation) ? p.relation.map(v => notionPageId(record(v).id)).filter(Boolean) : null
+  else if (type === 'checkbox') result = typeof p.checkbox === 'boolean' ? p.checkbox : null
   else if (type === 'url') result = text(p.url)
   else if (type === 'date') result = p.date === null ? null : { start: text(record(p.date).start), end: text(record(p.date).end), time_zone: text(record(p.date).time_zone) }
   return { id: text(p.id), type, value: result, hasMore: p.has_more === true,

@@ -10,6 +10,8 @@ import { fail, ok } from '../api/envelope'
 import { releaseAssociations } from '../../shared/releases'
 import { AssociationConflict, AssociationStore, associationInput } from './associations'
 import { ReleasePullReader } from './pulls'
+import { ReleaseEvidenceReader } from './evidence'
+import { ReleaseReconciler } from './reconcile'
 
 async function ownerLogins(root: string): Promise<string[]> {
   try {
@@ -20,12 +22,12 @@ async function ownerLogins(root: string): Promise<string[]> {
 /** Local association overrides only. This API has no Notion writer or forge mutation. */
 export class ReleasesApi {
   readonly store: AssociationStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private evidence = new ReleaseEvidenceReader(root), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]
-    if (!['/api/releases', '/api/releases/associations'].includes(path!)) return false
+    if (!['/api/releases', '/api/releases/associations', '/api/releases/reconciliation'].includes(path!)) return false
     const allowlist = currentOriginAllowlist(), origin = req.headers.origin
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI', 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
@@ -35,7 +37,7 @@ export class ReleasesApi {
     // Same tailnet owner boundary as Ask: only the local serve proxy injects this identity.
     const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
     try {
-      if (path === '/api/releases' && req.method === 'GET') {
+      if ((path === '/api/releases' || path === '/api/releases/reconciliation') && req.method === 'GET') {
         const scene = await this.sources.scene()
         let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
         try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
@@ -45,10 +47,14 @@ export class ReleasesApi {
         const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
         for (const pull of data.pulls) {
           Object.assign(pull, observations.get(pull.url))
-          if (pull.freshness !== 'fresh') pull.exceptions.push('GitHub merge evidence pending, stale or unavailable')
+          if (pull.readError) pull.exceptions.push(pull.readError)
+          else if (pull.freshness !== 'fresh') pull.exceptions.push('GitHub merge evidence pending, stale or unavailable')
           else if (pull.state !== 'merged') pull.exceptions.push(pull.state === 'open' ? 'PR has not merged' : 'PR closed without merge')
         }
-        return ok(res, data, { headers })
+        const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
+        data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
+        const reconciled = await this.reconciler.get(data, scene, await this.evidence.get())
+        return ok(res, path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
       }
       if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
       if (!writable || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'Authorized tailnet owner and UI handshake required', { headers })
