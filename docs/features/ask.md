@@ -125,8 +125,7 @@ URL locator to reveal the exact authorized PR or release row despite the current
 filter. Deployment/receipt origins reveal their read-only evidence inline in the
 main workspace. Source removal, receipt replacement and changed PR heads have
 visible fallback messages; source links remain available in the answer. Manual
-section navigation or clearing the origin ends pending focus. Inline answer
-threads remain a follow-up; answers retain the existing answer dialog.
+section navigation or clearing the origin ends pending focus.
 
 Desk returns to a PR with its captured query/sort intact, temporarily reveals,
 expands and focuses the canonical row, and keeps the answer open. A closed PR
@@ -135,6 +134,20 @@ not add closed PRs to the open inventory. The same configured repository and
 owned/authored/explicitly-associated relevance scope applies. Changed heads are
 labelled; failed or inaccessible reads retain the answer and original GitHub
 link. “Show all PRs in this view” removes only the temporary reveal.
+
+
+Answers expand inline in the persistent Desk, with neighboring conversation
+previews still available in one click. Correlated follow-ups share one thread;
+collapse, history, unread status, dismiss, references and suggested actions retain
+the existing request/permission boundaries. The composer remains a dialog.
+
+Normal browser history entries capture the previous section's lightweight view
+before a Desk jump. Back (or the thread's Back to previous view control) restores
+PR query/sort/selection/expanded rows, Releases filters/grouping/collapsed groups,
+and their semantic row anchor and scroll offset. Overview reuses its existing
+search-session snapshot for filters, grouping, relationships, density, focus and
+position. The expanded conversation remains visible during navigation and Back.
+A newer route cancels pending origin focus/position restoration.
 
 ## Configuration and trust boundary
 

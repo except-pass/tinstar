@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from '../apiClient'
 import { AskSurface } from '../ask/AskSurface'
+import { captureScroll, useScrollRestore, useViewSnapshot } from '../ask/workspaceHistory'
 import { useOriginFocus } from '../ask/useOriginFocus'
 import type { AskReturn, AskView, ArtifactAskTarget } from '../shared/ask'
 import { AskCardAction } from '../ask/Ask'
@@ -83,13 +84,19 @@ function PullDrawer({ pull, scene, data, refresh, close, askView }: { pull: Rele
   </dialog>
 }
 export function Releases({ data, error, refresh }: { data: ReleasesRead | null; error: string | null; refresh: () => void }) {
-  const { scene, error: sceneError, now, origin, clearOrigin } = useDeskWorkspace()
+  const { scene, error: sceneError, now, origin, clearOrigin, views } = useDeskWorkspace()
   const [filter, setFilter] = useState<ReleaseFilter>(() => releaseFilters.includes(origin?.view?.filter as ReleaseFilter) ? origin!.view!.filter as ReleaseFilter : 'In Queue'), [preset, setPreset] = useState<'initiative' | 'repository'>(origin?.view?.preset ?? 'initiative')
   const [selection, setSelection] = useState<string[]>([]), [drawer, setDrawer] = useState<string | null | undefined>(undefined)
   const [collapsed, setCollapsed] = useState<string[]>(origin?.view?.collapsed ?? []), [searchOpen, setSearchOpen] = useState(false), [focus, setFocus] = useState<Target | null>(null)
   const [beforeFocus, setBeforeFocus] = useState<ReleaseFilter | null>(null)
   const destination = origin?.section === 'releases' ? origin : undefined
   const focusRef = useOriginFocus(destination)
+  const viewport = () => focusRef.current?.querySelector<HTMLElement>('.rel-scroll') ?? null
+  const scroll = useScrollRestore(viewport, 'data-pull-id', !!data, views?.restoration.revision)
+  useViewSnapshot(views, 'releases', () => ({ filter, preset, selection, collapsed, focus, beforeFocus, position: captureScroll(viewport(), 'data-pull-id') }), saved => {
+    setFilter(saved.filter); setPreset(saved.preset); setSelection(saved.selection); setCollapsed(saved.collapsed); setFocus(saved.focus); setBeforeFocus(saved.beforeFocus); scroll.restore(saved.position)
+  }, !!data && !!scene)
+
   const askView: AskView = { scene: 'releases', filter, preset, collapsed }
   const restoreFocus = () => { setFocus(null); if (beforeFocus) setFilter(beforeFocus); setBeforeFocus(null) }
   const state = useMemo(initialPresentation, [])
@@ -126,7 +133,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
     </details>
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
     <div className="rel-scroll"><table className="rel-table"><caption className="sr-only">Release queue · one row per GitHub PR; repeated group references share identity</caption><thead><tr><th><input type="checkbox" aria-label="Select visible PRs" checked={visible.length > 0 && visible.every(pull => selected.has(pull.id))} onChange={event => setSelection(event.target.checked ? [...new Set([...selection, ...visible.map(pull => pull.id)])] : selection.filter(id => !visible.some(pull => pull.id === id)))} /></th><th>GitHub PR</th><th>Change</th><th>Linked Notion cards</th><th>Merged</th><th>Release state</th><th>Inspect</th></tr></thead>
-      {groups.map(group => <tbody key={group.id}><tr className="rel-group"><th colSpan={7}><button type="button" aria-expanded={!collapsed.includes(group.id)} onClick={() => setCollapsed(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])}>{collapsed.includes(group.id) ? '▸' : '▾'} {group.label} <small>{group.pulls.length}</small></button></th></tr>
+      {groups.map(group => <tbody key={group.id} data-view-group={group.id}><tr className="rel-group"><th colSpan={7}><button type="button" aria-expanded={!collapsed.includes(group.id)} onClick={() => setCollapsed(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])}>{collapsed.includes(group.id) ? '▸' : '▾'} {group.label} <small>{group.pulls.length}</small></button></th></tr>
         {(!collapsed.includes(group.id) || !!destination) && group.pulls.map(pull => <Fragment key={pull.id}><AskSurface subject={{ target: { kind: 'pull', id: pull.id, ...(pull.head ? { head: pull.head } : {}) }, label: `${pull.id} · ${pull.title ?? 'PR'}`, view: askView }} data-pull-id={pull.id} data-ask-origin={pull.id} tabIndex={-1} className={`${selected.has(pull.id) ? 'rel-selected' : ''}${destination?.target.kind === 'pull' && originMatches && destination.target.id === pull.id ? ' ask-origin' : ''}`}>
           <td><input type="checkbox" aria-label={`Select ${pull.id}`} checked={selected.has(pull.id)} onChange={event => setSelection(values => event.target.checked ? [...new Set([...values, pull.id])] : values.filter(id => id !== pull.id))} /></td>
           <td><a href={pull.url} target="_blank" rel="noreferrer">{pull.repository}#{pull.number} ↗</a></td><td title={pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}><button type="button" className="rel-title" onClick={() => setDrawer(pull.id)}>{pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}</button></td>

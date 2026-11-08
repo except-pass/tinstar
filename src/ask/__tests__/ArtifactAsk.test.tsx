@@ -92,9 +92,9 @@ it('returns a retained PR Ask from Releases to its exact authorized row, with ca
   expect(document.querySelectorAll('.pr-row')).toHaveLength(1)
   expect(window.location.search).toContain('view=pulls')
   expect(JSON.parse(new URLSearchParams(window.location.search).get('origin')!)).toMatchObject({ section: 'pulls', target: { kind: 'pull', id: pull.id } })
-  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
-  fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Real-shaped test answer')
   expect(returned).toHaveFocus()
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
   const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
   await act(async () => { window.history.back(); await popped })
   expect(window.location.search).toBe('?view=releases')
@@ -107,7 +107,102 @@ it('reveals and highlights exact receipt evidence in Releases without replacing 
   await waitFor(() => expect(document.querySelector('[data-receipt-id="receipt-17"].ask-origin')).toBeTruthy())
   expect(screen.getByLabelText('Your desk')).toBe(desk)
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
-  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Real-shaped test answer')
+})
+
+
+it('keeps neighbor previews inline and restores Releases filter, grouping, collapse and position with one Back', async () => {
+  window.history.replaceState(null, '', '/?view=releases')
+  const first = item({ kind: 'pull', id: pull.id, head }, 'pulls')
+  const neighbor = { ...item({ kind: 'pull', id: 'other/repo#17', head }, 'pulls'), question: 'Second independent question' }
+  records = [first, neighbor]
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Shipped' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Repository' }))
+  fireEvent.click(document.querySelector<HTMLButtonElement>('.rel-group button')!)
+  const viewport = document.querySelector<HTMLElement>('.rel-scroll')!
+  viewport.scrollTop = 137; viewport.scrollLeft = 59
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('button', { name: /New answer.*Second independent question/ })).toBeVisible()
+  await waitFor(() => expect(document.querySelector('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', pull.id))
+  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Back to previous view' }))
+  await act(async () => { await popped })
+  expect(screen.getByRole('button', { name: 'Shipped' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'Repository' })).toHaveAttribute('aria-pressed', 'true')
+  expect(document.querySelector('.rel-group button')).toHaveAttribute('aria-expanded', 'false')
+  await waitFor(() => expect(document.querySelector('.rel-scroll')!.scrollLeft).toBe(59))
+  expect(document.querySelector('.rel-scroll')!.scrollTop).toBe(137)
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
+  fireEvent.click(screen.getByRole('button', { name: /New answer.*Second independent question/ }))
+  expect(screen.getAllByRole('region', { name: /Answer thread/ })).toHaveLength(1)
+  await waitFor(() => expect(document.querySelector('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', 'other/repo#17'))
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Second independent question')
+})
+
+it('restores PR query, sort, selection and position through native browser Back', async () => {
+  records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
+  render(<App />)
+  await screen.findByRole('button', { name: 'Inspect owner/repo#17' })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'owner/repo' } })
+  fireEvent.click(screen.getByRole('button', { name: /^Author/ }))
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
+  const viewport = document.querySelector<HTMLElement>('.pr-scroll')!
+  viewport.scrollLeft = 83; viewport.scrollTop = 31
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Releases' })
+  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+  await act(async () => { history.back(); await popped })
+  expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('owner/repo')
+  expect(screen.getByRole('button', { name: /^Author/ }).closest('th')).toHaveAttribute('aria-sort', 'ascending')
+  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
+  await waitFor(() => expect(document.querySelector('.pr-scroll')!.scrollLeft).toBe(83))
+  expect(document.querySelector('.pr-scroll')!.scrollTop).toBe(31)
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
+})
+
+
+it('restores the existing Overview search lens on Back and can still clear it to the prior workspace', async () => {
+  history.replaceState(null, '', '/')
+  records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
+  const view = render(<App />)
+  const initial = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
+  fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+  const input = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
+  fireEvent.change(input, { target: { value: 'Roadmap: planned integration' } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  const filtered = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
+  expect(filtered).not.toEqual(initial)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Pull requests' })
+  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+  await act(async () => { history.back(); await popped })
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(filtered)
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(initial)
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
+})
+
+it('reveals both verified relationship endpoints and only its link from another section, retaining the inline answer', async () => {
+  history.replaceState(null, '', '/?view=releases')
+  const scene = fixtureScene(), claim = scene.claims.find(link => link.verification === 'confirmed' && link.state === 'current')!
+  const context = { target: { kind: 'claim', id: claim.id }, view: { scene: 'overview' }, anchor: { kind: 'link', page_id: claim.id, label: 'Verified relationship', url: null, observed_at: date }, return_to: { section: 'overview', target: { kind: 'claim', id: claim.id } } }
+  records = [askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), context })]
+  const view = render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Overview' })
+  const card = [...view.container.querySelectorAll<HTMLElement>('.ov-card')].find(row => row.dataset.entityId === claim.cardId)!
+  const worker = [...view.container.querySelectorAll<HTMLElement>('.ov-execution')].find(row => row.dataset.entityId === claim.executionId)!
+  expect(card).toBeVisible(); expect(worker).toBeVisible()
+  expect(card).toHaveClass('flashed'); expect(worker).toHaveClass('flashed')
+  const lines = view.container.querySelectorAll('.ov-line.flashed')
+  expect(lines).toHaveLength(1)
+  expect(lines[0]!.parentElement!.querySelector('[data-claim-id]')).toHaveAttribute('data-claim-id', claim.id)
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
+  expect(screen.queryByRole('dialog')).toBeNull()
 })
 
 it.each([

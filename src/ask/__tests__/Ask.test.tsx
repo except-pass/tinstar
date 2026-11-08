@@ -111,10 +111,9 @@ describe('one-card text Ask and Desk', () => {
     expect(card(container)).toBeVisible()
     expect(card(container)).toHaveClass('flashed')
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
-    fireEvent.click(screen.getByText('Full answer & evidence'))
-    expect(screen.getByRole('dialog')).toHaveTextContent('First Mate checked the live dependency.')
-    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute('href', 'https://example.test/evidence')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
+    expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('First Mate checked the live dependency.')
+    expect(screen.getByRole('link', { name: /Evidence/ })).toHaveAttribute('href', 'https://example.test/evidence')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).not.toHaveTextContent('New answer'))
     fireEvent.click(screen.getByText('Actions', { selector: 'summary' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss to history' }))
@@ -168,7 +167,7 @@ describe('one-card text Ask and Desk', () => {
     const after = JSON.parse(localStorage.getItem(preferencesKey)!)
     expect(after).toEqual(before)
     expect([...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId).filter(id => id !== fixtureId(1))).toEqual(visibleBefore)
-    expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+    expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
   })
   it('offers the original source when a retained card is trashed', async () => {
     records = [seed()]
@@ -176,15 +175,15 @@ describe('one-card text Ask and Desk', () => {
     const { container } = mount()
     fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
     expect(card(container)).toBeNull()
-    expect(screen.getByRole('link', { name: 'Open the source task' })).toHaveAttribute('href', records[0]!.context.anchor.url)
+    expect(screen.getByRole('link', { name: /Open originating source/ })).toHaveAttribute('href', records[0]!.context.anchor.url)
   })
   it('shows the original source when its card is missing and keeps follow-ups correlated', async () => {
     const original = seed(); records = [original]; scene.cards = scene.cards.filter(card => card.id !== fixtureId(1))
     mount()
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('New answer'))
     fireEvent.click(screen.getByRole('button', { name: /New answer.*Why is this waiting/ }))
-    expect(screen.getByRole('dialog')).toHaveTextContent('no longer on the floor')
-    expect(screen.getByRole('link', { name: 'Open the source task' })).toHaveAttribute('href', original.context.anchor.url)
+    expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('no longer on the floor')
+    expect(screen.getByRole('link', { name: /Open originating source/ })).toHaveAttribute('href', original.context.anchor.url)
     fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What evidence changed?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
@@ -309,7 +308,7 @@ it('returns a retained worker answer after remount to its exact filtered executi
   const returned = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(el => el.dataset.entityId === worker.id)!
   expect(returned).toHaveClass('flashed')
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
-  expect(screen.getByRole('dialog')).toHaveTextContent('Captured worker')
+  expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Captured worker')
   fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
   expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
   fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What has changed?' } })
@@ -354,7 +353,7 @@ it.each(['detailed', 'compact'] as const)('returns a retained claim answer to on
   const lines = [...container.querySelectorAll('.ov-line.flashed')]
   expect(lines).toHaveLength(1)
   expect(lines[0]!.parentElement!.querySelector('.ov-relationship-hit')).toHaveAttribute('data-claim-id', claims[0]!.id)
-  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+  expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
 })
 
@@ -379,7 +378,7 @@ it('returns an unverified Detailed relationship answer after reload and filterin
   const returned = [...container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
   expect(returned.previousElementSibling).toHaveClass('flashed')
   expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
-  expect(screen.queryByRole('link', { name: 'Open the source task' })).toBeNull()
+  expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
 })
 
 it('reports a missing relationship even when its card remains available', async () => {
@@ -389,6 +388,28 @@ it('reports a missing relationship even when its card remains available', async 
   records = [original]
   const { container } = mount()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
-  expect(screen.getByRole('dialog')).toHaveTextContent('no longer on the floor')
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('no longer on the floor')
   expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(0)
+})
+
+
+it('groups correlated follow-ups into one inline thread and switches independent conversations in one click', async () => {
+  const first = seed(), followUp = { ...seed(), conversation_id: first.conversation_id, question: 'What changed next?', created_at: '2099-01-01T00:00:00Z' }
+  const neighbor = { ...seed(), question: 'Independent investigation' }
+  records = [first, followUp, neighbor]
+  mount()
+  const desk = screen.getByLabelText('Questions for First Mate')
+  await waitFor(() => expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2))
+  fireEvent.click(within(desk).getByRole('button', { name: /New answer.*Why is this waiting/ }))
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('What changed next?')
+  expect(within(desk).getByRole('button', { name: /New answer.*Independent investigation/ })).toBeVisible()
+  fireEvent.click(within(desk).getByRole('button', { name: /New answer.*Independent investigation/ }))
+  expect(screen.getAllByRole('region', { name: /Answer thread/ })).toHaveLength(1)
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Independent investigation')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
+  expect(within(desk).getByRole('button', { name: /Independent investigation/ })).toHaveFocus()
 })

@@ -13,6 +13,7 @@ import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
 import { DeskWorkspace } from './ask/DeskWorkspace'
+import { useWorkspaceHistory } from './ask/workspaceHistory'
 import { Pulls } from './pulls/Pulls'
 import { useReleases } from './releases/useReleases'
 import { releaseQueueCount } from './releases/model'
@@ -44,6 +45,7 @@ export default function App() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(true)
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
+  const views = useWorkspaceHistory(overviewLocation.worker ? null : overviewLocation.page ?? 'overview')
   const [drawer, setDrawer] = useState(isDrawerLayout)
   const [panelMode, setPanelMode] = useState<ContextPanelMode>(null)
   const drawerRef = useRef(drawer)
@@ -154,15 +156,17 @@ export default function App() {
     const url = `${window.location.pathname}${search}${window.location.hash}`
     const here = `${window.location.pathname}${window.location.search}${window.location.hash}`
     if (url !== here) {
+      views.capture()
       // WebKit and Firefox throw after bursts of history calls; the view must still follow.
       try {
-        if (mode === 'push') history.pushState(null, '', url)
-        else history.replaceState(null, '', url)
+        if (mode === 'push') history.pushState({ tinstarAskReturn: !!next.origin }, '', url)
+        else history.replaceState({ ...history.state, tinstarAskReturn: !!next.origin }, '', url)
       } catch {}
     }
+    views.navigated()
     overviewRef.current = next
     setOverviewLocation(next)
-  }, [workers])
+  }, [workers, views.capture, views.navigated])
 
   const openWorker = useCallback((key: string, mode: 'push' | 'replace' = 'push') => {
     const worker = workers.find(item => item.key === key)
@@ -226,11 +230,12 @@ export default function App() {
   useEffect(() => {
     const onPop = () => {
       setPanelMode(null)
+      views.pop()
       setOverviewLocation(readOverviewSearch(window.location.search))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [])
+  }, [views.pop])
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
@@ -304,7 +309,7 @@ export default function App() {
       <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
-    <DeskWorkspace onClearOrigin={() => applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace')} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
+    <DeskWorkspace views={views} onClearOrigin={() => applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace')} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">

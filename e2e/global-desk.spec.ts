@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { AskApi } from '../src/server/ask/routes'
+import { askItemSchema } from '../src/shared/ask'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 import { resolve } from 'node:path'
 import { decideStaticServe } from '../src/server/staticServe'
@@ -131,8 +132,8 @@ test('typed CI Ask returns from Releases to its exact PR after an independent an
   await page.getByRole('button', { name: /New answer.*Isolated fixture CI question/ }).click()
   await expect(page.locator('.pr-row')).toHaveCount(1)
   await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', pull.id)
-  await expect(page.getByRole('dialog')).toContainText('Isolated correlated answer')
-  await page.getByRole('button', { name: 'Back to task' }).click()
+  await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Isolated correlated answer')
+  await page.getByRole('button', { name: 'Collapse answer' }).click()
   await page.goBack()
   await expect(page).toHaveURL(/view=releases/)
 })
@@ -151,8 +152,8 @@ for (const mode of ['release', 'receipt', 'removed-target', 'wrong-component', '
     await page.goto(`${base}/?view=pulls`)
     await page.getByRole('button', { name: /New answer.*Explain deployment identity/ }).click()
     await expect(page).toHaveURL(/view=releases/)
-    await expect(page.getByRole('dialog')).toContainText('Deployment answer')
-    await page.getByRole('button', { name: 'Back to task' }).click()
+    await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Deployment answer')
+    await page.getByRole('button', { name: 'Collapse answer' }).click()
     if (mode === 'removed-target' || mode === 'wrong-component') {
       await expect(page.getByText(mode === 'removed-target' ? /original deployment target is missing/ : /original receipt is missing or has been superseded/)).toBeVisible()
       await expect(page.locator('.rel-root .ask-origin')).toHaveCount(0)
@@ -243,3 +244,54 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('button', { name: 'Author ↓' })).toBeVisible()
   })
 }
+
+
+test('inline neighbors survive real browser Back to Releases filters, collapsed groups and semantic position', async ({ page }, testInfo) => {
+  const at = new Date().toISOString(), head = 'a'.repeat(40), scene = fixtureScene()
+  const claim = scene.claims.find(link => link.verification === 'confirmed' && link.state === 'current')!
+  const pulls = Array.from({ length: 80 }, (_, index) => ({ id: `owner/repo${Math.floor(index / 10)}#${index + 1}`, repository: `owner/repo${Math.floor(index / 10)}`, number: index + 1, url: `https://github.com/owner/repo${Math.floor(index / 10)}/pull/${index + 1}`, title: `Release ${index + 1}`, author: 'owner', draft: false, head, base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [], exceptions: [], state: 'merged', mergedAt: at, mergeSha: head, deployment: { state: 'shipped', targets: [] } }))
+  const origin = pulls[24]!
+  let records = askItemSchema.array().parse([
+    { request_id: '30000000-0000-4000-8000-000000000001', conversation_id: '40000000-0000-4000-8000-000000000001', question: 'Inline PR investigation', input_mode: 'text', context: { target: { kind: 'pull', id: origin.id, head }, anchor: { kind: 'pull', page_id: origin.id, label: origin.id, url: origin.url, observed_at: at }, view: { scene: 'pulls' }, return_to: { section: 'pulls', target: { kind: 'pull', id: origin.id, head } } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Independent PR answer', detail: 'Detailed PR evidence stays inline.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null },
+    { request_id: '30000000-0000-4000-8000-000000000002', conversation_id: '40000000-0000-4000-8000-000000000002', question: 'Independent link investigation', input_mode: 'text', context: { target: { kind: 'claim', id: claim.id }, anchor: { kind: 'link', page_id: claim.id, label: 'Verified relationship', url: null, observed_at: at }, view: { scene: 'overview' }, return_to: { section: 'overview', target: { kind: 'claim', id: claim.id } } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Independent link answer', detail: 'Both verified endpoints and their exact link.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null },
+  ])
+  await page.route('**/api/pulls', route => route.fulfill({ json: { ok: true, data: { pulls, repositories: [], warnings: [], associationsComplete: true } } }))
+  await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { pulls, unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } } }))
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
+  await page.route('**/api/ask/requests/*/read', route => {
+    records = records.map(record => route.request().url().includes(record.request_id) ? { ...record, read_at: at } : record)
+    return route.fulfill({ json: { ok: true, data: {} } })
+  })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto(`${base}/?view=releases`)
+  await page.getByRole('button', { name: 'Shipped', exact: true }).click()
+  await page.getByRole('button', { name: 'Repository', exact: true }).click()
+  await page.locator('.rel-group button').first().click()
+  await page.evaluate(() => document.fonts.ready)
+  const position = await page.locator('.rel-scroll').evaluate(node => { node.scrollTop = 500; node.scrollLeft = 40; return { top: node.scrollTop, left: node.scrollLeft } })
+  expect(position.top).toBeGreaterThan(0)
+  await page.getByRole('button', { name: /New answer.*Inline PR investigation/ }).click()
+  await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', origin.id)
+  await expect(page.getByRole('region', { name: 'Answer thread: Inline PR investigation', exact: true })).toContainText('Detailed PR evidence stays inline.')
+  await expect(page.getByRole('button', { name: /New answer.*Independent link investigation/ })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.goBack()
+  await expect(page.getByRole('button', { name: 'Shipped', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Repository', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.rel-group button').first()).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(() => page.locator('.rel-scroll').evaluate(node => node.scrollTop)).toBeCloseTo(position.top, 0)
+  await expect.poll(() => page.locator('.rel-scroll').evaluate(node => node.scrollLeft)).toBe(position.left)
+  await expect(page.getByRole('region', { name: /Answer thread/ })).toBeVisible()
+  await page.getByRole('button', { name: /New answer.*Independent link investigation/ }).click()
+  await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
+  await expect(page.locator('.ov-line.flashed')).toHaveCount(1)
+  await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Both verified endpoints')
+  await page.screenshot({ path: testInfo.outputPath('inline-link-desktop.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: /^Open Your desk/ }).click()
+  const sheet = page.getByRole('dialog', { name: 'Your desk' })
+  await expect(sheet.getByRole('region', { name: /Answer thread/ })).toBeVisible()
+  const bounds = await sheet.boundingBox()
+  expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: testInfo.outputPath('inline-mobile.png') })
+})

@@ -168,7 +168,7 @@ it.each(['Clear', 'Escape'])('restores search focus after section remount using 
   expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
   expect([...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))).toEqual(before)
 })
-it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s origin navigation without resetting it', async origin => {
+it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask and dismisses operational queue navigation on %s', async origin => {
   Object.defineProperty(window, 'innerWidth', { value: 390 })
   localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))
   source.queue = fixtureQueue()
@@ -183,12 +183,13 @@ it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s ori
   const desk = screen.getByRole('dialog', { name: 'Your desk' })
   if (origin === 'queue') fireEvent.click(desk.querySelector<HTMLButtonElement>(`[data-desk-card-id="${fixtureId(1)}"]`)!)
   else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0]!)
-  expect(desk).not.toBeVisible()
+  if (origin === 'queue') expect(desk).not.toBeVisible()
+  else expect(desk).toBeVisible()
   expect(screen.getByRole('region', { name: 'Overview' })).toBeVisible()
   expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  if (origin === 'queue') fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(desk)
-  expect(within(desk).getAllByText('Where is the evidence?')).toHaveLength(2)
+  expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2)
 })
 
 it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Overview through App history using %s', async method => {
@@ -235,4 +236,20 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
   await act(async () => { window.history.back(); await popped })
   expect(window.location.search).toContain('view=releases')
   expect(within(nav).getByRole('button', { name: /^Releases/ })).toHaveAttribute('aria-current', 'page')
+})
+
+
+it('updates an expanded inline thread in place as independent answers arrive through the single poller', async () => {
+  vi.useFakeTimers()
+  render(<Shell page="releases" />)
+  await act(async () => {})
+  fireEvent.click(screen.getAllByRole('button', { name: /Sent.*Where is the evidence/ })[0]!)
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  expect(thread).toHaveTextContent('Waiting for First Mate')
+  items = items.map((item, index) => ({ ...item, status: 'answered', reply: { summary: `Independent answer ${index}`, detail: `Complete evidence ${index}`, references: [], suggested_actions: [] } }))
+  await act(async () => { vi.advanceTimersByTime(5000) })
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toBe(thread)
+  expect(thread).toHaveTextContent('Complete evidence 0')
+  expect(screen.getByRole('button', { name: /New answer.*Independent answer 1/ })).toBeVisible()
+  expect(read.mock.calls.filter(([url]) => url === '/api/ask/requests')).toHaveLength(2)
 })
