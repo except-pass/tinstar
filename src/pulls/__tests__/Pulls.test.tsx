@@ -35,3 +35,27 @@ it('makes missing reader/partial source errors visible rather than remaining pen
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'alpha/repo: gh-axi is missing from the server PATH.')
   expect(screen.getByText('No PRs observed. Check repository coverage above.')).toBeTruthy()
 })
+
+it('shows the owner authorization error for inventory and detail', async () => {
+  const message = 'Authorized tailnet owner required for PR Operations.'
+  const denied = () => new Response(JSON.stringify({ ok: false, error: { code: 'FORBIDDEN', message } }), { status: 403 })
+  vi.stubGlobal('fetch', () => Promise.resolve(denied()))
+  const view = render(<Pulls />)
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', `${message} `)
+  view.unmount()
+  vi.stubGlobal('fetch', (input: string) => Promise.resolve(input.includes('/detail?') ? denied() : new Response(JSON.stringify({ ok: true, data: { pulls: [pulls[0]], repositories: [], warnings: [], associationsComplete: true } }))))
+  render(<Pulls />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect alpha/repo#1' }))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', message)
+})
+it('retains active card associations when scene context is unavailable', async () => {
+  const pull = { ...pulls[0], links: [{ cardId: 'linked-card', active: true, sources: ['audit'], events: [] }, { cardId: 'old-card', active: false, sources: ['audit'], events: [] }] }
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response(JSON.stringify({ ok: true, data: { pulls: [pull], repositories: [], warnings: [], associationsComplete: true } }))))
+  render(<Pulls />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect alpha/repo#1' }))
+  expect(screen.getByText('Linked work · Confirmed')).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'linked-card' }).getAttribute('href')).toBe('?card=linked-card')
+  expect(screen.getByText(/Card context unavailable/)).toBeTruthy()
+  expect(screen.queryByText(/No verified operational card/)).toBeNull()
+  expect(screen.queryByRole('link', { name: 'old-card' })).toBeNull()
+})

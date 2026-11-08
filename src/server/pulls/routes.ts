@@ -10,6 +10,7 @@ import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { PullReader } from './reader'
+import { askConfigSchema } from '../ask/routes'
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
 async function configuredRepositories(root: string): Promise<string[] | null> {
@@ -25,10 +26,18 @@ export class PullsApi {
     const url = new URL(req.url ?? '/', 'http://local')
     if (!['/api/pulls', '/api/pulls/detail'].includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
-    const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Origin' }
+    const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
     if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'PR Operations is read-only; use GET.', { headers })
+    let ownerLogins: string[] = []
+    try {
+      const config = JSON.parse(await readFile(join(this.root, 'config.json'), 'utf8'))
+      ownerLogins = askConfigSchema.parse(config.ask).ownerLogins
+    } catch { ownerLogins = [] }
+    const peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
+    const login = req.headers['tailscale-user-login']
+    if (!(peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !ownerLogins.includes(login)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for PR Operations.', { headers })
     try {
       const scene = await this.sources.scene(), warnings: string[] = []
       let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true

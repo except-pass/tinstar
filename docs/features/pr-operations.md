@@ -8,6 +8,8 @@ Click row body or its keyboard-accessible Inspect button to expand the actual de
 
 GitHub reads use `gh-axi api GET` with its existing local authentication. `gh-axi` must be in the backend service PATH. Missing CLI/auth/access failures appear as repository errors, with last-known rows explicitly stale. No GitHub write endpoint exists in PR Operations.
 
+Inventory and detail require a Tailscale-User-Login listed in `ask.ownerLogins`, forwarded through the loopback-only backend trust boundary used by Ask. Missing or unauthorized identity returns 403 with a visible page error.
+
 Repository scope defaults to the union of explicit PRs in the shared Releases association projection and configured fleet execution PR registrations. This includes **unlinked PRs in those repositories**; it does not claim every accessible GitHub repository is scanned. To choose scope, add ordinary configuration under the server's `getConfigRoot()/config.json`:
 
 ```json

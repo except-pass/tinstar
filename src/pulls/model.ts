@@ -5,10 +5,11 @@ import { releasePull } from '../shared/releases'
 import { workerTitle, managerName } from '../reconciliation/overviewModel'
 
 export function pullContext(scene: FloorScene | null, pull: PullSummary) {
-  const cards = scene?.cards.filter(card => pull.links.some(link => link.active && link.cardId === card.id)) ?? []
+  const links = pull.links.filter(link => link.active)
+  const cards = scene?.cards.filter(card => links.some(link => link.cardId === card.id)) ?? []
   const workers = scene?.executions.filter(worker => releasePull(String(worker.source.pr.url))?.id === pull.id) ?? []
   const values = (field: 'initiative' | 'epic') => scene ? [...new Set(cards.flatMap(card => floorFieldValues(scene, { card }, field)))] : []
-  return { cards, workers, initiatives: values('initiative'), epics: values('epic'),
+  return { links, cards, workers, initiatives: values('initiative'), epics: values('epic'),
     workerNames: workers.map(workerTitle), managers: scene ? [...new Set(workers.map(worker => managerName(scene, worker.home)))] : [] }
 }
 export type PullSort = 'repository' | 'title' | 'author' | 'changes' | 'checks' | 'review' | 'updated' | 'initiative' | 'epic' | 'manager' | 'worker'
