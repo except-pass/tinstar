@@ -8,7 +8,7 @@ export function pullContext(scene: FloorScene | null, pull: PullSummary, now = D
   const links = pull.links.filter(link => link.active)
   const cards = scene?.cards.filter(card => links.some(link => link.cardId === card.id)) ?? []
   const workers = scene?.executions.filter(worker => releasePull(String(worker.source.pr.url))?.id === pull.id) ?? []
-  const freshness = (observation: { status: string; expiresAt: string | null }) => observation.expiresAt && Date.parse(observation.expiresAt) <= now ? 'stale' : observation.status
+  const freshness = (observation: { status: string; expiresAt: string | null }) => scene?.searchReadFailed || observation.expiresAt && Date.parse(observation.expiresAt) <= now ? 'stale' : observation.status
   const contributors = workers.map(worker => ({
     id: worker.id, task: worker.identity.task_id ?? 'Unknown', home: worker.home, attempt: worker.identity.spawn_gen,
     manager: worker.home, managerBasis: `Current home accountability; parent ${worker.parentHome ?? 'Unknown'}`,
@@ -16,7 +16,11 @@ export function pullContext(scene: FloorScene | null, pull: PullSummary, now = D
     state: historyRecord(worker) ? 'Historical' : freshness(worker.observation) === 'fresh' && worker.observation.coverage === 'complete' ? 'Confirmed' : 'Last known',
     freshness: freshness(worker.observation), source: String(worker.source.pr.source ?? 'tasks[].pr.url'), observedAt: worker.observation.observedAt,
     registeredHead: typeof worker.source.pr.head === 'string' ? worker.source.pr.head : null,
-    claims: [...(scene?.claims ?? []), ...(scene?.claimHistory ?? [])].filter(claim => claim.executionId === worker.id),
+    claims: [...(scene?.claims ?? []), ...(scene?.claimHistory ?? [])].filter(claim => claim.executionId === worker.id).map(claim => ({ ...claim,
+      state: claim.state === 'current' && claim.verification === 'confirmed' &&
+        (freshness(scene!.coverage.intentions) !== 'fresh' || scene!.coverage.intentions.coverage !== 'complete' ||
+          freshness(worker.observation) !== 'fresh' || worker.observation.coverage !== 'complete') ? 'last-known' as const : claim.state,
+    })),
   }))
   for (const row of scene?.backlog ?? []) {
     if (releasePull(String(row.source.pr_url))?.id !== pull.id || workers.some(worker => worker.home === row.home && worker.identity.task_id === row.source.id)) continue

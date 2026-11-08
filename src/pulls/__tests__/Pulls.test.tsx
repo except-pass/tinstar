@@ -92,18 +92,26 @@ it.each([true, false])('ages an expanded footprint independently of coverage (co
 })
 
 it.each([
-  ['last-known', 'confirmed', 'Last known'],
-  ['historical', 'confirmed', 'Historical'],
-  ['current', 'confirmed', 'Confirmed'],
-  ['current', 'conflicting', 'Conflicting / unknown'],
-  ['current', 'unverified', 'Suggested / unverified'],
-] as const)('labels %s/%s claim evidence as %s work', async (state, verification, label) => {
+  ['last-known', 'confirmed', 'Last known', 'fresh'],
+  ['historical', 'confirmed', 'Historical', 'failed'],
+  ['current', 'confirmed', 'Confirmed', 'fresh'],
+  ['current', 'confirmed', 'Last known', 'failed'],
+  ['current', 'confirmed', 'Last known', 'intentions-expired'],
+  ['current', 'confirmed', 'Last known', 'execution-expired'],
+  ['current', 'confirmed', 'Last known', 'execution-unavailable'],
+  ['current', 'conflicting', 'Conflicting / unknown', 'failed'],
+  ['current', 'unverified', 'Suggested / unverified', 'failed'],
+] as const)('labels %s/%s claim evidence as %s work', async (state, verification, label, condition) => {
   const scene = fixtureScene({ now: clock.now })
   const worker = scene.executions[0]!
   worker.source.pr = { url: pulls[0]!.url, head: fileData.head, source: 'task metadata' }
   const claim = scene.claims.find(claim => claim.executionId === worker.id)!
   scene.claims = [{ ...claim, state, verification, sources: ['Notion declaration'], observedAt: fileData.observedAt }]
   scene.claimHistory = []
+  if (condition === 'failed') scene.searchReadFailed = true
+  if (condition === 'intentions-expired') scene.coverage.intentions.expiresAt = new Date(clock.now).toISOString()
+  if (condition === 'execution-expired') worker.observation.expiresAt = new Date(clock.now).toISOString()
+  if (condition === 'execution-unavailable') worker.observation.status = 'unknown'
   clock.scene = scene
   vi.stubGlobal('fetch', (input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? { head: fileData.head, reviews: [], observedAt: fileData.observedAt, freshness: 'fresh' } : { pulls: [pulls[0]], repositories: [], warnings: [], associationsComplete: true } }))))
   render(<Pulls />)
@@ -112,5 +120,10 @@ it.each([
   const evidence = screen.getByText((_, element) => element?.tagName === 'P' && !!element.textContent?.startsWith(`${label} work:`))
   expect(evidence.textContent).toContain(`Notion declaration · observed ${fileData.observedAt}`)
   expect(within(evidence).getByRole('link').getAttribute('href')).toBe(`?card=${claim.cardId}`)
-  if (state !== 'current') expect(screen.queryByText(/^Confirmed work:/)).toBeNull()
+  if (condition === 'failed' || condition.startsWith('execution-')) {
+    const contributor = evidence.closest('article')!
+    expect(within(contributor).getByText('Last known', { selector: 'strong' })).toBeTruthy()
+    expect(within(contributor).getByText(/Source task metadata/).textContent).not.toContain(' · fresh · ')
+  }
+  if (label !== 'Confirmed') expect(screen.queryByText(/^Confirmed work:/)).toBeNull()
 })
