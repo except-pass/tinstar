@@ -1,4 +1,4 @@
-import policyData from '../../../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v1.json'
+import policyData from '../../../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json'
 import type { ActionSnapshot, CheckPolicy } from '../../shared/actions'
 
 export const cmsandboxCheckPolicy: CheckPolicy = policyData

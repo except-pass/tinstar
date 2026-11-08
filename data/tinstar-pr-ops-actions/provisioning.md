@@ -5,13 +5,22 @@ mint, GitHub mutation client or switch that enables real execution. None of the 
 below were executed. Firstmate must review the final safety-test evidence before the
 owner registers or installs Apps or adds any bypass actor.
 
-**Current technical hold:** `cmsandbox-check-policy.v1.json` has a nonempty candidate
-inventory, with exact name + publishing app identities and provenance, but no workload
-is marked complete. 145 workflows exist; the ten sampled PR heads do not establish
-all path/transitive workload requirements. Current reusable workflow names also differ
-from some recorded names. Consequently Admin Merge is disabled for all paths. Completing
-the inventory and obtaining a separately reviewed live broker/isolated runner are
-prerequisites. This is an evidence gap, not a request for a new product decision.
+**Current technical hold:** `cmsandbox-check-policy.v2.json`
+(`cmsandbox-ci-2026-11-08-v2`) reads 145 workflows at cmsandbox head
+`6eb4a17379d2a26814a95b27a8d50f99b963a477`. 119 run on pull_request into main
+and none use pull_request_target. Reusable job names resolve as
+`<caller job> / <called job>`, including `CI Pool route / CI Pool route` when
+the pool job actually runs. Draft jobs stay skipped until `ready_for_review`,
+as on https://github.com/fortresspower/cmsandbox/pull/3322. Twenty-five
+workloads, including transitive shared-library paths, have exact github-actions
+app 15368 names confirmed on two recent PRs. The rest stay incomplete: a
+matrix label was not observed (utility-messagebus), a wildcard path does not
+fit the prefix matcher, or the 62-PR sample did not confirm the derived set
+twice. The broker can accept a simulated merge only for a completed workload whose
+checks are all green. The installed button stays disabled while any path
+remains incomplete. Live execution is not enabled. The remaining inventory and a separately
+reviewed live broker/isolated runner are still prerequisites. This is an
+evidence gap, not a request for a new product decision.
 
 ## Registration and installation — owner/admin only
 
