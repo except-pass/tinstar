@@ -262,3 +262,74 @@ it('retains the answer and original GitHub link when the PR is inaccessible', as
   expect(document.querySelector('.pr-row')).toBeNull()
   expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
 })
+
+it('restores an Overview-origin entry after a PR answer without replaying its source reveal', async () => {
+  history.replaceState(null, '', '/')
+  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  const overview = askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Overview answer', context: {
+    target, view: { scene: 'overview' }, anchor: { kind: 'work', page_id: target.id, label: 'Overview source', url: null, observed_at: date },
+    return_to: { section: 'overview', target },
+  } })
+  records = [overview, { ...item({ kind: 'pull', id: pull.id, head }, 'pulls'), question: 'PR answer' }]
+  const replaced = vi.spyOn(history, 'replaceState')
+  const view = render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Overview answer/ }))
+  expect(new URLSearchParams(location.search).has('origin')).toBe(true)
+  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', { name: 'Open in Inspector' })[0]!)
+  fireEvent.click(screen.getByRole('button', { name: 'Customize', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Filters', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: /Gaps only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close Customize' }))
+  const collapse = view.container.querySelector<HTMLButtonElement>('.ov-group-head button[aria-expanded="true"]')!
+  const expandedName = collapse.getAttribute('aria-label')!.replace(/^Collapse /, 'Expand ')
+  fireEvent.click(collapse)
+  const viewport = view.container.querySelector('.ov-canvas')!.parentElement!
+  viewport.scrollTop = 140; viewport.scrollLeft = 21
+  const originUrl = location.search
+  fireEvent.click(screen.getByRole('button', { name: /New answer.*PR answer/ }))
+  await screen.findByRole('region', { name: 'Pull requests' })
+  const saved = replaced.mock.calls.map(([state]) => state?.tinstarWorkspace).filter(entry => entry?.section === 'overview').at(-1)!.view
+  expect(saved.state.collapsed.length).toBeGreaterThan(0)
+  expect(saved.state.selection).not.toBeNull()
+  expect(saved.state.exceptionsOnly).toBe(true)
+  const pop = async (direction: 'back' | 'forward') => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history[direction](); await popped })
+  }
+  await pop('back')
+  expect(location.search).toBe(originUrl)
+  expect(screen.getAllByRole('button', { name: expandedName }).some(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+  expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollTop).toBe(140)
+  expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollLeft).toBe(21)
+  fireEvent.click(await screen.findByRole('button', { name: /Answered.*PR answer/ }))
+  const restored = replaced.mock.calls.map(([state]) => state?.tinstarWorkspace).filter(entry => entry?.section === 'overview').at(-1)!.view
+  for (const field of ['searchFocus', 'searchReveal', 'collapsed', 'selection', 'navigation', 'exceptionsOnly', 'roadmapExpanded'] as const) expect(restored.state[field]).toEqual(saved.state[field])
+  await pop('back')
+  await pop('forward')
+  await pop('back')
+  expect(screen.getAllByRole('button', { name: expandedName }).some(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+  fireEvent.click(await screen.findByRole('button', { name: /Answered.*Overview answer/ }))
+  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
+  expect(screen.queryAllByRole('button', { name: expandedName })).toHaveLength(0)
+})
+
+
+it.each([false, true])('handles a deferred Overview origin deep link with newer manual navigation=%s', async navigateAway => {
+  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
+  fixture.scene = null
+  const view = render(<App />)
+  if (navigateAway) fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: /^Releases/ }))
+  fixture.scene = scene
+  view.rerender(<App />)
+  if (navigateAway) {
+    expect(location.search).toContain('view=releases')
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: 'Overview' }))
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+    expect(view.container.querySelector('.ov-card.flashed')).toBeNull()
+  } else {
+    expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+    expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
+  }
+})

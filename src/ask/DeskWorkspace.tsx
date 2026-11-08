@@ -61,6 +61,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     const target = overviewTarget(origin.target)
     if (!overviewActive || !floor.scene || origin.section !== 'overview' || !target || handledOrigin.current === origin) return
     handledOrigin.current = origin
+    if (views?.restoration.snapshot?.section === 'overview') return
     search.choose(target)
     presentation.send({ type: 'flash', targets: [target] })
   })
