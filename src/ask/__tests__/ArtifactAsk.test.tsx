@@ -487,3 +487,32 @@ it('captures Releases grouping, collapse and selection edits before native trave
   fireEvent.click(restoredGroup)
   expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
 })
+
+it.each([false, true])('captures PR query and sort edits while inventory loads, descending=%s', async descending => {
+  records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
+  const read = vi.mocked(fetch).getMockImplementation()!
+  let releaseInventory!: () => void
+  const inventoryReady = new Promise<void>(resolve => { releaseInventory = resolve })
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (String(input) === '/api/pulls') await inventoryReady
+    return read(input, init)
+  })
+  render(<App />)
+  expect(screen.getByText('Reading GitHub…')).toBeVisible()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'artifact' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
+  if (descending) fireEvent.click(screen.getByRole('button', { name: 'Author ↑' }))
+  const sourceEntry = history.state.tinstarWorkspaceEntry
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Releases' })
+  expect(persistedView(sourceEntry).query).toBe('artifact')
+  expect(persistedView(sourceEntry).sort).toBe('author')
+  expect(persistedView(sourceEntry).descending).toBe(descending)
+  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+  await act(async () => { history.back(); await popped })
+  expect(screen.getByText('Reading GitHub…')).toBeVisible()
+  await act(async () => { releaseInventory() })
+  await screen.findByText('2 observed open')
+  expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('artifact')
+  expect(screen.getByRole('button', { name: descending ? 'Author ↓' : 'Author ↑' })).toBeVisible()
+})

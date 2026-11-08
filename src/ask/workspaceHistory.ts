@@ -3,7 +3,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 type Section = 'overview' | 'pulls' | 'releases'
 interface Snapshot { section: Section; view: unknown }
 interface Entry { snapshot?: Snapshot; resolvedOrigin?: string }
-interface Adapter { capture: () => unknown; ready: () => boolean }
+interface Adapter { capture: () => unknown }
 export const workspaceHistoryStorageKey = 'tinstar.workspace-history.v1'
 
 function loadEntries(): Map<string, Entry> {
@@ -33,7 +33,7 @@ export function useWorkspaceHistory(section: Section | null) {
   }, [])
   const capture = useCallback(() => {
     const key = active.current, adapter = key && adapters.current.get(key)
-    if (!key || !adapter || !adapter.ready()) return
+    if (!key || !adapter) return
     const view = adapter.capture(); saved.current.set(key, view)
     entries.current.set(currentId.current, { ...entries.current.get(currentId.current), snapshot: { section: key, view } })
     persist()
@@ -73,12 +73,12 @@ export type WorkspaceHistory = ReturnType<typeof useWorkspaceHistory>
 
 /** Each section owns its small, serializable view; callbacks stay out of history. */
 export function useViewSnapshot<T>(history: WorkspaceHistory | undefined, section: Section, capture: () => T, restore: (view: T) => void, ready = true) {
-  const latest = useRef({ capture, restore, ready }); latest.current = { capture, restore, ready }
+  const latest = useRef({ capture, restore }); latest.current = { capture, restore }
   const revision = useRef<number | null>(null)
   const entry = history?.restoration.snapshot
   const view = entry?.section === section ? entry.view : revision.current === null ? history?.saved(section) : undefined
   const restoring = !!history && ready && revision.current !== history.restoration.revision && view !== undefined
-  useLayoutEffect(() => history?.register(section, { capture: () => latest.current.capture(), ready: () => latest.current.ready }), [history?.register, section])
+  useLayoutEffect(() => history?.register(section, { capture: () => latest.current.capture() }), [history?.register, section])
   useLayoutEffect(() => {
     if (!history || !ready || revision.current === history.restoration.revision) return
     revision.current = history.restoration.revision
