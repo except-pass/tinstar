@@ -54,8 +54,8 @@ Status is the unobtrusive local system health surface: enabled/loaded state,
 last attempt/success/error times (Unix seconds), success age, last fixed error
 class, next eligible poll, consecutive failures, last observed outstanding
 `queued` count, captured/replied totals, and no-op/work/error poll counters.
-`queued` counts unanswered pending/tracked requests in the last successful
-bridge read; it is not a current server queue while disconnected. `healthy`
+`queued` counts unanswered pending/tracked requests at the end of the last successful
+pass; it is not a current server queue while disconnected. `healthy`
 requires a loaded agent and success within three minutes. An interrupted or
 stale pass is visible; health never claims an answer is investigating. Status
 also gives the next diagnostic action. No continuous agent watches the status.
@@ -95,7 +95,10 @@ reasoning session, worker spawn or model retry/investigation on these paths.
 Actual new user questions can wake First Mate through its ordinary inbox.
 
 The pass has a 50-second total deadline, in addition to the adapter's individual
-network/process/read bounds. Launchd schedules normal successful passes about
+network/process/read bounds. Expiry stops the entire pass, including remaining
+captures and mapped reply posts, and records a `timeout` health error with backoff.
+A deadline-interrupted capture is not marked `capture-failed` solely for expiry;
+the next eligible pass reconciles it with the same request ID. Launchd schedules normal successful passes about
 60 seconds apart; successful polls tolerate timer jitter. Failures back off
 60, 120, 240, 480, then at most 900 seconds;
 launchd continues checking eligibility every 60 seconds without network, clavis
