@@ -7,8 +7,8 @@ First Mate inbox through the authenticated outbound puller for a correlated
 answer. Answer navigation reveals and highlights the original card. Known
 capture failures remain visible and retryable.
 
-Operational decision/request items render before Ask questions on desktop and
-mobile. Existing Inspector actions and card click semantics are preserved.
+The [feature contract](ask.md) owns the current inbox layout and ordering.
+Existing Inspector actions and card click semantics are preserved.
 
 Follow-up slices cover Worker and verified Link contexts with actual endpoints,
 right-drag voice with permission/transcription review and text fallback,

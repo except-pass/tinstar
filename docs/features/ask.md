@@ -67,7 +67,10 @@ It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
 Opening an item reveals its originating context and opens a compact answer
-sheet over the floor. Work items use existing [Desk navigation](overview.md).
+sheet over Overview, switching sections when necessary. Successful origin
+navigation closes the mobile Desk sheet without changing desktop collapse
+preferences or clearing the retained conversation. Work items use existing
+[Desk navigation](overview.md).
 Link items retain the exact claim ID, reveal its endpoints and scroll to its card;
 the flash targets that relationship, including unverified Detailed lines, rather
 than every confirmed connection on the card. Inbox questions and answer previews
