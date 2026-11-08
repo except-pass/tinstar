@@ -63,11 +63,11 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   }), saved => {
     handledOrigin.current = null
     presentation.send({ type: 'set-search', search: { ...saved.filter.search, query: saved.query } })
+    presentation.send({ type: 'set-sort', sort: saved.sort })
     if (saved.group) presentation.send({ type: 'set-organizer', organizer: saved.group })
     if (saved.filter.status) presentation.send({ type: 'set-status-filter', filter: saved.filter.status })
     if (saved.filter.donut) presentation.send({ type: 'set-donut-filter', filter: saved.filter.donut })
     presentation.send({ type: 'set-exceptions', enabled: saved.filter.exceptions })
-    presentation.send({ type: 'set-sort', sort: saved.sort })
   }, overviewActive && !!floor.scene)
   useLayoutEffect(() => {
     if (!origin) { handledOrigin.current = null; return }
