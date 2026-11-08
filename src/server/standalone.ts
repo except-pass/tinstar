@@ -74,7 +74,7 @@ export function startServer(opts: ServerOptions) {
   const releases = new ReleasesApi(reconciliation)
   const pulls = new PullsApi(reconciliation, releases.store)
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
-  const asks = new AskApi(reconciliation)
+  const asks = new AskApi(reconciliation, undefined, undefined, { pulls: () => pulls.read(), releases: () => releases.read() })
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()

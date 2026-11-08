@@ -80,3 +80,13 @@ describe('worker links across First Mate homes', () => {
     expect(findLinkedWorker(fleet, readOverviewSearch('?worker=shared&home=%2FUsers%2Fme%2Fhomes%2Fb'))).toBeNull()
   })
 })
+
+it('round-trips a typed canonical Ask origin and clears it on manual section navigation', () => {
+  const origin = { section: 'pulls' as const, target: { kind: 'pull' as const, id: 'owner/repo#17', head: 'a'.repeat(40) }, view: { scene: 'pulls' as const, query: 'review' } }
+  const search = writeOverviewSearch('?unrelated=keep', { worker: null, home: null, key: null, q: '', page: 'pulls', origin })
+  expect(readOverviewSearch(search).origin).toEqual(origin)
+  expect(new URLSearchParams(search).get('unrelated')).toBe('keep')
+  expect(readOverviewSearch(writeOverviewSearch(search, { worker: null, home: null, key: null, q: '', page: 'releases' })).origin).toBeUndefined()
+  expect(readOverviewSearch(`?view=pulls&origin=${encodeURIComponent(JSON.stringify({ section: 'pulls', target: { kind: 'pull', id: 'wrong-url' } }))}`).origin).toBeUndefined()
+  expect(readOverviewSearch(`?view=releases&origin=${encodeURIComponent(JSON.stringify(origin))}`).origin).toBeUndefined()
+})

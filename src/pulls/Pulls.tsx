@@ -1,4 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { AskCardAction } from '../ask/Ask'
+import { AskSurface } from '../ask/AskSurface'
+import { useOriginFocus } from '../ask/useOriginFocus'
+import type { AskView } from '../shared/ask'
 import { apiFetch } from '../apiClient'
 import type { PullDetail, PullSummary } from '../shared/pulls'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
@@ -11,8 +15,8 @@ import type { PullFootprint } from '../shared/pullFootprint'
 
 const columns: Array<[PullSort, string]> = [['repository', 'Repository'], ['title', 'PR'], ['author', 'Author'], ['changes', 'Changes / files'], ['checks', 'CI'], ['review', 'Review'], ['updated', 'Updated / age'], ['initiative', 'Initiative'], ['epic', 'Epic'], ['manager', 'Manager'], ['worker', 'Worker']]
 export function Pulls() {
-  const { data, error, refresh } = usePulls(), { scene, now, openDesk } = useDeskWorkspace()
-  const [query, setQuery] = useState(''), [sort, setSort] = useState<PullSort>('repository'), [descending, setDescending] = useState(false)
+  const { data, error, refresh } = usePulls(), { scene, now, openDesk, origin, clearOrigin } = useDeskWorkspace()
+  const [query, setQuery] = useState(origin?.view?.query ?? ''), [sort, setSort] = useState<PullSort>(() => columns.some(([key]) => key === origin?.view?.sort) ? origin!.view!.sort as PullSort : 'repository'), [descending, setDescending] = useState(origin?.view?.descending ?? false)
   const [selected, setSelected] = useState<Set<string>>(new Set()), [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [details, setDetails] = useState<Record<string, PullDetail>>({}), [failures, setFailures] = useState<Record<string, string>>({}), [busy, setBusy] = useState<Set<string>>(new Set())
   const [footprints, setFootprints] = useState<Record<string, PullFootprint>>({}), [fileErrors, setFileErrors] = useState<Record<string, string>>({}), [fileBusy, setFileBusy] = useState<Set<string>>(new Set())
@@ -21,7 +25,10 @@ export function Pulls() {
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   // A refreshed head must never display changes/checks captured at the old head.
   const currentDetails = useMemo(() => Object.fromEntries(Object.entries(details).filter(([id, detail]) => data?.pulls.some(pull => pull.id === id && pull.head === detail.head))), [data, details])
-  const rows = useMemo(() => visiblePulls(data?.pulls ?? [], query, sort, descending, scene, currentDetails), [data, query, sort, descending, scene, currentDetails])
+  const destination = origin?.section === 'pulls' ? origin : undefined
+  const focusRef = useOriginFocus(destination)
+  const view: AskView = { scene: 'pulls', query, sort, descending }
+  const rows = useMemo(() => visiblePulls(destination ? data?.pulls.filter(pull => pull.id === destination.target.id) ?? [] : data?.pulls ?? [], destination ? '' : query, sort, descending, scene, currentDetails), [data, query, sort, descending, scene, currentDetails, destination])
   const actualSelection = [...selected].filter(id => data?.pulls.some(pull => pull.id === id))
   const allSelected = rows.length > 0 && rows.every(pull => selected.has(pull.id))
   const toggleSelection = (id: string) => setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next })
@@ -57,9 +64,11 @@ export function Pulls() {
     setExpanded(previous => { const next = new Set(previous); if (next.has(pull.id)) next.delete(pull.id); else next.add(pull.id); return next })
     if (!expanded.has(pull.id)) { void load(pull); void loadFiles(pull); requestAnimationFrame(() => document.getElementById(`detail-${pull.id}`)?.scrollIntoView?.({ block: 'nearest', inline: 'start' })) }
   }
-  return <section className="pr-page" aria-label="Pull requests">
+  return <section ref={focusRef} className="pr-page" aria-label="Pull requests">
     <header className="pr-header"><h1>Pull requests</h1><span>{data ? `${data.pulls.length} observed open` : 'Reading GitHub…'}</span><button type="button" onClick={refresh}>Refresh</button><button type="button" onClick={openDesk}>Your desk</button></header>
-    <div className="pr-toolbar"><label><span className="sr-only">Find PRs</span><input aria-label="Find PRs" placeholder="Find PR, repo, author, work…" value={query} onChange={event => setQuery(event.target.value)} /></label><small>{rows.length} shown · Read-only</small></div>
+    {destination && <p role="status" className="pr-notice">{data?.pulls.some(pull => pull.id === destination.target.id) ? `Showing originating PR ${destination.target.id}.${destination.target.kind === 'pull' && destination.target.head && data.pulls.find(pull => pull.id === destination.target.id)?.head !== destination.target.head ? ' The PR head changed since this question.' : ''}` : data ? `The originating PR ${destination.target.id} is missing or outside the current authorized open-PR inventory.` : 'Resolving originating PR…'}</p>}
+    {destination && <button type="button" onClick={clearOrigin}>Show all PRs in this view</button>}
+    <div className="pr-toolbar"><label><span className="sr-only">Find PRs</span><input aria-label="Find PRs" placeholder="Find PR, repo, author, work…" value={query} onChange={event => { setQuery(event.target.value); clearOrigin?.() }} /></label><small>{rows.length} shown · Read-only</small></div>
     {error && <p role="alert" className="pr-notice">{error} {data && 'Retained rows are last known.'}</p>}
     {data?.warnings.map(warning => <p className="pr-notice" role="status" key={warning}>{warning}</p>)}
     {data && <details className="pr-coverage"><summary>{data.repositories.length} repositories · {data.repositories.every(repo => repo.complete) ? 'Open PR inventory complete in this scope' : 'Inventory incomplete'}</summary>{data.repositories.map(repo => <p key={repo.repository}>{repo.repository} · {repo.scope === 'authored-or-associated' ? 'Authored or explicitly associated' : 'All open PRs'} · {repo.status} · {repo.observedAt ? new Date(repo.observedAt).toLocaleString() : 'No successful observation'}{repo.error && ` · ${repo.error}`}</p>)}<p>Repositories come from explicit PR sources or configuration. All open PRs in the authenticated account’s repositories and organizations; elsewhere, only PRs authored by {data.account ?? 'the authenticated account'} or explicitly associated with a card or worker. Counts, CI and reviews load when you inspect a row.</p></details>}
@@ -72,14 +81,15 @@ export function Pulls() {
         const stale = !!error || pull.freshness === 'stale' || detail?.freshness === 'stale' || !!detail && now - Date.parse(detail.observedAt) >= 120_000
         const footprint = footprints[pull.id]?.head === pull.head ? footprints[pull.id] : null
         const linked = context.links.length > 0, associationLabel = linked ? !error && data?.associationsComplete ? 'Confirmed' : 'Last known' : !error && data?.associationsComplete ? 'Unlinked in operational work' : 'Link unknown'
-        return <Fragment key={pull.id}><tr className={`pr-row${open ? ' is-expanded' : ''}`} onClick={event => { if (!(event.target as Element).closest('a,button,input')) inspect(pull) }}>
+        const subject = { target: { kind: 'pull' as const, id: pull.id, head: pull.head }, label: `${pull.id} · ${pull.title}`, view }
+        return <Fragment key={pull.id}><AskSurface subject={subject} data-ask-origin={pull.id} tabIndex={-1} className={`pr-row${open ? ' is-expanded' : ''}${destination?.target.id === pull.id ? ' ask-origin' : ''}`} onClick={event => { if (!(event.target as Element).closest('a,button,input')) inspect(pull) }}>
           <td><input type="checkbox" aria-label={`Select ${pull.id}`} checked={selected.has(pull.id)} onChange={() => toggleSelection(pull.id)} /></td>
           <td title={pull.repository}>{pull.repository}</td><td className="pr-title"><a href={pull.url} target="_blank" rel="noreferrer">#{pull.number} {pull.title}</a>{pull.draft && <small> Draft</small>}{stale && <small> · stale</small>}</td><td>{pull.author}</td>
-          <td>{detail ? <><span className="pr-add">+{detail.additions}</span> <span className="pr-delete">−{detail.deletions}</span> · {detail.files}f</> : <span className="pr-unknown">Unknown</span>}</td><td>{detail?.checks ?? 'Unknown'}</td><td>{detail?.review ?? 'Unknown'}</td>
+          <td data-ask-field="changes">{detail ? <><span className="pr-add">+{detail.additions}</span> <span className="pr-delete">−{detail.deletions}</span> · {detail.files}f</> : <span className="pr-unknown">Unknown</span>}</td><td data-ask-field="ci">{detail?.checks ?? 'Unknown'}</td><td data-ask-field="review">{detail?.review ?? 'Unknown'}</td>
           <td title={`Updated ${pull.updatedAt}; created ${pull.createdAt}`}>{ageLabel(Date.parse(pull.updatedAt), now)} / {ageLabel(Date.parse(pull.createdAt), now)}</td>
           <td title={associationLabel}>{context.initiatives.join(', ') || 'Unknown'}</td><td title={associationLabel}>{context.epics.join(', ') || 'Unknown'}</td><td>{context.managers.join(', ') || 'Unknown'}</td><td title="First Mate PR registration evidence">{context.workerNames.join(', ') || 'Unlinked / unknown'}</td>
-          <td><button type="button" className="pr-inspect" aria-label={`Inspect ${pull.id}`} aria-expanded={open} aria-controls={`detail-${pull.id}`} title="Inspect PR" onClick={() => inspect(pull)}><span className="material-symbols-outlined" aria-hidden="true">view_sidebar</span></button></td>
-        </tr>{open && <tr><td colSpan={13}><section className="pr-detail" id={`detail-${pull.id}`} aria-label={`Details ${pull.id}`}>
+          <td><AskCardAction subject={subject} icon /><button type="button" className="pr-inspect" aria-label={`Inspect ${pull.id}`} aria-expanded={open} aria-controls={`detail-${pull.id}`} title="Inspect PR" onClick={() => inspect(pull)}><span className="material-symbols-outlined" aria-hidden="true">view_sidebar</span></button></td>
+        </AskSurface>{open && <tr><td colSpan={13}><section className="pr-detail" id={`detail-${pull.id}`} aria-label={`Details ${pull.id}`}>
           <header><strong>{pull.title}</strong> <a href={pull.url} target="_blank" rel="noreferrer">Open in GitHub ↗</a><button type="button" onClick={() => { void load(pull); void loadFiles(pull) }} disabled={busy.has(pull.id) || fileBusy.has(pull.id)}>Read current detail</button></header>
           <p>Head {pull.head.slice(0, 12)} → {pull.base} · observed {ageLabel(Date.parse(pull.observedAt), now)}{stale ? ' · Last known / stale' : ''}</p>
           {busy.has(pull.id) && <p role="status">Reading PR description, changes, checks and reviews…</p>}{failures[pull.id] && <p role="alert">{failures[pull.id]}</p>}

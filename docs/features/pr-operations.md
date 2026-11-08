@@ -1,8 +1,8 @@
 # PR Operations
 
-The **PRs** destination shows one compact row per observed open GitHub PR. Repository is the first data column and sorts in both directions. Search matches repository, title, number, author and observed work/contributor context. Select rows without losing hidden selections; the selection summary appears only while a selection exists. This slice provides inspection only.
+The **PRs** destination shows one compact row per observed open GitHub PR. Repository is the first data column and sorts in both directions. Search matches repository, title, number, author and observed work/contributor context. Select rows without losing hidden selections; the selection summary appears only while a selection exists. Inspection and contextual Ask are available; installed actions remain a follow-on slice.
 
-Click row body or its keyboard-accessible Inspect button to expand the actual description, additions/deletions/file count, check/review observations and explicit work/contributor evidence inline. GitHub links remain direct. Counts/checks/reviews are **unknown until inspected**; details are cached for two minutes per canonical PR and captured head. A changed head cannot reuse the old detail. Review approvals are observations, not a claim that all branch policy requirements are satisfied. For file categorization and coverage, see [Change footprint and contributor evidence](#change-footprint-and-contributor-evidence). Typed PR Ask and installed actions are follow-on slices.
+Click row body or its keyboard-accessible Inspect button to expand the actual description, additions/deletions/file count, check/review observations and explicit work/contributor evidence inline. GitHub links remain direct. Counts/checks/reviews are **unknown until inspected**; details are cached for two minutes per canonical PR and captured head. A changed head cannot reuse the old detail. Review approvals are observations, not a claim that all branch policy requirements are satisfied. For file categorization and coverage, see [Change footprint and contributor evidence](#change-footprint-and-contributor-evidence).
 
 ## Sources and scope
 
@@ -26,7 +26,7 @@ Canonical PR identity and many-to-many card edges come directly from `src/shared
 
 ## Navigation and receipts
 
-See [README navigation](../../README.md) for activity destinations, worker switching and message receipts. The Ask inbox stays in Your Desk with its existing permissions and conversation lifecycle. PRs opens the persistent shared Desk directly; typed PR Ask will reuse that inbox in its own slice.
+See [README navigation](../../README.md) for activity destinations, worker switching and message receipts. The Ask inbox stays in Your Desk with its existing permissions and conversation lifecycle. PRs opens the persistent shared Desk directly; the [Ask reference](ask.md#typed-artifact-origins-and-returns) owns typed PR targeting and return behavior.
 
 The [README URL table](../../README.md#worker-links) lists supported deep links. A navigation switch closes auxiliary panels so they do not become empty orphan drawers. At narrow widths the PR table scrolls horizontally; metadata and GitHub links remain available.
 

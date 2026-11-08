@@ -48,7 +48,8 @@ export class AskStore {
     return this.change(rows => {
       const previous = rows.find(row => row.owner === owner && row.client_key === clientKey)
       if (previous) {
-        if (previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id ||
+        if (previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
+          JSON.stringify(previous.context.target) !== JSON.stringify(context.target) ||
           (followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
         return previous
       }

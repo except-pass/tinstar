@@ -1,15 +1,23 @@
+import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { Releases } from '../Releases'
 import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
+import type { AskReturn } from '../../shared/ask'
 import { releaseFixture } from './fixtures'
 
-const observed = vi.hoisted(() => ({ scene: null as unknown }))
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
+const observed = vi.hoisted(() => ({ scene: null as unknown, origin: undefined as AskReturn | undefined }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => {
+  const [origin, setOrigin] = React.useState(observed.origin)
+  return { scene: observed.scene, origin, clearOrigin: () => setOrigin(undefined), error: null, now: Date.now() }
+} }))
 // Ask's existing provider/transport is covered in ask tests; keep the same card-bound affordance here.
+vi.mock('../../ask/AskSurface', () => ({ AskSurface: ({ as = 'tr', children, subject: _subject, ...props }: React.HTMLAttributes<HTMLElement> & { as?: string; subject: unknown }) => React.createElement(as, props, children) }))
 vi.mock('../../ask/Ask', () => ({ AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
 let data: ReleasesRead
 beforeEach(() => {
+  observed.origin = undefined
+  HTMLElement.prototype.scrollIntoView = vi.fn()
   const scene = releaseFixture(); observed.scene = scene; data = releaseAssociations(scene)
   for (const pull of data.pulls) Object.assign(pull, { title: `Receipt change ${pull.number}`, state: 'merged', freshness: 'fresh', mergedAt: '2026-11-06T18:00:00Z' })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
@@ -88,4 +96,63 @@ describe('PR-first Releases', () => {
     expect(within(dialog).queryByRole('button', { name: /mark Done|complete card/i })).toBeNull()
   })
 
+})
+
+describe('release origin identity', () => {
+  it('lets a manual Smart Search selection replace the Desk origin and restore the prior filter', () => {
+    observed.origin = { section: 'releases', target: { kind: 'pull', id: data.pulls[0]!.id } }
+    mount()
+    expect(screen.getByText(/Showing originating release owner\/repo#1/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'owner/repo#2 ↗' })).toBeNull()
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const search = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
+    fireEvent.change(search, { target: { value: 'PR #2' } })
+    fireEvent.keyDown(search, { key: 'Enter' })
+
+    expect(screen.getByRole('link', { name: 'owner/repo#2 ↗' })).toBeTruthy()
+    expect(screen.queryAllByRole('link', { name: 'owner/repo#1 ↗' })).toHaveLength(0)
+    expect(screen.queryByText(/Showing originating release/)).toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getAllByRole('link', { name: /owner\/repo#/ })).toHaveLength(3)
+    expect(screen.getByRole('button', { name: 'In Queue' })).toHaveAttribute('aria-pressed', 'true')
+  })
+  function prepare(kind: 'release' | 'receipt') {
+    const pull = data.pulls[0]!
+    pull.deployment = { state: 'in-queue', targets: [
+      { component: 'web', target: 'production', state: 'unknown', reason: 'Pending', ancestry: 'unknown', receipt: { id: 'receipt-1', repository: pull.repository, component: 'web', target: 'production', environment: 'production', deployedSha: null, artifactDigest: null, version: null, deployedAt: '2026-11-06', workflowUrl: 'https://example.com/workflow', receiptUrl: 'https://example.com/receipt', outcome: 'succeeded', exceptions: [] } },
+      { component: 'api', target: 'production', state: 'unknown', reason: 'Pending', ancestry: 'unknown', receipt: null },
+    ] }
+    observed.origin = { section: 'releases', target: { kind, id: pull.id, component: 'web', target: 'production', ...(kind === 'receipt' ? { receipt_id: 'receipt-1' } : {}) } } as AskReturn
+    return pull
+  }
+  it('reports a removed deployment mapping instead of claiming return success', () => {
+    const pull = prepare('release')
+    pull.deployment!.targets.shift()
+    mount()
+    expect(screen.queryByText(/Showing originating release/)).toBeNull()
+    expect(screen.getByText(/original deployment target is missing/i)).toBeTruthy()
+  })
+  it('highlights and focuses the exact deployment target', () => {
+    prepare('release')
+    const { container } = mount()
+    const target = container.querySelector('[data-deployment-target]')!
+    expect(target).toHaveClass('ask-origin')
+    expect(target).toHaveFocus()
+  })
+  it('rejects the same receipt ID on a different component', () => {
+    const pull = prepare('receipt')
+    pull.deployment!.targets[1]!.receipt = pull.deployment!.targets[0]!.receipt
+    pull.deployment!.targets.shift()
+    mount()
+    expect(screen.queryByText(/Showing originating release/)).toBeNull()
+    expect(screen.getByText(/original receipt is missing or has been superseded/i)).toBeTruthy()
+  })
+  it('warns when the originating PR head changed', () => {
+    const pull = data.pulls[0]!
+    pull.head = 'b'.repeat(40)
+    observed.origin = { section: 'releases', target: { kind: 'pull', id: pull.id, head: 'a'.repeat(40) } }
+    mount()
+    expect(screen.getByText(/PR head changed since this question/)).toBeTruthy()
+  })
 })

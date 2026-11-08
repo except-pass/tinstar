@@ -2,7 +2,7 @@ import { releasePull } from '../../shared/releases'
 import type { ReleasePull } from '../../shared/releases'
 import { readGithubScalars } from '../reconciliation/queuePulls'
 
-type Observation = Pick<ReleasePull, 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
+type Observation = Pick<ReleasePull, 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
 /** One GET per explicit PR, at most four concurrently per refresh. No repository crawl. */
 export class ReleasePullReader {
   private cache = new Map<string, { until: number; value: Observation }>()
@@ -34,10 +34,10 @@ export class ReleasePullReader {
     try {
       const pull = releasePull(url)
       if (!pull) throw new Error('Unsupported PR')
-      const raw = await this.read(`/repos/${pull.repository}/pulls/${pull.number}`, '{title,state,merged,merged_at,merge_commit_sha}')
+      const raw = await this.read(`/repos/${pull.repository}/pulls/${pull.number}`, '{title,state,merged,merged_at,merge_commit_sha,head_sha:.head.sha}')
       if (typeof raw.title !== 'string' || !['open', 'closed'].includes(String(raw.state)) || typeof raw.merged !== 'boolean') throw new Error('Incomplete PR observation')
       if (raw.merged && (typeof raw.merged_at !== 'string' || !Number.isFinite(Date.parse(raw.merged_at)) || !/^[a-f0-9]{40,64}$/.test(String(raw.merge_commit_sha)))) throw new Error('Missing effective merge identity')
-      value = { title: raw.title, state: raw.merged ? 'merged' : raw.state as 'open' | 'closed', mergedAt: raw.merged ? String(raw.merged_at) : null, mergeSha: raw.merged ? String(raw.merge_commit_sha) : null, observedAt: new Date(this.now()).toISOString(), freshness: 'fresh' }
+      value = { head: /^[a-f0-9]{40,64}$/.test(String(raw.head_sha)) ? String(raw.head_sha) : null, title: raw.title, state: raw.merged ? 'merged' : raw.state as 'open' | 'closed', mergedAt: raw.merged ? String(raw.merged_at) : null, mergeSha: raw.merged ? String(raw.merge_commit_sha) : null, observedAt: new Date(this.now()).toISOString(), freshness: 'fresh' }
     } catch (error) {
       const readError = (error as { code?: unknown }).code === 'ENOENT' ? 'gh-axi is unavailable on the server PATH; configure the service PATH' : `GitHub read failed for ${url}; check service PATH, credentials and repository access`
       const previous = this.cache.get(url)?.value

@@ -6,6 +6,9 @@ import { createServer, type Server } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
+import type { AskArtifactSources } from '../artifacts'
+import { releaseAssociations } from '../../../shared/releases'
+import type { PullsRead } from '../../../shared/pulls'
 import { AskApi } from '../routes'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
@@ -21,13 +24,13 @@ const view = { scene: 'overview' as const }
 const context = () => askContextSchema.parse({ anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: `https://www.notion.so/${fixtureId(1)}`, observed_at: null }, view })
 const note = (id: string, noteId = 'note-1', announced = true) => ({ schema: 'fm-inbox-note.v1' as const, outcome: 'created' as const, id: noteId, request_id: inboxRequestId(id), saved: true as const, announced, acknowledged: false })
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined }; if (root) await rm(root, { recursive: true, force: true }); resetOriginAllowlistForTests() })
-async function setup() {
+async function setup(artifacts?: AskArtifactSources) {
   root = await mkdtemp(join(tmpdir(), 'tinstar-ask-'))
   const sources = { scene: async () => {
     const scene = fixtureScene()
     return { ...scene, searchIndex: boundSearchDocuments(sceneSearchDocuments(scene)) }
   } }
-  let api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }))
+  let api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }), artifacts)
   server = createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -39,7 +42,7 @@ async function setup() {
     return { status: response.status, data: await response.json() }
   }
   const bridge = (body?: unknown) => call('bridge', body, { Authorization: `Bearer ${token}` })
-  const reload = () => { api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token })) }
+  const reload = () => { api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }), artifacts) }
   return { call, bridge, reload, base }
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
@@ -215,4 +218,58 @@ it('persists semantic fields, exact worker identities and server-resolved relati
   expect(follow.data.data.context).toEqual(retained.context)
   reload()
   expect((await call('requests', followInput)).data.data.request_id).toBe(follow.data.data.request_id)
+})
+
+it('resolves typed PR/deployment/receipt origins from the shared projections, persists them and retains existing callbacks', async () => {
+  const releases = releaseAssociations(fixtureScene())
+  const identity = { id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17' }
+  const head = 'a'.repeat(40)
+  const receipt = { id: 'immutable-receipt-1', repository: identity.repository, environment: 'production', target: 'production', component: 'web', deployedSha: 'b'.repeat(40), artifactDigest: null, version: '6.0', deployedAt: '2026-11-08T12:00:00.000Z', workflowUrl: 'https://github.com/owner/repo/actions/runs/55', receiptUrl: 'https://github.com/owner/repo/releases/tag/v6', outcome: 'succeeded' as const, exceptions: [] }
+  releases.pulls = [{ ...identity, title: 'Authoritative release title', head, state: 'merged', mergeSha: 'b'.repeat(40), mergedAt: '2026-11-08T11:00:00.000Z', observedAt: '2026-11-08T12:00:00.000Z', freshness: 'fresh', links: [], exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified receipt', ancestry: 'ancestor', receipt }] } }]
+  const pulls: PullsRead = { pulls: [{ ...identity, head, title: 'Authoritative PR title', author: 'owner', draft: false, base: 'main', createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-08T12:00:00.000Z', observedAt: '2026-11-08T12:00:00.000Z', freshness: 'fresh', links: [] }], repositories: [], warnings: [], associationsComplete: true }
+  let reads = 0
+  const { call, bridge, reload } = await setup({ pulls: async () => { reads++; return pulls }, releases: async () => { reads++; return releases } })
+  await new AskStore(root).create(owner, randomUUID(), 'Legacy stored question', context())
+  const prInput = { client_key: randomUUID(), target: { kind: 'pull', id: identity.id, head }, question: 'Why is CI pending?', field_key: 'ci', field_value: 'Captured UI hint', view: { scene: 'pulls', query: 'pending', sort: 'repository' } }
+  const pr = await call('requests', prInput)
+  expect(pr.status).toBe(200)
+  expect(pr.data.data.context).toMatchObject({ schema_version: 2, anchor: { kind: 'pull', page_id: identity.id, label: 'owner/repo#17 · Authoritative PR title', url: identity.url }, target: prInput.target, source: { kind: 'github', repository: identity.repository, number: 17, head }, return_to: { section: 'pulls', target: prInput.target }, field_key: 'ci' })
+  const releaseInput = { ...prInput, client_key: randomUUID(), target: { kind: 'release', id: identity.id, target: 'production', component: 'web' }, view: { scene: 'releases', filter: 'Shipped' }, field_key: 'deployment' }
+  const deployed = await call('requests', releaseInput)
+  expect(deployed.status).toBe(200)
+  expect(deployed.data.data.context).toMatchObject({ anchor: { kind: 'release' }, source: { kind: 'deployment', target: 'production', component: 'web', receipt_id: receipt.id, deployed_sha: receipt.deployedSha }, return_to: { section: 'releases', target: releaseInput.target } })
+  const receiptInput = { ...releaseInput, client_key: randomUUID(), target: { ...releaseInput.target, kind: 'receipt', receipt_id: receipt.id }, field_key: 'receipt' }
+  expect((await call('requests', { ...receiptInput, client_key: randomUUID(), target: { ...receiptInput.target, receipt_id: 'superseded-receipt' } })).status).toBe(404)
+  expect((await call('requests', { ...releaseInput, client_key: randomUUID(), target: { ...releaseInput.target, component: 'invented' } })).status).toBe(404)
+  const saved = await call('requests', receiptInput)
+  expect(saved.status).toBe(200)
+  expect(saved.data.data.context).toMatchObject({ anchor: { kind: 'receipt', url: receipt.receiptUrl }, source: { receipt_id: receipt.id, receipt_url: receipt.receiptUrl, workflow_url: receipt.workflowUrl } })
+  reload()
+  const before = reads
+  pulls.pulls = []; releases.pulls = []
+  expect((await call('requests', prInput)).data.data.request_id).toBe(pr.data.data.request_id)
+  expect(reads).toBe(before)
+  expect((await call('requests', { ...prInput, target: { ...prInput.target, head: 'c'.repeat(40) } })).status).toBe(409)
+  expect((await call('requests', { ...receiptInput, client_key: randomUUID() })).status).toBe(404)
+  const id = saved.data.data.request_id
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Typed artifact reply via existing bridge.', cursor: '1' } })
+  const retained = (await call('requests')).data.data.find((item: { request_id: string }) => item.request_id === id)
+  expect(retained.status).toBe('answered')
+  const legacy = (await call('requests')).data.data.find((row: { question: string }) => row.question === 'Legacy stored question')
+  expect(legacy.context).toEqual(context())
+  expect(legacy.context.schema_version).toBeUndefined()
+  const follow = await call('requests', { ...receiptInput, client_key: randomUUID(), follow_up_to: id, field_key: undefined, field_value: undefined, question: 'What changed?' })
+  expect(follow.data.data.context).toEqual(retained.context)
+  expect(follow.data.data.conversation_id).toBe(id)
+})
+
+it('rejects invented artifact locators, unavailable scope and foreign owners without accepting client provenance', async () => {
+  const { call } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()) })
+  const body = { client_key: randomUUID(), target: { kind: 'pull', id: 'owner/repo#999', head: 'a'.repeat(40) }, question: 'Why?', view: { scene: 'pulls' } }
+  expect((await call('requests', body)).status).toBe(404)
+  expect((await call('requests', { ...body, return_to: { section: 'pulls', target: body.target } })).status).toBe(400)
+  expect((await call('requests', { ...body, source: { kind: 'github' } })).status).toBe(400)
+  expect((await call('requests', body, { 'Tailscale-User-Login': 'stranger', 'X-Tinstar-UI': '1' })).status).toBe(403)
+  expect((await call('requests', { ...body, target: { kind: 'pull', id: 'https://evil.test/#1' } })).status).toBe(400)
 })
