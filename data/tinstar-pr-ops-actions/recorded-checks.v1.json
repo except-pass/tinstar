@@ -1,0 +1,3998 @@
+{
+  "version": 1,
+  "source": "Read-only gh-axi GET; recorded observations, never live merge evidence",
+  "pulls": [
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3320",
+      "path": "/repos/fortresspower/cmsandbox/commits/fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:13.673Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:18:36Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128131118017",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128131118017,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-06T20:18:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:18:35Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128131116529",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128131116529,
+            "name": "deploy",
+            "started_at": "2026-11-06T20:18:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:18:35Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128131115642",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128131115642,
+            "name": "deploy-frontend",
+            "started_at": "2026-11-06T20:18:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:29Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130073403",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130073403,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:29Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130072740",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130072740,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:29Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130072348",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130072348,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:29Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130072211",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130072211,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:17:09Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130071652",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130071652,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-06T20:16:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130070006",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130070006,
+            "name": "build / Deploy",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128130069012",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128130069012,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-06T20:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:12:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128127932836",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128127932836,
+            "name": "publish-backend",
+            "started_at": "2026-11-06T20:12:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:16:28Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128127459250",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128127459250,
+            "name": "build / Build manager-siteconfiguration",
+            "started_at": "2026-11-06T20:11:56Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:11:11Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128127344851",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128127344851,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-06T20:11:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:11:15Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128127344720",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128127344720,
+            "name": "build / Prepare",
+            "started_at": "2026-11-06T20:11:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:18:35Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128126221925",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128126221925,
+            "name": "build-frontend",
+            "started_at": "2026-11-06T20:10:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:12:12Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128126221890",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128126221890,
+            "name": "build-backend",
+            "started_at": "2026-11-06T20:09:49Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:11:30Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128126215037",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128126215037,
+            "name": "Ops preview wire contract / Ops preview wire contract",
+            "started_at": "2026-11-06T20:09:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:10:17Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128126164031",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128126164031,
+            "name": "Owner reading wire contract / Owner reading wire contract",
+            "started_at": "2026-11-06T20:09:09Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:22:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707792/job/128125961577",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125961577,
+            "name": "mysql-8-4 integration tests",
+            "started_at": "2026-11-06T20:09:00Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:11:01Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128125957994",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125957994,
+            "name": "Verify Site merge final review / Verify Site merge final review",
+            "started_at": "2026-11-06T20:08:44Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:47:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707896/job/128125956063",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125956063,
+            "name": "mysql-8-4 integration tests / mysql-8-4 integration tests",
+            "started_at": "2026-11-06T20:09:00Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:03Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128125843999",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125843999,
+            "name": "Integration Tests",
+            "started_at": "2026-11-06T20:08:04Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:09:21Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285708435/job/128125842569",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125842569,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-06T20:08:28Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128125841982",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125841982,
+            "name": "Ops preview wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-06T20:08:37Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:41Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128125841670",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125841670,
+            "name": "Owner reading wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-06T20:08:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:48Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707859/job/128125841267",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125841267,
+            "name": "Prepare",
+            "started_at": "2026-11-06T20:08:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:17Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707896/job/128125841049",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125841049,
+            "name": "mysql-8-4 integration tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-06T20:08:06Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:17Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707792/job/128125840425",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125840425,
+            "name": "CI Pool route / integration-test",
+            "started_at": "2026-11-06T20:08:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:17Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707299/job/128125840365",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125840365,
+            "name": "Verify Site merge final review / CI Pool route / CI Pool route",
+            "started_at": "2026-11-06T20:08:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:21Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707943/job/128125840363",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125840363,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-06T20:08:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:08:27Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42285707610/job/128125839388",
+            "head_sha": "fcd9c75a295dc2170406ad2e4a3c08608e9fe6d7",
+            "id": 128125839388,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-06T20:08:04Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 31
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3321",
+      "path": "/repos/fortresspower/cmsandbox/commits/dc6060e12320b2cb3788994e206767d66011d4b9/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:13.023Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:47:50Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128115749938",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128115749938,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-06T19:47:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:48:25Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128115748238",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128115748238,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-06T19:47:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:47:50Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128115344106",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128115344106,
+            "name": "build-deploy / Build ra-telemetry",
+            "started_at": "2026-11-06T19:47:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:46:48Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128115233165",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128115233165,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-06T19:46:48Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:47:01Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128115231067",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128115231067,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-06T19:46:49Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:46:15Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128114961691",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114961691,
+            "name": "Unit tests / CI Pool route",
+            "started_at": "2026-11-06T19:46:16Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:46:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543854/job/128114960275",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114960275,
+            "name": "Unit tests / Unit tests",
+            "started_at": "2026-11-06T19:46:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:46:35Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543830/job/128114959242",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114959242,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-06T19:46:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:47:07Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543841/job/128114958764",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114958764,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-06T19:46:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:46:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543756/job/128114958520",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114958520,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-06T19:46:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T19:47:20Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42282543754/job/128114958458",
+            "head_sha": "dc6060e12320b2cb3788994e206767d66011d4b9",
+            "id": 128114958458,
+            "name": "Integration Tests",
+            "started_at": "2026-11-06T19:46:17Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 11
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3322",
+      "path": "/repos/fortresspower/cmsandbox/commits/e1d8f7929999043f5748d71e1303b2cc2990cacb/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:12.454Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146880885",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146880885,
+            "name": "build-frontend",
+            "started_at": "2026-11-06T20:51:06Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146874851",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146874851,
+            "name": "Owner reading wire contract",
+            "started_at": "2026-11-06T20:51:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:58Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146873039",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146873039,
+            "name": "publish-backend",
+            "started_at": "2026-11-06T20:51:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146864139",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146864139,
+            "name": "Prepare",
+            "started_at": "2026-11-06T20:51:04Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797703/job/128146857365",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146857365,
+            "name": "Migration safety contracts",
+            "started_at": "2026-11-06T20:51:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:58Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146820827",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146820827,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:58Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146820550",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146820550,
+            "name": "deploy",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:58Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146819896",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146819896,
+            "name": "deploy-frontend",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146819138",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146819138,
+            "name": "build-backend",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146818858",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146818858,
+            "name": "Integration Tests",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797961/job/128146817962",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146817962,
+            "name": "Ops preview wire contract",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797939/job/128146816953",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146816953,
+            "name": "Check for dangerous files",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-06T20:50:57Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42291797742/job/128146815514",
+            "head_sha": "e1d8f7929999043f5748d71e1303b2cc2990cacb",
+            "id": 128146815514,
+            "name": "Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-06T20:50:58Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 13
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3323",
+      "path": "/repos/fortresspower/cmsandbox/commits/e4e111bc89d2603ddd8e10f9817a64f8355784a2/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:11.942Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:06Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792657588",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792657588,
+            "name": "dev-receipts",
+            "started_at": "2026-11-08T16:36:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:06Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792657167",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792657167,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T16:36:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:31Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792504731",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792504731,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T16:35:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:31Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792504580",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792504580,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T16:35:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:31Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792504238",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792504238,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T16:35:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:31Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792503690",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792503690,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T16:35:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:06Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128792503347",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128792503347,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T16:35:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:39Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128791492599",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128791492599,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T16:31:39Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:39Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128791492428",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128791492428,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T16:31:39Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789978012",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789978012,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789977578",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789977578,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789977556",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789977556,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789977425",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789977425,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789977041",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789977041,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:26:31Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789976776",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789976776,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T16:25:48Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:46Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128789976338",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128789976338,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T16:25:46Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:25:45Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128788424338",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128788424338,
+            "name": "build / Build manager-siteconfiguration",
+            "started_at": "2026-11-08T16:20:20Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:19:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128788371535",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128788371535,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:19:37Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:19:48Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128788371454",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128788371454,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T16:19:37Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:18:21Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128788051136",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128788051136,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T16:18:22Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:18:52Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128788049511",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128788049511,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T16:18:23Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:18:21Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128787801996",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787801996,
+            "name": "build-deploy / Build ra-telemetry",
+            "started_at": "2026-11-08T16:17:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:19:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128787762193",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787762193,
+            "name": "Verify Site merge final review / Verify Site merge final review",
+            "started_at": "2026-11-08T16:17:40Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:38Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787742602",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787742602,
+            "name": "build / Build manager-analysis",
+            "started_at": "2026-11-08T16:17:53Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:07Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128787728861",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787728861,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T16:17:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:24Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128787727750",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787727750,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T16:17:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:30:05Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787696332",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787696332,
+            "name": "Unit Tests / Unit Tests",
+            "started_at": "2026-11-08T16:17:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:31Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787676361",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787676361,
+            "name": "tariff-integration-test / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:17:35Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:24:25Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043795/job/128787615939",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787615939,
+            "name": "mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:17:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:27:24Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043914/job/128787610833",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787610833,
+            "name": "mysql-8-4 integration tests / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:17:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128787564552",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787564552,
+            "name": "Unit tests / CI Pool route",
+            "started_at": "2026-11-08T16:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:14Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043961/job/128787564073",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787564073,
+            "name": "Verify Site merge final review / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:17:06Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:10Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787563582",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787563582,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:17:02Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:00Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787563577",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787563577,
+            "name": "Unit Tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:16:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:08Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787563553",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787563553,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T16:16:56Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:55Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044063/job/128787563369",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787563369,
+            "name": "tariff-integration-test / CI Pool route",
+            "started_at": "2026-11-08T16:16:47Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:07Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044053/job/128787563361",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787563361,
+            "name": "Unit tests / Unit tests",
+            "started_at": "2026-11-08T16:16:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:39Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043914/job/128787562756",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787562756,
+            "name": "mysql-8-4 integration tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:16:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:48Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499044016/job/128787562548",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787562548,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T16:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043889/job/128787562017",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787562017,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T16:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:35Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043875/job/128787561869",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787561869,
+            "name": "Integration Tests",
+            "started_at": "2026-11-08T16:16:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:16:41Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043795/job/128787561609",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787561609,
+            "name": "CI Pool route / integration-test",
+            "started_at": "2026-11-08T16:16:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:17:20Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42499043797/job/128787561371",
+            "head_sha": "e4e111bc89d2603ddd8e10f9817a64f8355784a2",
+            "id": 128787561371,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T16:16:29Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 43
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3324",
+      "path": "/repos/fortresspower/cmsandbox/commits/9745791778fcfca4bd05aeb72320698cf0ca2131/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:11.198Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:25:09Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744433848",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744433848,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T13:25:09Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:25:09Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744433663",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744433663,
+            "name": "dev-receipts",
+            "started_at": "2026-11-08T13:25:09Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:47Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128744347049",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744347049,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T13:24:48Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:47Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128744346281",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744346281,
+            "name": "deploy-frontend",
+            "started_at": "2026-11-08T13:24:48Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:47Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128744346092",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744346092,
+            "name": "deploy",
+            "started_at": "2026-11-08T13:24:48Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:47Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128744345409",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744345409,
+            "name": "publish-backend",
+            "started_at": "2026-11-08T13:24:47Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:33Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744288424",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744288424,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:33Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744288070",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744288070,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:32Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744288004",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744288004,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:32Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744287761",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744287761,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:25:09Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744287595",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744287595,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T13:24:35Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:32Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744287083",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744287083,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:32Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128744287063",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128744287063,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T13:24:33Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:02Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743914579",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743914579,
+            "name": "administrative-dev-smoke",
+            "started_at": "2026-11-08T13:23:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:14Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743715847",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743715847,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:14Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743715779",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743715779,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:14Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743715262",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743715262,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:14Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743715040",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743715040,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:02Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743714770",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743714770,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T13:22:16Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743714190",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743714190,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128743713915",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743713915,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T13:22:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743458290",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743458290,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743457732",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743457732,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743457382",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743457382,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743457190",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743457190,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:58Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743456995",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743456995,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T13:21:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:11Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743456689",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743456689,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:11Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128743456229",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128743456229,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T13:21:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:22:13Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128742265252",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128742265252,
+            "name": "build / Build manager-vppOps",
+            "started_at": "2026-11-08T13:16:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:16:19Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128742213037",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128742213037,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:16:11Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:16:22Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128742213006",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128742213006,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T13:16:11Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:11Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128742027465",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128742027465,
+            "name": "build / Build manager-siteconfiguration",
+            "started_at": "2026-11-08T13:15:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:15:19Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128741960604",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741960604,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:15:09Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:15:24Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128741960445",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741960445,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T13:15:09Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:32Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741397270",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741397270,
+            "name": "build / Build manager-analysis",
+            "started_at": "2026-11-08T13:13:22Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:41Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741397159",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741397159,
+            "name": "Unit Tests / Unit Tests",
+            "started_at": "2026-11-08T13:13:11Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:15:01Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741394908",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741394908,
+            "name": "Ops preview wire contract / Ops preview wire contract",
+            "started_at": "2026-11-08T13:13:11Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:14:43Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741376326",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741376326,
+            "name": "Owner reading wire contract / Owner reading wire contract",
+            "started_at": "2026-11-08T13:13:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:15:07Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128741349170",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741349170,
+            "name": "Verify Site merge final review / Verify Site merge final review",
+            "started_at": "2026-11-08T13:13:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:30Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741306138",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741306138,
+            "name": "tariff-integration-test / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T13:12:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:16:03Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741304499",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741304499,
+            "name": "Production container smoke / Production container smoke",
+            "started_at": "2026-11-08T13:12:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741229691",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741229691,
+            "name": "build-backend",
+            "started_at": "2026-11-08T13:12:53Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:21:18Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741229669",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741229669,
+            "name": "build-frontend",
+            "started_at": "2026-11-08T13:12:47Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:16:09Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128741224238",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741224238,
+            "name": "test / test",
+            "started_at": "2026-11-08T13:12:45Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:13:23Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758475/job/128741223496",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741223496,
+            "name": "Build, Test / Build, Test",
+            "started_at": "2026-11-08T13:12:40Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:15:56Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741175403",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741175403,
+            "name": "MySQL 8.4.11 contracts, importer, and catalog",
+            "started_at": "2026-11-08T13:12:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:13:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758319/job/128741111167",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741111167,
+            "name": "Typecheck, Test, Build / Typecheck, Test, Build",
+            "started_at": "2026-11-08T13:12:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:06Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758327/job/128741101569",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741101569,
+            "name": "Typecheck, Test, Build / Typecheck, Test, Build",
+            "started_at": "2026-11-08T13:11:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:25Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741062835",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062835,
+            "name": "Integration Tests",
+            "started_at": "2026-11-08T13:11:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:25Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741062732",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062732,
+            "name": "Focused Grafana contracts / CI Pool route",
+            "started_at": "2026-11-08T13:11:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:25Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741062480",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062480,
+            "name": "Terraform and Alloy / CI Pool route",
+            "started_at": "2026-11-08T13:11:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:46Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741062444",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062444,
+            "name": "Unit Tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:38Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:46Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741062303",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062303,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:37Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:23Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741062261",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741062261,
+            "name": "tariff-integration-test / CI Pool route",
+            "started_at": "2026-11-08T13:12:16Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:14Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758357/job/128741061983",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061983,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T13:12:03Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:45Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741061789",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061789,
+            "name": "Ops preview wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:41Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741061655",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061655,
+            "name": "Owner reading wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:32Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:04Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758490/job/128741061542",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061542,
+            "name": "test / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:11:55Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:23Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741061498",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061498,
+            "name": "Production container smoke / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:15Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758319/job/128741061392",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061392,
+            "name": "Typecheck, Test, Build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:34Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758383/job/128741061368",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061368,
+            "name": "Verify Site merge final review / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:12:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:51Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741061281",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061281,
+            "name": "Focused Grafana contracts / Focused Grafana contracts",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:03Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758475/job/128741061256",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061256,
+            "name": "Build, Test / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:11:55Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:13Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741061202",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061202,
+            "name": "Terraform and Alloy / Terraform and Alloy",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:40Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758587/job/128741061164",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061164,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:05Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758385/job/128741061070",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741061070,
+            "name": "Prepare",
+            "started_at": "2026-11-08T13:11:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:52Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758388/job/128741060959",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741060959,
+            "name": "CI Pool route",
+            "started_at": "2026-11-08T13:11:44Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:34Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758327/job/128741060632",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741060632,
+            "name": "Typecheck, Test, Build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:12:19Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758329/job/128741060581",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741060581,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:11:44Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42483758325/job/128741060534",
+            "head_sha": "9745791778fcfca4bd05aeb72320698cf0ca2131",
+            "id": 128741060534,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T13:11:26Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 70
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3325",
+      "path": "/repos/fortresspower/cmsandbox/commits/ea09b4e5a463743da1319d26c098242015bacedb/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:10.489Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:31:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128745936230",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128745936230,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T13:31:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:31:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128745934828",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128745934828,
+            "name": "deploy-frontend",
+            "started_at": "2026-11-08T13:31:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:31:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128745934309",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128745934309,
+            "name": "deploy",
+            "started_at": "2026-11-08T13:31:28Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:27:01Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128744881366",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128744881366,
+            "name": "publish-backend",
+            "started_at": "2026-11-08T13:27:01Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:25:19Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128744083660",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128744083660,
+            "name": "Owner reading wire contract / Owner reading wire contract",
+            "started_at": "2026-11-08T13:24:11Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:27:01Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128744064616",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128744064616,
+            "name": "build-backend",
+            "started_at": "2026-11-08T13:24:10Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:31:28Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128744064493",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128744064493,
+            "name": "build-frontend",
+            "started_at": "2026-11-08T13:24:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:25:10Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128744018168",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128744018168,
+            "name": "Ops preview wire contract / Ops preview wire contract",
+            "started_at": "2026-11-08T13:23:55Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:16Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128743975773",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743975773,
+            "name": "Integration Tests",
+            "started_at": "2026-11-08T13:23:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:42Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128743975001",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743975001,
+            "name": "Owner reading wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:23:34Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:26Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128743974792",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743974792,
+            "name": "Ops preview wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:23:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:37Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718716/job/128743974609",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743974609,
+            "name": "Prepare",
+            "started_at": "2026-11-08T13:23:18Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:36Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718676/job/128743974247",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743974247,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T13:23:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:24:05Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718675/job/128743974122",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743974122,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T13:23:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:23:33Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42484718639/job/128743974105",
+            "head_sha": "ea09b4e5a463743da1319d26c098242015bacedb",
+            "id": 128743974105,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T13:23:17Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 15
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3326",
+      "path": "/repos/fortresspower/cmsandbox/commits/a6a1128781c1fbaebffeae48d18a2100e2d4a9f9/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:09.927Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:56Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128751109170",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128751109170,
+            "name": "dev-receipts",
+            "started_at": "2026-11-08T13:52:56Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:56Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128751108407",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128751108407,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T13:52:56Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750935716",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750935716,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750935093",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750935093,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750934881",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750934881,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:13Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750934790",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750934790,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:56Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750934541",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750934541,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T13:52:15Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750933896",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750933896,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:12Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128750933408",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128750933408,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T13:52:13Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:48:14Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748243216",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748243216,
+            "name": "Unit Tests / Unit Tests",
+            "started_at": "2026-11-08T13:41:26Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:50:02Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748220741",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748220741,
+            "name": "tariff-integration-test / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T13:41:27Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:52:12Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748166496",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748166496,
+            "name": "build / Build manager-analysis",
+            "started_at": "2026-11-08T13:41:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:41:03Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748100617",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748100617,
+            "name": "Unit Tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:40:55Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:40:57Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748100396",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748100396,
+            "name": "tariff-integration-test / CI Pool route",
+            "started_at": "2026-11-08T13:40:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:40:39Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748100380",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748100380,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:40:28Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:40:43Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072090/job/128748100215",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748100215,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T13:40:28Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:40:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072108/job/128748099520",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748099520,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T13:40:27Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:41:16Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072117/job/128748099492",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748099492,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T13:40:27Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:40:43Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486072028/job/128748099371",
+            "head_sha": "a6a1128781c1fbaebffeae48d18a2100e2d4a9f9",
+            "id": 128748099371,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T13:40:27Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 19
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3327",
+      "path": "/repos/fortresspower/cmsandbox/commits/0262cab606c19167f0c2c78e051fa40675463c72/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:09.376Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:44:05Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486133838/job/128748327462",
+            "head_sha": "0262cab606c19167f0c2c78e051fa40675463c72",
+            "id": 128748327462,
+            "name": "concurrency-tests / Workflow and script contracts",
+            "started_at": "2026-11-08T13:41:56Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:41:23Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486133838/job/128748287054",
+            "head_sha": "0262cab606c19167f0c2c78e051fa40675463c72",
+            "id": 128748287054,
+            "name": "concurrency-tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T13:41:15Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:41:32Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486133755/job/128748286267",
+            "head_sha": "0262cab606c19167f0c2c78e051fa40675463c72",
+            "id": 128748286267,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T13:41:15Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:41:29Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486133768/job/128748286227",
+            "head_sha": "0262cab606c19167f0c2c78e051fa40675463c72",
+            "id": 128748286227,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T13:41:15Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T13:42:03Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42486133751/job/128748286202",
+            "head_sha": "0262cab606c19167f0c2c78e051fa40675463c72",
+            "id": 128748286202,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T13:41:15Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 5
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3328",
+      "path": "/repos/fortresspower/cmsandbox/commits/b0b499f4167b35b74d24e30503b2f58b794d5334/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:08.875Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:45:29Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128795048815",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128795048815,
+            "name": "dev-receipts",
+            "started_at": "2026-11-08T16:45:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:45:28Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128795048622",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128795048622,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T16:45:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:50Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794881829",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794881829,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T16:44:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:50Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794880575",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794880575,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T16:44:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:50Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794880533",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794880533,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T16:44:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:45:28Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794880311",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794880311,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T16:44:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:50Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794879840",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794879840,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T16:44:50Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:30Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128794799827",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794799827,
+            "name": "deploy-frontend",
+            "started_at": "2026-11-08T16:44:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:30Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128794799233",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794799233,
+            "name": "designer-dev-smoke",
+            "started_at": "2026-11-08T16:44:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:30Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128794799202",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794799202,
+            "name": "deploy",
+            "started_at": "2026-11-08T16:44:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:30Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128794798371",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794798371,
+            "name": "publish-backend",
+            "started_at": "2026-11-08T16:44:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:43:20Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794506117",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794506117,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T16:43:21Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:43:20Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128794505007",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128794505007,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T16:43:20Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:52Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793613011",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793613011,
+            "name": "build-deploy / Build ${{ inputs.component-name }}",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:52Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793612976",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793612976,
+            "name": "build-deploy / Integration Tests",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:52Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793612529",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793612529,
+            "name": "build-deploy / Prepare",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:52Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793612487",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793612487,
+            "name": "build-deploy / CI Pool route",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:51Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793612024",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793612024,
+            "name": "build / Integration Tests",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:40:39Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793611922",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793611922,
+            "name": "build-deploy / Deploy",
+            "started_at": "2026-11-08T16:39:54Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:51Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128793611600",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128793611600,
+            "name": "build / Deploy",
+            "started_at": "2026-11-08T16:39:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:20Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301001/job/128792717707",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792717707,
+            "name": "build-deploy",
+            "started_at": "2026-11-08T16:36:21Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:20Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301001/job/128792717190",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792717190,
+            "name": "administrative-dev-smoke",
+            "started_at": "2026-11-08T16:36:21Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:20Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301001/job/128792717130",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792717130,
+            "name": "build",
+            "started_at": "2026-11-08T16:36:21Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:51Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128792311930",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792311930,
+            "name": "build / Build manager-siteconfiguration",
+            "started_at": "2026-11-08T16:35:14Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:34:45Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128792258839",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792258839,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:34:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:34:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128792258759",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128792258759,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T16:34:35Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:43:20Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791801388",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791801388,
+            "name": "build / Build manager-analysis",
+            "started_at": "2026-11-08T16:33:45Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:42:42Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791760125",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791760125,
+            "name": "Unit Tests / Unit Tests",
+            "started_at": "2026-11-08T16:33:19Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:35:47Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791757996",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791757996,
+            "name": "Ops preview wire contract / Ops preview wire contract",
+            "started_at": "2026-11-08T16:33:42Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:33:13Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301039/job/128791752139",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791752139,
+            "name": "Typecheck, Test, Build / Typecheck, Test, Build",
+            "started_at": "2026-11-08T16:32:39Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:20Z",
+            "conclusion": "failure",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301001/job/128791706191",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791706191,
+            "name": "test / test",
+            "started_at": "2026-11-08T16:33:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:34:50Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791670788",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791670788,
+            "name": "Owner reading wire contract / Owner reading wire contract",
+            "started_at": "2026-11-08T16:33:10Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:33:43Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300989/job/128791665426",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791665426,
+            "name": "Build, Test / Build, Test",
+            "started_at": "2026-11-08T16:32:58Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:30Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791664315",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791664315,
+            "name": "build-backend",
+            "started_at": "2026-11-08T16:33:10Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:34:08Z",
+            "conclusion": "failure",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791664221",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791664221,
+            "name": "build-frontend",
+            "started_at": "2026-11-08T16:32:43Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:34:34Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128791648920",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791648920,
+            "name": "Verify Site merge final review / Verify Site merge final review",
+            "started_at": "2026-11-08T16:32:42Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:37:28Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791585946",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791585946,
+            "name": "MySQL 8.4.11 contracts, importer, and catalog",
+            "started_at": "2026-11-08T16:32:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:44:49Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791555824",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791555824,
+            "name": "tariff-integration-test / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:32:27Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:36:11Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791539980",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791539980,
+            "name": "Production container smoke / Production container smoke",
+            "started_at": "2026-11-08T16:32:19Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": null,
+            "conclusion": null,
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300967/job/128791515486",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791515486,
+            "name": "mysql-8-4 integration tests / mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:32:14Z",
+            "status": "in_progress"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:33:08Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300855/job/128791445783",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791445783,
+            "name": "Typecheck, Test, Build / Typecheck, Test, Build",
+            "started_at": "2026-11-08T16:32:00Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:39:42Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300832/job/128791437511",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791437511,
+            "name": "mysql-8-4 integration tests",
+            "started_at": "2026-11-08T16:31:57Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:16Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791394793",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791394793,
+            "name": "Integration Tests",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:49Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791394215",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791394215,
+            "name": "build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:41Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:39Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791393979",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393979,
+            "name": "Unit Tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:31Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:34Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791393944",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393944,
+            "name": "build / Prepare",
+            "started_at": "2026-11-08T16:32:25Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:16Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791393900",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393900,
+            "name": "Terraform and Alloy / CI Pool route",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:53Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301040/job/128791393714",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393714,
+            "name": "tariff-integration-test / CI Pool route",
+            "started_at": "2026-11-08T16:31:45Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:16Z",
+            "conclusion": "skipped",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791393652",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393652,
+            "name": "Focused Grafana contracts / CI Pool route",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:39Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791393530",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393530,
+            "name": "Ops preview wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:30Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:19Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791393468",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393468,
+            "name": "Owner reading wire contract / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:12Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:18Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300993/job/128791393292",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393292,
+            "name": "Prepare",
+            "started_at": "2026-11-08T16:32:01Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:18Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300989/job/128791393284",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393284,
+            "name": "Build, Test / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:10Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:27Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301001/job/128791393259",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393259,
+            "name": "test / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:19Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:37Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500301039/job/128791393248",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393248,
+            "name": "Typecheck, Test, Build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:29Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:38Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791393130",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393130,
+            "name": "Focused Grafana contracts / Focused Grafana contracts",
+            "started_at": "2026-11-08T16:31:18Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:49Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791393090",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791393090,
+            "name": "Production container smoke / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:31:41Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:14Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300905/job/128791392985",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392985,
+            "name": "Verify Site merge final review / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:32:05Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:08Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791392953",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392953,
+            "name": "Terraform and Alloy / Terraform and Alloy",
+            "started_at": "2026-11-08T16:31:18Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:00Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300945/job/128791392731",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392731,
+            "name": "CI Pool route",
+            "started_at": "2026-11-08T16:31:52Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:44Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300967/job/128791392720",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392720,
+            "name": "mysql-8-4 integration tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:31:36Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:28Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300855/job/128791392599",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392599,
+            "name": "Typecheck, Test, Build / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:31:18Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:32:09Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300891/job/128791392327",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392327,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:34Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300858/job/128791392177",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791392177,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:26Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300832/job/128791391884",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791391884,
+            "name": "CI Pool route / integration-test",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:31:52Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42500300823/job/128791391809",
+            "head_sha": "b0b499f4167b35b74d24e30503b2f58b794d5334",
+            "id": 128791391809,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T16:31:17Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 66
+      }
+    },
+    {
+      "pull": "https://github.com/fortresspower/cmsandbox/pull/3329",
+      "path": "/repos/fortresspower/cmsandbox/commits/c864d000aa729b0b5392bed13107b44503ce5501/check-runs?per_page=100",
+      "observedAt": "2026-11-08T17:05:08.067Z",
+      "data": {
+        "check_runs": [
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T17:00:20Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42502543448/job/128798261335",
+            "head_sha": "c864d000aa729b0b5392bed13107b44503ce5501",
+            "id": 128798261335,
+            "name": "concurrency-tests / Workflow and script contracts",
+            "started_at": "2026-11-08T16:58:45Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:58:16Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42502543448/job/128798220500",
+            "head_sha": "c864d000aa729b0b5392bed13107b44503ce5501",
+            "id": 128798220500,
+            "name": "concurrency-tests / CI Pool route / CI Pool route",
+            "started_at": "2026-11-08T16:58:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:58:26Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42502543459/job/128798220378",
+            "head_sha": "c864d000aa729b0b5392bed13107b44503ce5501",
+            "id": 128798220378,
+            "name": "Check for dangerous files / Check for dangerous files",
+            "started_at": "2026-11-08T16:58:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:58:21Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42502543427/job/128798220204",
+            "head_sha": "c864d000aa729b0b5392bed13107b44503ce5501",
+            "id": 128798220204,
+            "name": "Verify immutable Alloy and fail-open ECS / Verify immutable Alloy and fail-open ECS",
+            "started_at": "2026-11-08T16:58:07Z",
+            "status": "completed"
+          },
+          {
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "completed_at": "2026-11-08T16:58:55Z",
+            "conclusion": "success",
+            "details_url": "https://github.com/fortresspower/cmsandbox/actions/runs/42502543423/job/128798220138",
+            "head_sha": "c864d000aa729b0b5392bed13107b44503ce5501",
+            "id": 128798220138,
+            "name": "Migration safety contracts / Migration safety contracts",
+            "started_at": "2026-11-08T16:58:07Z",
+            "status": "completed"
+          }
+        ],
+        "total_count": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+.installed-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.installed-actions button, .installed-actions select { padding: 4px 7px; border: 1px solid #ffffff25; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+.installed-actions button:disabled { opacity: .45; cursor: default; }
+.installed-actions small { opacity: .7; }
+.action-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.action-inspect, .action-history { flex-basis: 100%; padding: 10px; background: #ffffff06; border: 1px solid #ffffff18; border-radius: 6px; }
+.action-inspect pre, .action-receipt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; font-size: 11px; }
+.action-inspect textarea { display: block; width: 100%; min-height: 80px; color: inherit; background: #ffffff08; }
+.action-receipt { padding: 8px; margin-top: 6px; border-top: 1px solid #ffffff20; }
+.is-compact .action-history { max-width: 700px; }

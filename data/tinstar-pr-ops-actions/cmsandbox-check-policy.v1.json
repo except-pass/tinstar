@@ -1,0 +1,102 @@
+{
+  "version": "cmsandbox-ci-2026-11-08-v1",
+  "repository": "fortresspower/cmsandbox",
+  "observedAt": "2026-11-08T17:05:13.673Z",
+  "provenance": [
+    "https://github.com/fortresspower/cmsandbox/tree/main/.github/workflows",
+    "data/tinstar-pr-ops-actions/workflow-provenance.v1.json",
+    "data/tinstar-pr-ops-actions/recorded-checks.v1.json"
+  ],
+  "common": [
+    {
+      "name": "Check for dangerous files / Check for dangerous files",
+      "appId": 15368,
+      "appSlug": "github-actions"
+    }
+  ],
+  "unknownReason": "Partial inventory: 145 workflows; sampled current definitions differ from observed reusable-job names. Transitive path triggers, draft skips and publishing revisions have not all been established. Live Admin Merge remains disabled for every workload.",
+  "workloads": [
+    {
+      "id": "workflow-and-script-contracts",
+      "prefixes": [
+        ".github/"
+      ],
+      "excludedPrefixes": [],
+      "complete": false,
+      "checks": [
+        {
+          "name": "concurrency-tests / Workflow and script contracts",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "evidence": [
+        "concurrency-tests.yml: pull_request main .github/**; non-draft; uses _check.yml; observed on selected heads with github-actions app 15368. CI Pool routing is not itself proof of a test."
+      ]
+    },
+    {
+      "id": "web-fmp",
+      "prefixes": [
+        "components/web-fmp/"
+      ],
+      "excludedPrefixes": [
+        "components/web-fmp/docs/",
+        "components/web-fmp/obs/",
+        "components/web-fmp/infra/"
+      ],
+      "complete": false,
+      "checks": [
+        {
+          "name": "build-frontend",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "evidence": [
+        "web-fmp.yml has PR path exclusions and cross-component proto/library triggers. Real build-frontend failure recorded on https://github.com/fortresspower/cmsandbox/pull/3328; exact test/test origin not fully mapped."
+      ]
+    },
+    {
+      "id": "fuzzy-search",
+      "prefixes": [
+        "libs/fuzzy-search/"
+      ],
+      "excludedPrefixes": [
+        "libs/fuzzy-search/docs/"
+      ],
+      "complete": false,
+      "checks": [
+        {
+          "name": "Build, Test / Build, Test",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "evidence": [
+        "libs-fuzzy-search.yml PR paths; _check.yml dynamic input name. Candidate context inferred from reusable name pattern, not corroborated by these ten PRs. Workload disabled."
+      ]
+    },
+    {
+      "id": "migration",
+      "prefixes": [
+        "components/",
+        "docs/runbooks/mysql84/",
+        "scripts/mysql84/",
+        "IaC/iam/github-actions-terraform-deploy/",
+        ".github/workflows/"
+      ],
+      "excludedPrefixes": [],
+      "complete": false,
+      "checks": [
+        {
+          "name": "Migration safety contracts / Migration safety contracts",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "evidence": [
+        "mysql84-migration-safety.yml plus recorded observations; other cross-component dependencies are incomplete."
+      ]
+    }
+  ]
+}

@@ -11,7 +11,7 @@ export type AskView = z.infer<typeof askViewSchema>
 export const pullIdSchema = z.string().max(512).regex(/^[\w.-]+\/[\w.-]+#[1-9]\d*$/).transform(value => value.toLowerCase())
 const headSchema = z.string().regex(/^[a-f0-9]{40,64}$/)
 const overviewTargetSchema = z.object({ kind: z.enum(['execution', 'claim']), id: z.string().min(1).max(2048) }).strict()
-const pullTargetSchema = z.object({ kind: z.literal('pull'), id: pullIdSchema, head: headSchema.optional() }).strict()
+const pullTargetSchema = z.object({ kind: z.literal('pull'), id: pullIdSchema, head: headSchema.optional(), action_receipt_id: z.string().regex(/^[a-f0-9-]{36}-\d+$/).optional() }).strict()
 const releaseTargetSchema = z.object({ kind: z.literal('release'), id: pullIdSchema, target: z.string().min(1).max(256), component: z.string().min(1).max(256) }).strict()
 const receiptTargetSchema = releaseTargetSchema.extend({ kind: z.literal('receipt'), receipt_id: z.string().min(1).max(2048) }).strict()
 export const askTargetSchema = z.union([overviewTargetSchema, pullTargetSchema, releaseTargetSchema, receiptTargetSchema])
@@ -42,6 +42,7 @@ export const askContextSchema = z.object({
     receipt_id: z.string().optional(), receipt_url: z.string().url().optional(), workflow_url: z.string().url().optional(),
     deployed_sha: z.string().nullable().optional(), observed_at: z.string().nullable(),
   }).strict().optional(),
+  action_receipt: z.object({ id: z.string(), action: z.string(), version: z.string(), digest: z.string(), actor: z.string(), outcome: z.string(), intended_effect: z.string(), result: z.string(), reasons: z.array(z.string()), actual_github_writes: z.literal(0) }).strict().optional(),
   relationships: z.object({
     complete: z.boolean(),
     cards: z.array(z.object({ card_id: pageIdSchema, sources: z.array(z.string()) }).strict()),

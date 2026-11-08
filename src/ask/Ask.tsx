@@ -99,7 +99,7 @@ function useDialogFocus() {
   return ref
 }
 function AskComposer({ scene, state, seed, parent, clientKey, submit, close }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void }) {
-  const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.field_key ? fieldDrafts[seed.field_key] : ''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
+  const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.question ?? (seed.target?.kind === 'pull' && seed.target.action_receipt_id ? 'What does this action receipt establish?' : seed.field_key ? fieldDrafts[seed.field_key] : '')), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const ref = useDialogFocus(), locked = useRef(false)
   const card = scene?.cards.find(card => card.id === chosen)
   const worker = seed.target?.kind === 'execution' ? scene?.executions.find(worker => worker.id === seed.target!.id) : null

@@ -2,6 +2,10 @@ import { useLayoutEffect, useRef } from 'react'
 import type { AskReturn } from '../shared/ask'
 
 export function findOriginElement(root: ParentNode | null, target: AskReturn['target']) {
+  if (target.kind === 'pull' && target.action_receipt_id) {
+    const receipt = [...root?.querySelectorAll<HTMLElement>('[data-action-receipt]') ?? []].find(row => row.dataset.actionReceipt === target.action_receipt_id)
+    if (receipt) return receipt
+  }
   const selector = target.kind === 'receipt' ? '[data-receipt-id]' : target.kind === 'release' ? '[data-deployment-target]' : '[data-ask-origin]'
   return [...root?.querySelectorAll<HTMLElement>(selector) ?? []].find(row => target.kind === 'receipt' ? row.dataset.originPull === target.id && row.dataset.receiptId === target.receipt_id && row.dataset.component === target.component && row.dataset.target === target.target : target.kind === 'release' ? row.dataset.originPull === target.id && row.dataset.deploymentTarget === JSON.stringify([target.component, target.target]) : row.dataset.askOrigin === target.id)
 }
