@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from '../apiClient'
 import { AskSurface } from '../ask/AskSurface'
 import { useOriginFocus } from '../ask/useOriginFocus'
-import type { AskView, ArtifactAskTarget } from '../shared/ask'
+import type { AskReturn, AskView, ArtifactAskTarget } from '../shared/ask'
 import { AskCardAction } from '../ask/Ask'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { SmartSearch } from '../reconciliation/SmartSearch'
@@ -47,20 +47,25 @@ function CardDryRun({ data, cardId }: { data: ReleasesRead; cardId: string }) {
   const decision = { 'would-complete': 'Would mark Done', 'would-verify': 'Requires production verification', waiting: 'Waiting for required production changes', exception: 'Release evidence unresolved', unrelated: 'Card status is outside release automation' }[card.decision]
   return <div className="rel-dry-run"><strong>Dry run: {decision}</strong><p>Owner: {card.owner} · {card.status} · {card.requiredPulls.length} required PRs</p>{card.reasons.length > 0 && <ul>{card.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}<CardReleaseProposal plan={data.automation} cardId={cardId} /><small>No Notion or Desk transition is performed.</small></div>
 }
+function matchesReleaseOrigin(pull: ReleasePull, target: AskReturn['target']) {
+  if (pull.id !== target.id) return false
+  if (target.kind === 'pull') return true
+  return (target.kind === 'release' || target.kind === 'receipt') && !!pull.deployment?.targets.some(item =>
+    item.target === target.target && item.component === target.component && (target.kind !== 'receipt' || item.receipt?.id === target.receipt_id))
+}
 function ProductionTargets({ pull, askView }: { pull: ReleasePull; askView: AskView }) {
   const { origin } = useDeskWorkspace()
-  const receiptId = origin?.target.kind === 'receipt' ? origin.target.receipt_id : undefined
+  const targetOrigin = origin?.section === 'releases' && origin.target.id === pull.id && (origin.target.kind === 'release' || origin.target.kind === 'receipt') ? origin.target : undefined
   return <>
       <h3>Production targets</h3>{pull.deployment?.targets.length ? pull.deployment.targets.map(target => {
         const deployment: ArtifactAskTarget = { kind: 'release', id: pull.id, target: target.target, component: target.component }
         const receipt: ArtifactAskTarget | null = target.receipt ? { ...deployment, kind: 'receipt', receipt_id: target.receipt.id } : null
-        const selected = origin?.target.kind === 'receipt' && origin.target.id === pull.id && origin.target.receipt_id === target.receipt?.id && origin.target.target === target.target && origin.target.component === target.component
+        const selected = targetOrigin && matchesReleaseOrigin({ ...pull, deployment: { ...pull.deployment!, targets: [target] } }, targetOrigin)
         return <section key={`${target.target}:${target.component}`}>
-          <AskSurface as="section" data-origin-pull={pull.id} data-deployment-target={JSON.stringify([target.component, target.target])} tabIndex={-1} subject={{ target: deployment, label: `${pull.id} · ${target.component} / ${target.target}`, view: askView }} data-ask-field="deployment"><strong>{target.component} · {target.target}</strong><AskCardAction subject={{ target: deployment, label: `${pull.id} · ${target.component} / ${target.target}`, view: askView }} icon /><p>{target.state} · {target.reason}</p><p>Ancestry: {target.ancestry}</p></AskSurface>
-          {target.receipt && receipt && <AskSurface as="section" className={selected ? 'ask-origin' : undefined} data-origin-pull={pull.id} data-receipt-id={target.receipt.id} data-component={target.component} data-target={target.target} tabIndex={-1} data-ask-field="receipt" subject={{ target: receipt, label: `${pull.id} · receipt ${target.receipt.id}`, view: askView }}><AskCardAction subject={{ target: receipt, label: `${pull.id} · receipt ${target.receipt.id}`, view: askView }} icon /><p>{target.receipt.version ?? 'Version unknown'} · {target.receipt.deployedSha ?? target.receipt.artifactDigest ?? 'Identity unknown'}<br />{target.receipt.deployedAt}</p><a href={target.receipt.receiptUrl} target="_blank" rel="noreferrer">Read deployment receipt ↗</a> · <a href={target.receipt.workflowUrl} target="_blank" rel="noreferrer">Release workflow ↗</a></AskSurface>}
+          <AskSurface as="section" className={selected && targetOrigin?.kind === 'release' ? 'ask-origin' : undefined} data-origin-pull={pull.id} data-deployment-target={JSON.stringify([target.component, target.target])} tabIndex={-1} subject={{ target: deployment, label: `${pull.id} · ${target.component} / ${target.target}`, view: askView }} data-ask-field="deployment"><strong>{target.component} · {target.target}</strong><AskCardAction subject={{ target: deployment, label: `${pull.id} · ${target.component} / ${target.target}`, view: askView }} icon /><p>{target.state} · {target.reason}</p><p>Ancestry: {target.ancestry}</p></AskSurface>
+          {target.receipt && receipt && <AskSurface as="section" className={selected && targetOrigin?.kind === 'receipt' ? 'ask-origin' : undefined} data-origin-pull={pull.id} data-receipt-id={target.receipt.id} data-component={target.component} data-target={target.target} tabIndex={-1} data-ask-field="receipt" subject={{ target: receipt, label: `${pull.id} · receipt ${target.receipt.id}`, view: askView }}><AskCardAction subject={{ target: receipt, label: `${pull.id} · receipt ${target.receipt.id}`, view: askView }} icon /><p>{target.receipt.version ?? 'Version unknown'} · {target.receipt.deployedSha ?? target.receipt.artifactDigest ?? 'Identity unknown'}<br />{target.receipt.deployedAt}</p><a href={target.receipt.receiptUrl} target="_blank" rel="noreferrer">Read deployment receipt ↗</a> · <a href={target.receipt.workflowUrl} target="_blank" rel="noreferrer">Release workflow ↗</a></AskSurface>}
         </section>
       }) : <p>No required production component mapping.</p>}
-      {receiptId && !pull.deployment?.targets.some(target => target.receipt?.id === receiptId) && <p role="status">The original receipt is missing or has been superseded. The answer retains its captured source link.</p>}
   </>
 }
 function PullDrawer({ pull, scene, data, refresh, close, askView }: { pull: ReleasePull | null; scene: FloorScene; data: ReleasesRead; refresh: () => void; close: () => void; askView: AskView }) {
@@ -97,6 +102,11 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
   }, [drawer, searchOpen, beforeFocus])
   if (!scene || !data) return <section ref={focusRef} className="ov-root rel-root" aria-label="Releases"><p role="status">{error ?? sceneError ?? 'Reading release associations…'}</p></section>
+  const originPull = destination && data.pulls.find(pull => pull.id === destination.target.id)
+  const originMatches = !!(destination && originPull && matchesReleaseOrigin(originPull, destination.target))
+  const originMessage = !originPull ? `The originating release ${destination?.target.id} is missing or outside the current authorized source.`
+    : !originMatches ? destination?.target.kind === 'receipt' ? 'The original receipt is missing or has been superseded. The answer retains its captured source link.' : 'The original deployment target is missing or outside the current authorized source. The answer retains its captured source link.'
+    : `Showing originating release ${destination?.target.id}.${destination?.target.kind === 'pull' && destination.target.head && originPull.head !== destination.target.head ? ' The PR head changed since this question.' : ''}`
   const focused = destination ? data.pulls.filter(pull => pull.id === destination.target.id) : focus ? data.pulls.filter(pull => focus.kind === 'pull' ? pull.id === focus.id : activeReleaseLinks(pull).some(link => link.cardId === focus.id)) : null
   const visible = focused ?? filterReleases(data.pulls, filter), groups = releaseGroups(scene, visible, preset)
   const selected = new Set(selection), drawerPull = data.pulls.find(pull => pull.id === drawer) ?? null, warning = error ?? sceneError
@@ -108,7 +118,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
       <div className="rel-filters">{releaseFilters.map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setFocus(null); clearOrigin?.() }}>{value}{value === 'Exceptions' ? ` (${data.pulls.filter(pull => pull.exceptions.length).length + data.unassociatedCards.length})` : ''}</button>)}</div>
       <button type="button" onClick={() => setDrawer(null)}>Link PR</button>
     </header>
-    {destination && <p role="status">{data.pulls.some(pull => pull.id === destination.target.id) ? `Showing originating release ${destination.target.id}.` : `The originating release ${destination.target.id} is missing or outside the current authorized source.`} <button type="button" onClick={clearOrigin}>Show all releases in this view</button></p>}
+    {destination && <p role="status">{originMessage} <button type="button" onClick={clearOrigin}>Show all releases in this view</button></p>}
     <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories{data.automation && ' · transitions OFF'}</summary>
       {warning && <p role="alert">{warning}</p>}{data.githubSync?.errors.map(message => <p role="alert" key={message}>{message}</p>)}{[...data.warnings, ...(data.reconciliation?.warnings ?? [])].map(message => <p key={message}>{message}</p>)}
       {data.reconciliation?.targets.map(target => <p key={`${target.repository}:${target.target}:${target.component}`}>{target.repository} · {target.component} / {target.target} · {target.version ?? 'Version unknown'} · {target.deployedSha ?? target.artifactDigest ?? 'Identity unknown'} · observed {target.observedAt} · <a href={target.receiptUrl} target="_blank" rel="noreferrer">Receipt ↗</a></p>)}{!data.reconciliation?.targets.length && <p>Deployed component identities are unknown; no matching current receipt.</p>}
@@ -117,7 +127,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
     <div className="rel-scroll"><table className="rel-table"><caption className="sr-only">Release queue · one row per GitHub PR; repeated group references share identity</caption><thead><tr><th><input type="checkbox" aria-label="Select visible PRs" checked={visible.length > 0 && visible.every(pull => selected.has(pull.id))} onChange={event => setSelection(event.target.checked ? [...new Set([...selection, ...visible.map(pull => pull.id)])] : selection.filter(id => !visible.some(pull => pull.id === id)))} /></th><th>GitHub PR</th><th>Change</th><th>Linked Notion cards</th><th>Merged</th><th>Release state</th><th>Inspect</th></tr></thead>
       {groups.map(group => <tbody key={group.id}><tr className="rel-group"><th colSpan={7}><button type="button" aria-expanded={!collapsed.includes(group.id)} onClick={() => setCollapsed(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])}>{collapsed.includes(group.id) ? '▸' : '▾'} {group.label} <small>{group.pulls.length}</small></button></th></tr>
-        {(!collapsed.includes(group.id) || !!destination) && group.pulls.map(pull => <Fragment key={pull.id}><AskSurface subject={{ target: { kind: 'pull', id: pull.id, ...(pull.head ? { head: pull.head } : {}) }, label: `${pull.id} · ${pull.title ?? 'PR'}`, view: askView }} data-pull-id={pull.id} data-ask-origin={pull.id} tabIndex={-1} className={`${selected.has(pull.id) ? 'rel-selected' : ''}${destination?.target.id === pull.id ? ' ask-origin' : ''}`}>
+        {(!collapsed.includes(group.id) || !!destination) && group.pulls.map(pull => <Fragment key={pull.id}><AskSurface subject={{ target: { kind: 'pull', id: pull.id, ...(pull.head ? { head: pull.head } : {}) }, label: `${pull.id} · ${pull.title ?? 'PR'}`, view: askView }} data-pull-id={pull.id} data-ask-origin={pull.id} tabIndex={-1} className={`${selected.has(pull.id) ? 'rel-selected' : ''}${destination?.target.kind === 'pull' && originMatches && destination.target.id === pull.id ? ' ask-origin' : ''}`}>
           <td><input type="checkbox" aria-label={`Select ${pull.id}`} checked={selected.has(pull.id)} onChange={event => setSelection(values => event.target.checked ? [...new Set([...values, pull.id])] : values.filter(id => id !== pull.id))} /></td>
           <td><a href={pull.url} target="_blank" rel="noreferrer">{pull.repository}#{pull.number} ↗</a></td><td title={pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}><button type="button" className="rel-title" onClick={() => setDrawer(pull.id)}>{pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}</button></td>
           <td><span className="rel-cards">{activeReleaseLinks(pull).length ? activeReleaseLinks(pull).map(link => <a key={link.cardId} href={cardHref(link.cardId)} title={title(scene, link.cardId)}>{title(scene, link.cardId)}</a>) : <span>No linked card</span>}</span></td>
