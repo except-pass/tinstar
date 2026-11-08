@@ -1,3 +1,4 @@
+import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -74,7 +75,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     }
     await page.setViewportSize({ width: 1280, height: 720 })
     await page.goto(base)
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     const term = page.frameLocator('iframe[title="scroll terminal"]').frameLocator('#term')
     const screen = term.locator('.xterm-screen')

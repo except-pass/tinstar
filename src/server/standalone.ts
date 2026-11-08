@@ -8,6 +8,7 @@ import { ReconciliationMcp } from './reconciliation/mcp'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { ReleasesApi } from './releases/routes'
+import { PullsApi } from './pulls/routes'
 import { QuotaAxiPoller } from './quota/poller'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
 import { ProviderObservationIngestor } from './providers/observation-ingestor'
@@ -71,6 +72,7 @@ export function startServer(opts: ServerOptions) {
   const fleet = new CockpitFleet()
   const reconciliation = new ReconciliationSources()
   const releases = new ReleasesApi(reconciliation)
+  const pulls = new PullsApi(reconciliation, releases.store)
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
   const asks = new AskApi(reconciliation)
   fleet.start()
@@ -139,6 +141,7 @@ export function startServer(opts: ServerOptions) {
       if (await asks.handle(req, res)) return
       if (await reconciliationMcp.handle(req, res)) return
       if (await releases.handle(req, res)) return
+      if (await pulls.handle(req, res)) return
       if (await handleReconciliationRequest(reconciliation, req, res)) return
       if (await handleScreenshotUpload(req, res, { configRoot: getConfigRoot() })) return
       if (await handleCoreApi(coreApi, req, res)) return

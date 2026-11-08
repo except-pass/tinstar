@@ -1,3 +1,4 @@
+import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -53,7 +54,7 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
 
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(base)
-    await page.getByRole('button', { name: 'Workers' }).click()
+    await openWorkerSwitcher(page)
     await page.locator('.cockpit-worker-button', { hasText: 'scribe' }).click()
     const composer = page.getByTestId('prompt-composer')
     const textarea = composer.locator('textarea')
