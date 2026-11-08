@@ -110,7 +110,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
   const focused = destination ? data.pulls.filter(pull => pull.id === destination.target.id) : focus ? data.pulls.filter(pull => focus.kind === 'pull' ? pull.id === focus.id : activeReleaseLinks(pull).some(link => link.cardId === focus.id)) : null
   const visible = focused ?? filterReleases(data.pulls, filter), groups = releaseGroups(scene, visible, preset)
   const selected = new Set(selection), drawerPull = data.pulls.find(pull => pull.id === drawer) ?? null, warning = error ?? sceneError
-  const choose = (target: Target) => { if (!focus) setBeforeFocus(filter); setFocus(target); if (target.kind === 'card') setFilter('Exceptions'); setSearchOpen(false) }
+  const choose = (target: Target) => { clearOrigin?.(); if (!focus) setBeforeFocus(filter); setFocus(target); if (target.kind === 'card') setFilter('Exceptions'); setSearchOpen(false) }
   return <section ref={focusRef} className="ov-root rel-root" aria-label="Releases">
     <header className="ov-toolbar rel-toolbar"><strong>Releases <small>{releaseQueueCount(data, warning) ?? '?'}</small></strong>
       <div className="ov-preset-buttons"><button type="button" aria-pressed={preset === 'initiative'} onClick={() => setPreset('initiative')}>Initiative → Epic</button><button type="button" aria-pressed={preset === 'repository'} onClick={() => setPreset('repository')}>Repository</button></div>

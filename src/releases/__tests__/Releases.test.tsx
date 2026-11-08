@@ -7,7 +7,10 @@ import type { AskReturn } from '../../shared/ask'
 import { releaseFixture } from './fixtures'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, origin: undefined as AskReturn | undefined }))
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, origin: observed.origin, error: null, now: Date.now() }) }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => {
+  const [origin, setOrigin] = React.useState(observed.origin)
+  return { scene: observed.scene, origin, clearOrigin: () => setOrigin(undefined), error: null, now: Date.now() }
+} }))
 // Ask's existing provider/transport is covered in ask tests; keep the same card-bound affordance here.
 vi.mock('../../ask/AskSurface', () => ({ AskSurface: ({ as = 'tr', children, subject: _subject, ...props }: React.HTMLAttributes<HTMLElement> & { as?: string; subject: unknown }) => React.createElement(as, props, children) }))
 vi.mock('../../ask/Ask', () => ({ AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
@@ -96,6 +99,24 @@ describe('PR-first Releases', () => {
 })
 
 describe('release origin identity', () => {
+  it('lets a manual Smart Search selection replace the Desk origin and restore the prior filter', () => {
+    observed.origin = { section: 'releases', target: { kind: 'pull', id: data.pulls[0]!.id } }
+    mount()
+    expect(screen.getByText(/Showing originating release owner\/repo#1/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'owner/repo#2 ↗' })).toBeNull()
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const search = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
+    fireEvent.change(search, { target: { value: 'PR #2' } })
+    fireEvent.keyDown(search, { key: 'Enter' })
+
+    expect(screen.getByRole('link', { name: 'owner/repo#2 ↗' })).toBeTruthy()
+    expect(screen.queryAllByRole('link', { name: 'owner/repo#1 ↗' })).toHaveLength(0)
+    expect(screen.queryByText(/Showing originating release/)).toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getAllByRole('link', { name: /owner\/repo#/ })).toHaveLength(3)
+    expect(screen.getByRole('button', { name: 'In Queue' })).toHaveAttribute('aria-pressed', 'true')
+  })
   function prepare(kind: 'release' | 'receipt') {
     const pull = data.pulls[0]!
     pull.deployment = { state: 'in-queue', targets: [
