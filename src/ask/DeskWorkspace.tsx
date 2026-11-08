@@ -55,11 +55,13 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
   const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
   const search = useSearchSession({ views, active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const handledOrigin = useRef<AskReturn | null>(null)
   const restoringOverview = useViewSnapshot(views, 'overview', () => ({
     query: presentation.state.search?.query ?? '', sort: presentation.state.sort ?? 'priority',
     filter: { search: presentation.state.search ?? emptySearch(), status: presentation.state.statusFilter, donut: presentation.state.donutFilter, exceptions: presentation.state.exceptionsOnly },
     group: presentation.state.organizer,
   }), saved => {
+    handledOrigin.current = null
     presentation.send({ type: 'set-search', search: { ...saved.filter.search, query: saved.query } })
     if (saved.group) presentation.send({ type: 'set-organizer', organizer: saved.group })
     if (saved.filter.status) presentation.send({ type: 'set-status-filter', filter: saved.filter.status })
@@ -67,17 +69,13 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     presentation.send({ type: 'set-exceptions', enabled: saved.filter.exceptions })
     presentation.send({ type: 'set-sort', sort: saved.sort })
   }, overviewActive && !!floor.scene)
-  const handledOrigin = useRef<AskReturn | null>(null)
   useLayoutEffect(() => {
     if (!origin) { handledOrigin.current = null; return }
     const target = overviewTarget(origin.target)
     if (!overviewActive || !floor.scene || origin.section !== 'overview' || !target || handledOrigin.current === origin) return
     if (restoringOverview) return
-    const originKey = JSON.stringify([origin.section, target.kind, target.id])
-    if (views?.restoration.snapshot?.section === 'overview' && views.originResolved(originKey)) { handledOrigin.current = origin; return }
     if (!search.choose(target)) return
     handledOrigin.current = origin
-    views?.resolveOrigin(originKey)
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }

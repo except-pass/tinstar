@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../../App'
+import { preferencesKey } from '../../reconciliation/presentationPreferences'
+import { emptySearch } from '../../shared/smartSearch'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema, type AskItem, type AskTarget } from '../../shared/ask'
 import type { ReleasesRead } from '../../shared/releases'
@@ -386,4 +388,44 @@ it('preserves a pending PR return when leaving again before inventory is ready',
   await screen.findByText('2 observed open')
   expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('owner/repo')
   expect(screen.getByRole('button', { name: 'Author ↑' })).toBeVisible()
+})
+
+
+it.each((['card', 'execution', 'claim'] as const).flatMap(kind => ['Back', 'reload'].map(mode => ({ kind, mode }))))('reveals a filtered $kind origin after $mode restores its lightweight view', async ({ kind, mode }) => {
+  history.replaceState(null, '', '/')
+  const scene = fixtureScene(), link = scene.claims.find(claim => claim.verification === 'confirmed' && claim.state === 'current')!
+  const target = { kind, id: kind === 'card' ? link.cardId : kind === 'execution' ? link.executionId : link.id }
+  const query = 'no-source-matches-this-query'
+  localStorage.setItem(preferencesKey, JSON.stringify({ search: { ...emptySearch(), query } }))
+  records = [askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Filtered Overview origin', context: {
+    ...(kind === 'card' ? {} : { target }),
+    anchor: { kind: kind === 'card' ? 'work' : kind === 'execution' ? 'worker' : 'link', page_id: target.id, label: 'Filtered source', url: null, observed_at: date },
+    view: { scene: 'overview' }, return_to: { section: 'overview', target },
+  } }), { ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'PR elsewhere' }]
+  let view = render(<App />)
+  expect(view.container.querySelector(`.ov-card[data-entity-id="${link.cardId}"]`)).toBeNull()
+  const worker = () => [...view.container.querySelectorAll<HTMLElement>('.ov-execution')].find(row => row.dataset.entityId === link.executionId)
+  expect(worker()).toBeUndefined()
+  const revealed = () => {
+    if (kind !== 'execution') expect(view.container.querySelector(`.ov-card[data-entity-id="${link.cardId}"]`)).toHaveClass('flashed')
+    if (kind !== 'card') expect(worker()).toHaveClass('flashed')
+    if (kind === 'claim') expect(view.container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
+  }
+  fireEvent.click(await screen.findByRole('button', { name: /Filtered Overview origin/ }))
+  await waitFor(revealed)
+  const originUrl = location.search
+  if (mode === 'Back') {
+    fireEvent.click(screen.getByRole('button', { name: /PR elsewhere/ }))
+    await screen.findByRole('region', { name: 'Pull requests' })
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history.back(); await popped })
+    expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
+  } else {
+    fireEvent(window, new Event('pagehide'))
+    view.unmount()
+    view = render(<App />)
+  }
+  expect(location.search).toBe(originUrl)
+  expect(history.state.tinstarWorkspace.query).toBe(query)
+  await waitFor(revealed)
 })

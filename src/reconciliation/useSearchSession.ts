@@ -57,7 +57,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
       historyEntries.current = ownedHistoryDepth()
-      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspace: undefined, tinstarResolvedOrigin: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
+      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspace: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }

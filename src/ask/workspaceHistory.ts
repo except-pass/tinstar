@@ -29,7 +29,7 @@ export function useWorkspaceHistory(section: Section | null) {
   }, [])
   const navigated = useCallback(() => {
     pendingRestore.current = false
-    try { history.replaceState({ ...history.state, tinstarWorkspace: undefined, tinstarResolvedOrigin: undefined }, '', location.href) } catch {}
+    try { history.replaceState({ ...history.state, tinstarWorkspace: undefined }, '', location.href) } catch {}
     setCanBack(!!history.state?.tinstarAskReturn)
     setRestoration(previous => ({ revision: previous.revision + 1, snapshot: undefined }))
   }, [])
@@ -41,11 +41,7 @@ export function useWorkspaceHistory(section: Section | null) {
       window.removeEventListener('pagehide', capture)
     }
   }, [pop, capture])
-  const originResolved = (key: string) => history.state?.tinstarResolvedOrigin === key
-  const resolveOrigin = (key: string) => {
-    try { history.replaceState({ ...history.state, tinstarResolvedOrigin: key }, '', location.href) } catch {}
-  }
-  return { register, capture, navigated, originResolved, resolveOrigin, restoration, applied: () => { pendingRestore.current = false }, canBack, back: () => history.back() }
+  return { register, capture, navigated, restoration, applied: () => { pendingRestore.current = false }, canBack, back: () => history.back() }
 }
 export type WorkspaceHistory = ReturnType<typeof useWorkspaceHistory>
 
