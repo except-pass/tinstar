@@ -215,8 +215,7 @@ it('reveals a now-closed changed-head PR, inspects it and restores the captured 
   expect(await screen.findByRole('region', { name: `Details ${pull.id}` })).toBeTruthy()
   expect(document.querySelectorAll('.pr-row')).toHaveLength(1)
   expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('a filter hiding this row')
-  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
-  fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
+  expect(screen.getByRole('region', { name: 'Answer thread: What is the artifact evidence?' })).toHaveTextContent('Real-shaped test answer')
   fireEvent.click(screen.getByRole('button', { name: 'Show all PRs in this view' }))
   expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('a filter hiding this row')
   expect(document.querySelectorAll('.pr-row')).toHaveLength(0)
@@ -228,7 +227,7 @@ it('retains the answer and original GitHub link when the PR is inaccessible', as
   expect(await screen.findByText(/originating PR.*missing or inaccessible/)).toHaveTextContent('Not accessible in current scope')
   expect(screen.getByRole('link', { name: 'Open originating PR in GitHub ↗' })).toHaveAttribute('href', pull.url)
   expect(document.querySelector('.pr-row')).toBeNull()
-  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
+  expect(screen.getByRole('region', { name: 'Answer thread: What is the artifact evidence?' })).toHaveTextContent('Real-shaped test answer')
 })
 
 it.each([false, true])('handles a deferred Overview origin deep link with newer manual navigation=%s', async navigateAway => {
