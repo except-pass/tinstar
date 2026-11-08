@@ -21,7 +21,12 @@ const exec = promisify(execFile)
 export async function readGithubScalars(path: string, projection: string): Promise<Record<string, unknown>> {
   if (liveActionsEnabled()) {
     const raw = await liveReaderJson(path) as Record<string, unknown>
-    if (/\/pulls\/\d+$/.test(path)) return { state: raw.state, merged: raw.merged, draft: raw.draft, head: (raw.head as { sha: string })?.sha, mergeable: raw.mergeable, mergeable_state: raw.mergeable_state }
+    if (/\/pulls\/\d+$/.test(path)) return {
+      state: raw.state, merged: raw.merged, draft: raw.draft,
+      head: (raw.head as { sha: string })?.sha, mergeable: raw.mergeable, mergeable_state: raw.mergeable_state,
+      title: raw.title, merged_at: raw.merged_at, merge_commit_sha: raw.merge_commit_sha,
+      head_sha: (raw.head as { sha: string })?.sha, base_ref: (raw.base as { ref: string })?.ref,
+    }
     if (/\/check-runs\?/.test(path)) {
       const checks = raw.check_runs as Array<{ status: string; conclusion: string }>
       return { total: raw.total_count, returned: checks.length, pending: checks.filter(row => row.status !== 'completed').length,
