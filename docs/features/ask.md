@@ -21,7 +21,8 @@ available for touch. Right-click never sends. The original left-swipe mapping is
 unchanged; voice is outside this refinement.
 
 The existing create endpoint still accepts `card_id` for work. An optional typed
-`target` identifies a canonical execution or claim instead. Optional `field_key`
+`target` identifies a canonical execution, claim or artifact instead (see
+[typed artifact origins](#typed-artifact-origins-and-returns)). Optional `field_key`
 and `field_value` retain the clicked field; relationship endpoint IDs, basis,
 verification and provenance are resolved from the server scene, never supplied
 by the draft. Worker anchors retain the canonical execution ID in the legacy
@@ -67,7 +68,7 @@ It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
 Opening an item reveals its originating context and opens a compact answer
-sheet over Overview, switching sections when necessary. Successful origin
+sheet over the originating section, switching sections when necessary. Successful origin
 navigation closes the mobile Desk sheet without changing desktop collapse
 preferences or clearing the retained conversation. Work items use existing
 [Desk navigation](overview.md).
@@ -210,8 +211,8 @@ in the existing scheduler and make failures visible through that scheduler.
 
 The Ask body contains `tinstar.ask.v1`, logical request/conversation IDs,
 authenticated principal, question/input mode/time and structured captured context.
-The server derives page ID, canonical URL, label and freshness from its authorized
-scene; labels are snapshot evidence. The primary should re-read authoritative
+The server derives anchor identity, canonical URL, label and freshness from its
+authorized scene or artifact projection; labels are snapshot evidence. The primary should re-read authoritative
 sources and distinguish their freshness from that snapshot.
 
 Plain-text primary replies work. For evidence and suggested actions the primary
