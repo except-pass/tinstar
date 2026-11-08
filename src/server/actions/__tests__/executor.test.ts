@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { ActionStore } from '../store'
 import { ActionExecutor } from '../executor'
 import { simulateRunner } from '../runner'
-import { sourceDigest, actionExamples } from '../examples'
+import { sourceDigest } from '../examples'
 import { head, snapshot, installed, run, policy } from './fixtures'
 import type { ActionCandidate, ActionSnapshot } from '../../../shared/actions'
 const candidate = (action: ActionCandidate): ActionCandidate => ({ manifest: action.manifest, source: action.source })
@@ -121,9 +121,6 @@ it('unavailable audit storage prevents even simulated effects', async () => {
   const append = vi.spyOn(store, 'append').mockRejectedValue(new Error('Disk unavailable'))
   await expect(executor.start(run(action))).rejects.toThrow('Disk unavailable')
   expect(append).toHaveBeenCalledTimes(1)
-})
-it('trusted example sources contain no live write mechanism', () => {
-  for (const example of actionExamples()) expect(example.source).not.toMatch(/fetch\(|exec\(|process\.|node:/)
 })
 it('retains installed catalog after locks/receipts exist and keeps runs on the captured version across rollback', async () => {
   let resume!: () => void

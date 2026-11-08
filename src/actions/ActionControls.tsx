@@ -34,9 +34,10 @@ export function ActionControls({ targets, view, compact = false, focusReceipt }:
   }, [pending])
   const perform = async (work: () => Promise<void>) => { setBusy(true); setError(''); try { await work(); await refresh() } catch (error) { setError((error as Error).message) } finally { setBusy(false) } }
   const invoke = (action: InstalledAction) => void perform(async () => {
-    if (repairChoice !== 'none' && targets.length !== 1) throw new Error('Repair extras require exactly one selected PR and explicit invocation')
-    if (repairChoice === 'rerun' && (!/^[1-9]\d*$/.test(jobId) || !/^[1-9]\d*$/.test(jobRunId))) throw new Error('Enter the exact failed job and run IDs')
-    const repair = action.manifest.id !== 'fix-ci' || repairChoice === 'none' ? undefined : repairChoice === 'update' ? { kind: 'repair.update', ref: '', expectedHead: targets[0]?.head } : { kind: 'repair.rerun', jobId: Number(jobId), runId: Number(jobRunId), attempt: 1, expectedHead: targets[0]?.head }
+    const operation = action.manifest.id === 'fix-ci' ? repairChoice : 'none'
+    if (operation !== 'none' && targets.length !== 1) throw new Error('Repair extras require exactly one selected PR and explicit invocation')
+    if (operation === 'rerun' && (!/^[1-9]\d*$/.test(jobId) || !/^[1-9]\d*$/.test(jobRunId))) throw new Error('Enter the exact failed job and run IDs')
+    const repair = operation === 'none' ? undefined : operation === 'update' ? { kind: 'repair.update', ref: '', expectedHead: targets[0]?.head } : { kind: 'repair.rerun', jobId: Number(jobId), runId: Number(jobRunId), attempt: 1, expectedHead: targets[0]?.head }
     // The safe head ref is supplied by the capture endpoint, never inferred from base/main.
     if (repair?.kind === 'repair.update') { const captured = await request('/api/actions/capture', { target: { url: targets[0]!.url, head: targets[0]!.head, base: targets[0]!.base ?? 'main' } }); repair.ref = `refs/heads/${captured.headRef}` }
     const result = await request('/api/actions/run', { key: crypto.randomUUID(), action: action.manifest.id, version: action.manifest.version, targets: targets.map(target => ({ url: target.url, head: target.head, base: target.base ?? 'main' })), mode, view, ...(repair ? { repair } : {}) })

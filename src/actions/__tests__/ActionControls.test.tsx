@@ -50,3 +50,40 @@ it('invokes exact installed version/captured head, exposes coordinated mode and 
   const payload = JSON.parse(String(fetch.mock.calls.find(([path]) => path === '/api/actions/run')![1]!.body))
   expect(payload).toMatchObject({ action: 'fix-ci', version: 'v1', mode: 'coordinated', view: { scene: 'releases' }, targets: [{ head: snapshot().head, base: 'main' }, { head: snapshot().head, base: 'main' }] })
 })
+it.each(['update', 'rerun'] as const)('keeps stale %s options out of read actions for single and multiple PRs', async choice => {
+  for (const action of [installed('explain'), installed('deep-review')]) {
+    for (const count of [1, 2]) {
+      const catalog = { installed: [installed('fix-ci'), action], examples: [], receipts: [], policy: {}, runner: '' }
+      const fetch = vi.fn(async (_path: string, init?: RequestInit) => new Response(JSON.stringify({ ok: true, data: init?.method === 'POST' ? {} : catalog })))
+      vi.stubGlobal('fetch', fetch)
+      const { rerender } = render(<ActionControls targets={[snapshot()]} view={{ scene: 'pulls' }} />)
+      fireEvent.change(await screen.findByLabelText('Explicit operation'), { target: { value: choice } })
+      const targets = Array.from({ length: count }, (_, index) => snapshot(index + 1))
+      rerender(<ActionControls targets={targets} view={{ scene: 'releases' }} />)
+      fireEvent.click(screen.getByRole('button', { name: `${action.manifest.name} · Simulated` }))
+      await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === '/api/actions/run')).toBe(true))
+      const payload = JSON.parse(String(fetch.mock.calls.find(([path]) => path === '/api/actions/run')![1]!.body))
+      expect(payload.action).toBe(action.manifest.id)
+      expect(payload.targets).toHaveLength(count)
+      expect(payload).not.toHaveProperty('repair')
+      expect(fetch.mock.calls.some(([path]) => path === '/api/actions/capture')).toBe(false)
+      expect(screen.queryByRole('alert')).toBeNull()
+      cleanup()
+    }
+  }
+})
+it.each([
+  ['rerun', 1, 'Enter the exact failed job and run IDs'],
+  ['rerun', 2, 'Repair extras require exactly one selected PR and explicit invocation'],
+  ['update', 2, 'Repair extras require exactly one selected PR and explicit invocation'],
+] as const)('retains Fix CI %s validation with %s selected PRs', async (choice, count, message) => {
+  const catalog = { installed: [installed('fix-ci')], examples: [], receipts: [], policy: {}, runner: '' }
+  const fetch = vi.fn(async (_path: string) => new Response(JSON.stringify({ ok: true, data: catalog })))
+  vi.stubGlobal('fetch', fetch)
+  const { rerender } = render(<ActionControls targets={[snapshot()]} view={{ scene: 'pulls' }} />)
+  fireEvent.change(await screen.findByLabelText('Explicit operation'), { target: { value: choice } })
+  rerender(<ActionControls targets={Array.from({ length: count }, (_, index) => snapshot(index + 1))} view={{ scene: 'pulls' }} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Fix CI · Simulated' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(message)
+  expect(fetch.mock.calls.every(([path]) => path === '/api/actions')).toBe(true)
+})
