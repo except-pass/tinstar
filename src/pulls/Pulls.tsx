@@ -53,8 +53,8 @@ export function Pulls() {
   const viewport = () => focusRef.current?.querySelector<HTMLElement>('.pr-scroll') ?? null
   const scroll = useScrollRestore(viewport, 'data-ask-origin', !!data, views?.restoration.revision)
   const restoredExpanded = useRef<string[] | null>(null)
-  useViewSnapshot(views, 'pulls', () => ({ query, sort, descending, selected: [...selected], expanded: [...expanded], position: captureScroll(viewport(), 'data-ask-origin') }), saved => {
-    setQuery(saved.query); setSort(saved.sort); setDescending(saved.descending); setSelected(new Set(saved.selected)); setExpanded(new Set(saved.expanded)); restoredExpanded.current = saved.expanded; scroll.restore(saved.position)
+  useViewSnapshot(views, 'pulls', () => ({ query, sort, descending, selected: [...selected], expanded: [...expanded], details: currentDetails, position: captureScroll(viewport(), 'data-ask-origin') }), saved => {
+    setDetails(saved.details ?? {}); setQuery(saved.query); setSort(saved.sort); setDescending(saved.descending); setSelected(new Set(saved.selected)); setExpanded(new Set(saved.expanded)); restoredExpanded.current = saved.expanded; scroll.restore(saved.position)
   }, !!data)
   const view: AskView = { scene: 'pulls', query, sort, descending }
   const rows = useMemo(() => visiblePulls(destination ? inventory.filter(pull => pull.id === destination.target.id) : inventory, destination ? '' : query, sort, descending, scene, currentDetails), [inventory, query, sort, descending, scene, currentDetails, destination])
