@@ -67,17 +67,14 @@ under the secondary Actions menu moves only the Ask into searchable history.
 It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
-Opening an item reveals its originating context and opens a compact answer
-sheet over the originating section, switching sections when necessary. Successful origin
-navigation closes the mobile Desk sheet without changing desktop collapse
-preferences or clearing the retained conversation. Work items use existing
-[Desk navigation](overview.md).
+Opening an item reveals its originating context, switching sections when
+necessary, while retaining the conversation in Desk. Work items use existing
+[Desk navigation](overview.md); inline answers and return controls are described
+[below](#typed-artifact-origins-and-returns).
 Link items retain the exact claim ID, reveal its endpoints and scroll to its card;
 the flash targets that relationship, including unverified Detailed lines, rather
 than every confirmed connection on the card. Inbox questions and answer previews
-wrap legibly. The answer sheet stays compact
-at rest; **Full answer & evidence** expands the retained detail, references and suggestions. The
-compact sheet leaves the returned task visible above it on mobile. Worker
+wrap legibly. Worker
 answers reveal and highlight the exact originating execution. Active and
 history items use the same return path. A task that cannot be shown gets the
 captured canonical source link rather than another object. Follow-up creates a new request in the same
