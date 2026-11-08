@@ -86,12 +86,20 @@ conversation and retains the original captured context. No raw audio is stored.
 ## Typed artifact origins and returns
 
 The same composer supports PRs, deployment targets and deployment receipts.
-PR rows in both PRs and Releases ask about the actual GitHub PR; linked-card
-controls inside inspection continue to ask about that explicit Notion card.
-Right-click a PR CI/review/changes field or deployment/receipt text to prepare an
-editable question. Blank Ask icons remain blank, and native links, selection,
-inspection, table scrolling and unavailable voice behavior retain their existing
-interaction rules.
+PR rows in both PRs and Releases ask about the actual GitHub PR. Right-click a
+PR CI/review/changes field or deployment/receipt text to prepare an editable
+question. Blank Ask icons remain blank, and native links outside semantic Ask
+fields, selection, inspection, table scrolling and unavailable voice behavior
+retain their existing interaction rules.
+
+PR inspection uses the same editable semantic Ask surface for description,
+footprint, card links and contributor evidence. Focus a semantic field and use
+Shift+F10 (or the Context Menu key), or right-click it; the row Ask icon stays
+blank. Semantic questions on these card links stay anchored to the PR; ordinary
+left-click still navigates to the Notion card.
+The shared Ask context optionally records server-resolved `relationships`:
+active card IDs with association provenance, and exact current/retained worker
+IDs, attempts, freshness and claims. Captured field text is a hint, never authority.
 
 New contexts optionally carry `schema_version: 2`, a typed target, server-owned
 source observation, and a canonical `return_to` locator. PR targets use the
@@ -99,8 +107,9 @@ canonical lowercase `repository#number` plus captured head when available.
 Deployment targets add target/component; receipt targets also carry the immutable
 receipt ID. Shared `src/shared/ask.ts` owns this contract. Source metadata and
 return targets are resolved through the same PR/Releases projections used by the
-screens, after the existing Ask owner authentication. Client field text and head
-are hints; First Mate still investigates fresh authoritative sources. A missing,
+screens or the scoped individual PR read described below, after the existing
+Ask owner authentication. Client field text and head are hints; First Mate still
+investigates fresh authoritative sources. A missing,
 superseded or out-of-scope object is reported honestly. No linkage is inferred
 from names or titles.
 
@@ -116,9 +125,16 @@ URL locator to reveal the exact authorized PR or release row despite the current
 filter. Deployment/receipt origins reveal their read-only evidence inline in the
 main workspace. Source removal, receipt replacement and changed PR heads have
 visible fallback messages; source links remain available in the answer. Manual
-section navigation or clearing the origin ends pending focus. Detailed prior-view
-restoration and inline answer threads are the separate following slice; answers
-currently retain the existing answer dialog.
+section navigation or clearing the origin ends pending focus. Inline answer
+threads remain a follow-up; answers retain the existing answer dialog.
+
+Desk returns to a PR with its captured query/sort intact, temporarily reveals,
+expands and focuses the canonical row, and keeps the answer open. A closed PR
+is read individually through owner-only `GET /api/pulls/origin?url=…`; this does
+not add closed PRs to the open inventory. The same configured repository and
+owned/authored/explicitly-associated relevance scope applies. Changed heads are
+labelled; failed or inaccessible reads retain the answer and original GitHub
+link. “Show all PRs in this view” removes only the temporary reveal.
 
 ## Configuration and trust boundary
 
@@ -284,19 +300,3 @@ The remaining parent-card items are follow-up slices:
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
   physical iPhone Safari and Android Chrome touch/microphone verification remains
   an explicit review gate when devices are available.
-
-PR inspection uses the same editable semantic Ask surface for description,
-footprint, card links and contributor evidence. Focus a semantic field and use
-Shift+F10 (or the Context Menu key), or right-click it; the row Ask icon stays
-blank. Notion links marked as Ask fields retain ordinary left-click navigation.
-The shared Ask context optionally records server-resolved `relationships`:
-active card IDs with association provenance, and exact current/retained worker
-IDs, attempts, freshness and claims. Captured field text is a hint, never authority.
-
-Desk returns to a PR with its captured query/sort intact, temporarily reveals,
-expands and focuses the canonical row, and keeps the answer open. A closed PR
-is read individually through owner-only `GET /api/pulls/origin?url=…`; this does
-not add closed PRs to the open inventory. The same configured repository and
-owned/authored/explicitly-associated relevance scope applies. Changed heads are
-labelled; failed or inaccessible reads retain the answer and original GitHub
-link. “Show all PRs in this view” removes only the temporary reveal.
