@@ -1,19 +1,22 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace } from '../DeskWorkspace'
 import { AskCardAction } from '../Ask'
 import { DeskRail } from '../DeskRail'
 import { clampDeskWidth, deskPreferencesKey, loadDeskPreferences } from '../deskPreferences'
-import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema } from '../../shared/ask'
-const source = vi.hoisted(() => ({ scene: null as unknown }))
+const source = vi.hoisted(() => ({ scene: null as unknown, queue: null as ReturnType<typeof fixtureQueue> | null }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: source.scene, error: null, now: Date.now() }) }))
-vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: null, error: null }) }))
+vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: null }) }))
 const read = vi.fn()
 const record = () => askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'Where is the evidence?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null })
 let items: ReturnType<typeof record>[]
 beforeEach(() => {
-  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene()
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
   vi.stubGlobal('matchMedia', () => ({ matches: window.innerWidth <= 850, addEventListener() {}, removeEventListener() {} }))
@@ -129,4 +132,55 @@ it('handles invalid or unavailable browser preferences without preventing use', 
   fireEvent.click(screen.getByRole('button', { name: 'Collapse Your desk' }))
   fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   expect(screen.getByRole('button', { name: 'Inbox item' })).toBeVisible()
+})
+
+function NavigationShell() {
+  const [page, setPage] = useState('overview')
+  return <DeskWorkspace overviewActive={page === 'overview'} onOverview={() => setPage('overview')} workers={[]} messages={[]} submit={vi.fn()}>
+    <button onClick={() => setPage('releases')}>Visit Releases</button>
+    <button onClick={() => setPage('pulls')}>Visit PRs</button>
+    <button onClick={() => setPage('overview')}>Visit Overview</button>
+    {page === 'overview' ? <Overview workers={[]} /> : <p>Other section</p>}
+  </DeskWorkspace>
+}
+it.each(['Clear', 'Escape'])('restores search focus after section remount using %s', async method => {
+  const view = render(<NavigationShell />)
+  const before = [...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))
+  fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { target: { value: 'Roadmap: planned integration' } })
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Find names, IDs and text' }), { key: 'Enter' })
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  for (const section of ['Releases', 'PRs']) {
+    fireEvent.click(screen.getByRole('button', { name: 'Visit ' + section }))
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Visit Overview' }))
+    expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  }
+  if (method === 'Clear') fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+  else fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  expect([...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))).toEqual(before)
+})
+it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s origin navigation without resetting it', async origin => {
+  Object.defineProperty(window, 'innerWidth', { value: 390 })
+  localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))
+  source.queue = fixtureQueue()
+  if (origin === 'execution' || origin === 'claim') {
+    const scene = fixtureScene()
+    items[0].context.target = { kind: origin, id: origin === 'execution' ? scene.executions[0].id : scene.claims[0].id }
+  }
+  render(<NavigationShell />)
+  await screen.findAllByText('Where is the evidence?')
+  fireEvent.click(screen.getByRole('button', { name: 'Visit Releases' }))
+  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  const desk = screen.getByRole('dialog', { name: 'Your desk' })
+  if (origin === 'queue') fireEvent.click(desk.querySelector<HTMLButtonElement>(`[data-desk-card-id="${fixtureId(1)}"]`)!)
+  else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0])
+  expect(desk).not.toBeVisible()
+  expect(screen.getByRole('region', { name: 'Overview' })).toBeVisible()
+  expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
+  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(desk)
+  expect(within(desk).getAllByText('Where is the evidence?')).toHaveLength(2)
 })

@@ -16,7 +16,8 @@ interface Snapshot {
 }
 
 /** One temporary focus lens over the existing reducer, with semantic restore. */
-export function useSearchSession({ scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+export function useSearchSession({ active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+  active: boolean
   scene: FloorScene | null
   state: PresentationState; send: (action: PresentationAction) => void; canvas: RefObject<HTMLDivElement>; root: RefObject<HTMLDivElement>
   details: string[]; setDetails: Dispatch<SetStateAction<string[]>>
@@ -63,7 +64,7 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
   }
   useLayoutEffect(() => {
     const saved = restorePending.current
-    if (!saved || !canvas.current) return
+    if (!active || !saved || !canvas.current) return
     const elements = [...canvas.current.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]')]
     const anchor = elements.find(element => element.dataset.semanticId === saved.anchor)
     const viewport = canvas.current.parentElement!
@@ -75,13 +76,14 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     return () => cancelAnimationFrame(frame)
   })
   useLayoutEffect(() => {
-    if (!state.searchReveal) return
+    if (!active || !state.searchReveal) return
     const key = semanticId(state.searchReveal)
     const element = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.dataset.semanticId === key)
     element?.scrollIntoView({ block: 'center', behavior: 'instant' }); element?.focus({ preventScroll: true })
-  }, [state.searchReveal, canvas])
+  }, [active, state.searchReveal, canvas])
   // Only the Overview owns this shortcut; terminal iframe input stays local.
   useEffect(() => {
+    if (!active) return
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); begin() }
@@ -93,7 +95,7 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
   const onPop = useRef<() => void>(() => {})
   onPop.current = () => {
     if (ignorePop.current) { ignorePop.current = false; return }
-    if (!snapshot.current) return
+    if (!active || !snapshot.current) return
     historyEntries.current = Math.max(0, historyEntries.current - 1)
     if (open) dismiss(false); else restore(false, false)
   }

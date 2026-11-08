@@ -8,14 +8,13 @@ import { semanticId, ancestorHomes, isPlanned, type FloorScene, type Presentatio
 import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { useSearchSession } from './useSearchSession'
 import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
-import { loadOverviewDensity, saveOverviewDensity, type OverviewDensity } from './overviewDensity'
+import { saveOverviewDensity } from './overviewDensity'
 import './overview.css'
 import './overviewActions.css'
 import { AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit } from '../ask/Ask'
@@ -293,7 +292,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   </section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
-  const { scene, error, now, queue, queueError, state, send, connection, bridgeError } = useDeskWorkspace()
+  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch } = useDeskWorkspace()
   const navigatedCard = useRef<string | null>(null)
   useEffect(() => {
     if (!initialCardId || !scene?.cards.some(card => card.id === initialCardId) || navigatedCard.current === initialCardId) return
@@ -303,13 +302,9 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const [hovered, setHovered] = useState<Target | null>(null), [diagnosticsRevision, setDiagnosticsRevision] = useState<number | null>(null)
   const diagnostics = diagnosticsRevision === state.revision
   const setDiagnostics = (open: boolean) => setDiagnosticsRevision(open ? state.revision : null)
-  const [density, setDensity] = useState<OverviewDensity>(loadOverviewDensity)
-  const [openRelationships, setOpenRelationships] = useState<Target[]>([])
-  const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
+  const { density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed, canvas, root, search } = overviewSearch
   const expanded = useMemo(() => scene ? expandedRelationships(scene, openRelationships) : new Set<string>(), [scene, openRelationships])
-  const canvas = useRef<HTMLDivElement>(null)
-  const root = useRef<HTMLDivElement>(null), previousSelection = useRef<string | null>(null)
-  const search = useSearchSession({ scene, state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const previousSelection = useRef<string | null>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
