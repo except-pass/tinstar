@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import type { PullDetail, PullSummary } from '../shared/pulls'
-import { useFloorScene } from '../reconciliation/useFloorScene'
+import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { ageLabel } from '../reconciliation/recordFields'
 import { usePulls } from './usePulls'
 import { pullContext, visiblePulls, type PullSort } from './model'
@@ -9,7 +9,7 @@ import './pulls.css'
 
 const columns: Array<[PullSort, string]> = [['repository', 'Repository'], ['title', 'PR'], ['author', 'Author'], ['changes', 'Changes / files'], ['checks', 'CI'], ['review', 'Review'], ['updated', 'Updated / age'], ['initiative', 'Initiative'], ['epic', 'Epic'], ['manager', 'Manager'], ['worker', 'Worker']]
 export function Pulls() {
-  const { data, error, refresh } = usePulls(), { scene, now } = useFloorScene()
+  const { data, error, refresh } = usePulls(), { scene, now, openDesk } = useDeskWorkspace()
   const [query, setQuery] = useState(''), [sort, setSort] = useState<PullSort>('repository'), [descending, setDescending] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set()), [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [details, setDetails] = useState<Record<string, PullDetail>>({}), [failures, setFailures] = useState<Record<string, string>>({}), [busy, setBusy] = useState<Set<string>>(new Set())
@@ -40,7 +40,7 @@ export function Pulls() {
     if (!expanded.has(pull.id)) void load(pull)
   }
   return <section className="pr-page" aria-label="Pull requests">
-    <header className="pr-header"><h1>Pull requests</h1><span>{data ? `${data.pulls.length} observed open` : 'Reading GitHub…'}</span><button type="button" onClick={refresh}>Refresh</button><a href="?">Your desk ↗</a></header>
+    <header className="pr-header"><h1>Pull requests</h1><span>{data ? `${data.pulls.length} observed open` : 'Reading GitHub…'}</span><button type="button" onClick={refresh}>Refresh</button><button type="button" onClick={openDesk}>Your desk</button></header>
     <div className="pr-toolbar"><label><span className="sr-only">Find PRs</span><input aria-label="Find PRs" placeholder="Find PR, repo, author, work…" value={query} onChange={event => setQuery(event.target.value)} /></label><small>{rows.length} shown · Read-only</small></div>
     {error && <p role="alert" className="pr-notice">{error} {data && 'Retained rows are last known.'}</p>}
     {data?.warnings.map(warning => <p className="pr-notice" role="status" key={warning}>{warning}</p>)}

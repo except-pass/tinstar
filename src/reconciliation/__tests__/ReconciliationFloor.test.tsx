@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { fixtureSources, fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { Overview } from '../Overview'
+import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, error: null as string | null }))
 vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: observed.error, now: Date.now() }) }))
@@ -225,7 +225,7 @@ it('clears mobile source diagnostics on close and subsequent worker selection', 
   const { container } = mount()
   fireEvent.click(screen.getByRole('button', { name: /Sources connected.*Details/ }))
   expect(screen.getByText('Source health')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close source health' }))
   fireEvent.click(within(container.querySelector('.ov-execution')!.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
   expect(screen.queryByText('Source health')).toBeNull()
   expect(screen.getByLabelText('Inspector')).toBeTruthy()
@@ -270,7 +270,8 @@ it('starts with Ask inbox records before operational requests in the shared Desk
   const operational = desk.querySelector('.ov-queue')!
   expect(operational).not.toBeNull()
   expect(questions.compareDocumentPosition(operational) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Your desk' }))
-  expect(desk).toHaveClass('mobile-open')
+  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  expect(desk).toBeVisible()
+  expect(screen.getByRole('button', { name: /Open Your desk/, hidden: true })).toHaveAttribute('aria-expanded', 'true')
   expect(questions.compareDocumentPosition(operational) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })

@@ -21,6 +21,7 @@ interface AskControls {
   returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss') => void
 }
 const Controls = createContext<AskControls | null>(null)
+export const useAskControls = () => useContext(Controls)
 export function useCardAsk(cardId: string | null) {
   const controls = useContext(Controls)
   return useAskGesture(controls && cardId ? () => controls.open({ cardId }) : undefined)
@@ -35,11 +36,12 @@ export function useSemanticAsk(subject: AskSubject) {
 }
 export function AskCardAction({ cardId, subject, icon = false }: { cardId?: string; subject?: AskSubject; icon?: boolean }) {
   const controls = useContext(Controls)
-  return controls && <button type="button" className={icon ? 'ov-header-icon' : 'ask-launch'} aria-label={icon ? 'Ask about this item' : undefined} title="Ask about this item" onClick={event => { event.stopPropagation(); controls.open(subject ?? { cardId }) }}>
+  const label = cardId || subject ? 'Ask about this item' : 'Ask First Mate'
+  return controls && <button type="button" className={icon ? 'ov-header-icon' : 'ask-launch'} aria-label={icon ? label : undefined} title={label} onClick={event => { event.stopPropagation(); controls.open(subject ?? { cardId }) }}>
     {icon ? <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-5 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 3-2Z" /></svg> : 'Ask First Mate about this task'}
   </button>
 }
-export function AskProvider({ scene, state, send, visibleCardIds, children }: { visibleCardIds: ReadonlySet<string>; scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; children: ReactNode }) {
+export function AskProvider({ scene, state, send, onReturn, children }: { scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: () => void; children: ReactNode }) {
   const [items, setItems] = useState<AskItem[]>([]), [error, setError] = useState<string | null>(null)
   const [composer, setComposer] = useState<{ seed: AskSeed; parent?: AskItem; key: string } | null>(null)
   const [answer, setAnswer] = useState<AskItem | null>(null)
@@ -55,27 +57,28 @@ export function AskProvider({ scene, state, send, visibleCardIds, children }: { 
     catch (reason) { if (revision === refreshRevision.current) setError((reason as Error).message) }
   }, [])
   useEffect(() => { void refresh(); const timer = setInterval(() => { void refresh() }, 5000); return () => { clearInterval(timer); refreshRevision.current++ } }, [refresh])
-  const open = (seed: AskSeed = {}, parent?: AskItem) => { setAnswer(null); setComposer({ seed, parent, key: crypto.randomUUID() }) }
+  const open = (seed: AskSeed = {}, parent?: AskItem) => { if (!scene) { setError('Source context is unavailable. Try again when sources connect.'); return } setAnswer(null); setComposer({ seed, parent, key: crypto.randomUUID() }) }
   const action = (item: AskItem, value: 'retry' | 'dismiss') => {
     void request(`requests/${item.request_id}/${value}`, {}).then(refresh).catch(reason => setError((reason as Error).message))
   }
   const returnTo = (item: AskItem) => {
     setAnswer(item)
+    onReturn()
     if (item.context.target?.kind === 'execution' || item.context.target?.kind === 'claim') {
       send({ type: 'reveal-search', target: item.context.target })
       send({ type: 'flash', targets: [item.context.target] })
-    } else if (scene.cards.some(card => card.id === item.context.anchor.page_id)) send({ type: 'navigate-card', cardId: item.context.anchor.page_id })
+    } else if (scene?.cards.some(card => card.id === item.context.anchor.page_id)) send({ type: 'navigate-card', cardId: item.context.anchor.page_id })
     if (item.reply && !item.read_at) void request(`requests/${item.request_id}/read`, {}).then(refresh).catch(reason => setError((reason as Error).message))
   }
   const currentAnswer = answer && (items.find(item => item.request_id === answer.request_id) ?? answer)
   return <Controls.Provider value={{ items, error, open, returnTo, action }}>{children}
-    {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
+    {composer && scene && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
       const item = await request<AskItem>('requests', body)
       localRevision.current++
       setItems(previous => [item, ...previous.filter(old => old.request_id !== item.request_id)])
       setComposer(null)
     }} />, document.body)}
-    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={currentAnswer.context.target?.kind === 'execution' ? scene.executions.some(worker => worker.id === currentAnswer.context.target!.id) : currentAnswer.context.target?.kind === 'claim' ? scene.claims.some(claim => claim.id === currentAnswer.context.target!.id && visibleCardIds.has(claim.cardId)) : visibleCardIds.has(currentAnswer.context.anchor.page_id)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.target ? { target: currentAnswer.context.target } : { cardId: currentAnswer.context.anchor.page_id }, currentAnswer)} />, document.body)}
+    {currentAnswer && createPortal(<AskAnswer item={currentAnswer} available={currentAnswer.context.target?.kind === 'execution' ? !!scene?.executions.some(worker => worker.id === currentAnswer.context.target!.id) : currentAnswer.context.target?.kind === 'claim' ? !!scene?.claims.some(claim => claim.id === currentAnswer.context.target!.id && scene.cards.some(card => card.id === claim.cardId && !card.source.in_trash && !card.source.archived)) : !!scene?.cards.some(card => card.id === currentAnswer.context.anchor.page_id && !card.source.in_trash && !card.source.archived)} close={() => setAnswer(null)} followUp={() => open(currentAnswer.context.target ? { target: currentAnswer.context.target } : { cardId: currentAnswer.context.anchor.page_id }, currentAnswer)} />, document.body)}
   </Controls.Provider>
 }
 export function AskRelationshipHit({ claimId, d }: { claimId: string; d: string }) {

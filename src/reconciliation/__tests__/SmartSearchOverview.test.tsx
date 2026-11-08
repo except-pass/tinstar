@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
-import { Overview } from '../Overview'
+import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { preferencesKey } from '../presentationPreferences'
 import type { FloorScene, PresentationAction } from '../presentation'
 import { actionSchema } from '../../shared/reconciliationCommands'

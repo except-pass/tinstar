@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, expect, it, vi } from 'vitest'
 import { Pulls } from '../Pulls'
 import type { PullSummary } from '../../shared/pulls'
-vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: null, now: Date.parse('2026-11-06T20:00:00Z') }) }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: null, now: Date.parse('2026-11-06T20:00:00Z') }) }))
 const pulls: PullSummary[] = Array.from({ length: 50 }, (_, index) => ({ id: `${index < 25 ? 'alpha/repo' : 'zeta/repo'}#${index + 1}`, repository: index < 25 ? 'alpha/repo' : 'zeta/repo', number: index + 1,
   url: `https://github.com/${index < 25 ? 'alpha/repo' : 'zeta/repo'}/pull/${index + 1}`, title: `Change ${index + 1}`, author: 'contributor', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-06T19:00:00Z', observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', links: [] }))
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })

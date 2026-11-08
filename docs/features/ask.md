@@ -35,6 +35,25 @@ horizontal overflow ancestor stays native; at its right edge, a left drag can
 open Ask. Use the visible action anywhere without changing the floor's scroll
 position. Pointer/touch cancellation never opens a composer.
 
+Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
+Overview, PRs, Releases and worker navigation. Section changes, rail collapse and
+mobile close keep the inbox, history, composer draft and answer selection mounted.
+The existing owner-scoped store, 5-second Ask refresh and First Mate bridge are
+unchanged. The Overview UI-command bridge disconnects while Overview is hidden
+and reconnects on return without clearing its presentation state.
+
+Desktop Desk opens by default. Drag the visible divider to resize, or focus it
+and use Left/Right (16px) and Home/End (bounds). **Desk size → Reset Desk size**
+restores the default. Width and collapsed state persist per browser/device in
+`tinstar.desk.preferences`; unavailable storage uses usable defaults. Effective
+width clamps to the available workspace without erasing the preferred width.
+At 850px and below, a single global Desk button opens the same inbox in a sheet;
+mobile open/close does not change the remembered desktop preference. Unread
+answers and actionable/failed items remain counted on the collapsed entry.
+Find worker and Message receipts remain accessible from the Desk header; on
+mobile they close the sheet before opening the existing panel. PRs' Desk button
+opens this workspace directly. Source health remains an on-demand Overview view.
+
 Your Desk starts with readable question/answer records, followed by supported
 actionable decision/request records. Operational queue introductions and counts
 are omitted; decision controls and routing remain intact. The Ask states are **Sent** (Tin Star retained it), **Delivered** (First Mate
