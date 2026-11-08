@@ -15,7 +15,8 @@ export interface PullReadiness {
 }
 const exec = promisify(execFile)
 
-/** gh-axi's projected scalar response avoids retrieving bodies/reviews/transcripts.
+/** CLI scalar projections avoid retrieving bodies/reviews/transcripts; live mode
+ * normalizes broker JSON to the Queue and Releases scalar contracts.
  * Reject unsupported output as unknown rather than mistaking it for green checks.
  */
 export async function readGithubScalars(path: string, projection: string): Promise<Record<string, unknown>> {

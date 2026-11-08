@@ -3,8 +3,8 @@ import { promisify } from 'node:util'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
 const exec = promisify(execFile)
 
-/** gh-axi is the existing credential/forge boundary. Encode structured projections
- * in one scalar so multiline PR prose cannot be confused with the TOON envelope. */
+/** In CLI mode, encode projections in one scalar so multiline PR prose cannot
+ * be confused with the TOON envelope. Live reads stay behind broker custody. */
 export async function githubJson(path: string, projection = '.') : Promise<unknown> {
   if (liveActionsEnabled()) return liveReaderJson(path, projection)
   try {

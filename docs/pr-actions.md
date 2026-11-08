@@ -57,7 +57,9 @@ Receipts persist exact intent before a provider effect and retain actor, PR/head
 source/version/grants, run/job identity, request, outcome and times. UI/Ask distinguish
 simulation, accepted requests, completed local reads and unknown outcomes. Accepted is
 not verified repair, merge or deployment. Unknown write counts are not presented as
-zero. Cancellation stops unsent requests; restart never automatically retries an
+zero. After an uncertain job rerun, one read-only reconciliation can record completion
+if the selected run advanced beyond its original attempt; write attribution remains
+unknown and no retry is sent. Cancellation stops unsent requests; restart never automatically retries an
 ambiguous effect. Same-head ambiguous Repair and consumed job reruns remain held.
 
 Run focused safety coverage with:
