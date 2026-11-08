@@ -6,6 +6,11 @@ that immutable version. Use the installed buttons to simulate an investigation o
 proposal. Fix CI also offers explicit safe-update and one-failed-job rerun proposals
 for a single selected PR. The receipt always records actual GitHub writes = 0.
 
+Invocation requires current captured heads and observed base branches. Unknown bases
+disable the buttons; stacked PRs retain their actual base. A changed head or base at
+capture requires refresh before invocation. Repair options apply only to Fix CI;
+they do not affect Explain or other read actions on one or multiple selected PRs.
+
 “Make a button…” opens the existing Desk Ask composer. First Mate can return a JSON
 candidate containing `manifest` and `source`; paste it under Inspect a Custom candidate.
 Installation stores source for inspection. Custom code is never evaluated: approved

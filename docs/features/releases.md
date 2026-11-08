@@ -34,7 +34,7 @@ trust a client-supplied Tailscale identity header (see [Ask](ask.md)).
 
 ## Evidence and current boundaries
 
-GitHub supplies PR title, captured head, merged state/time and effective merge commit. Reads
+GitHub supplies PR title, captured head and base branch, merged state/time and effective merge commit. Reads
 use the existing gh-axi scalar transport, at most four PR reads per refresh and
 no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.

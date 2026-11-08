@@ -82,7 +82,7 @@ conversation and retains the original captured context. No raw audio is stored.
 
 ## Typed artifact origins and returns
 
-The same composer supports PRs, deployment targets and deployment receipts.
+The same composer supports PRs, action receipts, deployment targets and deployment receipts.
 PR rows in both PRs and Releases ask about the actual GitHub PR. Right-click a
 PR CI/review/changes field or deployment/receipt text to prepare an editable
 question. Blank Ask icons remain blank, and native links outside semantic Ask
@@ -101,6 +101,10 @@ IDs, attempts, freshness and claims. Captured field text is a hint, never author
 New contexts optionally carry `schema_version: 2`, a typed target, server-owned
 source observation, and a canonical `return_to` locator. PR targets use the
 canonical lowercase `repository#number` plus captured head when available.
+Action receipt origins add `action_receipt_id` to the PR target. The server verifies
+that the retained receipt belongs to that PR and supplies its action, installed
+version/digest, actor, outcome, captured identity and result in `action_receipt`.
+See the [installed PR actions guide](../pr-actions.md) for execution boundaries.
 Deployment targets add target/component; receipt targets also carry the immutable
 receipt ID. Shared `src/shared/ask.ts` owns this contract. Source metadata and
 return targets are resolved through the same PR/Releases projections used by the
@@ -120,7 +124,8 @@ or return locators are not accepted by the create endpoint.
 Opening an artifact conversation uses the existing browser history and a typed
 URL locator to reveal the exact authorized PR or release row despite the current
 filter. Deployment/receipt origins reveal their read-only evidence inline in the
-main workspace. Source removal, receipt replacement and changed PR heads have
+main workspace. Action receipt origins open and focus the matching retained receipt
+in PRs or Releases. Source removal, receipt replacement and changed PR heads have
 visible fallback messages; source links remain available in the answer. Manual
 section navigation or clearing the origin ends pending focus.
 
