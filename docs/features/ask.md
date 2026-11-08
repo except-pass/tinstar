@@ -193,25 +193,17 @@ only to the designated primary-home puller.
 
 `scripts/ask-puller.py` is a Python 3 standard-library, single-pass adapter. It
 runs on the main First Mate home host. The Mac initiates HTTPS requests to Tin
-Star; Tin Star never executes a remote shell or an arbitrary command. Install
-and schedule it through the operator's existing Mac mechanisms after review.
-There is no embedded scheduler or daemon. For example (substitute the approved
-HTTPS origin, main home and clavis reference; the reference is not the secret):
+Star; Tin Star never executes a remote shell or an arbitrary command. Tin Star
+ships a managed Mac LaunchAgent; see the [service install and runbook](ask-puller-service.md)
+for installation, lifecycle commands, upgrades, health and whole-pass deadline behavior.
 
-```sh
-python3 /absolute/path/to/ask-puller.py \
-  --url https://approved-tinstar-tailnet-origin \
-  --home /absolute/path/to/main-firstmate-home \
-  --token-key tinstar-ask.token
-```
-
-It reads the token using `clavis get <reference>` into process memory. It never
+The adapter reads the token using `clavis get <reference>` into process memory. It never
 passes the value in subprocess argv or prints it. Redirects are refused so the
 bearer cannot be forwarded to another host. It makes one pass and prints only
-capture/reply counts, or a generic error. Inbox stderr, other primary notes and
+capture/reply/failure/queued counts, or a generic error. Inbox stderr, other primary notes and
 API payloads are not logged. A failed run can be run again; errors do not lose
-Tin Star's retained request or the inbox's durable note. Check the exit status
-in the existing scheduler and make failures visible through that scheduler.
+Tin Star's retained request or the inbox's durable note. Direct adapter invocations
+report their exit status; managed service health is described in the runbook.
 
 1. `GET /api/ask/bridge` with server-side bearer returns up to 50 pending
    requests (`request_id`, `inbox_request_id`, text `body`) plus tracked note
@@ -234,7 +226,8 @@ in the existing scheduler and make failures visible through that scheduler.
 5. The puller reads `fm-inbox.sh receipts --all-pending --all-handled
    --all-replies`. It joins only tracked notes and verifies `request_id`.
    Unrelated inbox content is never posted to Tin Star. Omitted receipts or a
-   rejected mapped reply do not block other mapped replies; after processing
+   rejected mapped reply do not block other mapped replies within the service's
+   whole-pass deadline; after processing
    them, the pass exits with a generic failure to report incomplete coverage. It posts
    `{request_id, reply:{id,at,body,cursor}}`; `id` must match the retained note,
    `at` is UTC ISO time and `cursor` is the inbox's per-home sequence string.

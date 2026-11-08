@@ -20,14 +20,14 @@ SPEC.loader.exec_module(puller)
 class PullerTests(unittest.TestCase):
     def test_cli_reads_token_only_from_clavis_and_does_not_log_it(self):
         secret = 'isolated-secret-value'
-        with patch.object(puller.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, secret, '')) as command, patch.object(puller, 'pull_once', return_value={'captured': 1, 'replied': 0}) as run, patch('sys.argv', ['ask-puller.py', '--url', 'https://floor.example.test', '--home', '/isolated/home', '--token-key', 'test.ask']), contextlib.redirect_stdout(io.StringIO()) as stdout:
+        with patch.object(puller, 'single_flight', return_value=contextlib.nullcontext(True)), patch.object(puller.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, secret, '')) as command, patch.object(puller, 'pull_once', return_value={'captured': 1, 'replied': 0}) as run, patch('sys.argv', ['ask-puller.py', '--url', 'https://floor.example.test', '--home', '/isolated/home', '--token-key', 'test.ask']), contextlib.redirect_stdout(io.StringIO()) as stdout:
             self.assertEqual(puller.main(), 0)
             command.assert_called_once_with(['clavis', 'get', 'test.ask'], text=True, capture_output=True, timeout=15)
             run.assert_called_once_with('https://floor.example.test', secret, Path('/isolated/home'))
             self.assertNotIn(secret, stdout.getvalue())
 
     def test_cli_failure_never_prints_sensitive_subprocess_error(self):
-        with patch.object(puller.subprocess, 'run', side_effect=OSError('secret-value')), patch('sys.argv', ['ask-puller.py', '--url', 'https://floor.example.test', '--home', '/isolated/home', '--token-key', 'test.ask']), contextlib.redirect_stderr(io.StringIO()) as stderr:
+        with patch.object(puller, 'single_flight', return_value=contextlib.nullcontext(True)), patch.object(puller.subprocess, 'run', side_effect=OSError('secret-value')), patch('sys.argv', ['ask-puller.py', '--url', 'https://floor.example.test', '--home', '/isolated/home', '--token-key', 'test.ask']), contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.assertEqual(puller.main(), 1)
             self.assertNotIn('secret-value', stderr.getvalue())
 

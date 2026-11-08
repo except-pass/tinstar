@@ -13,6 +13,10 @@
     "bin/",
     "dist/client/",
     "dist/server/",
+    "scripts/ask-puller.py",
+    "scripts/ask-puller-service.py",
+    "services/ask-puller/",
+    "docs/features/ask-puller-service.md",
     "README.md"
   ],
   "keywords": [
@@ -28,6 +32,7 @@
   },
   "scripts": {
     "janitor:pilot": "tsx scripts/card-janitor-pilot.ts",
+    "postinstall": "node bin/ask-puller-postinstall.js",
     "janitor:report": "tsx scripts/card-janitor-report.ts",
     "worker-links:report": "tsx scripts/worker-link-report.ts",
     "worker-links:adapter": "tsx scripts/worker-link-adapter.ts",

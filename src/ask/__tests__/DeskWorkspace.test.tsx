@@ -239,14 +239,12 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
 })
 
 
-it('updates an expanded inline thread in place as independent answers arrive through the single poller', async () => {
-  // The inbox sorts newest first; wall-clock fixture construction can cross a
-  // millisecond and reverse these otherwise indistinguishable request buttons.
-  items = items.map((item, index) => ({ ...item, created_at: new Date(Date.now() - index * 1000).toISOString() }))
+it.each(['same time', 'newest first', 'oldest first'])('updates an expanded inline thread in place through the single poller with requests at %s', async order => {
+  items = items.map((item, index) => ({ ...item, question: `Where is the evidence for request ${index}?`, created_at: new Date(Date.UTC(2026, 0, 1) + (order === 'same time' ? 0 : order === 'newest first' ? 1 - index : index) * 1000).toISOString() }))
   vi.useFakeTimers()
   render(<Shell page="releases" />)
   await act(async () => {})
-  fireEvent.click(screen.getAllByRole('button', { name: /Sent.*Where is the evidence/ })[0]!)
+  fireEvent.click(screen.getByRole('button', { name: /Sent.*Where is the evidence for request 0/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   expect(thread).toHaveTextContent('Waiting for First Mate')
   items = items.map((item, index) => ({ ...item, status: 'answered', reply: { summary: `Independent answer ${index}`, detail: `Complete evidence ${index}`, references: [], suggested_actions: [] } }))
