@@ -25,7 +25,8 @@ actor, installed digest, plan/order and credential profile names. No token is mi
 or exercised. Cancellation stops unsent proposals. On restart, unfinished intent is
 marked unknown; the same idempotency key never retries it automatically. The existing
 shared lock implementation is reused for cross-view/process exclusion. Unknown
-dependencies serialize with an explanation; no coordinator dispatch is invented.
+dependencies serialize with an explanation. Selected exact base-ref/base-SHA dependencies
+are ordered before their children; no coordinator dispatch is invented.
 
 Admin Merge is disabled for all current workloads because the check inventory is
 incomplete. The versioned candidate matrix and recorded real failures live in

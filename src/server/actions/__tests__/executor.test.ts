@@ -151,3 +151,16 @@ it('coordinates ten Fix CI investigations with shared failures but no branch dis
   const timedId = await timed.start(run(timedAction)); await timed.wait(timedId)
   expect((await store.receipts()).find(row => row.runId === timedId)?.outcome).toBe('cancelled')
 })
+it('orders an established base-ref/head-SHA dependency before its child in coordinated Fix CI', async () => {
+  const parent = snapshot(1), child = { ...snapshot(2), base: parent.headRef, baseHead: parent.head }
+  const { store, action } = await setup('fix-ci')
+  // Inspection explicitly includes this stacked base; an ordinary main-only grant cannot.
+  const stacked = await store.install({ source: action.source, manifest: { ...action.manifest, version: 'stacked', branches: ['main', parent.headRef] } }, 'owner')
+  const order: string[] = []
+  const executor = new ActionExecutor(store, async url => { order.push(url); return url === child.url ? child : parent }, policy)
+  const input = { ...run(stacked, [child, parent]), mode: 'coordinated' as const }
+  const id = await executor.start(input); await executor.wait(id)
+  expect(order).toEqual([parent.url, child.url])
+  expect((await store.receipts())[0]?.plan.join()).toContain('exact base-ref/base-SHA evidence')
+  expect(await executor.start(input)).toBe(id)
+})

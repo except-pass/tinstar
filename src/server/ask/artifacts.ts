@@ -22,10 +22,10 @@ export async function artifactContext(target: ArtifactAskTarget, view: AskView, 
   const receipt = deployment?.receipt
   if (target.kind === 'receipt' && (!receipt || receipt.id !== target.receipt_id)) throw new AskNotFound('Receipt unavailable or superseded in the authorized source')
   const section = target.kind === 'pull' && view.scene !== 'releases' ? 'pulls' : 'releases'
-  const label = `${identity.repository}#${identity.number}${target.kind !== 'pull' ? ` · ${target.component} / ${target.target}` : ''}${target.kind === 'receipt' ? ` · receipt ${target.receipt_id}` : observed.title ? ` · ${observed.title}` : ''}`
+  const label = `${identity.repository}#${identity.number}${actionReceipt ? ` · action receipt ${actionReceipt.id} · ${actionReceipt.actionId}` : ''}${target.kind !== 'pull' ? ` · ${target.component} / ${target.target}` : ''}${target.kind === 'receipt' ? ` · receipt ${target.receipt_id}` : observed.title ? ` · ${observed.title}` : ''}`
   return {
     schema_version: 2, target, view, ...fields,
-    ...(actionReceipt ? { action_receipt: { id: actionReceipt.id, action: actionReceipt.actionId, version: actionReceipt.version, digest: actionReceipt.digest, actor: actionReceipt.actor, outcome: actionReceipt.outcome, intended_effect: actionReceipt.intendedEffect, result: actionReceipt.result, reasons: actionReceipt.reasons, actual_github_writes: 0 as const } } : {}),
+    ...(actionReceipt ? { action_receipt: { id: actionReceipt.id, action: actionReceipt.actionId, version: actionReceipt.version, digest: actionReceipt.digest, actor: actionReceipt.actor, outcome: actionReceipt.outcome, intended_effect: actionReceipt.intendedEffect, result: actionReceipt.result, reasons: actionReceipt.reasons, actual_github_writes: 0 as const, captured_head: actionReceipt.captured.head, captured_base: actionReceipt.captured.base, started_at: actionReceipt.startedAt, finished_at: actionReceipt.finishedAt, check_policy_version: actionReceipt.checkPolicyVersion } } : {}),
     ...(target.kind === 'pull' && sources.pullRelationships ? { relationships: await sources.pullRelationships(target.id) } : {}),
     anchor: { kind: target.kind, page_id: target.id, label: label.slice(0, 512), url: target.kind === 'receipt' ? receipt!.receiptUrl : identity.url,
       observed_at: observed.observedAt, freshness: observed.freshness, expires_at: null },

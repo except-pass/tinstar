@@ -42,7 +42,7 @@ export const askContextSchema = z.object({
     receipt_id: z.string().optional(), receipt_url: z.string().url().optional(), workflow_url: z.string().url().optional(),
     deployed_sha: z.string().nullable().optional(), observed_at: z.string().nullable(),
   }).strict().optional(),
-  action_receipt: z.object({ id: z.string(), action: z.string(), version: z.string(), digest: z.string(), actor: z.string(), outcome: z.string(), intended_effect: z.string(), result: z.string(), reasons: z.array(z.string()), actual_github_writes: z.literal(0) }).strict().optional(),
+  action_receipt: z.object({ id: z.string(), action: z.string(), version: z.string(), digest: z.string(), actor: z.string(), outcome: z.string(), intended_effect: z.string(), result: z.string(), reasons: z.array(z.string()), actual_github_writes: z.literal(0), captured_head: headSchema, captured_base: z.string(), started_at: z.string(), finished_at: z.string().nullable(), check_policy_version: z.string().nullable() }).strict().optional(),
   relationships: z.object({
     complete: z.boolean(),
     cards: z.array(z.object({ card_id: pageIdSchema, sources: z.array(z.string()) }).strict()),

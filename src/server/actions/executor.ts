@@ -3,6 +3,7 @@ import { type ActionSnapshot, type ActionReceipt, type InstalledAction, type Che
 import type { AskView } from '../../shared/ask'
 import { tryAcquireLock, acquireLock } from '../infra/lock'
 import { ActionStore } from './store'
+import { coordinateTargets } from './coordination'
 import { simulateRunner } from './runner'
 import { type BrokerInvocation, profileFor, SimulatedWriteAdapter, validateOperation } from './broker'
 
@@ -13,17 +14,19 @@ export class ActionExecutor {
   private active = new Map<string, { actor: string; controller: AbortController; work: Promise<void> }>()
   constructor(readonly store: ActionStore, private read: (url: string) => Promise<ActionSnapshot>, private policy: CheckPolicy, private readJob?: (repository: string, jobId: number) => Promise<NonNullable<BrokerInvocation['job']>>) {}
   async start(input: RunInput): Promise<string> {
-    const { installed, targets, actor, mode, key } = input
+    const { installed, actor, mode, key } = input
+    const coordination = mode === 'coordinated' ? coordinateTargets(input.targets) : { targets: input.targets, plan: [] }
+    const targets = coordination.targets
     if (!/^[a-f0-9-]{36}$/.test(key) || !actor || !targets.length || targets.length > installed.manifest.limits.targets || targets.length > 10 || new Set(targets.map(row => row.id)).size !== targets.length || !installed.manifest.modes.includes(mode)) throw new Error('Choose unique targets within installed action limits')
     const unlock = await acquireLock(join(this.store.root, 'runs.lock'))
     let receipts: ActionReceipt[]
     try {
       const previous = (await this.store.receipts()).filter(row => row.runId === key)
       if (previous.length) {
-        if (previous.length !== targets.length || previous.some((row, index) => row.actor !== actor || row.actionId !== installed.manifest.id || row.version !== installed.manifest.version || row.mode !== mode || row.digest !== installed.manifest.digest || JSON.stringify(row.operation && row.operation.kind.startsWith('repair.') ? row.operation : undefined) !== JSON.stringify(input.repair) || JSON.stringify(row.captured) !== JSON.stringify(this.selection(targets[index]!)))) throw new Error('Idempotency key belongs to another invocation')
+        if (previous.length !== targets.length || previous.some(row => row.actor !== actor || row.actionId !== installed.manifest.id || row.version !== installed.manifest.version || row.mode !== mode || row.digest !== installed.manifest.digest || JSON.stringify(row.operation && row.operation.kind.startsWith('repair.') ? row.operation : undefined) !== JSON.stringify(input.repair) || JSON.stringify(row.captured) !== JSON.stringify(this.selection(targets.find(target => target.url === row.captured.url) ?? targets[0]!)))) throw new Error('Idempotency key belongs to another invocation')
         return key
       }
-      const plan = targets.map(target => `${target.url}: serialized; dependency order unknown, re-read before proposal`)
+      const plan = coordination.plan.length ? [...coordination.plan] : targets.map(target => `${target.url}: serialized; dependency order unknown, re-read before proposal`)
       const failures = new Map<string, string[]>()
       for (const target of targets) for (const check of target.checks.filter(check => check.conclusion === 'failure')) failures.set(check.name, [...failures.get(check.name) ?? [], target.url])
       for (const [name, urls] of failures) if (urls.length > 1) plan.push(`Shared failure candidate ${name}: ${urls.join(', ')}; per-PR repair remains isolated`)
@@ -38,7 +41,7 @@ export class ActionExecutor {
     } finally { await unlock() }
     const controller = new AbortController()
     // Store active state before executing so cancellation and immediate reads see the run.
-    const work = Promise.resolve().then(() => this.execute(input, receipts, controller)).finally(() => this.active.delete(key))
+    const work = Promise.resolve().then(() => this.execute({ ...input, targets }, receipts, controller)).finally(() => this.active.delete(key))
     this.active.set(key, { actor, controller, work })
     // Avoid an unhandled rejection if audit storage fails; persisted intent remains unknown.
     void work.catch(() => {})
