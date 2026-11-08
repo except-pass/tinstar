@@ -7,10 +7,12 @@ export interface PullSummary extends PullIdentity {
   links: ReleaseLink[]
 }
 export interface PullRepository {
+  scope?: 'all-open' | 'authored-or-associated'
   repository: string; status: 'fresh' | 'partial' | 'stale' | 'unavailable'
   observedAt: string | null; complete: boolean; error: string | null
 }
 export interface PullsRead {
+  account?: string
   pulls: PullSummary[]; repositories: PullRepository[]; warnings: string[]; associationsComplete: boolean
 }
 export interface PullDetail {
