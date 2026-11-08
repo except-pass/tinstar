@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from '../apiClient'
 import { AskSurface } from '../ask/AskSurface'
-import { captureScroll, useScrollRestore, useViewSnapshot } from '../ask/workspaceHistory'
+import { useViewSnapshot } from '../ask/workspaceHistory'
 import { useOriginFocus } from '../ask/useOriginFocus'
 import type { AskReturn, AskView, ArtifactAskTarget } from '../shared/ask'
 import { AskCardAction } from '../ask/Ask'
@@ -91,10 +91,8 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
   const [beforeFocus, setBeforeFocus] = useState<ReleaseFilter | null>(null)
   const destination = origin?.section === 'releases' ? origin : undefined
   const focusRef = useOriginFocus(destination)
-  const viewport = () => focusRef.current?.querySelector<HTMLElement>('.rel-scroll') ?? null
-  const scroll = useScrollRestore(viewport, 'data-pull-id', !!data, views?.restoration.revision)
-  useViewSnapshot(views, 'releases', () => ({ filter, preset, selection, collapsed, focus, beforeFocus, position: captureScroll(viewport(), 'data-pull-id') }), saved => {
-    setFilter(saved.filter); setPreset(saved.preset); setSelection(saved.selection); setCollapsed(saved.collapsed); setFocus(saved.focus); setBeforeFocus(saved.beforeFocus); scroll.restore(saved.position)
+  useViewSnapshot(views, 'releases', () => ({ filter, group: preset }), saved => {
+    setFilter(saved.filter); setPreset(saved.group)
   }, !!data && !!scene)
 
   const askView: AskView = { scene: 'releases', filter, preset, collapsed }

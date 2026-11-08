@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AskCardAction } from '../ask/Ask'
 import { AskSurface } from '../ask/AskSurface'
 import { useOriginFocus } from '../ask/useOriginFocus'
-import { captureScroll, useScrollRestore, useViewSnapshot } from '../ask/workspaceHistory'
+import { useViewSnapshot } from '../ask/workspaceHistory'
 import { pullSource, type AskView } from '../shared/ask'
 import { apiFetch } from '../apiClient'
 import type { PullDetail, PullSummary } from '../shared/pulls'
@@ -50,11 +50,11 @@ export function Pulls() {
   // A refreshed head must never display changes/checks captured at the old head.
   const currentDetails = useMemo(() => Object.fromEntries(Object.entries(details).filter(([id, detail]) => inventory.some(pull => pull.id === id && pull.head === detail.head))), [inventory, details])
   const focusRef = useOriginFocus(destination)
-  const viewport = () => focusRef.current?.querySelector<HTMLElement>('.pr-scroll') ?? null
-  const scroll = useScrollRestore(viewport, 'data-ask-origin', !!data, views?.restoration.revision)
-  const restoredExpanded = useRef<string[] | null>(null)
-  useViewSnapshot(views, 'pulls', () => ({ query, sort, descending, selected: [...selected], expanded: [...expanded], details: currentDetails, position: captureScroll(viewport(), 'data-ask-origin') }), saved => {
-    setDetails(saved.details ?? {}); setQuery(saved.query); setSort(saved.sort); setDescending(saved.descending); setSelected(new Set(saved.selected)); setExpanded(new Set(saved.expanded)); restoredExpanded.current = saved.expanded; scroll.restore(saved.position)
+  useViewSnapshot(views, 'pulls', () => ({ query, sort: `${descending ? '-' : ''}${sort}` }), saved => {
+    setQuery(saved.query)
+    const key = saved.sort.replace(/^-/, '')
+    if (columns.some(([column]) => column === key)) setSort(key as PullSort)
+    setDescending(saved.sort.startsWith('-'))
   }, !!data)
   const view: AskView = { scene: 'pulls', query, sort, descending }
   const rows = useMemo(() => visiblePulls(destination ? inventory.filter(pull => pull.id === destination.target.id) : inventory, destination ? '' : query, sort, descending, scene, currentDetails), [inventory, query, sort, descending, scene, currentDetails, destination])
@@ -95,12 +95,6 @@ export function Pulls() {
     // Read once per revealed identity/head; explicit Refresh detail remains available.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [originPull?.id, originPull?.head])
-
-  useEffect(() => {
-    if (!data || !restoredExpanded.current) return
-    const ids = restoredExpanded.current; restoredExpanded.current = null
-    for (const pull of data.pulls.filter(pull => ids.includes(pull.id))) { void load(pull); void loadFiles(pull) }
-  })
   const inspect = (pull: PullSummary) => {
     setExpanded(previous => { const next = new Set(previous); if (next.has(pull.id)) next.delete(pull.id); else next.add(pull.id); return next })
     if (!expanded.has(pull.id)) { void load(pull); void loadFiles(pull); requestAnimationFrame(() => document.getElementById(`detail-${pull.id}`)?.scrollIntoView?.({ block: 'nearest', inline: 'start' })) }

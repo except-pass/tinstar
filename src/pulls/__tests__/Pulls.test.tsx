@@ -1,18 +1,16 @@
 // @vitest-environment jsdom
-import { useEffect, useState } from 'react'
-import { useWorkspaceHistory, type WorkspaceHistory } from '../../ask/workspaceHistory'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Pulls } from '../Pulls'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import type { PullSummary } from '../../shared/pulls'
-const clock = vi.hoisted(() => ({ now: 0, scene: null as FloorScene | null, views: undefined as WorkspaceHistory | undefined }))
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: clock.scene, now: clock.now, views: clock.views }) }))
+const clock = vi.hoisted(() => ({ now: 0, scene: null as FloorScene | null }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: clock.scene, now: clock.now }) }))
 const fileData = { head: 'a'.repeat(40), baseHead: 'b'.repeat(40), files: [], expectedFiles: 0, complete: true, observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null }
 const pulls: PullSummary[] = Array.from({ length: 50 }, (_, index) => ({ id: `${index < 25 ? 'alpha/repo' : 'zeta/repo'}#${index + 1}`, repository: index < 25 ? 'alpha/repo' : 'zeta/repo', number: index + 1,
   url: `https://github.com/${index < 25 ? 'alpha/repo' : 'zeta/repo'}/pull/${index + 1}`, title: `Change ${index + 1}`, author: 'contributor', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-06T19:00:00Z', observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', links: [] }))
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); clock.now = Date.parse(fileData.observedAt); clock.scene = null; clock.views = undefined; sessionStorage.clear(); history.replaceState(null, '') })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); clock.now = Date.parse(fileData.observedAt); clock.scene = null; sessionStorage.clear(); history.replaceState(null, '') })
 clock.now = Date.parse(fileData.observedAt)
 it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and expands genuine detail', async () => {
   const read = vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? { head: 'a'.repeat(40), state: 'open', body: 'Real PR body\nsecond paragraph', additions: 4, deletions: 2, files: 3, checks: 'failed', review: 'Changes requested', reviewsComplete: true, reviews: [], observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null } : { pulls, repositories: [], warnings: [], associationsComplete: true } }))))
@@ -104,7 +102,7 @@ it.each([
   ['current', 'conflicting', 'Conflicting / unknown', 'failed'],
   ['current', 'unverified', 'Suggested / unverified', 'failed'],
 ] as const)('labels %s/%s claim evidence as %s work', async (state, verification, label, condition) => {
-  const scene: FloorScene = fixtureScene({ now: clock.now, views: clock.views })
+  const scene: FloorScene = fixtureScene({ now: clock.now })
   const worker = scene.executions[0]!
   worker.source.pr = { url: pulls[0]!.url, head: fileData.head, source: 'task metadata' }
   const claim = scene.claims.find(claim => claim.executionId === worker.id)!
@@ -131,50 +129,3 @@ it.each([
 })
 
 
-it.each(['Changes / files', 'CI', 'Review', 'Author', 'PR'].flatMap(column => [false, true].map(descending => ({ column, descending }))))('restores inspected collapsed rows and position for $column descending=$descending', async ({ column, descending }) => {
-  const read = vi.fn((input: string) => {
-    const second = input.includes('pull%2F2') || new URL(input, 'http://localhost').searchParams.get('url')?.endsWith('/2')
-    return Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? {
-      ...fileData, state: 'open', body: 'Observed description', additions: second ? 2 : 90, deletions: 0, files: 1,
-      checks: second ? 'failed' : 'passed', review: second ? 'Approved' : 'Changes requested', reviews: [], reviewsComplete: true,
-    } : { pulls: pulls.slice(0, 3), repositories: [], warnings: [], associationsComplete: true } })))
-  })
-  vi.stubGlobal('fetch', read)
-  function Journey() {
-    const [section, setSection] = useState<'pulls' | 'releases'>('pulls')
-    const views = useWorkspaceHistory(section)
-    clock.views = views
-    useEffect(() => {
-      const pop = () => setSection('pulls')
-      window.addEventListener('popstate', pop)
-      return () => window.removeEventListener('popstate', pop)
-    }, [])
-    return <><button onClick={() => { views.capture(); history.pushState(null, '', '?view=releases'); setSection('releases'); views.navigated() }}>Desk release origin</button><button onClick={() => history.back()}>Back to PRs</button>{section === 'pulls' ? <Pulls /> : <p>Release origin</p>}</>
-  }
-  render(<Journey />)
-  for (const id of ['alpha/repo#1', 'alpha/repo#2']) {
-    fireEvent.click(await screen.findByRole('button', { name: `Inspect ${id}` }))
-    await screen.findByText('Observed description')
-    fireEvent.click(screen.getByRole('button', { name: `Inspect ${id}` }))
-  }
-  fireEvent.click(screen.getByRole('button', { name: column, exact: true }))
-  if (descending) fireEvent.click(screen.getByRole('button', { name: `${column} ↑`, exact: true }))
-  const order = () => [...document.querySelectorAll('.pr-row')].map(row => row.getAttribute('data-ask-origin'))
-  const before = order()
-  const viewport = screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' })
-  viewport.scrollTop = 140; viewport.scrollLeft = 63
-  fireEvent.click(screen.getByRole('button', { name: 'Desk release origin' }))
-  expect(screen.getByText('Release origin')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Back to PRs' }))
-  await screen.findByText('+90')
-  expect(order()).toEqual(before)
-  expect(screen.queryByText('Observed description')).toBeNull()
-  const unknown = document.querySelector('[data-ask-origin="alpha/repo#3"]')!
-  for (const field of ['changes', 'ci', 'review']) expect(unknown.querySelector(`[data-ask-field="${field}"]`)?.textContent).toBe('Unknown')
-  await waitFor(() => {
-    const restored = screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' })
-    expect(restored.scrollTop).toBe(140)
-    expect(restored.scrollLeft).toBe(63)
-  })
-  expect(read.mock.calls.filter(([url]) => url.includes('/detail?'))).toHaveLength(2)
-})

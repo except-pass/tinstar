@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../../App'
-import { workspaceHistoryStorageKey } from '../workspaceHistory'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema, type AskItem, type AskTarget } from '../../shared/ask'
 import type { ReleasesRead } from '../../shared/releases'
@@ -18,7 +17,6 @@ let records: AskItem[], requests: Array<Record<string, unknown>>, releases: Rele
 function item(target: AskTarget, section: 'pulls' | 'releases'): AskItem {
   return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
 }
-const persistedView = (id: string) => JSON.parse(sessionStorage.getItem(workspaceHistoryStorageKey) ?? '[]').find(([key]: [string, unknown]) => key === id)?.[1]?.snapshot?.view
 beforeEach(() => {
   localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
@@ -113,7 +111,7 @@ it('reveals and highlights exact receipt evidence in Releases without replacing 
 })
 
 
-it('keeps neighbor previews inline and restores Releases filter, grouping, collapse and position with one Back', async () => {
+it('keeps neighbor previews inline and restores Releases filter and grouping with one Back', async () => {
   window.history.replaceState(null, '', '/?view=releases')
   const first = item({ kind: 'pull', id: pull.id, head }, 'pulls')
   const neighbor = { ...item({ kind: 'pull', id: 'other/repo#17', head }, 'pulls'), question: 'Second independent question' }
@@ -121,9 +119,6 @@ it('keeps neighbor previews inline and restores Releases filter, grouping, colla
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: 'Shipped' }))
   fireEvent.click(screen.getByRole('button', { name: 'Repository' }))
-  fireEvent.click(document.querySelector<HTMLButtonElement>('.rel-group button')!)
-  const viewport = document.querySelector<HTMLElement>('.rel-scroll')!
-  viewport.scrollTop = 137; viewport.scrollLeft = 59
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
   expect(screen.queryByRole('dialog')).toBeNull()
@@ -134,9 +129,6 @@ it('keeps neighbor previews inline and restores Releases filter, grouping, colla
   await act(async () => { await popped })
   expect(screen.getByRole('button', { name: 'Shipped' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('button', { name: 'Repository' })).toHaveAttribute('aria-pressed', 'true')
-  expect(document.querySelector('.rel-group button')).toHaveAttribute('aria-expanded', 'false')
-  await waitFor(() => expect(document.querySelector('.rel-scroll')!.scrollLeft).toBe(59))
-  expect(document.querySelector('.rel-scroll')!.scrollTop).toBe(137)
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
   fireEvent.click(screen.getByRole('button', { name: /New answer.*Second independent question/ }))
   expect(screen.getAllByRole('region', { name: /Answer thread/ })).toHaveLength(1)
@@ -144,49 +136,21 @@ it('keeps neighbor previews inline and restores Releases filter, grouping, colla
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Second independent question')
 })
 
-it('restores PR query, sort, selection and position through native browser Back', async () => {
+it('restores PR query and sort with one browser Back', async () => {
   records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
   render(<App />)
   await screen.findByRole('button', { name: 'Inspect owner/repo#17' })
   fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'owner/repo' } })
   fireEvent.click(screen.getByRole('button', { name: /^Author/ }))
-  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
-  const viewport = document.querySelector<HTMLElement>('.pr-scroll')!
-  viewport.scrollLeft = 83; viewport.scrollTop = 31
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   await screen.findByRole('region', { name: 'Releases' })
   const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
   await act(async () => { history.back(); await popped })
   expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('owner/repo')
   expect(screen.getByRole('button', { name: /^Author/ }).closest('th')).toHaveAttribute('aria-sort', 'ascending')
-  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
-  await waitFor(() => expect(document.querySelector('.pr-scroll')!.scrollLeft).toBe(83))
-  expect(document.querySelector('.pr-scroll')!.scrollTop).toBe(31)
   expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
 })
 
-
-it('restores the existing Overview search lens on Back and can still clear it to the prior workspace', async () => {
-  history.replaceState(null, '', '/')
-  records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
-  const view = render(<App />)
-  const initial = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
-  fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
-  const input = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
-  fireEvent.change(input, { target: { value: 'Roadmap: planned integration' } })
-  fireEvent.keyDown(input, { key: 'Enter' })
-  const filtered = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
-  expect(filtered).not.toEqual(initial)
-  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
-  await screen.findByRole('region', { name: 'Pull requests' })
-  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-  await act(async () => { history.back(); await popped })
-  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
-  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(filtered)
-  fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
-  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(initial)
-  expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
-})
 
 it('reveals both verified relationship endpoints and only its link from another section, retaining the inline answer', async () => {
   history.replaceState(null, '', '/?view=releases')
@@ -265,58 +229,6 @@ it('retains the answer and original GitHub link when the PR is inaccessible', as
   expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
 })
 
-it('restores an Overview-origin entry after a PR answer without replaying its source reveal', async () => {
-  history.replaceState(null, '', '/')
-  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
-  const overview = askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Overview answer', context: {
-    target, view: { scene: 'overview' }, anchor: { kind: 'work', page_id: target.id, label: 'Overview source', url: null, observed_at: date },
-    return_to: { section: 'overview', target },
-  } })
-  records = [overview, { ...item({ kind: 'pull', id: pull.id, head }, 'pulls'), question: 'PR answer' }]
-  const view = render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Overview answer/ }))
-  expect(new URLSearchParams(location.search).has('origin')).toBe(true)
-  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
-  fireEvent.click(screen.getAllByRole('button', { name: 'Open in Inspector' })[0]!)
-  fireEvent.click(screen.getByRole('button', { name: 'Customize', exact: true }))
-  fireEvent.click(screen.getByRole('button', { name: 'Filters', exact: true }))
-  fireEvent.click(screen.getByRole('button', { name: /Gaps only/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Close Customize' }))
-  const collapse = view.container.querySelector<HTMLButtonElement>('.ov-group-head button[aria-expanded="true"]')!
-  const expandedName = collapse.getAttribute('aria-label')!.replace(/^Collapse /, 'Expand ')
-  fireEvent.click(collapse)
-  const viewport = view.container.querySelector('.ov-canvas')!.parentElement!
-  viewport.scrollTop = 140; viewport.scrollLeft = 21
-  const originUrl = location.search
-  const overviewEntry = history.state.tinstarWorkspaceEntry
-  fireEvent.click(screen.getByRole('button', { name: /New answer.*PR answer/ }))
-  await screen.findByRole('region', { name: 'Pull requests' })
-  const saved = persistedView(overviewEntry)
-  expect(saved.state.collapsed.length).toBeGreaterThan(0)
-  expect(saved.state.selection).not.toBeNull()
-  expect(saved.state.exceptionsOnly).toBe(true)
-  const pop = async (direction: 'back' | 'forward') => {
-    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-    await act(async () => { history[direction](); await popped })
-  }
-  await pop('back')
-  expect(location.search).toBe(originUrl)
-  expect(screen.getAllByRole('button', { name: expandedName }).some(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
-  expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollTop).toBe(140)
-  expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollLeft).toBe(21)
-  fireEvent.click(await screen.findByRole('button', { name: /Answered.*PR answer/ }))
-  const restored = persistedView(overviewEntry)
-  for (const field of ['searchFocus', 'searchReveal', 'collapsed', 'selection', 'navigation', 'exceptionsOnly', 'roadmapExpanded'] as const) expect(restored.state[field]).toEqual(saved.state[field])
-  await pop('back')
-  await pop('forward')
-  await pop('back')
-  expect(screen.getAllByRole('button', { name: expandedName }).some(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
-  fireEvent.click(await screen.findByRole('button', { name: /Answered.*Overview answer/ }))
-  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
-  expect(screen.queryAllByRole('button', { name: expandedName })).toHaveLength(0)
-})
-
-
 it.each([false, true])('handles a deferred Overview origin deep link with newer manual navigation=%s', async navigateAway => {
   const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
   history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
@@ -337,32 +249,6 @@ it.each([false, true])('handles a deferred Overview origin deep link with newer 
 })
 
 
-it.each(['Clear', 'Escape'])('recovers the matching Overview baseline after Back twice and Forward using %s', async method => {
-  history.replaceState(null, '', '/')
-  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
-  records = [askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Focus Overview', context: {
-    target, view: { scene: 'overview' }, anchor: { kind: 'work', page_id: target.id, label: 'Source', url: null, observed_at: date }, return_to: { section: 'overview', target },
-  } }), { ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Visit PR' }]
-  const view = render(<App />)
-  const before = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
-  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Focus Overview/ }))
-  const focusedEntry = history.state.tinstarWorkspaceEntry
-  fireEvent.click(screen.getByRole('button', { name: /New answer.*Visit PR/ }))
-  await screen.findByRole('region', { name: 'Pull requests' })
-  expect(persistedView(focusedEntry).recovery).toBeTruthy()
-  expect(persistedView(focusedEntry).recovery.recovery).toBeUndefined()
-  const pop = async (direction: 'back' | 'forward') => {
-    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-    await act(async () => { history[direction](); await popped })
-  }
-  await pop('back'); await pop('back'); await pop('forward')
-  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
-  if (method === 'Clear') fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
-  else fireEvent.keyDown(window, { key: 'Escape' })
-  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
-  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(before)
-})
-
 it.each(['Clear', 'Escape'])('recovers a direct Overview origin using %s', method => {
   const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
   history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
@@ -376,7 +262,7 @@ it.each(['Clear', 'Escape'])('recovers a direct Overview origin using %s', metho
 
 it.each((['card', 'execution', 'claim'] as const).flatMap(kind => [false, true].map(cancel => ({ kind, cancel }))))('resolves a fresh $kind origin from a non-null older scene, cancellation=$cancel', async ({ kind, cancel }) => {
   const scene = fixtureScene()
-  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id
+  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims.find(claim => claim.verification === 'confirmed' && claim.state === 'current')!.id
   const target = { kind, id }
   fixture.scene = { ...scene, cards: kind === 'card' ? scene.cards.filter(row => row.id !== id) : scene.cards,
     executions: kind === 'execution' ? scene.executions.filter(row => row.id !== id) : scene.executions,
@@ -401,39 +287,9 @@ it.each((['card', 'execution', 'claim'] as const).flatMap(kind => [false, true].
   expect(location.search).toContain('view=releases')
 })
 
-it.each([false, true])('keeps PR edits made after Back through Forward and Back, scroll=%s', async withScroll => {
-  records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
-  render(<App />)
-  const query = await screen.findByRole('textbox', { name: 'Find PRs' })
-  fireEvent.change(query, { target: { value: 'owner' } })
-  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
-  await waitFor(() => expect(location.search).toContain('view=releases'))
-  const pop = async (direction: 'back' | 'forward') => {
-    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-    await act(async () => { history[direction](); await popped })
-  }
-  await pop('back')
-  fireEvent.change(await screen.findByRole('textbox', { name: 'Find PRs' }), { target: { value: 'artifact' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
-  const viewport = screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' })
-  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
-  if (withScroll) { viewport.scrollTop = 175; viewport.scrollLeft = 80; fireEvent.scroll(viewport) }
-  const prEntry = history.state.tinstarWorkspaceEntry
-  await pop('forward')
-  expect(persistedView(prEntry).query).toBe('artifact')
-  expect(persistedView(prEntry).position.left).toBe(withScroll ? 80 : 0)
-  await pop('back')
-  expect(await screen.findByRole('textbox', { name: 'Find PRs' })).toHaveValue('artifact')
-  expect(screen.getByRole('button', { name: 'Author ↑' })).toBeVisible()
-  await waitFor(() => expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollTop).toBe(withScroll ? 175 : 0))
-  expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollLeft).toBe(withScroll ? 80 : 0)
-  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
-})
-
-
 it.each((['card', 'execution', 'claim'] as const).flatMap(kind => ['Back', 'reload'].map(mode => ({ kind, mode }))))('resolves an unresolved $kind entry after $mode and later scene arrival', async ({ kind, mode }) => {
   const scene = fixtureScene()
-  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id
+  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims.find(claim => claim.verification === 'confirmed' && claim.state === 'current')!.id
   const target = { kind, id }
   fixture.scene = { ...scene, cards: kind === 'card' ? scene.cards.filter(row => row.id !== id) : scene.cards,
     executions: kind === 'execution' ? scene.executions.filter(row => row.id !== id) : scene.executions,
@@ -442,7 +298,6 @@ it.each((['card', 'execution', 'claim'] as const).flatMap(kind => ['Back', 'relo
   records = [item({ kind: 'pull', id: pull.id }, 'pulls')]
   let view = render(<App />)
   expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
-  const unresolvedEntry = history.state.tinstarWorkspaceEntry
   if (mode === 'Back') {
     fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
     await screen.findByRole('region', { name: 'Pull requests' })
@@ -453,39 +308,12 @@ it.each((['card', 'execution', 'claim'] as const).flatMap(kind => ['Back', 'relo
     view.unmount()
     view = render(<App />)
   }
-  expect(persistedView(unresolvedEntry)).toBeTruthy()
+  expect(history.state.tinstarWorkspace.section).toBe('overview')
   expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
   fixture.scene = scene
   view.rerender(<App />)
   expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
   expect(view.container.querySelector('.flashed')).toBeTruthy()
-})
-
-it('captures Releases grouping, collapse and selection edits before native traversal without scrolling', async () => {
-  history.replaceState(null, '', '/?view=releases')
-  records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
-  const view = render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Shipped', exact: true }))
-  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
-  await screen.findByRole('region', { name: 'Pull requests' })
-  const pop = async (direction: 'back' | 'forward') => {
-    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-    await act(async () => { history[direction](); await popped })
-  }
-  await pop('back')
-  fireEvent.click(screen.getByRole('button', { name: 'Repository', exact: true }))
-  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
-  const group = view.container.querySelector<HTMLButtonElement>('.rel-group button')!
-  const groupName = group.textContent!.replace('▾', '▸')
-  fireEvent.click(group)
-  await pop('forward'); await pop('back')
-  expect(screen.getByRole('button', { name: 'Repository', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  expect(screen.getByText('1 unique PRs selected')).toBeVisible()
-  const restoredGroup = view.container.querySelector<HTMLButtonElement>('.rel-group button')!
-  expect(restoredGroup).toHaveAttribute('aria-expanded', 'false')
-  expect(restoredGroup.textContent).toBe(groupName)
-  fireEvent.click(restoredGroup)
-  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
 })
 
 it.each([false, true])('captures PR query and sort edits while inventory loads, descending=%s', async descending => {
@@ -502,12 +330,8 @@ it.each([false, true])('captures PR query and sort edits while inventory loads, 
   fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'artifact' } })
   fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
   if (descending) fireEvent.click(screen.getByRole('button', { name: 'Author ↑' }))
-  const sourceEntry = history.state.tinstarWorkspaceEntry
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   await screen.findByRole('region', { name: 'Releases' })
-  expect(persistedView(sourceEntry).query).toBe('artifact')
-  expect(persistedView(sourceEntry).sort).toBe('author')
-  expect(persistedView(sourceEntry).descending).toBe(descending)
   const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
   await act(async () => { history.back(); await popped })
   expect(screen.getByText('Reading GitHub…')).toBeVisible()
@@ -515,4 +339,51 @@ it.each([false, true])('captures PR query and sort edits while inventory loads, 
   await screen.findByText('2 observed open')
   expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('artifact')
   expect(screen.getByRole('button', { name: descending ? 'Author ↓' : 'Author ↑' })).toBeVisible()
+})
+
+it('reveals a Work answer using its canonical card return locator', async () => {
+  history.replaceState(null, '', '/?view=releases')
+  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  records = [askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Work evidence', context: {
+    anchor: { kind: 'work', page_id: target.id, label: 'Work source', url: null, observed_at: date },
+    view: { scene: 'overview' }, return_to: { section: 'overview', target },
+  } })]
+  const view = render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Work evidence/ }))
+  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
+  fireEvent.click(screen.getByRole('button', { name: 'Return to source' }))
+  expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
+})
+
+it('preserves a pending PR return when leaving again before inventory is ready', async () => {
+  records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
+  const read = vi.mocked(fetch).getMockImplementation()!
+  let block = false, releaseInventory!: () => void
+  const inventoryReady = new Promise<void>(resolve => { releaseInventory = resolve })
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (String(input) === '/api/pulls' && block) await inventoryReady
+    return read(input, init)
+  })
+  render(<App />)
+  await screen.findByText('2 observed open')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'owner/repo' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
+  block = true
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Releases' })
+  const pop = async (direction: 'back' | 'forward') => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history[direction](); await popped })
+  }
+  await pop('back')
+  expect(screen.getByText('Reading GitHub…')).toBeVisible()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'temporary loading edit' } })
+  fireEvent(window, new Event('pagehide'))
+  expect(history.state.tinstarWorkspace.query).toBe('owner/repo')
+  await pop('forward'); await pop('back')
+  await act(async () => { releaseInventory() })
+  await screen.findByText('2 observed open')
+  expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('owner/repo')
+  expect(screen.getByRole('button', { name: 'Author ↑' })).toBeVisible()
 })

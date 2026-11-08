@@ -83,7 +83,7 @@ it('shows retained questions before contextual sources become available', async 
   render(<Shell page="releases" />)
   expect(await screen.findAllByText('Where is the evidence?')).toHaveLength(2)
   fireEvent.click(screen.getByRole('button', { name: 'Ask First Mate about this task' }))
-  expect(screen.getByRole('status')).toHaveTextContent('Source context is unavailable')
+  expect(screen.getByText(/Source context is unavailable/)).toHaveAttribute('role', 'status')
 })
 it('restores desktop width/collapse across reload and allows accessible reset', () => {
   localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))

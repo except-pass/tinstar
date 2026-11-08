@@ -246,7 +246,7 @@ for (const width of [1440, 390]) {
 }
 
 
-test('inline neighbors survive real browser Back to Releases filters, collapsed groups and semantic position', async ({ page }, testInfo) => {
+test('inline neighbors survive real browser Back to Releases filters and grouping', async ({ page }, testInfo) => {
   const at = new Date().toISOString(), head = 'a'.repeat(40), scene = fixtureScene()
   const claim = scene.claims.find(link => link.verification === 'confirmed' && link.state === 'current')!
   const pulls = Array.from({ length: 80 }, (_, index) => ({ id: `owner/repo${Math.floor(index / 10)}#${index + 1}`, repository: `owner/repo${Math.floor(index / 10)}`, number: index + 1, url: `https://github.com/owner/repo${Math.floor(index / 10)}/pull/${index + 1}`, title: `Release ${index + 1}`, author: 'owner', draft: false, head, base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [], exceptions: [], state: 'merged', mergedAt: at, mergeSha: head, deployment: { state: 'shipped', targets: [] } }))
@@ -266,10 +266,7 @@ test('inline neighbors survive real browser Back to Releases filters, collapsed 
   await page.goto(`${base}/?view=releases`)
   await page.getByRole('button', { name: 'Shipped', exact: true }).click()
   await page.getByRole('button', { name: 'Repository', exact: true }).click()
-  await page.locator('.rel-group button').first().click()
   await page.evaluate(() => document.fonts.ready)
-  const position = await page.locator('.rel-scroll').evaluate(node => { node.scrollTop = 500; node.scrollLeft = 40; return { top: node.scrollTop, left: node.scrollLeft } })
-  expect(position.top).toBeGreaterThan(0)
   await page.getByRole('button', { name: /New answer.*Inline PR investigation/ }).click()
   await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', origin.id)
   await expect(page.getByRole('region', { name: 'Answer thread: Inline PR investigation', exact: true })).toContainText('Detailed PR evidence stays inline.')
@@ -278,9 +275,6 @@ test('inline neighbors survive real browser Back to Releases filters, collapsed 
   await page.goBack()
   await expect(page.getByRole('button', { name: 'Shipped', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('button', { name: 'Repository', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.locator('.rel-group button').first()).toHaveAttribute('aria-expanded', 'false')
-  await expect.poll(() => page.locator('.rel-scroll').evaluate(node => node.scrollTop)).toBeCloseTo(position.top, 0)
-  await expect.poll(() => page.locator('.rel-scroll').evaluate(node => node.scrollLeft)).toBe(position.left)
   await expect(page.getByRole('region', { name: /Answer thread/ })).toBeVisible()
   await page.getByRole('button', { name: /New answer.*Independent link investigation/ }).click()
   await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()

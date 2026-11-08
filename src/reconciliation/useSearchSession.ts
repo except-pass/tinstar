@@ -16,8 +16,6 @@ interface ViewSnapshot {
   focus?: string
 }
 
-export interface Snapshot extends ViewSnapshot { recovery?: ViewSnapshot }
-
 /** One temporary focus lens over the existing reducer, with semantic restore. */
 export function useSearchSession({ views, active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
   views?: WorkspaceHistory
@@ -52,7 +50,6 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     return { state, roots, density, details, anchor: anchor?.dataset.semanticId, offset: anchor ? anchor.getBoundingClientRect().top - top : 0, scroll: viewport?.scrollTop ?? 0, scrollLeft: viewport?.scrollLeft ?? 0,
       focus: document.activeElement?.closest<HTMLElement>('[data-semantic-id]')?.dataset.semanticId }
   }
-  const captureView = (): Snapshot => ({ ...captureBaseline(), recovery: snapshot.current ?? undefined })
   const remember = () => { if (!snapshot.current) snapshot.current = captureBaseline() }
   const begin = (withHistory = true) => {
     remember()
@@ -60,7 +57,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
       historyEntries.current = ownedHistoryDepth()
-      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspaceEntry: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
+      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspace: undefined, tinstarResolvedOrigin: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }
@@ -126,7 +123,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
   }, [])
-  return { remember, captureView, restoreView: (saved: Snapshot) => { restoreView(saved); snapshot.current = saved.state.searchFocus ? saved.recovery ?? null : null; setOpen(false) }, dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
+  return { remember, dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
     if (!scene || [target, ...targets].some(item => !targetExists(scene, item, state))) return false
     remember()
     leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
