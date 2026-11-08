@@ -12,12 +12,13 @@ vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
 const head = 'a'.repeat(40), date = '2026-11-08T12:00:00.000Z'
 const receipt = { id: 'receipt-17', repository: 'owner/repo', environment: 'production', target: 'production', component: 'web', deployedSha: head, artifactDigest: null, version: '6.0', deployedAt: date, workflowUrl: 'https://github.com/owner/repo/actions/runs/17', receiptUrl: 'https://github.com/owner/repo/releases/tag/v6', outcome: 'succeeded' as const, exceptions: [] }
 const pull: PullSummary = { id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', title: 'Exact artifact title', author: 'owner', draft: false, head, base: 'main', createdAt: date, updatedAt: date, observedAt: date, freshness: 'fresh', links: [] }
+let inventory: PullSummary[], originResult: PullSummary | null
 let records: AskItem[], requests: Array<Record<string, unknown>>, releases: ReleasesRead
 function item(target: AskTarget, section: 'pulls' | 'releases'): AskItem {
   return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
 }
 beforeEach(() => {
-  localStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []
+  localStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -31,7 +32,9 @@ beforeEach(() => {
     if (path === '/api/fleet') data = { ready: true, workers: [], attention: [], errors: [] }
     if (path === '/api/fleet/messages') data = []
     if (path === '/api/releases') data = releases
-    if (path === '/api/pulls') data = { pulls: [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }], repositories: [], warnings: [], associationsComplete: true }
+    if (path === '/api/pulls') data = { pulls: inventory, repositories: [], warnings: [], associationsComplete: true }
+    if (path.startsWith('/api/pulls/origin')) return new Response(JSON.stringify(originResult ? { ok: true, data: originResult } : { ok: false, error: { message: 'Not accessible in current scope.' } }), { status: originResult ? 200 : 403 })
+    if (path.startsWith('/api/pulls/files')) data = { head, baseHead: head, files: [], expectedFiles: 0, complete: true, freshness: 'fresh', observedAt: date, error: null }
     if (path.startsWith('/api/pulls/detail')) data = { head, state: 'open', body: 'PR description', additions: 3, deletions: 1, files: 2, checks: 'failed', review: 'Changes requested', reviews: [], reviewsComplete: true, freshness: 'fresh', observedAt: date, error: null }
     if (path === '/api/reconciliation/ui') data = body?.type === 'register' ? { scene_id: 'artifact-ui', key: 'key' } : { commands: [] }
     if (path === '/api/ask/requests') {
@@ -83,6 +86,8 @@ it('returns a retained PR Ask from Releases to its exact authorized row, with ca
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   await screen.findByRole('region', { name: 'Pull requests' })
   const returned = document.querySelector<HTMLElement>('.pr-row.ask-origin')!
+  expect(await screen.findByRole('region', { name: `Details ${pull.id}` })).toBeTruthy()
+  expect(await screen.findByText('PR description')).toBeTruthy()
   expect(returned).toHaveAttribute('data-ask-origin', pull.id)
   expect(document.querySelectorAll('.pr-row')).toHaveLength(1)
   expect(window.location.search).toContain('view=pulls')
@@ -102,5 +107,63 @@ it('reveals and highlights exact receipt evidence in Releases without replacing 
   await waitFor(() => expect(document.querySelector('[data-receipt-id="receipt-17"].ask-origin')).toBeTruthy())
   expect(screen.getByLabelText('Your desk')).toBe(desk)
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
+})
+
+it.each([
+  ['description', 'PR description', 'Explain this PR and its current situation.'],
+  ['changes', 'Change footprint', 'What is risky in these changes?'],
+  ['worker', 'Unlinked / unknown', 'What is this worker doing on the PR?'],
+])('opens editable %s Ask from inspected PR detail or a keyboard field without sending', async (key, label, draft) => {
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
+  await screen.findByText('PR description')
+  const field = key === 'changes' ? screen.getByRole('region', { name: label }).parentElement! : key === 'worker' ? within(screen.getByRole('button', { name: 'Inspect owner/repo#17' }).closest('tr')!).getByText(label) : screen.getByText(label)
+  fireEvent.keyDown(field, { key: 'F10', shiftKey: true })
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue(draft)
+  expect(requests).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: key })
+})
+it('asks about the explicit Notion link while retaining normal link navigation', async () => {
+  const scene = fixture.scene as ReturnType<typeof fixtureScene>, cardId = scene.cards[0]!.id
+  inventory[0] = { ...pull, links: [{ cardId, active: true, sources: ['Notion Link/GitHub property'], events: [] }] }
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
+  const detail = await screen.findByRole('region', { name: `Details ${pull.id}` })
+  const link = detail.querySelector<HTMLAnchorElement>('a[data-ask-field="relationship"]')!
+  expect(link.getAttribute('href')).toBe(`?card=${cardId}`)
+  fireEvent.contextMenu(link)
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
+  expect(requests).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: 'relationship' })
+})
+it('reveals a now-closed changed-head PR, inspects it and restores the captured filter when reveal ends', async () => {
+  window.history.replaceState(null, '', '/?view=releases')
+  inventory = inventory.slice(1)
+  originResult = { ...pull, state: 'merged', head: 'b'.repeat(40) }
+  records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  expect(await screen.findByText(/Showing originating PR owner\/repo#17 \(merged\)/)).toHaveTextContent('head changed')
+  expect(await screen.findByRole('region', { name: `Details ${pull.id}` })).toBeTruthy()
+  expect(document.querySelectorAll('.pr-row')).toHaveLength(1)
+  expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('a filter hiding this row')
+  expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
+  fireEvent.click(screen.getByRole('button', { name: 'Back to task' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show all PRs in this view' }))
+  expect(screen.getByRole('textbox', { name: 'Find PRs' })).toHaveValue('a filter hiding this row')
+  expect(document.querySelectorAll('.pr-row')).toHaveLength(0)
+})
+it('retains the answer and original GitHub link when the PR is inaccessible', async () => {
+  inventory = []; records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  expect(await screen.findByText(/originating PR.*missing or inaccessible/)).toHaveTextContent('Not accessible in current scope')
+  expect(screen.getByRole('link', { name: 'Open originating PR in GitHub ↗' })).toHaveAttribute('href', pull.url)
+  expect(document.querySelector('.pr-row')).toBeNull()
   expect(screen.getByRole('dialog')).toHaveTextContent('Real-shaped test answer')
 })

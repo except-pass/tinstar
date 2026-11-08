@@ -11,6 +11,8 @@ import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { PullReader } from './reader'
 import { PullFilesReader } from './files'
+import type { AskContext } from '../../shared/ask'
+import { pullContext } from '../../shared/pullContext'
 import { askConfigSchema } from '../ask/routes'
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
@@ -45,9 +47,29 @@ export class PullsApi {
     return { account: identity.account, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
       repositories: reads.map(read => read.coverage), warnings: [...warnings, ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }
   }
+  async origin(url: string) {
+    const { repositories, associated, associations, auditAvailable } = await this.scope()
+    const identity = releasePull(url)
+    if (!identity || !repositories.includes(identity.repository)) throw new Error('PR unavailable in the current repository scope.')
+    const user = await this.reader.identity()
+    const pull = await this.reader.summary(identity.url)
+    if (!user.owners.includes(identity.repository.split('/')[0]!) && pull.author.toLowerCase() !== user.account && !associated.some(row => row.id === pull.id)) throw new Error('PR unavailable in the current authored or associated scope.')
+    return { ...pull, links: auditAvailable ? associations.pulls.find(row => row.id === pull.id)?.links ?? [] : [] }
+  }
+  async relationships(id: string): Promise<AskContext['relationships']> {
+    const { scene, associations, auditAvailable } = await this.scope()
+    const context = pullContext(scene, { id, links: auditAvailable ? associations.pulls.find(row => row.id === id)?.links ?? [] : [] })
+    return { complete: auditAvailable && associations.associationsComplete && context.contributors.every(worker => worker.freshness === 'fresh') && (!scene.coverage.intentions.expiresAt || Date.parse(scene.coverage.intentions.expiresAt) > Date.now()),
+      cards: context.links.map(link => ({ card_id: link.cardId, sources: link.sources })),
+      workers: context.contributors.map(worker => ({ execution_id: worker.id, home: worker.home, task: worker.task, attempt: worker.attempt,
+        state: worker.state, freshness: worker.freshness, source: worker.source, observed_at: worker.observedAt, registered_head: worker.registeredHead,
+        claims: worker.claims.map(claim => ({ claim_id: claim.id, card_id: claim.cardId, sources: claim.sources, basis: claim.basis, verification: claim.verification, state: claim.state })),
+      })),
+    }
+  }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files'].includes(url.pathname)) return false
+    if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files', '/api/pulls/origin'].includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
@@ -62,6 +84,7 @@ export class PullsApi {
     const login = req.headers['tailscale-user-login']
     if (!(peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !ownerLogins.includes(login)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for PR Operations.', { headers })
     try {
+      if (url.pathname === '/api/pulls/origin') return ok(res, await this.origin(url.searchParams.get('url') ?? ''), { headers })
       if (url.pathname !== '/api/pulls') {
         const { repositories } = await this.scope()
         const identity = releasePull(url.searchParams.get('url') ?? ''), head = url.searchParams.get('head') ?? ''

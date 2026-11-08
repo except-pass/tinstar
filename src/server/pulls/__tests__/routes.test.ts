@@ -26,7 +26,7 @@ it('reuses the shared audit for many-to-many links, keeps unlinked PRs, and refu
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   seedOriginAllowlist((server.address() as { port: number }).port)
   const headers = { 'Tailscale-User-Login': 'owner@example.test' }
-  for (const path of [`/api/pulls/files?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`, '/api/pulls', `/api/pulls/detail?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`]) {
+  for (const path of ['/api/pulls/origin?url=https://github.com/owner/repo/pull/1', `/api/pulls/files?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`, '/api/pulls', `/api/pulls/detail?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`]) {
     for (const denied of [{}, { 'Tailscale-User-Login': 'stranger@example.test' }] as Record<string, string>[]) {
       const response = await fetch(`${base}${path}`, { headers: denied })
       expect(response.status).toBe(403)
@@ -66,4 +66,28 @@ it('reuses the shared audit for many-to-many links, keeps unlinked PRs, and refu
   const unlinked = await (await fetch(`${base}/api/pulls`, { headers })).json()
   expect(unlinked.data.pulls).toEqual([])
   expect(unlinked.data.repositories[0].scope).toBe('authored-or-associated')
+})
+
+it('resolves closed origins within owned/authored/associated scope and derives Ask provenance from shared evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pr-origin-'))
+  await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['owner/repo', 'foreign/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+  const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }, store = new AssociationStore(root), worker = scene.executions[0]!
+  const url = 'https://github.com/foreign/repo/pull/9'
+  worker.source.pr.url = url
+  await store.append({ id: randomUUID(), pull: url, cardId: scene.cards[0]!.id, action: 'link', reason: 'Explicit relationship' }, 'owner')
+  const read = vi.fn(async (path: string) => path === '/user' ? { login: 'owner' } : path.startsWith('/user/orgs') ? [] : {
+    number: 9, title: 'Closed origin', html_url: path.includes('/owner/') ? 'https://github.com/owner/repo/pull/9' : url, user: { login: 'stranger' }, draft: false, head: { sha: 'b'.repeat(40) }, base: { ref: 'main' }, state: 'closed', merged_at: '2026-11-08T12:00:00Z', created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-08T12:00:00Z',
+  })
+  const api = new PullsApi({ scene: async () => scene }, store, root, new PullReader(read))
+  cleanups.push(() => rm(root, { recursive: true, force: true }))
+  expect(await api.origin('https://github.com/owner/repo/pull/9')).toMatchObject({ state: 'merged', head: 'b'.repeat(40), title: 'Closed origin' })
+  expect(await api.origin(url)).toMatchObject({ state: 'merged', links: expect.arrayContaining([expect.objectContaining({ active: true, cardId: scene.cards[0]!.id })]) })
+  const context = await api.relationships('foreign/repo#9')
+  expect(context?.cards).toContainEqual({ card_id: scene.cards[0]!.id, sources: ['Manual association'] })
+  expect(context?.workers[0]).toMatchObject({ execution_id: worker.id, home: worker.home, attempt: worker.identity.spawn_gen, source: String(worker.source.pr.source ?? 'tasks[].pr.url'), claims: expect.any(Array) })
+  worker.source.pr.url = null
+  await store.append({ id: randomUUID(), pull: url, cardId: scene.cards[0]!.id, action: 'unlink', reason: 'Removed relationship' }, 'owner')
+  await expect(api.origin(url)).rejects.toThrow('authored or associated scope')
+  await expect(api.origin('https://github.com/unconfigured/repo/pull/9')).rejects.toThrow('repository scope')
+  expect(read.mock.calls.every(([path]) => !path.includes('state=all'))).toBe(true)
 })

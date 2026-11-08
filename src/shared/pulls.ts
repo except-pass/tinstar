@@ -1,6 +1,7 @@
 import type { PullIdentity, ReleaseLink } from './releases'
 
 export interface PullSummary extends PullIdentity {
+  state?: 'open' | 'closed' | 'merged'
   title: string; author: string; draft: boolean; head: string; base: string
   createdAt: string; updatedAt: string
   observedAt: string; freshness: 'fresh' | 'stale'

@@ -120,6 +120,16 @@ export class PullReader {
     while (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
     return data
   }
+  /** One canonical origin, including a closed PR; never a repository history crawl. */
+  async summary(url: string): Promise<Omit<PullSummary, 'links'>> {
+    const identity = releasePull(url)
+    if (!identity) throw new Error('Invalid PR identity')
+    const row = listing.element.extend({ state: z.enum(['open', 'closed']), merged_at: z.string().nullable() }).parse(await this.read(`/repos/${identity.repository}/pulls/${identity.number}`, '{number,title,html_url,user:{login:.user.login},draft,head:{sha:.head.sha},base:{ref:.base.ref},created_at,updated_at,state,merged_at}'))
+    if (releasePull(row.html_url)?.id !== identity.id || row.number !== identity.number) throw new Error('GitHub PR identity mismatch')
+    return { ...identity, title: row.title, author: row.user?.login ?? 'Unknown', draft: row.draft,
+      head: row.head.sha, base: row.base.ref, createdAt: row.created_at, updatedAt: row.updated_at,
+      state: row.merged_at ? 'merged' : row.state, observedAt: new Date(this.now()).toISOString(), freshness: 'fresh' }
+  }
   async detail(url: string, head: string): Promise<PullDetail> {
     const identity = releasePull(url)
     if (!identity) throw new Error('Invalid PR identity')

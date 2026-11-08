@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -228,12 +228,15 @@ it('resolves typed PR/deployment/receipt origins from the shared projections, pe
   releases.pulls = [{ ...identity, title: 'Authoritative release title', head, state: 'merged', mergeSha: 'b'.repeat(40), mergedAt: '2026-11-08T11:00:00.000Z', observedAt: '2026-11-08T12:00:00.000Z', freshness: 'fresh', links: [], exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified receipt', ancestry: 'ancestor', receipt }] } }]
   const pulls: PullsRead = { pulls: [{ ...identity, head, title: 'Authoritative PR title', author: 'owner', draft: false, base: 'main', createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-08T12:00:00.000Z', observedAt: '2026-11-08T12:00:00.000Z', freshness: 'fresh', links: [] }], repositories: [], warnings: [], associationsComplete: true }
   let reads = 0
-  const { call, bridge, reload } = await setup({ pulls: async () => { reads++; return pulls }, releases: async () => { reads++; return releases } })
+  const relationships = { complete: true, cards: [{ card_id: fixtureId(1), sources: ['Notion Link/GitHub property'] }], workers: [] }
+  const { call, bridge, reload } = await setup({ pulls: async () => { reads++; return pulls }, releases: async () => { reads++; return releases }, pullRelationships: async () => relationships })
   await new AskStore(root).create(owner, randomUUID(), 'Legacy stored question', context())
   const prInput = { client_key: randomUUID(), target: { kind: 'pull', id: identity.id, head }, question: 'Why is CI pending?', field_key: 'ci', field_value: 'Captured UI hint', view: { scene: 'pulls', query: 'pending', sort: 'repository' } }
   const pr = await call('requests', prInput)
   expect(pr.status).toBe(200)
   expect(pr.data.data.context).toMatchObject({ schema_version: 2, anchor: { kind: 'pull', page_id: identity.id, label: 'owner/repo#17 · Authoritative PR title', url: identity.url }, target: prInput.target, source: { kind: 'github', repository: identity.repository, number: 17, head }, return_to: { section: 'pulls', target: prInput.target }, field_key: 'ci' })
+  expect(pr.data.data.context.relationships).toEqual(relationships)
+  expect((await call('requests', { ...prInput, client_key: randomUUID(), relationships: { complete: true, cards: [], workers: [] } })).status).toBe(400)
   const releaseInput = { ...prInput, client_key: randomUUID(), target: { kind: 'release', id: identity.id, target: 'production', component: 'web' }, view: { scene: 'releases', filter: 'Shipped' }, field_key: 'deployment' }
   const deployed = await call('requests', releaseInput)
   expect(deployed.status).toBe(200)
@@ -272,4 +275,18 @@ it('rejects invented artifact locators, unavailable scope and foreign owners wit
   expect((await call('requests', { ...body, source: { kind: 'github' } })).status).toBe(400)
   expect((await call('requests', body, { 'Tailscale-User-Login': 'stranger', 'X-Tinstar-UI': '1' })).status).toBe(403)
   expect((await call('requests', { ...body, target: { kind: 'pull', id: 'https://evil.test/#1' } })).status).toBe(400)
+})
+
+it('anchors a closed PR resolved on demand and retains captured versus current heads through retry', async () => {
+  const identity = { id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17' }, head = 'b'.repeat(40)
+  const origin = vi.fn(async () => ({ ...identity, state: 'merged' as const, title: 'Now merged', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: '2026-11-08T12:00:00Z', freshness: 'fresh' as const, links: [] }))
+  const { call, reload } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()), pullOrigin: origin })
+  const body = { client_key: randomUUID(), target: { kind: 'pull', id: identity.id, head: 'a'.repeat(40) }, question: 'What changed after this question?', view: { scene: 'pulls', query: 'kept filter' } }
+  const saved = await call('requests', body)
+  expect(saved.status).toBe(200)
+  expect(saved.data.data.context).toMatchObject({ target: body.target, source: { head }, return_to: { target: body.target, view: body.view } })
+  expect(origin).toHaveBeenCalledWith(identity.url)
+  reload()
+  expect((await call('requests', body)).data.data.request_id).toBe(saved.data.data.request_id)
+  expect(origin).toHaveBeenCalledTimes(1)
 })

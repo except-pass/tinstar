@@ -11,7 +11,7 @@ export function AskSurface({ as = 'tr', subject, children, onKeyDown, ...props }
   const gesture = useAskGesture<HTMLElement>(controls ? () => controls.open(subject) : undefined, true)
   const semantic = (event: MouseEvent | KeyboardEvent) => {
     const element = event.target instanceof Element ? event.target : null
-    if (element?.closest('a,button,input,select,textarea')) return
+    if (element?.closest('input,select,textarea') || element?.closest('a,button') && !element.closest('a[data-ask-field],button[data-ask-field]')) return
     const field = element?.closest<HTMLElement>('[data-ask-field]')
     const key = askFieldSchema.safeParse(field?.dataset.askField)
     ask(event, key.success ? key.data : undefined, field?.textContent?.trim())
