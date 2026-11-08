@@ -132,11 +132,12 @@ owned/authored/explicitly-associated relevance scope applies. Changed heads are
 labelled; failed or inaccessible reads retain the answer and original GitHub
 link. “Show all PRs in this view” removes only the temporary reveal.
 
-
 Answers expand inline in the persistent Desk, with neighboring conversation
 previews still available in one click. Correlated follow-ups share one thread;
 collapse, history, unread status, dismiss, references and suggested actions retain
 the existing request/permission boundaries. The composer remains a dialog.
+On mobile, opening a conversation keeps the Desk sheet open; close it to see
+the revealed origin in the main workspace.
 
 Normal browser history entries store the previous section's query, sort, filters
 and grouping before a Desk jump. Back (or the thread's Back to previous view

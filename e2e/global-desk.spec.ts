@@ -237,6 +237,7 @@ for (const width of [1440, 390]) {
     await expect(page.locator('.pr-row.ask-origin')).toBeFocused()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`closed-return-${width}.png`), fullPage: true })
+    if (width === 390) await page.getByRole('dialog', { name: 'Your desk' }).getByRole('button', { name: 'Close Your desk' }).click()
     await page.getByRole('button', { name: 'Show all PRs in this view' }).click()
     await expect(page.getByRole('textbox', { name: 'Find PRs' })).toHaveValue(view.query)
     await expect(page.locator('.pr-row')).toHaveCount(0)
