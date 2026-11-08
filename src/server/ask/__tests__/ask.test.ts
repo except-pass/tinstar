@@ -140,7 +140,7 @@ describe('owner-scoped durable Ask protocol', () => {
   })
 })
 
-it('runs the outbound Mac puller against the real Tin Star HTTP API with isolated inbox and clavis stand-ins', async () => {
+it('runs scheduled Ask passes against the real Tin Star HTTP API with isolated inbox and clavis stand-ins', async () => {
   const { call, base, reload } = await setup()
   const id = (await call('requests', input())).data.data.request_id
   const home = join(root, 'home'), bin = join(root, 'bin')
@@ -155,7 +155,9 @@ p = home / 'note.json'
 if sys.argv[1] == 'note':
     request = sys.argv[sys.argv.index('--request-id') + 1]
     body = sys.stdin.read()
-    if not p.exists(): p.write_text(json.dumps({'request_id':request,'body':body}))
+    if not p.exists():
+        p.write_text(json.dumps({'request_id':request,'body':body}))
+        (home / 'dispatch.json').write_text(json.dumps({'notes':1,'wakes':1}))
     print(json.dumps({'schema':'fm-inbox-note.v1','outcome':'replay' if p.exists() else 'created','id':'proof-note','request_id':request,'saved':True,'announced':True,'acknowledged':False}))
 elif sys.argv[1] == 'receipts':
     n = json.loads(p.read_text())
@@ -165,23 +167,24 @@ elif sys.argv[1] == 'receipts':
   await chmod(script, 0o700)
   // Import and call the executable pass: production CLI requires HTTPS, while
   // the isolated HTTP fixture binds only an ephemeral loopback listener.
-  const driver = `import importlib.util,pathlib,sys\ns=importlib.util.spec_from_file_location('puller',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nprint(m.pull_once(sys.argv[2],sys.stdin.read(),pathlib.Path(sys.argv[3])))`
+  const driver = `import importlib.util,pathlib,sys\ns=importlib.util.spec_from_file_location('service',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nr=pathlib.Path(sys.argv[3])/'service';m.write_json(r/'ask-puller.json',{'enabled':True,'url':sys.argv[2],'home':sys.argv[3],'token_key':'test.ask','clavis':'clavis'})\nh=m.read_json(r/'ask-puller-health.json');print(m.tick(r,now=h.get('next_poll_at',0)))`
   const run = () => new Promise<string>((resolveRun, reject) => {
-    const child = execFile('python3', ['-c', driver, resolve('scripts/ask-puller.py'), base, home], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }, (error, stdout) => error ? reject(error) : resolveRun(stdout))
-    child.stdin!.end(token)
+    execFile('python3', ['-c', driver, resolve('scripts/ask-puller-service.py'), base, home], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }, (error, stdout) => error ? reject(error) : resolveRun(stdout))
   })
   await run(); await run(); reload()
   expect((await call('requests')).data.data[0].status).toBe('delivered')
   expect(JSON.parse(await readFile(join(home, 'note.json'), 'utf8')).request_id).toBe(inboxRequestId(id))
+  expect(JSON.parse(await readFile(join(home, 'dispatch.json'), 'utf8'))).toEqual({ notes: 1, wakes: 1 })
   await writeFile(join(home, 'reply.json'), JSON.stringify({ id: 'proof-note', at: new Date().toISOString(), body: 'Stand-in answer for adapter behavior only', cursor: '000000000001' }))
   await run(); await run(); reload()
   expect((await call('requests')).data.data).toMatchObject([{ request_id: id, status: 'answered', reply: { detail: 'Stand-in answer for adapter behavior only' } }])
+  expect(JSON.parse(await readFile(join(home, 'service', 'ask-puller-health.json'), 'utf8'))).toMatchObject({ work_polls: 2, noop_polls: 2, captured: 1, replied: 1, queued: 0 })
   const cli = await exec('python3', ['scripts/ask-puller.py', '--url', base, '--home', home, '--token-key', 'test.ask'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }).catch(error => error)
   expect(cli.stderr).toContain('must be an HTTPS origin')
 })
 
 it('checks the standalone puller CLI security and retry behavior', async () => {
-  const result = await exec('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_ask_puller.py'])
+  const result = await exec('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_ask_puller*.py'])
   expect(result.stderr).toContain('OK')
 })
 

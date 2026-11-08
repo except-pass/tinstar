@@ -5,6 +5,8 @@ Only clavis stdout supplies the bearer token. Errors never echo response bodies,
 subprocess output, request content or credentials. See docs/features/ask.md.
 """
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,37 @@ import urllib.request
 
 
 class PullerError(Exception):
-    pass
+    def __init__(self, message, code='bridge-error'):
+        super().__init__(message)
+        self.code = code
+
+
+@contextmanager
+def single_flight(home):
+    """Kernel-owned lock: process death releases it; never unlink a live inode."""
+    state = home / 'state'
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / 'tinstar-ask-puller.lock').open('a') as lock:
+        os.chmod(lock.name, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def read_token(key, executable='clavis'):
+    try:
+        secret = subprocess.run([executable, 'get', key], text=True, capture_output=True, timeout=15)
+        if secret.returncode or not secret.stdout.strip():
+            raise PullerError('Could not read bridge credential', 'credential-store')
+        return secret.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        raise PullerError('Could not read bridge credential', 'credential-store') from None
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -39,7 +71,11 @@ def api(base, token, payload=None):
         if result.get('ok') is not True:
             raise PullerError('Bridge rejected the operation')
         return result['data']
-    except (urllib.error.URLError, ValueError, KeyError):
+    except urllib.error.HTTPError as error:
+        raise PullerError('Bridge rejected the operation', 'credential-expired' if error.code in (401, 403) else 'bridge-http') from None
+    except (urllib.error.URLError, TimeoutError):
+        raise PullerError('Bridge unavailable', 'network') from None
+    except (ValueError, KeyError):
         raise PullerError('Bridge unavailable or returned an invalid response') from None
 
 
@@ -50,22 +86,25 @@ def inbox(home, args, body=None):
         result = subprocess.run([str(home / 'bin' / 'fm-inbox.sh'), *args], input=body,
                                 text=True, capture_output=True, timeout=30, env=env)
         if result.returncode not in (0, 3):
-            raise PullerError('Inbox command failed')
+            raise PullerError('Inbox command failed', 'inbox')
         return json.loads(result.stdout), result.returncode
     except (OSError, subprocess.TimeoutExpired, ValueError):
-        raise PullerError('Inbox unavailable or returned an invalid response') from None
+        raise PullerError('Inbox unavailable or returned an invalid response', 'inbox') from None
 
 
 def pull_once(base, token, home):
     work = api(base, token)
     tracked = {row['note_id']: row['request_id'] for row in work['tracked']}
     captured = 0
+    failed = 0
+    queued = {row['request_id'] for row in work['pending'] + work['tracked']}
     for request in work['pending']:
         request_id = request['request_id']
         try:
             note, code = inbox(home, ['note', '--request-id', request['inbox_request_id'], '--json', '-'], request['body'])
         except PullerError:
             api(base, token, {'request_id': request_id, 'error': 'capture-failed'})
+            failed += 1
             continue
         if note.get('saved') is not True or note.get('request_id') != request['inbox_request_id']:
             raise PullerError('Inbox capture correlation failed')
@@ -92,11 +131,12 @@ def pull_once(base, token, home):
                     raise PullerError('Inbox receipt correlation failed')
                 api(base, token, {'request_id': request_id, 'reply': receipt['reply']})
                 replied += 1
+                queued.discard(request_id)
             except PullerError:
                 incomplete = True
         if incomplete:
             raise PullerError('Inbox receipt delivery is incomplete')
-    return {'captured': captured, 'replied': replied}
+    return {'captured': captured, 'replied': replied, 'failed': failed, 'queued': len(queued)}
 
 
 def main():
@@ -111,10 +151,10 @@ def main():
     if not args.home.is_absolute():
         parser.error('--home must be absolute')
     try:
-        secret = subprocess.run(['clavis', 'get', args.token_key], text=True, capture_output=True, timeout=15)
-        if secret.returncode or not secret.stdout.strip():
-            raise PullerError('Could not read the Tin Star API token from clavis')
-        result = pull_once(args.url.rstrip('/'), secret.stdout.strip(), args.home)
+        with single_flight(args.home) as acquired:
+            if not acquired:
+                return 0
+            result = pull_once(args.url.rstrip('/'), read_token(args.token_key), args.home)
         print(json.dumps(result))
         return 0
     except (PullerError, OSError, subprocess.TimeoutExpired):

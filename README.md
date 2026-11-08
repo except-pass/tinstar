@@ -48,6 +48,10 @@ An id that is not in the fleet, or that is in more than one home when no `home` 
 
 ## Quick start
 
+For automatic Ask delivery on the designated Mac First Mate host, use the
+[Tin Star Ask LaunchAgent installer and runbook](docs/features/ask-puller-service.md).
+Normal npm updates maintain that configured service and preserve disable state.
+
 Requires Node.js 22.12 or newer, a working [First Mate](https://github.com/kunchenguid/firstmate) home, `tmux`, `ttyd`, and Python 3. Start Tinstar with:
 
 ```bash
