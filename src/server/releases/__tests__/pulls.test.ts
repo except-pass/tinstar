@@ -45,3 +45,9 @@ describe('bounded read-only release PR observations', () => {
   })
 
 })
+
+it.each(['stack-base', null])('preserves the observed base %s without inferring main', async base => {
+  const reader = new ReleasePullReader(vi.fn().mockResolvedValue({ ...merged, head_sha: sha, base_ref: base }))
+  expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ head: sha, base })
+  expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ head: sha, base })
+})

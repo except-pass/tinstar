@@ -39,6 +39,16 @@ it('authenticates every local operation, rejects cross-origin/live routes, insta
   })
   expect(context.action_receipt).toMatchObject({ id: receipt.id, actual_github_writes: 0, outcome: 'simulated' })
   expect(context.return_to?.target).toMatchObject({ kind: 'pull', action_receipt_id: receipt.id })
+  const stackedCandidate = { ...candidate, manifest: { ...candidate.manifest, version: 'stacked', branches: ['stack-base'] } }
+  expect((await post('/api/actions/install', { candidate: stackedCandidate, inspected: true })).status).toBe(200)
+  read.mockImplementation(async () => ({ ...snapshot(), base: 'stack-base' }))
+  const stacked = await post('/api/actions/run', { ...input, key: randomUUID(), version: 'stacked', view: { scene: 'releases' }, targets: [{ url: snapshot().url, head, base: 'stack-base' }] })
+  expect(stacked.status).toBe(200)
+  const stackedRun = (await stacked.json()).data.runId
+  await api.executor.wait(stackedRun)
+  expect((await api.store.receipts()).find(row => row.runId === stackedRun)).toMatchObject({ outcome: 'simulated', captured: { head, base: 'stack-base' }, live: { head, base: 'stack-base' }, actualGitHubWrites: 0 })
+  expect((await post('/api/actions/run', { ...input, key: randomUUID() })).status).toBe(409)
+  read.mockImplementation(async () => snapshot())
   expect((await post('/api/actions/live-merge', {})).status).toBe(404)
   expect((await post('/api/actions/run', { ...input, key: randomUUID(), targets: [{ ...input.targets[0], url: 'https://github.com/kunchenguid/firstmate/pull/1' }] })).status).toBe(409)
   expect((await post('/api/actions/run', { ...input, key: randomUUID(), targets: [{ ...input.targets[0], head: baseHead }] })).status).toBe(409)

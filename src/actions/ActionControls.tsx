@@ -4,10 +4,10 @@ import { AskCardAction, useAskControls } from '../ask/Ask'
 import { AskSurface } from '../ask/AskSurface'
 import type { AskView } from '../shared/ask'
 import { candidateSchema, type ActionCandidate, ActionCatalog, ActionReceipt, InstalledAction } from '../shared/actions'
-import type { ReleasePull, PullIdentity } from '../shared/releases'
+import type { PullIdentity } from '../shared/releases'
 import './actions.css'
 
-type Target = PullIdentity & { head?: string | null; base?: string; state?: string; freshness?: string }
+type Target = PullIdentity & { head?: string | null; base?: string | null; state?: string; freshness?: string }
 async function request(path: string, payload?: unknown) {
   const response = await apiFetch(path, { headers: { 'X-Tinstar-UI': '1', ...(payload ? { 'Content-Type': 'application/json' } : {}) }, ...(payload ? { method: 'POST', body: JSON.stringify(payload) } : {}) })
   const result = await response.json()
@@ -39,11 +39,12 @@ export function ActionControls({ targets, view, compact = false, focusReceipt }:
     if (operation === 'rerun' && (!/^[1-9]\d*$/.test(jobId) || !/^[1-9]\d*$/.test(jobRunId))) throw new Error('Enter the exact failed job and run IDs')
     const repair = operation === 'none' ? undefined : operation === 'update' ? { kind: 'repair.update', ref: '', expectedHead: targets[0]?.head } : { kind: 'repair.rerun', jobId: Number(jobId), runId: Number(jobRunId), attempt: 1, expectedHead: targets[0]?.head }
     // The safe head ref is supplied by the capture endpoint, never inferred from base/main.
-    if (repair?.kind === 'repair.update') { const captured = await request('/api/actions/capture', { target: { url: targets[0]!.url, head: targets[0]!.head, base: targets[0]!.base ?? 'main' } }); repair.ref = `refs/heads/${captured.headRef}` }
-    const result = await request('/api/actions/run', { key: crypto.randomUUID(), action: action.manifest.id, version: action.manifest.version, targets: targets.map(target => ({ url: target.url, head: target.head, base: target.base ?? 'main' })), mode, view, ...(repair ? { repair } : {}) })
+    if (repair?.kind === 'repair.update') { const captured = await request('/api/actions/capture', { target: { url: targets[0]!.url, head: targets[0]!.head, base: targets[0]!.base } }); repair.ref = `refs/heads/${captured.headRef}` }
+    const result = await request('/api/actions/run', { key: crypto.randomUUID(), action: action.manifest.id, version: action.manifest.version, targets: targets.map(target => ({ url: target.url, head: target.head, base: target.base })), mode, view, ...(repair ? { repair } : {}) })
     setRunId(result.runId)
   })
   const disabled = (action: InstalledAction) => {
+    if (targets.some(target => !target.base)) return 'Select PRs with an observed base branch'
     if (busy || pending || !targets.length || targets.some(target => !target.head || target.freshness === 'stale')) return 'Select PRs with current captured heads'
     if (action.manifest.capabilities.some(cap => cap.startsWith('merge.') || cap.startsWith('repair.')) && targets.some(target => target.state !== undefined && target.state !== 'open')) return 'Merge and repair are disabled on merged or closed PRs'
     if (targets.some(target => !action.grant.repositories.includes(target.repository))) return 'Selection outside installed grant'
@@ -97,4 +98,3 @@ function ActionReceiptView({ receipt, view }: { receipt: ActionReceipt; view: As
     <details><summary>Inspect complete receipt</summary><pre>{JSON.stringify(receipt, null, 2)}</pre></details>
   </AskSurface>
 }
-export function releaseActionTargets(pulls: ReleasePull[]) { return pulls.map(pull => ({ ...pull, base: 'main' })) }

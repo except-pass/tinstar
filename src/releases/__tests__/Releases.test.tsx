@@ -1,9 +1,10 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Releases } from '../Releases'
 import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
 import type { AskReturn } from '../../shared/ask'
+import { installed } from '../../server/actions/__tests__/fixtures'
 import { releaseFixture } from './fixtures'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, origin: undefined as AskReturn | undefined }))
@@ -22,7 +23,7 @@ beforeEach(() => {
   for (const pull of data.pulls) Object.assign(pull, { title: `Receipt change ${pull.number}`, state: 'merged', freshness: 'fresh', mergedAt: '2026-11-06T18:00:00Z' })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
 })
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 const mount = () => render(<Releases data={data} error={null} refresh={vi.fn()} />)
 describe('PR-first Releases', () => {
   it('shows an unknown total for incomplete empty sources and retained failed reads', () => {
@@ -155,4 +156,24 @@ describe('release origin identity', () => {
     mount()
     expect(screen.getByText(/PR head changed since this question/)).toBeTruthy()
   })
+})
+
+it.each(['toolbar', 'drawer', 'receipt'] as const)('preserves a stacked Releases PR identity in the %s Explain request', async entry => {
+  const pull = data.pulls[0]!
+  Object.assign(pull, { head: 'a'.repeat(40), base: 'stack-base' })
+  const action = installed('explain')
+  action.grant.repositories = [pull.repository]
+  const catalog = { installed: [action], examples: [], receipts: [], policy: {}, runner: '' }
+  const fetch = vi.fn(async (_path: string, init?: RequestInit) => new Response(JSON.stringify({ ok: true, data: init?.method === 'POST' ? {} : catalog })))
+  vi.stubGlobal('fetch', fetch)
+  if (entry === 'receipt') observed.origin = { section: 'releases', target: { kind: 'pull', id: pull.id, head: pull.head!, action_receipt_id: 'receipt-1' } }
+  mount()
+  if (entry === 'toolbar') fireEvent.click(screen.getAllByLabelText(`Select ${pull.id}`)[0]!)
+  if (entry === 'drawer') fireEvent.click(screen.getAllByRole('button', { name: `Inspect ${pull.id}` })[0]!)
+  const scope = entry === 'drawer' ? within(screen.getByRole('dialog')) : screen
+  const buttons = await scope.findAllByRole('button', { name: 'Explain · Simulated' })
+  fireEvent.click(buttons.find(button => !(button as HTMLButtonElement).disabled)!)
+  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === '/api/actions/run')).toBe(true))
+  const payload = JSON.parse(String(fetch.mock.calls.find(([path]) => path === '/api/actions/run')![1]!.body))
+  expect(payload).toMatchObject({ action: 'explain', view: { scene: 'releases' }, targets: [{ url: pull.url, head: pull.head, base: 'stack-base' }] })
 })

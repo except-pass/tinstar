@@ -87,3 +87,14 @@ it.each([
   expect(await screen.findByRole('alert')).toHaveTextContent(message)
   expect(fetch.mock.calls.every(([path]) => path === '/api/actions')).toBe(true)
 })
+
+it.each([null, undefined])('blocks invocation when the observed base is %s', async base => {
+  const catalog = { installed: [installed('explain')], examples: [], receipts: [], policy: {}, runner: '' }
+  const fetch = vi.fn(async (_path: string) => new Response(JSON.stringify({ ok: true, data: catalog })))
+  vi.stubGlobal('fetch', fetch)
+  render(<ActionControls targets={[{ ...snapshot(), base }]} view={{ scene: 'releases' }} />)
+  const button = await screen.findByRole('button', { name: 'Explain · Simulated' })
+  expect(button).toBeDisabled()
+  fireEvent.click(button)
+  expect(fetch.mock.calls.every(([path]) => path === '/api/actions')).toBe(true)
+})

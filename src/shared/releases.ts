@@ -31,6 +31,7 @@ export interface ReleasePull extends PullIdentity {
   state: 'open' | 'closed' | 'merged' | 'unknown'
   mergedAt: string | null
   mergeSha: string | null
+  base?: string | null
   head?: string | null
   observedAt: string | null
   freshness: 'fresh' | 'stale' | 'unknown'
