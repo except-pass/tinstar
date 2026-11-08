@@ -8,6 +8,7 @@ import { activeReleaseLinks, type ReleasePull, type ReleasesRead } from '../shar
 import { productionSyncLabel, filterReleases, releaseQueueCount, releaseDocuments, releaseFilters, releaseGroups, releaseState, type ReleaseFilter } from './model'
 import '../reconciliation/overview.css'
 import './releases.css'
+import { CardReleaseProposal, ReleaseAutomationSummary } from './ReleaseAutomation'
 
 const cardHref = (id: string) => `?card=${encodeURIComponent(id)}`
 const title = (scene: FloorScene, id: string) => String(scene.cards.find(card => card.id === id)?.source.properties.Name?.value ?? id)
@@ -41,7 +42,7 @@ function CardDryRun({ data, cardId }: { data: ReleasesRead; cardId: string }) {
   const card = data.reconciliation?.cards.find(card => card.cardId === cardId)
   if (!card) return null
   const decision = { 'would-complete': 'Would mark Done', 'would-verify': 'Requires production verification', waiting: 'Waiting for required production changes', exception: 'Release evidence unresolved', unrelated: 'Card status is outside release automation' }[card.decision]
-  return <div className="rel-dry-run"><strong>Dry run: {decision}</strong><p>Owner: {card.owner} · {card.status} · {card.requiredPulls.length} required PRs</p>{card.reasons.length > 0 && <ul>{card.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}<small>No Notion or Desk transition is performed.</small></div>
+  return <div className="rel-dry-run"><strong>Dry run: {decision}</strong><p>Owner: {card.owner} · {card.status} · {card.requiredPulls.length} required PRs</p>{card.reasons.length > 0 && <ul>{card.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}<CardReleaseProposal plan={data.automation} cardId={cardId} /><small>No Notion or Desk transition is performed.</small></div>
 }
 function PullDrawer({ pull, scene, data, refresh, close }: { pull: ReleasePull | null; scene: FloorScene; data: ReleasesRead; refresh: () => void; close: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -87,10 +88,10 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
       <div className="rel-filters">{releaseFilters.map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setFocus(null) }}>{value}{value === 'Exceptions' ? ` (${data.pulls.filter(pull => pull.exceptions.length).length + data.unassociatedCards.length})` : ''}</button>)}</div>
       <button type="button" onClick={() => setDrawer(null)}>Link PR</button>
     </header>
-    <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories</summary>
+    <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories{data.automation && ' · transitions OFF'}</summary>
       {warning && <p role="alert">{warning}</p>}{data.githubSync?.errors.map(message => <p role="alert" key={message}>{message}</p>)}{[...data.warnings, ...(data.reconciliation?.warnings ?? [])].map(message => <p key={message}>{message}</p>)}
       {data.reconciliation?.targets.map(target => <p key={`${target.repository}:${target.target}:${target.component}`}>{target.repository} · {target.component} / {target.target} · {target.version ?? 'Version unknown'} · {target.deployedSha ?? target.artifactDigest ?? 'Identity unknown'} · observed {target.observedAt} · <a href={target.receiptUrl} target="_blank" rel="noreferrer">Receipt ↗</a></p>)}{!data.reconciliation?.targets.length && <p>Deployed component identities are unknown; no matching current receipt.</p>}
-      <p>Read-only reconciliation. No Notion or Desk transitions are performed.</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a>
+      <p>Read-only reconciliation. No Notion or Desk transitions are performed.</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a><ReleaseAutomationSummary plan={data.automation} />
     </details>
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
     <div className="rel-scroll"><table className="rel-table"><caption className="sr-only">Release queue · one row per GitHub PR; repeated group references share identity</caption><thead><tr><th><input type="checkbox" aria-label="Select visible PRs" checked={visible.length > 0 && visible.every(pull => selected.has(pull.id))} onChange={event => setSelection(event.target.checked ? [...new Set([...selection, ...visible.map(pull => pull.id)])] : selection.filter(id => !visible.some(pull => pull.id === id)))} /></th><th>GitHub PR</th><th>Change</th><th>Linked Notion cards</th><th>Merged</th><th>Release state</th><th>Inspect</th></tr></thead>
