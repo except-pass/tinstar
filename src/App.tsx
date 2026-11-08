@@ -230,12 +230,11 @@ export default function App() {
   useEffect(() => {
     const onPop = () => {
       setPanelMode(null)
-      views.pop()
       setOverviewLocation(readOverviewSearch(window.location.search))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [views.pop])
+  }, [])
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {

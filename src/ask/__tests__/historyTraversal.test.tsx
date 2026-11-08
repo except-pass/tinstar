@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { captureScroll, useScrollRestore, useViewSnapshot, useWorkspaceHistory, type WorkspaceHistory } from '../workspaceHistory'
+import { captureScroll, useScrollRestore, useViewSnapshot, useWorkspaceHistory, workspaceHistoryStorageKey, type WorkspaceHistory } from '../workspaceHistory'
 
 type Section = 'overview' | 'pulls' | 'releases'
-afterEach(() => { cleanup(); vi.restoreAllMocks(); history.replaceState(null, '', '/') })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); history.replaceState(null, '', '/'); sessionStorage.clear() })
 
 function View({ section, views }: { section: Section; views: WorkspaceHistory }) {
   const [query, setQuery] = useState(''), [sort, setSort] = useState('title')
@@ -19,17 +19,17 @@ function Journey({ initial }: { initial: Section }) {
   const [section, setSection] = useState(initial)
   const views = useWorkspaceHistory(section)
   useEffect(() => {
-    const pop = () => { views.pop(); setSection(new URLSearchParams(location.search).get('view') as Section) }
+    const pop = () => { setSection(new URLSearchParams(location.search).get('view') as Section) }
     window.addEventListener('popstate', pop)
     return () => window.removeEventListener('popstate', pop)
-  }, [views.pop])
+  }, [])
   return <><button onClick={() => {
     const next = section === 'releases' ? 'pulls' : 'releases'
     views.capture(); history.pushState(null, '', `?view=${next}`); views.navigated(); setSection(next)
   }}>Desk jump</button><View key={section} section={section} views={views} /></>
 }
 
-it.each(['overview', 'pulls', 'releases'] as const)('keeps the latest %s edits and scroll in its native entry', async section => {
+it.each((['overview', 'pulls', 'releases'] as const).flatMap(section => [false, true].map(withScroll => ({ section, withScroll }))))('captures current $section edits on departure, scroll=$withScroll', async ({ section, withScroll }) => {
   history.replaceState(null, '', `?view=${section}`)
   const writes = vi.spyOn(history, 'replaceState')
   render(<Journey initial={section} />)
@@ -44,18 +44,39 @@ it.each(['overview', 'pulls', 'releases'] as const)('keeps the latest %s edits a
   fireEvent.change(screen.getByRole('textbox', { name: 'Query' }), { target: { value: 'newer' } })
   fireEvent.click(screen.getByRole('button', { name: 'title' }))
   const viewport = screen.getByTestId('viewport')
+  const entry = history.state.tinstarWorkspaceEntry
   const beforeScroll = writes.mock.calls.length
-  for (let index = 1; index <= 20; index++) {
+  for (let index = 1; withScroll && index <= 20; index++) {
     viewport.scrollTop = index * 10; viewport.scrollLeft = index
     fireEvent.scroll(viewport)
   }
-  await waitFor(() => expect(history.state.tinstarWorkspace.view.position.top).toBe(200))
-  expect(writes.mock.calls.length - beforeScroll).toBeLessThanOrEqual(1)
+  expect(writes.mock.calls.length).toBe(beforeScroll)
   await pop('forward')
+  const persisted = JSON.parse(sessionStorage.getItem(workspaceHistoryStorageKey)!).find(([id]: [string, unknown]) => id === entry)[1].snapshot.view
+  expect(persisted.query).toBe('newer')
+  expect(persisted.sort).toBe('changes')
   expect(screen.getByRole('textbox', { name: 'Query' })).toHaveValue('')
   await pop('back')
   expect(screen.getByRole('textbox', { name: 'Query' })).toHaveValue('newer')
   expect(screen.getByRole('button', { name: 'changes' })).toBeVisible()
-  await waitFor(() => expect(screen.getByTestId('viewport').scrollTop).toBe(200))
-  expect(screen.getByTestId('viewport').scrollLeft).toBe(20)
+  await waitFor(() => expect(screen.getByTestId('viewport').scrollTop).toBe(withScroll ? 200 : 0))
+  expect(screen.getByTestId('viewport').scrollLeft).toBe(withScroll ? 20 : 0)
+})
+
+it('reloads the current entry from its session mirror after departure', () => {
+  history.replaceState(null, '', '?view=pulls')
+  const view = render(<Journey initial="pulls" />)
+  fireEvent.change(screen.getByRole('textbox', { name: 'Query' }), { target: { value: 'retained through reload' } })
+  fireEvent.click(screen.getByRole('button', { name: 'title' }))
+  const viewport = screen.getByTestId('viewport')
+  viewport.scrollTop = 95; viewport.scrollLeft = 28
+  fireEvent(window, new Event('pagehide'))
+  const id = history.state.tinstarWorkspaceEntry
+  view.unmount()
+  render(<Journey initial="pulls" />)
+  expect(history.state.tinstarWorkspaceEntry).toBe(id)
+  expect(screen.getByRole('textbox', { name: 'Query' })).toHaveValue('retained through reload')
+  expect(screen.getByRole('button', { name: 'changes' })).toBeVisible()
+  expect(screen.getByTestId('viewport').scrollTop).toBe(95)
+  expect(screen.getByTestId('viewport').scrollLeft).toBe(28)
 })

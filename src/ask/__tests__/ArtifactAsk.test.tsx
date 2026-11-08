@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../../App'
+import { workspaceHistoryStorageKey } from '../workspaceHistory'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema, type AskItem, type AskTarget } from '../../shared/ask'
 import type { ReleasesRead } from '../../shared/releases'
@@ -17,8 +18,9 @@ let records: AskItem[], requests: Array<Record<string, unknown>>, releases: Rele
 function item(target: AskTarget, section: 'pulls' | 'releases'): AskItem {
   return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
 }
+const persistedView = (id: string) => JSON.parse(sessionStorage.getItem(workspaceHistoryStorageKey) ?? '[]').find(([key]: [string, unknown]) => key === id)?.[1]?.snapshot?.view
 beforeEach(() => {
-  localStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
+  localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -271,7 +273,6 @@ it('restores an Overview-origin entry after a PR answer without replaying its so
     return_to: { section: 'overview', target },
   } })
   records = [overview, { ...item({ kind: 'pull', id: pull.id, head }, 'pulls'), question: 'PR answer' }]
-  const replaced = vi.spyOn(history, 'replaceState')
   const view = render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Overview answer/ }))
   expect(new URLSearchParams(location.search).has('origin')).toBe(true)
@@ -287,9 +288,10 @@ it('restores an Overview-origin entry after a PR answer without replaying its so
   const viewport = view.container.querySelector('.ov-canvas')!.parentElement!
   viewport.scrollTop = 140; viewport.scrollLeft = 21
   const originUrl = location.search
+  const overviewEntry = history.state.tinstarWorkspaceEntry
   fireEvent.click(screen.getByRole('button', { name: /New answer.*PR answer/ }))
   await screen.findByRole('region', { name: 'Pull requests' })
-  const saved = replaced.mock.calls.map(([state]) => state?.tinstarWorkspace).filter(entry => entry?.section === 'overview').at(-1)!.view
+  const saved = persistedView(overviewEntry)
   expect(saved.state.collapsed.length).toBeGreaterThan(0)
   expect(saved.state.selection).not.toBeNull()
   expect(saved.state.exceptionsOnly).toBe(true)
@@ -303,7 +305,7 @@ it('restores an Overview-origin entry after a PR answer without replaying its so
   expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollTop).toBe(140)
   expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollLeft).toBe(21)
   fireEvent.click(await screen.findByRole('button', { name: /Answered.*PR answer/ }))
-  const restored = replaced.mock.calls.map(([state]) => state?.tinstarWorkspace).filter(entry => entry?.section === 'overview').at(-1)!.view
+  const restored = persistedView(overviewEntry)
   for (const field of ['searchFocus', 'searchReveal', 'collapsed', 'selection', 'navigation', 'exceptionsOnly', 'roadmapExpanded'] as const) expect(restored.state[field]).toEqual(saved.state[field])
   await pop('back')
   await pop('forward')
@@ -344,10 +346,11 @@ it.each(['Clear', 'Escape'])('recovers the matching Overview baseline after Back
   const view = render(<App />)
   const before = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Focus Overview/ }))
-  await waitFor(() => expect(history.state?.tinstarWorkspace?.view?.recovery).toBeTruthy())
-  expect(history.state.tinstarWorkspace.view.recovery.recovery).toBeUndefined()
+  const focusedEntry = history.state.tinstarWorkspaceEntry
   fireEvent.click(screen.getByRole('button', { name: /New answer.*Visit PR/ }))
   await screen.findByRole('region', { name: 'Pull requests' })
+  expect(persistedView(focusedEntry).recovery).toBeTruthy()
+  expect(persistedView(focusedEntry).recovery.recovery).toBeUndefined()
   const pop = async (direction: 'back' | 'forward') => {
     const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
     await act(async () => { history[direction](); await popped })
@@ -398,7 +401,7 @@ it.each((['card', 'execution', 'claim'] as const).flatMap(kind => [false, true].
   expect(location.search).toContain('view=releases')
 })
 
-it('keeps PR query, sort and scroll edits made after Back through Forward and Back', async () => {
+it.each([false, true])('keeps PR edits made after Back through Forward and Back, scroll=%s', async withScroll => {
   records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
   render(<App />)
   const query = await screen.findByRole('textbox', { name: 'Find PRs' })
@@ -413,14 +416,74 @@ it('keeps PR query, sort and scroll edits made after Back through Forward and Ba
   fireEvent.change(await screen.findByRole('textbox', { name: 'Find PRs' }), { target: { value: 'artifact' } })
   fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
   const viewport = screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' })
-  viewport.scrollTop = 175; viewport.scrollLeft = 80; fireEvent.scroll(viewport)
-  await waitFor(() => {
-    expect(history.state.tinstarWorkspace.view.query).toBe('artifact')
-    expect(history.state.tinstarWorkspace.view.position.left).toBe(80)
-  })
-  await pop('forward'); await pop('back')
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
+  if (withScroll) { viewport.scrollTop = 175; viewport.scrollLeft = 80; fireEvent.scroll(viewport) }
+  const prEntry = history.state.tinstarWorkspaceEntry
+  await pop('forward')
+  expect(persistedView(prEntry).query).toBe('artifact')
+  expect(persistedView(prEntry).position.left).toBe(withScroll ? 80 : 0)
+  await pop('back')
   expect(await screen.findByRole('textbox', { name: 'Find PRs' })).toHaveValue('artifact')
   expect(screen.getByRole('button', { name: 'Author ↑' })).toBeVisible()
-  await waitFor(() => expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollTop).toBe(175))
-  expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollLeft).toBe(80)
+  await waitFor(() => expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollTop).toBe(withScroll ? 175 : 0))
+  expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollLeft).toBe(withScroll ? 80 : 0)
+  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
+})
+
+
+it.each((['card', 'execution', 'claim'] as const).flatMap(kind => ['Back', 'reload'].map(mode => ({ kind, mode }))))('resolves an unresolved $kind entry after $mode and later scene arrival', async ({ kind, mode }) => {
+  const scene = fixtureScene()
+  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id
+  const target = { kind, id }
+  fixture.scene = { ...scene, cards: kind === 'card' ? scene.cards.filter(row => row.id !== id) : scene.cards,
+    executions: kind === 'execution' ? scene.executions.filter(row => row.id !== id) : scene.executions,
+    claims: kind === 'claim' ? scene.claims.filter(row => row.id !== id) : scene.claims, claimHistory: [] }
+  history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
+  records = [item({ kind: 'pull', id: pull.id }, 'pulls')]
+  let view = render(<App />)
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  const unresolvedEntry = history.state.tinstarWorkspaceEntry
+  if (mode === 'Back') {
+    fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+    await screen.findByRole('region', { name: 'Pull requests' })
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history.back(); await popped })
+  } else {
+    fireEvent(window, new Event('pagehide'))
+    view.unmount()
+    view = render(<App />)
+  }
+  expect(persistedView(unresolvedEntry)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  fixture.scene = scene
+  view.rerender(<App />)
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  expect(view.container.querySelector('.flashed')).toBeTruthy()
+})
+
+it('captures Releases grouping, collapse and selection edits before native traversal without scrolling', async () => {
+  history.replaceState(null, '', '/?view=releases')
+  records = [item({ kind: 'pull', id: pull.id, head }, 'pulls')]
+  const view = render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Shipped', exact: true }))
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await screen.findByRole('region', { name: 'Pull requests' })
+  const pop = async (direction: 'back' | 'forward') => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history[direction](); await popped })
+  }
+  await pop('back')
+  fireEvent.click(screen.getByRole('button', { name: 'Repository', exact: true }))
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${pull.id}` }))
+  const group = view.container.querySelector<HTMLButtonElement>('.rel-group button')!
+  const groupName = group.textContent!.replace('▾', '▸')
+  fireEvent.click(group)
+  await pop('forward'); await pop('back')
+  expect(screen.getByRole('button', { name: 'Repository', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByText('1 unique PRs selected')).toBeVisible()
+  const restoredGroup = view.container.querySelector<HTMLButtonElement>('.rel-group button')!
+  expect(restoredGroup).toHaveAttribute('aria-expanded', 'false')
+  expect(restoredGroup.textContent).toBe(groupName)
+  fireEvent.click(restoredGroup)
+  expect(screen.getByRole('checkbox', { name: `Select ${pull.id}` })).toBeChecked()
 })

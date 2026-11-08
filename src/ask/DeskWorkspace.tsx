@@ -53,16 +53,19 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const [openRelationships, setOpenRelationships] = useState<Target[]>([])
   const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
   const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
-  const search = useSearchSession({ active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
-  useViewSnapshot(views, 'overview', search.captureView, search.restoreView, overviewActive && !!floor.scene)
+  const search = useSearchSession({ views, active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const restoringOverview = useViewSnapshot(views, 'overview', search.captureView, search.restoreView, overviewActive && !!floor.scene)
   const handledOrigin = useRef<AskReturn | null>(null)
   useLayoutEffect(() => {
     if (!origin) { handledOrigin.current = null; return }
     const target = overviewTarget(origin.target)
     if (!overviewActive || !floor.scene || origin.section !== 'overview' || !target || handledOrigin.current === origin) return
-    if (views?.restoration.snapshot?.section === 'overview') { handledOrigin.current = origin; return }
+    if (restoringOverview) return
+    const originKey = JSON.stringify([origin.section, target.kind, target.id])
+    if (views?.restoration.snapshot?.section === 'overview' && views.originResolved(originKey)) { handledOrigin.current = origin; return }
     if (!search.choose(target)) return
     handledOrigin.current = origin
+    views?.resolveOrigin(originKey)
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }

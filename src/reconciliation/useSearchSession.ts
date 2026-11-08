@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import type { WorkspaceHistory } from '../ask/workspaceHistory'
 import { directNeighbors, emptySearch } from '../shared/smartSearch'
 import { targetExists, semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
@@ -18,7 +19,8 @@ interface ViewSnapshot {
 export interface Snapshot extends ViewSnapshot { recovery?: ViewSnapshot }
 
 /** One temporary focus lens over the existing reducer, with semantic restore. */
-export function useSearchSession({ active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+export function useSearchSession({ views, active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+  views?: WorkspaceHistory
   active: boolean
   scene: FloorScene | null
   state: PresentationState; send: (action: PresentationAction) => void; canvas: RefObject<HTMLDivElement>; root: RefObject<HTMLDivElement>
@@ -58,7 +60,7 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
       historyEntries.current = ownedHistoryDepth()
-      try { window.history.pushState({ ...window.history.state, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
+      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspaceEntry: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }
