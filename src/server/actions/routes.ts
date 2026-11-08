@@ -3,22 +3,24 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { askViewSchema } from '../../shared/ask'
-import { candidateSchema, selectionSchema, operationSchema, readerRepositories, type ActionSnapshot } from '../../shared/actions'
+import { candidateSchema, selectionSchema, operationSchema, readerRepositories, type ActionSnapshot, type ActionReceipt } from '../../shared/actions'
 import { releasePull } from '../../shared/releases'
 import { getConfigRoot } from '../configRoot'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { ActionStore } from './store'
-import { ActionExecutor } from './executor'
+import { ActionExecutor, type ExecutorRuntime } from './executor'
 import { actionExamples } from './examples'
 import { cmsandboxCheckPolicy } from './checkPolicy'
 import { runnerStatus } from './runner'
 import { readActionJob, readActionSnapshot } from './evidence'
+import type { BrokerInvocation } from './broker'
+import { brokerData, brokerRequest, liveActionsEnabled } from './liveClient'
 
 const key = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/)
 const invoke = z.object({ key: z.string().uuid(), action: key, version: key, targets: z.array(selectionSchema).min(1).max(10), mode: z.enum(['direct', 'coordinated']), view: askViewSchema, repair: operationSchema.refine(value => value.kind === 'repair.update' || value.kind === 'repair.rerun').optional() }).strict()
-async function body(req: IncomingMessage) {
+export async function actionBody(req: IncomingMessage) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Expected JSON')
   let size = 0; const chunks: Buffer[] = []
   const timeout = setTimeout(() => req.destroy(), 10_000)
@@ -30,11 +32,14 @@ async function body(req: IncomingMessage) {
 export class ActionsApi {
   readonly executor: ActionExecutor
   private ready?: Promise<void>
-  constructor(readonly store = new ActionStore(), private read = readActionSnapshot, private root = getConfigRoot()) {
-    this.executor = new ActionExecutor(store, read, cmsandboxCheckPolicy, readActionJob)
+  constructor(readonly store = new ActionStore(), private read = readActionSnapshot, private root = getConfigRoot(), private broker?: { runtime: ExecutorRuntime; owners: string[]; readJob: (repository: string, jobId: number) => Promise<NonNullable<BrokerInvocation['job']>> }) {
+    this.executor = new ActionExecutor(store, read, cmsandboxCheckPolicy, broker?.readJob ?? readActionJob, broker?.runtime)
   }
   private async initialize() { await (this.ready ??= this.store.reconcileInterrupted()) }
-  async receipt(id: string) { await this.initialize(); return (await this.store.receipts()).find(receipt => receipt.id === id) }
+  async receipt(id: string): Promise<ActionReceipt | undefined> {
+    if (!this.broker && liveActionsEnabled()) return await brokerData('/receipt', { id }) as ActionReceipt | undefined
+    await this.initialize(); return (await this.store.receipts()).find(receipt => receipt.id === id)
+  }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
     if (!url.pathname.startsWith('/api/actions')) return false
@@ -43,27 +48,32 @@ export class ActionsApi {
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
     let owners: string[] = []
-    try { owners = z.array(z.string()).parse(JSON.parse(await readFile(join(this.root, 'config.json'), 'utf8')).ask?.ownerLogins) } catch { owners = [] }
+    if (this.broker) owners = this.broker.owners
+    else try { owners = z.array(z.string()).parse(JSON.parse(await readFile(join(this.root, 'config.json'), 'utf8')).ask?.ownerLogins) } catch { owners = [] }
     const login = req.headers['tailscale-user-login'], peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
-    if (!(peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !owners.includes(login) || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'Authorized owner UI required for local action operations', { headers })
+    if (!(this.broker || peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !owners.includes(login) || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'Authorized owner UI required for local action operations', { headers })
     try {
+      if (!this.broker && liveActionsEnabled()) {
+        const response = await brokerRequest(url.pathname + url.search, req.method === 'POST' ? await actionBody(req) : undefined, login, req.method)
+        res.writeHead(response.status, { ...headers, 'Content-Type': 'application/json' }); res.end(JSON.stringify(response.body)); return true
+      }
       await this.initialize()
-      if (req.method === 'GET' && url.pathname === '/api/actions') return ok(res, { installed: await this.store.list(), examples: actionExamples(), runner: runnerStatus, policy: cmsandboxCheckPolicy, receipts: await this.store.receipts() }, { headers })
+      if (req.method === 'GET' && url.pathname === '/api/actions') return ok(res, { installed: await this.store.list(), examples: actionExamples(!!this.broker), runner: this.broker ? 'Isolated bubblewrap runner; Reader/Repair only. Admin Merge globally disabled.' : runnerStatus, policy: cmsandboxCheckPolicy, receipts: await this.store.receipts(), live: !!this.broker }, { headers })
       if (req.method === 'GET' && url.pathname === '/api/actions/inspect') {
         const id = key.parse(url.searchParams.get('id')), version = url.searchParams.get('version') ?? undefined
         return ok(res, { installed: await this.store.inspect(id, version), versions: await this.store.versions(id) }, { headers })
       }
       if (req.method === 'POST' && url.pathname === '/api/actions/install') {
-        const input = z.object({ candidate: candidateSchema, inspected: z.literal(true) }).strict().parse(await body(req))
+        const input = z.object({ candidate: candidateSchema, inspected: z.literal(true) }).strict().parse(await actionBody(req))
         return ok(res, await this.store.install(input.candidate, login), { headers })
       }
       if (req.method === 'POST' && url.pathname === '/api/actions/rollback') {
-        const input = z.object({ id: key, version: key }).strict().parse(await body(req))
+        const input = z.object({ id: key, version: key }).strict().parse(await actionBody(req))
         await this.store.rollback(input.id, input.version, login)
         return ok(res, { rolledBack: true }, { headers })
       }
       if (req.method === 'POST' && url.pathname === '/api/actions/capture') {
-        const input = z.object({ target: selectionSchema }).strict().parse(await body(req))
+        const input = z.object({ target: selectionSchema }).strict().parse(await actionBody(req))
         const identity = releasePull(input.target.url)
         if (!identity || !readerRepositories.includes(identity.repository as typeof readerRepositories[number])) throw new Error('Target outside Reader scope')
         const snapshot = await this.read(identity.url)
@@ -71,7 +81,8 @@ export class ActionsApi {
         return ok(res, snapshot, { headers })
       }
       if (req.method === 'POST' && url.pathname === '/api/actions/run') {
-        const input = invoke.parse(await body(req)), installed = await this.store.inspect(input.action, input.version)
+        const input = invoke.parse(await actionBody(req)), installed = await this.store.inspect(input.action, input.version)
+        if (input.repair && input.targets.length !== 1) throw new Error('Repair requires exactly one selected PR')
         const targets: ActionSnapshot[] = []
         // Four read slots, selected targets only. No inventory scan or caller-controlled tool URL.
         for (let index = 0; index < input.targets.length; index += 4) targets.push(...await Promise.all(input.targets.slice(index, index + 4).map(async selected => {
@@ -81,13 +92,13 @@ export class ActionsApi {
           if (snapshot.head !== selected.head || snapshot.base !== selected.base || selected.baseHead && selected.baseHead !== snapshot.baseHead) throw new Error('Selected head/base changed; refresh before invocation')
           return snapshot
         })))
-        return ok(res, { runId: await this.executor.start({ key: input.key, actor: login, installed, targets, mode: input.mode, view: input.view, repair: input.repair as Extract<NonNullable<typeof input.repair>, { kind: 'repair.update' | 'repair.rerun' }> | undefined }), simulated: true, actualGitHubWrites: 0 }, { headers })
+        return ok(res, { runId: await this.executor.start({ key: input.key, actor: login, installed, targets, mode: input.mode, view: input.view, repair: input.repair as Extract<NonNullable<typeof input.repair>, { kind: 'repair.update' | 'repair.rerun' }> | undefined }), simulated: !this.broker, ...(!this.broker ? { actualGitHubWrites: 0 } : {}) }, { headers })
       }
       if (req.method === 'POST' && url.pathname === '/api/actions/cancel') {
-        const input = z.object({ runId: z.string().uuid() }).strict().parse(await body(req))
+        const input = z.object({ runId: z.string().uuid() }).strict().parse(await actionBody(req))
         await this.executor.cancel(input.runId, login); return ok(res, { cancelled: true }, { headers })
       }
-      return fail(res, 'NOT_FOUND', 'Unknown local action route; live execution is not implemented', { headers })
+      return fail(res, 'NOT_FOUND', 'Unknown action route', { headers })
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid action payload', { headers })
       return fail(res, 'CONFLICT', error instanceof Error ? error.message : 'Action unavailable', { headers })

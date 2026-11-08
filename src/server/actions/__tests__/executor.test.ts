@@ -81,7 +81,7 @@ it('cancellation stops unsent operations and restart reconciles unfinished inten
   const reloaded = new ActionStore(store.root); await reloaded.reconcileInterrupted()
   expect((await reloaded.receipts()).find(row => row.id === 'unfinished')).toMatchObject({ outcome: 'unknown', actualGitHubWrites: 0, resultingSha: null })
 })
-it('proves ten-target coordinated partial merge results with head drift, missing checks, unresolved threads and provider failure', async () => {
+it('refuses Admin Merge globally for all ten targets while retaining per-target evidence and provider failures', async () => {
   const targets = Array.from({ length: 10 }, (_, i) => snapshot(i + 1))
   const { store, executor, action } = await setup('admin-merge', async url => {
     const number = Number(url.split('/').pop()), live = snapshot(number)
@@ -96,10 +96,11 @@ it('proves ten-target coordinated partial merge results with head drift, missing
   const id = await executor.start(input); await executor.wait(id)
   const receipts = await store.receipts()
   expect(receipts).toHaveLength(10)
-  expect(receipts.filter(row => row.outcome === 'simulated')).toHaveLength(5)
-  expect(receipts.filter(row => row.outcome === 'skipped')).toHaveLength(5)
+  expect(receipts.filter(row => row.outcome === 'simulated')).toHaveLength(0)
+  expect(receipts.filter(row => row.outcome === 'skipped')).toHaveLength(10)
   expect(receipts.every(row => row.actualGitHubWrites === 0 && row.resultingSha === null && row.worker === 'Unknown')).toBe(true)
-  expect(receipts.filter(row => row.providerRequest).every(row => row.providerRequest?.body.merge_method === 'squash' && row.providerRequest.body.sha === head)).toBe(true)
+  expect(receipts.every(row => row.providerRequest === null)).toBe(true)
+  expect(receipts.filter(row => row.reasons.includes('Admin Merge is globally disabled; no live Merge adapter exists'))).toHaveLength(9)
   expect(receipts[0]?.plan.join()).toContain('dependency order unknown')
   expect(receipts.every(row => row.mode === 'coordinated' && row.order >= 0)).toBe(true)
 })

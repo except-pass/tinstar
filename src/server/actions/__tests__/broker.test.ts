@@ -21,7 +21,7 @@ describe('dedicated app broker boundary', () => {
     expect(appProfiles.Repair.permissions.actions).toBe('write')
   })
   it('simulates explicit squash bound to expected head with only approved PR rule scope', () => {
-    expect(reasons()).toEqual([])
+    expect(reasons()).toEqual(['Admin Merge is globally disabled; no live Merge adapter exists'])
     expect(new SimulatedWriteAdapter().perform(snapshot(), merge)).toMatchObject({ actualGitHubWrites: 0, resultingSha: null, verification: 'not-performed', providerRequest: { method: 'PUT', path: '/repos/fortresspower/cmsandbox/pulls/1/merge', body: { merge_method: 'squash', sha: head }, ruleScope: { id: 6108448, mode: 'pull_request' } } })
   })
   it.each([
@@ -85,7 +85,7 @@ describe('mandatory check inventory', () => {
     const requiredCheck = checks[0]
     if (!requiredCheck) throw new Error('Disposable workload fixture requires a nonempty check inventory')
     const selected = { ...snapshot(), changedPaths: [webFmp], checks }
-    expect(validateOperation(installed(), selected, selected, merge, invocation, fixturePolicy).reasons).toEqual([])
+    expect(validateOperation(installed(), selected, selected, merge, invocation, fixturePolicy).reasons).toEqual(['Admin Merge is globally disabled; no live Merge adapter exists'])
     for (const conclusion of ['failure', 'skipped', 'cancelled', 'timed_out', 'neutral', null]) expect(validateChecks({ ...selected, checks: [{ ...requiredCheck, conclusion }, ...checks.slice(1)] }, fixturePolicy).length).toBeGreaterThan(0)
     for (const status of ['queued', 'in_progress', 'pending', 'requested', 'waiting']) expect(validateChecks({ ...selected, checks: [{ ...requiredCheck, status, conclusion: null }, ...checks.slice(1)] }, fixturePolicy).length).toBeGreaterThan(0)
     expect(validateChecks({ ...selected, checks: checks.slice(1) }, fixturePolicy).join()).toContain('Missing required check')

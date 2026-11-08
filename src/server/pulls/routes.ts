@@ -44,8 +44,8 @@ export class PullsApi {
     const identity = await this.reader.identity()
     const reads = await this.reader.inventory(repositories, { ...identity, associated })
     const links = new Map(associations.pulls.map(pull => [pull.id, pull.links]))
-    return { account: identity.account, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
-      repositories: reads.map(read => read.coverage), warnings: [...warnings, ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }
+    return { account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
+      repositories: reads.map(read => read.coverage), warnings: [...warnings, ...(identity.authenticatedActor ? [`Authenticated as ${identity.authenticatedActor}; review author ${identity.account}. Repositories outside its verified installations are unavailable; no ambient-login fallback.`] : []), ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }
   }
   async origin(url: string) {
     const { repositories, associated, associations, auditAvailable } = await this.scope()
@@ -53,7 +53,7 @@ export class PullsApi {
     if (!identity || !repositories.includes(identity.repository)) throw new Error('PR unavailable in the current repository scope.')
     const user = await this.reader.identity()
     const pull = await this.reader.summary(identity.url)
-    if (!user.owners.includes(identity.repository.split('/')[0]!) && pull.author.toLowerCase() !== user.account && !associated.some(row => row.id === pull.id)) throw new Error('PR unavailable in the current authored or associated scope.')
+    if (!(user.repositories ? user.repositories.includes(identity.repository) : user.owners.includes(identity.repository.split('/')[0]!)) && pull.author.toLowerCase() !== user.account && !associated.some(row => row.id === pull.id)) throw new Error('PR unavailable in the current authored or associated scope.')
     return { ...pull, links: auditAvailable ? associations.pulls.find(row => row.id === pull.id)?.links ?? [] : [] }
   }
   async relationships(id: string): Promise<AskContext['relationships']> {

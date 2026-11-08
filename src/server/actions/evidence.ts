@@ -6,7 +6,7 @@ import { githubJson } from '../pulls/github'
 const metadata = z.object({ number: z.number(), html_url: z.string(), state: z.enum(['open', 'closed']), merged: z.boolean(), draft: z.boolean(), mergeable: z.boolean().nullable(),
   head: z.object({ sha: z.string(), ref: z.string(), repo: z.object({ full_name: z.string() }).nullable() }), base: z.object({ sha: z.string(), ref: z.string() }), changed_files: z.number().int().nonnegative() })
 const checkSchema = z.object({ total_count: z.number(), check_runs: z.array(z.object({ id: z.number(), name: z.string(), head_sha: z.string(), status: z.string(), conclusion: z.string().nullable(), app: z.object({ id: z.number(), slug: z.string() }), details_url: z.string(), started_at: z.string().nullable(), completed_at: z.string().nullable() })) })
-/** Existing authorized application GET route, expressly not an App token migration.
+/** Reader selection honors the explicit live switch through githubJson.
  * No cache is used: each proposal observes the exact head immediately before validation.
  * REST reviews cannot establish resolved threads; do not invent that evidence. */
 export async function readActionSnapshot(url: string, read = githubJson): Promise<ActionSnapshot> {

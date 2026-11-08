@@ -97,6 +97,6 @@ export class ActionStore {
     return [...latest.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   }
   async reconcileInterrupted() {
-    for (const receipt of await this.receipts()) if (receipt.outcome === 'intent') await this.append({ ...receipt, outcome: 'unknown', finishedAt: new Date().toISOString(), reasons: [...receipt.reasons, 'Process restarted before completion; provider reconciliation required before retry. No automatic retry.'] })
+    for (const receipt of await this.receipts()) if (receipt.outcome === 'intent') await this.append({ ...receipt, outcome: 'unknown', actualGitHubWrites: receipt.execution === 'live' && receipt.providerRequest ? null : 0, finishedAt: new Date().toISOString(), reasons: [...receipt.reasons, 'Process restarted before completion; provider reconciliation required before retry. No automatic retry.'] })
   }
 }
