@@ -18,15 +18,20 @@ this service. There must be exactly one active puller. This installer does not
 edit First Mate registrations. The shared home lock also protects accidental
 manual execution of the shipped adapter.
 
-For a fresh normal npm install on the designated Mac, one command installs and
-enables the service as part of Tin Star (substitute origin, home and key reference):
+Tin Star is not published on the npm registry. Install or replace the global
+package from the release tarball on the designated Mac. Use the same
+login/config root that will run the service; do not use sudo:
 
 ```sh
-TINSTAR_ASK_URL=https://your-tinstar.example.ts.net:8450 TINSTAR_ASK_HOME="$HOME/repo/firstmate" TINSTAR_ASK_TOKEN_KEY=tinstar.ask-bridge npm install -g tinstar@<release>
+npm install -g ./tinstar-<ver>.tgz
 ```
 
-Use the same login/config root that will run the service; do not use sudo. For
-an existing installed Tin Star, the canonical one-command service install is:
+npm 11.19 and newer may skip Tin Star's postinstall under the allow-scripts
+gate. `npm update -g` skips that hook the same way unless allow-scripts
+includes tinstar, so a global install or update does not by itself set up the
+LaunchAgent. After every `npm install -g` or `npm update -g`, run the
+canonical idempotent service install (substitute origin, home and key
+reference):
 
 ```sh
 tinstar ask-puller install --url https://your-tinstar.example.ts.net:8450 --home "$HOME/repo/firstmate" --token-key tinstar.ask-bridge
@@ -39,6 +44,31 @@ reference, executable search path, clavis path and enabled state in mode-0600
 `ask-puller.json`. The LaunchAgent uses the installed package's Python service
 path and interpreter, never a copied worktree script. Its PATH is captured at
 install so clavis and the inbox work without an interactive shell.
+
+Confirm the service:
+
+```sh
+tinstar ask-puller status
+```
+
+`healthy` means the LaunchAgent is loaded and the last success is within
+three minutes.
+
+Letting the postinstall enable the service is secondary. It works only when
+npm actually runs the hook. For a global install, npm 11.19 accepts
+`--allow-scripts=tinstar` on the command, or a persisted user setting,
+`npm config set allow-scripts=tinstar --location=user`, before a later
+install or update. `npm approve-scripts` only edits a project `package.json`
+and fails for a global install (`-g` returns EGLOBAL). npm matches each
+allow-scripts name to the package's resolved identity, not the name the
+package reports. With the hook allowed, pass the same settings in the
+environment:
+
+```sh
+TINSTAR_ASK_URL=https://your-tinstar.example.ts.net:8450 TINSTAR_ASK_HOME="$HOME/repo/firstmate" TINSTAR_ASK_TOKEN_KEY=tinstar.ask-bridge npm install -g --allow-scripts=tinstar ./tinstar-<ver>.tgz
+```
+
+If status is not healthy, run the canonical install above.
 
 ## Verify and operate
 
@@ -68,19 +98,20 @@ removes the plist/config; it retains private health for diagnosis and the lock
 inode for safe overlap. Never delete a lock inode to clear a stale-looking PID:
 the kernel releases the lock on process death.
 
-Normal `npm install -g tinstar@<release>` / `npm update -g tinstar` runs the shipped
-postinstall hook. A configured Mac regenerates/reloads the service when installed
-paths or configuration change and ensures an enabled agent is loaded. Reinstall
-is idempotent. Disabled installations stay disabled; unconfigured Macs and all
-non-Mac installs do nothing. Source checkouts also skip automatic service updates
-so `npm ci` cannot repoint
-an installed LaunchAgent at a disposable worktree; lifecycle setup commands
-require the installed Tin Star CLI. Status/disable/uninstall remain available.
-`--ignore-scripts` suppresses npm integration;
-after such an update, rerun the canonical install command with the saved settings.
-A failed update hook reports failure; run the CLI and status from the installed
-package to repair it. No separate service checkout or manually maintained plist
-is involved. Desktop-only/browser-only installs do not designate a Mac puller.
+When npm runs the shipped postinstall, a configured Mac regenerates and
+reloads the service when installed paths or configuration change, and ensures
+an enabled agent is loaded. On npm 11.19 and newer that hook may be skipped;
+after every global install or update, rerun the canonical install from the
+install section. Reinstall is idempotent. Disabled installations stay
+disabled; unconfigured Macs and all non-Mac installs do nothing. Source
+checkouts also skip automatic service updates so `npm ci` cannot repoint an
+installed LaunchAgent at a disposable worktree; lifecycle setup commands
+require the installed Tin Star CLI. Status, disable and uninstall remain
+available. `--ignore-scripts` also skips the hook; rerun the canonical
+install afterward. A failed update hook reports failure; run the canonical
+install and then status from the installed package to repair it. No separate
+service checkout or manually maintained plist is involved. Desktop-only and
+browser-only installs do not designate a Mac puller.
 
 ## Idle cost, failure and retry behavior
 
