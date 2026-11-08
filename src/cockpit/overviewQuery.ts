@@ -1,4 +1,5 @@
 import Fuse from 'fuse.js'
+import { askReturnSchema, type AskReturn } from '../shared/ask'
 
 /** A worker the overview can match. `id` is the First Mate task id shown as the name. */
 export interface FilterableWorker {
@@ -8,6 +9,7 @@ export interface FilterableWorker {
 
 export interface OverviewLocation {
   page?: 'releases' | 'pulls'
+  origin?: AskReturn
   card?: string
   /** First Mate task id, or null when the overview is showing. */
   worker: string | null
@@ -67,11 +69,13 @@ export function linkLocation(workers: LinkableWorker[], location: OverviewLocati
 
 export function readOverviewSearch(search: string): OverviewLocation {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  let origin: AskReturn | undefined
+  try { const parsed = askReturnSchema.safeParse(JSON.parse(params.get('origin') ?? 'null')); if (parsed.success && parsed.data.section === params.get('view')) origin = parsed.data } catch { /* Ignore an invalid locator; normal section navigation stays available. */ }
   const worker = params.get('worker')
   const home = params.get('home')
   return worker && worker.trim()
     ? { worker, home: home || null, key: null, q: params.get('q') ?? '' }
-    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(['releases', 'pulls'].includes(params.get('view') ?? '') ? { page: params.get('view') as 'releases' | 'pulls' } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
+    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(origin ? { origin } : {}), ...(['releases', 'pulls'].includes(params.get('view') ?? '') ? { page: params.get('view') as 'releases' | 'pulls' } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
 }
 
 /** Merge the overview params into the current query string, preserving anything else. */
@@ -87,6 +91,8 @@ export function writeOverviewSearch(currentSearch: string, next: OverviewLocatio
   else params.delete('view')
   if (next.card && !next.page && !next.worker) params.set('card', next.card)
   else params.delete('card')
+  if (next.origin && next.origin.section === next.page && !next.worker) params.set('origin', JSON.stringify(next.origin))
+  else params.delete('origin')
   const text = params.toString()
   return text ? `?${text}` : ''
 }

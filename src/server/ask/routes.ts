@@ -2,13 +2,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askCreateSchema, bridgeUpdateSchema, publicAsk, type AskContext } from '../../shared/ask'
+import { askCreateSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
 import { getConfigRoot } from '../configRoot'
 import { ok, fail } from '../api/envelope'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { secretEquals } from '../reconciliation/sessions'
 import type { ReconciliationSources } from '../reconciliation'
+import { artifactContext, type AskArtifactSources } from './artifacts'
 import { AskConflict, AskNotFound, AskStore } from './store'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
@@ -40,7 +41,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -75,7 +76,10 @@ export class AskApi {
         if (input.follow_up_to && !parent) throw new AskNotFound('Original question unavailable')
         let context: AskContext
         if (existing || parent) context = (existing ?? parent)!.context
-        else {
+        else if (isArtifactTarget(input.target)) {
+          if (!this.artifacts) throw new AskNotFound('Artifact sources unavailable')
+          context = await artifactContext(input.target, input.view, { ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
+        } else {
           const scene = await this.sources.scene()
           const claim = input.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === input.target!.id) : undefined
           const worker = input.target?.kind === 'execution' ? scene.executions.find(worker => worker.id === input.target!.id) : undefined
@@ -84,14 +88,14 @@ export class AskApi {
           if (!card && !worker) throw new AskNotFound('Card unavailable in the authorized source')
           const title = card?.source.properties.Name?.value
           const observation = worker?.observation ?? scene.coverage.intentions
-          context = { anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : `https://www.notion.so/${card!.id}`, observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
+          context = { schema_version: 2, return_to: { section: 'overview', target: input.target ?? { kind: 'card', id: card!.id }, view: input.view }, anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : `https://www.notion.so/${card!.id}`, observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
             ...(input.target ? { target: input.target } : {}),
             ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}),
             ...(claim ? { relationship: { claim_id: claim.id, card_id: claim.cardId, execution_id: claim.executionId, sources: claim.sources, basis: claim.basis, verification: claim.verification } } : {}),
           }
         }
         if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value)) throw new AskConflict('Question field differs from the original')
-        if (input.target ? input.target.kind !== context.target?.kind || input.target.id !== context.target.id : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
+        if (input.target ? JSON.stringify(input.target) !== JSON.stringify(context.target) : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
         return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
       }
       const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|retry)$/.exec(path)

@@ -90,3 +90,43 @@ test('one accessible mobile sheet retains its inbox on close and section navigat
   await expect(sheet).toBeHidden()
   await expect(page.getByRole('complementary', { name: 'Workers' })).toBeVisible()
 })
+
+test('typed CI Ask returns from Releases to its exact PR after an independent answer arrives', async ({ page }) => {
+  const head = 'a'.repeat(40), at = new Date().toISOString(), requests: Record<string, unknown>[] = []
+  const pull = { id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', title: 'Typed fixture PR', author: 'owner', draft: false, head, base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [] }
+  let records: Array<Record<string, unknown>> = []
+  await page.route('**/api/pulls**', async route => {
+    const data = new URL(route.request().url()).pathname.endsWith('/detail') ? { head, state: 'open', body: 'CI evidence', bodyTruncated: false, additions: 2, deletions: 1, files: 1, checks: 'failed', review: 'Changes requested', reviews: [], reviewsComplete: true, freshness: 'fresh', observedAt: at, error: null } : { pulls: [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }], repositories: [], warnings: [], associationsComplete: true }
+    await route.fulfill({ json: { ok: true, data } })
+  })
+  await page.route('**/api/ask/requests', async route => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON(); requests.push(body)
+      const target = body.target
+      const row = { request_id: '20000000-0000-4000-8000-000000000017', conversation_id: '20000000-0000-4000-8000-000000000017', question: body.question, input_mode: 'text', context: { schema_version: 2, anchor: { kind: 'pull', page_id: pull.id, label: 'Typed fixture PR', url: pull.url, observed_at: at }, target, view: body.view, return_to: { section: 'pulls', target, view: body.view }, field_key: 'ci', field_value: 'failed' }, created_at: at, updated_at: at, status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null }
+      records.push(row); await route.fulfill({ json: { ok: true, data: row } })
+    } else await route.fulfill({ json: { ok: true, data: records } })
+  })
+  await page.route('**/api/ask/requests/*/read', async route => { await route.fulfill({ json: { ok: true, data: {} } }) })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${base}/?view=pulls`)
+  await page.getByRole('button', { name: 'Inspect owner/repo#17', exact: true }).click()
+  await page.locator('.pr-row[data-ask-origin="owner/repo#17"] [data-ask-field="ci"]').click({ button: 'right' })
+  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue('What is happening with CI for this PR?')
+  expect(requests).toHaveLength(0)
+  await page.getByRole('textbox', { name: 'Question' }).fill('Isolated fixture CI question')
+  await page.getByRole('button', { name: 'Send question' }).click()
+  await expect(page.getByText('Isolated fixture CI question', { exact: true })).toBeVisible()
+  expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: 'ci', view: { scene: 'pulls' } })
+  expect(requests[0]).not.toHaveProperty('card_id')
+  await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
+  records = records.map(row => ({ ...row, status: 'answered', reply: { summary: 'Isolated correlated answer', detail: 'Fixture evidence detail', references: [], suggested_actions: [] } }))
+  await expect(page.getByText('Isolated correlated answer', { exact: true })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: /New answer.*Isolated fixture CI question/ }).click()
+  await expect(page.locator('.pr-row')).toHaveCount(1)
+  await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', pull.id)
+  await expect(page.getByRole('dialog')).toContainText('Isolated correlated answer')
+  await page.getByRole('button', { name: 'Back to task' }).click()
+  await page.goBack()
+  await expect(page).toHaveURL(/view=releases/)
+})

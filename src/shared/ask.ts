@@ -3,21 +3,54 @@ import { organizerSchema, statusFilterSchema } from './reconciliationCommands'
 
 export const pageIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const askViewSchema = z.object({
-  scene: z.literal('overview'), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
+  scene: z.enum(['overview', 'pulls', 'releases']), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
+  query: z.string().max(512).optional(), sort: z.string().max(64).optional(), descending: z.boolean().optional(),
+  filter: z.string().max(64).optional(), preset: z.enum(['initiative', 'repository']).optional(), collapsed: z.array(z.string().max(2048)).max(500).optional(),
 }).strict()
-export const askTargetSchema = z.object({ kind: z.enum(['execution', 'claim']), id: z.string().min(1).max(2048) }).strict()
+export type AskView = z.infer<typeof askViewSchema>
+export const pullIdSchema = z.string().max(512).regex(/^[\w.-]+\/[\w.-]+#[1-9]\d*$/).transform(value => value.toLowerCase())
+const headSchema = z.string().regex(/^[a-f0-9]{40,64}$/)
+const overviewTargetSchema = z.object({ kind: z.enum(['execution', 'claim']), id: z.string().min(1).max(2048) }).strict()
+const pullTargetSchema = z.object({ kind: z.literal('pull'), id: pullIdSchema, head: headSchema.optional() }).strict()
+const releaseTargetSchema = z.object({ kind: z.literal('release'), id: pullIdSchema, target: z.string().min(1).max(256), component: z.string().min(1).max(256) }).strict()
+const receiptTargetSchema = releaseTargetSchema.extend({ kind: z.literal('receipt'), receipt_id: z.string().min(1).max(2048) }).strict()
+export const askTargetSchema = z.union([overviewTargetSchema, pullTargetSchema, releaseTargetSchema, receiptTargetSchema])
 export type AskTarget = z.infer<typeof askTargetSchema>
-export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title'])
+export type ArtifactAskTarget = Exclude<AskTarget, z.infer<typeof overviewTargetSchema>>
+export const isArtifactTarget = (target: AskTarget | undefined): target is ArtifactAskTarget => !!target && ['pull', 'release', 'receipt'].includes(target.kind)
+export const askReturnSchema = z.object({
+  section: z.enum(['overview', 'pulls', 'releases']),
+  target: z.union([z.object({ kind: z.literal('card'), id: pageIdSchema }).strict(), askTargetSchema]),
+  view: askViewSchema.optional(),
+}).strict().refine(value => value.section === 'overview' ? ['card', 'execution', 'claim'].includes(value.target.kind) : value.section === 'pulls' ? value.target.kind === 'pull' : isArtifactTarget(value.target as AskTarget), 'Return section must own its target')
+export type AskReturn = z.infer<typeof askReturnSchema>
+export function pullSource(id: string) {
+  const match = /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(id)
+  return match ? { repository: match[1]!.toLowerCase(), number: Number(match[2]), url: `https://github.com/${match[1]!.toLowerCase()}/pull/${match[2]}` } : null
+}
+export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title', 'ci', 'review', 'changes', 'description', 'deployment', 'receipt'])
 export type AskField = z.infer<typeof askFieldSchema>
 const semanticContext = {
   field_key: askFieldSchema.optional(), field_value: z.string().max(4000).optional(),
 }
 export const askContextSchema = z.object({
-  anchor: z.object({ kind: z.enum(['work', 'worker', 'link']), page_id: z.string().min(1).max(2048), label: z.string().max(512), url: z.string().url().nullable(), observed_at: z.string().nullable(), freshness: z.enum(['fresh', 'partial', 'stale', 'unknown']).default('unknown'), expires_at: z.string().nullable().default(null) }).strict(),
+  anchor: z.object({ kind: z.enum(['work', 'worker', 'link', 'pull', 'release', 'receipt']), page_id: z.string().min(1).max(2048), label: z.string().max(512), url: z.string().url().nullable(), observed_at: z.string().nullable(), freshness: z.enum(['fresh', 'partial', 'stale', 'unknown']).default('unknown'), expires_at: z.string().nullable().default(null) }).strict(),
   view: askViewSchema, target: askTargetSchema.optional(), ...semanticContext,
+  schema_version: z.literal(2).optional(), return_to: askReturnSchema.optional(),
+  source: z.object({ kind: z.enum(['github', 'deployment']), repository: z.string(), number: z.number().int().positive(),
+    head: headSchema.nullable(), merge_sha: headSchema.nullable().optional(), target: z.string().optional(), component: z.string().optional(),
+    receipt_id: z.string().optional(), receipt_url: z.string().url().optional(), workflow_url: z.string().url().optional(),
+    deployed_sha: z.string().nullable().optional(), observed_at: z.string().nullable(),
+  }).strict().optional(),
   relationship: z.object({ claim_id: z.string().max(2048), card_id: pageIdSchema, execution_id: z.string().max(2048), sources: z.array(z.string()), basis: z.enum(['explicit', 'inferred', 'textual']), verification: z.enum(['confirmed', 'unverified', 'conflicting']) }).strict().optional(),
 }).strict()
 export type AskContext = z.infer<typeof askContextSchema>
+/** Legacy records keep their original wire shape; navigation derives the same Overview origin. */
+export function askReturn(context: AskContext): AskReturn {
+  if (context.return_to) return context.return_to
+  if (isArtifactTarget(context.target)) return { section: context.view.scene === 'releases' || context.target.kind !== 'pull' ? 'releases' : 'pulls', target: context.target, view: context.view }
+  return { section: 'overview', target: context.target?.kind === 'execution' || context.target?.kind === 'claim' ? context.target : { kind: 'card', id: context.anchor.page_id } }
+}
 export const askReplySchema = z.object({
   summary: z.string().min(1).max(2000), detail: z.string().max(32000),
   references: z.array(z.object({ label: z.string().max(512), url: z.string().url().refine(value => {

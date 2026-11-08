@@ -10,10 +10,12 @@ import { AskCardAction, AskDesk, AskProvider, useAskControls } from './Ask'
 import { DeskRail } from './DeskRail'
 import { useSearchSession } from '../reconciliation/useSearchSession'
 import { loadOverviewDensity, type OverviewDensity } from '../reconciliation/overviewDensity'
+import type { AskReturn } from '../shared/ask'
 import type { Target } from '../reconciliation/presentation'
 
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
+  origin?: AskReturn; clearOrigin?: () => void
   queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void
 }
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -23,7 +25,8 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ overviewActive, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
+export function DeskWorkspace({ origin, onNavigate, onClearOrigin, overviewActive, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
+  onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
   overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
@@ -47,9 +50,9 @@ export function DeskWorkspace({ overviewActive, onOverview, onWorkers, onReceipt
   const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
   const search = useSearchSession({ active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk }
+  const workspace = { origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk }
   return <WorkspaceContext.Provider value={workspace}>
-    <AskProvider scene={floor.scene} state={presentation.state} send={send} onReturn={() => { if (!overviewActive) onOverview() }}>
+    <AskProvider scene={floor.scene} state={presentation.state} send={send} onReturn={destination => { if (destination.section !== 'overview') { setCloseRequest(value => value + 1); onNavigate?.(destination) } else if (!overviewActive) onOverview() }}>
       <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} onWorkers={onWorkers} onReceipts={onReceipts} workers={workers} messages={messages} submit={submit} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>

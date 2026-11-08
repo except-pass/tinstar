@@ -82,6 +82,43 @@ history items use the same return path. A task that cannot be shown gets the
 captured canonical source link rather than another object. Follow-up creates a new request in the same
 conversation and retains the original captured context. No raw audio is stored.
 
+## Typed artifact origins and returns
+
+The same composer supports PRs, deployment targets and deployment receipts.
+PR rows in both PRs and Releases ask about the actual GitHub PR; linked-card
+controls inside inspection continue to ask about that explicit Notion card.
+Right-click a PR CI/review/changes field or deployment/receipt text to prepare an
+editable question. Blank Ask icons remain blank, and native links, selection,
+inspection, table scrolling and unavailable voice behavior retain their existing
+interaction rules.
+
+New contexts optionally carry `schema_version: 2`, a typed target, server-owned
+source observation, and a canonical `return_to` locator. PR targets use the
+canonical lowercase `repository#number` plus captured head when available.
+Deployment targets add target/component; receipt targets also carry the immutable
+receipt ID. Shared `src/shared/ask.ts` owns this contract. Source metadata and
+return targets are resolved through the same PR/Releases projections used by the
+screens, after the existing Ask owner authentication. Client field text and head
+are hints; First Mate still investigates fresh authoritative sources. A missing,
+superseded or out-of-scope object is reported honestly. No linkage is inferred
+from names or titles.
+
+Existing stored Work/Worker/Link contexts remain readable without a migration;
+legacy return navigation is derived as Overview. The request IDs, client retry
+keys, follow-up correlation, owner scoping, `tinstar.ask.v1` bridge envelope and
+reply callback remain unchanged. New receipt/PR follow-ups retain their original
+captured context even if the source disappears later. Client-supplied provenance
+or return locators are not accepted by the create endpoint.
+
+Opening an artifact conversation uses the existing browser history and a typed
+URL locator to reveal the exact authorized PR or release row despite the current
+filter. Deployment/receipt origins reveal their read-only evidence inline in the
+main workspace. Source removal, receipt replacement and changed PR heads have
+visible fallback messages; source links remain available in the answer. Manual
+section navigation or clearing the origin ends pending focus. Detailed prior-view
+restoration and inline answer threads are the separate following slice; answers
+currently retain the existing answer dialog.
+
 ## Configuration and trust boundary
 
 Use the existing `config.json` under `getConfigRoot()` (normally

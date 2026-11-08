@@ -1,3 +1,4 @@
+import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { Releases } from '../Releases'
@@ -7,6 +8,7 @@ import { releaseFixture } from './fixtures'
 const observed = vi.hoisted(() => ({ scene: null as unknown }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
 // Ask's existing provider/transport is covered in ask tests; keep the same card-bound affordance here.
+vi.mock('../../ask/AskSurface', () => ({ AskSurface: ({ as = 'tr', children, subject: _subject, ...props }: React.HTMLAttributes<HTMLElement> & { as?: string; subject: unknown }) => React.createElement(as, props, children) }))
 vi.mock('../../ask/Ask', () => ({ AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
 let data: ReleasesRead
 beforeEach(() => {

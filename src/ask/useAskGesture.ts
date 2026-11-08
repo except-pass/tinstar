@@ -7,8 +7,8 @@ function canScrollLeftSwipe(element: HTMLElement) {
   }
   return false
 }
-export function useAskGesture(open: (() => void) | undefined) {
-  const ref = useRef<HTMLButtonElement>(null)
+export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (() => void) | undefined, ignoreControls = false) {
+  const ref = useRef<T>(null)
   const openRef = useRef(open); openRef.current = open
   const [hint, setHint] = useState(false)
   useEffect(() => {
@@ -31,9 +31,11 @@ export function useAskGesture(open: (() => void) | undefined) {
       if (ask) openRef.current?.()
     }
     const cancel = () => { if (gesture?.lock === 'text') suppressUntil = Date.now() + 700; gesture = null; pointerId = null; setHint(false) }
-    const touchStart = (e: TouchEvent) => { const t = e.touches[0]; if (e.touches.length === 1 && t) start(t.clientX, t.clientY); else cancel() }
+    const ignored = (event: Event) => ignoreControls && event.target instanceof Element && event.target !== element && !!event.target.closest('a,button,input,select,textarea')
+    const touchStart = (e: TouchEvent) => { if (ignored(e)) return; const t = e.touches[0]; if (e.touches.length === 1 && t) start(t.clientX, t.clientY); else cancel() }
     const touchMove = (e: TouchEvent) => { const t = e.touches[0]; if (e.touches.length === 1 && t) move(t.clientX, t.clientY, e); else cancel() }
     const pointerStart = (e: PointerEvent) => {
+      if (ignored(e)) return
       if (e.pointerType === 'touch' || e.button !== 0) return
       pointerId = e.pointerId; start(e.clientX, e.clientY)
       element.setPointerCapture?.(e.pointerId)
@@ -61,6 +63,6 @@ export function useAskGesture(open: (() => void) | undefined) {
       element.removeEventListener('pointerup', pointerEnd); element.removeEventListener('pointercancel', pointerCancel)
       element.removeEventListener('lostpointercapture', pointerCancel); element.removeEventListener('click', click, true)
     }
-  }, [!!open])
+  }, [!!open, ignoreControls])
   return { ref, hint }
 }

@@ -26,6 +26,27 @@ export class ReleasesApi {
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private evidence = new ReleaseEvidenceReader(root), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
   }
+  /** Shared authorized-source projection for Releases and contextual Ask. */
+  async read(writable = false) {
+    const scene = await this.sources.scene()
+    let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
+    try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
+    const data = releaseAssociations(scene, events)
+    data.associationsWritable = writable && !warning
+    if (warning) { data.associationsComplete = false; data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
+    const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
+    for (const pull of data.pulls) {
+      Object.assign(pull, observations.get(pull.url))
+      if (pull.readError) pull.exceptions.push(pull.readError)
+      else if (pull.freshness !== 'fresh') pull.exceptions.push('GitHub merge evidence pending, stale or unavailable')
+      else if (pull.state !== 'merged') pull.exceptions.push(pull.state === 'open' ? 'PR has not merged' : 'PR closed without merge')
+    }
+    const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
+    data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
+    const reconciled = await this.reconciler.get(data, scene, await this.evidence.get())
+    reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+    return reconciled
+  }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]
     if (!['/api/releases', '/api/releases/associations', '/api/releases/reconciliation', '/api/releases/automation'].includes(path!)) return false
@@ -39,23 +60,7 @@ export class ReleasesApi {
     const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
     try {
       if (path !== '/api/releases/associations' && req.method === 'GET') {
-        const scene = await this.sources.scene()
-        let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
-        try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
-        const data = releaseAssociations(scene, events)
-        data.associationsWritable = writable && !warning
-        if (warning) { data.associationsComplete = false; data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
-        const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
-        for (const pull of data.pulls) {
-          Object.assign(pull, observations.get(pull.url))
-          if (pull.readError) pull.exceptions.push(pull.readError)
-          else if (pull.freshness !== 'fresh') pull.exceptions.push('GitHub merge evidence pending, stale or unavailable')
-          else if (pull.state !== 'merged') pull.exceptions.push(pull.state === 'open' ? 'PR has not merged' : 'PR closed without merge')
-        }
-        const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
-        data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
-        const reconciled = await this.reconciler.get(data, scene, await this.evidence.get())
-        reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+        const reconciled = await this.read(writable)
         return ok(res, path === '/api/releases/automation' ? reconciled.automation : path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
       }
       if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
