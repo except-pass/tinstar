@@ -209,3 +209,37 @@ test('real Ask HTTP service persists independent typed questions and enforces so
     await testInfo.attach('Live HTTP transcript', { body: JSON.stringify(transcript, null, 2), contentType: 'application/json' })
   } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true }) }
 })
+
+for (const width of [1440, 390]) {
+  test(`closed PR Ask return preserves filters and expands its changed head at ${width}px`, async ({ page }, testInfo) => {
+    const head = 'b'.repeat(40), at = new Date().toISOString(), id = 'owner/repo#17'
+    const target = { kind: 'pull', id, head: 'a'.repeat(40) }, view = { scene: 'pulls', query: 'deliberately hides this origin', sort: 'author', descending: true }
+    const pull = { id, repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', state: 'merged', title: 'Closed origin fixture', author: 'owner', draft: false, head, base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [] }
+    await page.route('**/api/pulls**', async route => {
+      const path = new URL(route.request().url()).pathname
+      const data = path.endsWith('/origin') ? pull : path.endsWith('/detail') ? { head, state: 'closed', body: 'Closed PR authoritative description', bodyTruncated: false, additions: 2, deletions: 1, files: 0, checks: 'passed', review: 'Approved review', reviews: [], reviewsComplete: true, freshness: 'fresh', observedAt: at, error: null }
+        : path.endsWith('/files') ? { head, baseHead: head, files: [], expectedFiles: 0, complete: true, freshness: 'fresh', observedAt: at, error: null }
+          : { pulls: [], repositories: [], warnings: [], associationsComplete: true }
+      await route.fulfill({ json: { ok: true, data } })
+    })
+    await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [{ request_id: '20000000-0000-4000-8000-000000000017', conversation_id: '20000000-0000-4000-8000-000000000017', question: 'Explain closed PR evidence', input_mode: 'text', context: { schema_version: 2, anchor: { kind: 'pull', page_id: id, label: id, url: pull.url, observed_at: at }, target, view, return_to: { section: 'pulls', target, view } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Closed origin answer', detail: 'Retained evidence for this PR', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null }] } }))
+    await page.route('**/api/ask/requests/*/read', route => route.fulfill({ json: { ok: true, data: {} } }))
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto(`${base}/?view=releases`)
+    if (width === 390) await page.getByRole('button', { name: /Open Your desk/ }).click()
+    await page.getByRole('button', { name: /New answer.*Explain closed PR evidence/ }).click()
+    await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', id)
+    await expect(page.getByText('Closed PR authoritative description')).toBeVisible()
+    await expect(page.getByText(/Showing originating PR.*merged/)).toContainText('head changed')
+    await expect(page.getByRole('textbox', { name: 'Find PRs' })).toHaveValue(view.query)
+    await expect(page.getByRole('dialog')).toContainText('Closed origin answer')
+    await page.getByRole('button', { name: 'Back to task' }).click()
+    await expect(page.locator('.pr-row.ask-origin')).toBeFocused()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`closed-return-${width}.png`), fullPage: true })
+    await page.getByRole('button', { name: 'Show all PRs in this view' }).click()
+    await expect(page.getByRole('textbox', { name: 'Find PRs' })).toHaveValue(view.query)
+    await expect(page.locator('.pr-row')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Author ↓' })).toBeVisible()
+  })
+}

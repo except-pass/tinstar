@@ -284,3 +284,19 @@ The remaining parent-card items are follow-up slices:
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
   physical iPhone Safari and Android Chrome touch/microphone verification remains
   an explicit review gate when devices are available.
+
+PR inspection uses the same editable semantic Ask surface for description,
+footprint, card links and contributor evidence. Focus a semantic field and use
+Shift+F10 (or the Context Menu key), or right-click it; the row Ask icon stays
+blank. Notion links marked as Ask fields retain ordinary left-click navigation.
+The shared Ask context optionally records server-resolved `relationships`:
+active card IDs with association provenance, and exact current/retained worker
+IDs, attempts, freshness and claims. Captured field text is a hint, never authority.
+
+Desk returns to a PR with its captured query/sort intact, temporarily reveals,
+expands and focuses the canonical row, and keeps the answer open. A closed PR
+is read individually through owner-only `GET /api/pulls/origin?url=…`; this does
+not add closed PRs to the open inventory. The same configured repository and
+owned/authored/explicitly-associated relevance scope applies. Changed heads are
+labelled; failed or inaccessible reads retain the answer and original GitHub
+link. “Show all PRs in this view” removes only the temporary reveal.

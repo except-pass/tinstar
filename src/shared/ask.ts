@@ -28,7 +28,7 @@ export function pullSource(id: string) {
   const match = /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(id)
   return match ? { repository: match[1]!.toLowerCase(), number: Number(match[2]), url: `https://github.com/${match[1]!.toLowerCase()}/pull/${match[2]}` } : null
 }
-export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title', 'ci', 'review', 'changes', 'description', 'deployment', 'receipt'])
+export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title', 'ci', 'review', 'changes', 'description', 'deployment', 'receipt', 'worker'])
 export type AskField = z.infer<typeof askFieldSchema>
 const semanticContext = {
   field_key: askFieldSchema.optional(), field_value: z.string().max(4000).optional(),
@@ -41,6 +41,14 @@ export const askContextSchema = z.object({
     head: headSchema.nullable(), merge_sha: headSchema.nullable().optional(), target: z.string().optional(), component: z.string().optional(),
     receipt_id: z.string().optional(), receipt_url: z.string().url().optional(), workflow_url: z.string().url().optional(),
     deployed_sha: z.string().nullable().optional(), observed_at: z.string().nullable(),
+  }).strict().optional(),
+  relationships: z.object({
+    complete: z.boolean(),
+    cards: z.array(z.object({ card_id: pageIdSchema, sources: z.array(z.string()) }).strict()),
+    workers: z.array(z.object({ execution_id: z.string(), home: z.string(), task: z.string(), attempt: z.string().nullable(),
+      state: z.string(), freshness: z.string(), source: z.string(), observed_at: z.string().nullable(), registered_head: z.string().nullable(),
+      claims: z.array(z.object({ claim_id: z.string(), card_id: pageIdSchema, sources: z.array(z.string()), basis: z.string(), verification: z.string(), state: z.string() }).strict()),
+    }).strict()),
   }).strict().optional(),
   relationship: z.object({ claim_id: z.string().max(2048), card_id: pageIdSchema, execution_id: z.string().max(2048), sources: z.array(z.string()), basis: z.enum(['explicit', 'inferred', 'textual']), verification: z.enum(['confirmed', 'unverified', 'conflicting']) }).strict().optional(),
 }).strict()

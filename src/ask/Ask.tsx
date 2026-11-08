@@ -30,7 +30,7 @@ export function useCardAsk(cardId: string | null) {
 export function useSemanticAsk(subject: AskSubject) {
   const controls = useContext(Controls)
   return (event: MouseEvent | KeyboardEvent, field_key?: AskField, field_value?: string) => {
-    if (!controls || (event.target instanceof Element && event.target.closest('a, input, textarea, select'))) return
+    if (!controls || (event.target instanceof Element && (event.target.closest('input, textarea, select') || event.target.closest('a') && !event.target.closest('a[data-ask-field]')))) return
     event.preventDefault(); event.stopPropagation()
     controls.open({ ...subject, field_key, field_value: field_value?.slice(0, 4000) })
   }
