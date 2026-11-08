@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
-import { Overview } from '../Overview'
+import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { overviewDensityKey } from '../overviewDensity'
 import type { FloorScene } from '../presentation'
 

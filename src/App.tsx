@@ -12,6 +12,7 @@ import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
+import { DeskWorkspace } from './ask/DeskWorkspace'
 import { Pulls } from './pulls/Pulls'
 import { useReleases } from './releases/useReleases'
 import { releaseQueueCount } from './releases/model'
@@ -303,8 +304,9 @@ export default function App() {
       <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
+    <DeskWorkspace overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview onReceipts={() => setPanelMode('messages')} onWorkers={() => setPanelMode('workers')} initialCardId={overviewLocation.card} workers={workers} messages={messages} submit={submit} /> : current ? <>
+      {overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {
@@ -344,7 +346,7 @@ export default function App() {
           : !fleet.errors.length && <p className="cockpit-empty">Loading workers…</p>}
       </> : null}
 
-    </main>
+    </main></DeskWorkspace>
 
   </div>
 }

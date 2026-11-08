@@ -1,28 +1,25 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
-import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shell/types'
+import type { Worker } from '../cockpit/shell/types'
 import { homeName, findLinkedWorker } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { AgentIcon } from '../components/agentIcon'
 import { semanticId, ancestorHomes, isPlanned, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
-import { useFloorScene } from './useFloorScene'
-import { useDeskQueue } from './useDeskQueue'
-import { usePresentation } from './usePresentation'
-import { QueuePanel } from './QueuePanel'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { useSearchSession } from './useSearchSession'
 import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
-import { loadOverviewDensity, saveOverviewDensity, type OverviewDensity } from './overviewDensity'
+import { saveOverviewDensity } from './overviewDensity'
 import './overview.css'
 import './overviewActions.css'
-import { AskProvider, AskDesk, AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit } from '../ask/Ask'
+import { AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit } from '../ask/Ask'
+
+import { useDeskWorkspace } from '../ask/DeskWorkspace'
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
@@ -294,9 +291,8 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </section>
 }
-export function Overview({ workers, submit, messages, initialCardId, onReceipts, onWorkers }: { onReceipts?: () => void; onWorkers?: () => void; initialCardId?: string; messages: OutboxMessage[]; workers: Worker[]; submit: (draft: Draft) => Promise<SubmitResult> }) {
-  const { scene, error, now } = useFloorScene(), { queue, error: queueError } = useDeskQueue()
-  const { state, send, connection, bridgeError } = usePresentation(scene, queue, !!error)
+export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
+  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch } = useDeskWorkspace()
   const navigatedCard = useRef<string | null>(null)
   useEffect(() => {
     if (!initialCardId || !scene?.cards.some(card => card.id === initialCardId) || navigatedCard.current === initialCardId) return
@@ -306,22 +302,10 @@ export function Overview({ workers, submit, messages, initialCardId, onReceipts,
   const [hovered, setHovered] = useState<Target | null>(null), [diagnosticsRevision, setDiagnosticsRevision] = useState<number | null>(null)
   const diagnostics = diagnosticsRevision === state.revision
   const setDiagnostics = (open: boolean) => setDiagnosticsRevision(open ? state.revision : null)
-  const [density, setDensity] = useState<OverviewDensity>(loadOverviewDensity)
-  const [openRelationships, setOpenRelationships] = useState<Target[]>([])
-  const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
+  const { density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed, canvas, root, search } = overviewSearch
   const expanded = useMemo(() => scene ? expandedRelationships(scene, openRelationships) : new Set<string>(), [scene, openRelationships])
-  const canvas = useRef<HTMLDivElement>(null)
-  const [deskMobile, setDeskMobile] = useState(false)
-  const root = useRef<HTMLDivElement>(null), previousSelection = useRef<string | null>(null)
-  const search = useSearchSession({ scene, state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
-  const deskPanel = useRef<HTMLElement>(null), previousDeskOpen = useRef(false)
+  const previousSelection = useRef<string | null>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
-  useEffect(() => {
-    const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width:850px)').matches
-    if (mobile && deskMobile && !previousDeskOpen.current) deskPanel.current?.querySelector<HTMLButtonElement>('.ov-mobile-close')?.focus({ preventScroll: true })
-    if (mobile && !deskMobile && previousDeskOpen.current && !selectedId && !root.current?.querySelector('.ov-card:focus')) root.current?.querySelector<HTMLButtonElement>('.ov-mobile-desk')?.focus({ preventScroll: true })
-    previousDeskOpen.current = deskMobile
-  }, [deskMobile, selectedId])
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
   const searchMatches = useMemo(() => scene && state.searchFocus ? directNeighbors(scene, state.searchFocus) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
@@ -337,7 +321,6 @@ export function Overview({ workers, submit, messages, initialCardId, onReceipts,
     if (search.isRestoring()) return
     const id = selectedId ?? previousSelection.current
     previousSelection.current = selectedId
-    if (state.queueOpen && !selectedId) setDeskMobile(true)
     if (!id) return
     const element = [...root.current?.querySelectorAll<HTMLElement>('[data-semantic-id]') ?? []].find(el => el.dataset.semanticId === id)
     element?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
@@ -349,16 +332,14 @@ export function Overview({ workers, submit, messages, initialCardId, onReceipts,
     if (!destination || search.isRestoring()) return
     const element = [...root.current?.querySelectorAll<HTMLElement>('.ov-item') ?? []].find(el => el.dataset.entityId === destination.id)
     if (!element) return
-    setDeskMobile(false)
     // Expand and reveal have committed. Land immediately so a second input or
     // Desk focus restoration cannot interrupt an in-flight native scroll.
     element.scrollIntoView({ block: 'center', behavior: 'instant' })
     element.focus({ preventScroll: true })
   }, [state.navigation, state.searchReveal])
-  if (!scene) return <section className="ov-loading" aria-label="Overview"><p role="status">{error ? 'Sources unavailable · Retrying' : 'Reading workers and Notion cards…'}</p>{onWorkers && <button type="button" onClick={onWorkers}>Find worker</button>}{onReceipts && <button type="button" onClick={onReceipts}>Message receipts</button>}</section>
+  if (!scene) return <section className="ov-loading" aria-label="Overview"><p role="status">{error ? 'Sources unavailable · Retrying' : 'Reading workers and Notion cards…'}</p></section>
   const toggleRelationship = (item: Target) => {
     setDiagnostics(false)
-    setDeskMobile(false)
     const removing = openRelationships.some(root => same(root, item))
     const roots = removing ? openRelationships.filter(root => !same(root, item)) : [...openRelationships, item]
     setOpenRelationships(roots)
@@ -382,10 +363,9 @@ export function Overview({ workers, submit, messages, initialCardId, onReceipts,
   const visibleCards = new Set(groups.flatMap(g => g.cards.map(c => c.id))).size
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
-  const visibleCardIds = new Set(displayGroups.filter(group => !state.collapsed.includes(semanticId(target('group', group.id))) && !state.collapsed.includes(semanticId(target('group', group.outerId)))).flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)))
-  return <AskProvider scene={scene} state={state} send={send} visibleCardIds={visibleCardIds}><div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDeskMobile(false); setDiagnostics(false) } }}>
+  return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => { setDiagnostics(!diagnostics); setDeskMobile(true) }} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
+      <FloorToolbar searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)
         if (value === 'compact' && state.selection) {
           const selected = state.selection
@@ -408,8 +388,7 @@ export function Overview({ workers, submit, messages, initialCardId, onReceipts,
         {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? 'No confirmed pattern matches in available records. The pattern reminder explains any missing evidence.' : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
         {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>
-    </div><aside ref={deskPanel} className={`ov-desk${deskMobile ? ' mobile-open' : ''}`} aria-label="Your desk"><header><small className="ov-eyebrow">YOU / ONE INBOX</small><div className="ov-desk-title"><h2>Your desk</h2><span className="ov-desk-tools">{onWorkers && <button type="button" aria-label="Find worker" title="Find worker" onClick={onWorkers}><span className="material-symbols-outlined" aria-hidden="true">person_search</span></button>}{onReceipts && <button type="button" aria-label="Message receipts" title={`Message receipts · ${messages.length}`} onClick={onReceipts}><span className="material-symbols-outlined" aria-hidden="true">receipt_long</span></button>}</span></div><button type="button" className="ov-mobile-close" onClick={() => { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); setDiagnostics(false); setDeskMobile(false) }}>Close</button></header>
-      {diagnostics ? <section className="ov-inspector"><button type="button" className="ov-back" onClick={() => setDiagnostics(false)}>← Your desk</button><h3>Source health</h3><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{coverageNotice && <p>{coverageNotice}{unreadHomes.length ? ` ${unreadHomes.map(home => `${managerName(scene, home.source.home)} · ${homeFreshness(home.observation, now)}`).join('; ')}` : ''}</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section> : null}<div><AskDesk now={now} /><QueuePanel scene={scene} messages={messages} submit={submit} workers={workers} state={state} send={send} queue={queue} error={queueError} now={now} /></div>
-    </aside></div>{state.selection && <Inspector view={view} workers={workers} />}<button type="button" className="ov-mobile-desk" onClick={() => { setDiagnostics(false); send({ type: 'open-queue' }); setDeskMobile(true) }}>Your desk</button>
-  </div></AskProvider>
+    </div></div>{state.selection && <Inspector view={view} workers={workers} />}
+    {diagnostics && <section className="ov-inspector" aria-label="Source health"><header><h2>Source health</h2><button type="button" onClick={() => setDiagnostics(false)}>Close source health</button></header><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{coverageNotice && <p>{coverageNotice}{unreadHomes.length ? ` ${unreadHomes.map(home => `${managerName(scene, home.source.home)} · ${homeFreshness(home.observation, now)}`).join('; ')}` : ''}</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section>}
+  </div>
 }

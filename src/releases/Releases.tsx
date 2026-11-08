@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from '../apiClient'
-import { AskCardAction, AskProvider } from '../ask/Ask'
-import { useFloorScene } from '../reconciliation/useFloorScene'
+import { AskCardAction } from '../ask/Ask'
+import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { SmartSearch } from '../reconciliation/SmartSearch'
 import { initialPresentation, type Target, type FloorScene } from '../shared/reconciliationPresentation'
 import { activeReleaseLinks, type ReleasePull, type ReleasesRead } from '../shared/releases'
@@ -59,7 +59,7 @@ function PullDrawer({ pull, scene, data, refresh, close }: { pull: ReleasePull |
   </dialog>
 }
 export function Releases({ data, error, refresh }: { data: ReleasesRead | null; error: string | null; refresh: () => void }) {
-  const { scene, error: sceneError, now } = useFloorScene()
+  const { scene, error: sceneError, now } = useDeskWorkspace()
   const [filter, setFilter] = useState<ReleaseFilter>('In Queue'), [preset, setPreset] = useState<'initiative' | 'repository'>('initiative')
   const [selection, setSelection] = useState<string[]>([]), [drawer, setDrawer] = useState<string | null | undefined>(undefined)
   const [collapsed, setCollapsed] = useState<string[]>([]), [searchOpen, setSearchOpen] = useState(false), [focus, setFocus] = useState<Target | null>(null)
@@ -79,9 +79,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
   const visible = focused ?? filterReleases(data.pulls, filter), groups = releaseGroups(scene, visible, preset)
   const selected = new Set(selection), drawerPull = data.pulls.find(pull => pull.id === drawer) ?? null, warning = error ?? sceneError
   const choose = (target: Target) => { if (!focus) setBeforeFocus(filter); setFocus(target); if (target.kind === 'card') setFilter('Exceptions'); setSearchOpen(false) }
-  return <AskProvider scene={scene} state={state} visibleCardIds={new Set(visible.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))} send={action => {
-    if (action.type === 'navigate-card') window.location.assign(cardHref(action.cardId))
-  }}><section className="ov-root rel-root" aria-label="Releases">
+  return <section className="ov-root rel-root" aria-label="Releases">
     <header className="ov-toolbar rel-toolbar"><strong>Releases <small>{releaseQueueCount(data, warning) ?? '?'}</small></strong>
       <div className="ov-preset-buttons"><button type="button" aria-pressed={preset === 'initiative'} onClick={() => setPreset('initiative')}>Initiative → Epic</button><button type="button" aria-pressed={preset === 'repository'} onClick={() => setPreset('repository')}>Repository</button></div>
       <SmartSearch scope="releases" scene={scene} state={state} now={now} documents={documents} open={searchOpen} focused={!!focus} onOpen={() => setSearchOpen(true)} onDismiss={() => setSearchOpen(false)} onRestore={restoreFocus} onChoose={choose} />
@@ -108,5 +106,5 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
     {!visible.length && <p className="rel-empty">{filter === 'Shipped' || filter === 'Verify in Prod' ? 'No verified production evidence available yet.' : 'No PRs in this view.'}</p>}
     {filter === 'Exceptions' && data.unassociatedCards.length > 0 && <details className="rel-missing" open><summary>{data.unassociatedCards.length} waiting cards need PR associations</summary>{data.unassociatedCards.filter(card => !focus || focus.kind !== 'card' || focus.id === card.id).map(card => <p key={card.id}><a href={cardHref(card.id)}>{card.title}</a> · {card.reason}</p>)}</details>}
     {drawer !== undefined && <PullDrawer key={drawer ?? 'new'} pull={drawerPull} scene={scene} data={data} refresh={refresh} close={() => setDrawer(undefined)} />}
-  </section></AskProvider>
+  </section>
 }

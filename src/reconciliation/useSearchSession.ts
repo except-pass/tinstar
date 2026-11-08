@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import { directNeighbors, emptySearch } from '../shared/smartSearch'
 import { semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
@@ -16,7 +16,8 @@ interface Snapshot {
 }
 
 /** One temporary focus lens over the existing reducer, with semantic restore. */
-export function useSearchSession({ scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+export function useSearchSession({ active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+  active: boolean
   scene: FloorScene | null
   state: PresentationState; send: (action: PresentationAction) => void; canvas: RefObject<HTMLDivElement>; root: RefObject<HTMLDivElement>
   details: string[]; setDetails: Dispatch<SetStateAction<string[]>>
@@ -24,11 +25,21 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
 }) {
   const [open, setOpen] = useState(false)
   const snapshot = useRef<Snapshot | null>(null), restorePending = useRef<Snapshot | null>(null)
+  const [historySession] = useState(() => crypto.randomUUID())
   const historyEntries = useRef(0), ignorePop = useRef(false)
+  const ownedHistoryDepth = useCallback(() => {
+    const entry = window.history.state?.tinstarSearch
+    return entry?.session === historySession ? entry.depth as number : 0
+  }, [historySession])
+  useLayoutEffect(() => {
+    historyEntries.current = active ? ownedHistoryDepth() : 0
+  }, [active, ownedHistoryDepth])
   const leaveHistory = (count: number) => {
-    if (!count) return
-    historyEntries.current = Math.max(0, historyEntries.current - count)
-    ignorePop.current = true; window.history.go(-count)
+    const depth = ownedHistoryDepth()
+    const steps = Math.min(count, depth)
+    historyEntries.current = depth - steps
+    if (!steps) return
+    ignorePop.current = true; window.history.go(-steps)
   }
   const begin = () => {
     if (!snapshot.current) {
@@ -41,17 +52,18 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     if (!open && window.matchMedia?.('(max-width:850px)').matches) {
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
-      try { window.history.pushState({ ...window.history.state, tinstarSearch: true }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
+      historyEntries.current = ownedHistoryDepth()
+      try { window.history.pushState({ ...window.history.state, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }
   const dismiss = (back = true) => {
-    if (back) leaveHistory(Math.min(1, historyEntries.current))
+    if (back) leaveHistory(Math.min(1, ownedHistoryDepth()))
     setOpen(false)
     if (!state.searchFocus) snapshot.current = null
   }
   const restore = (clear = false, back = true) => {
-    if (back) leaveHistory(historyEntries.current)
+    if (back) leaveHistory(ownedHistoryDepth())
     const saved = snapshot.current
     if (saved) {
       const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
@@ -63,7 +75,7 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
   }
   useLayoutEffect(() => {
     const saved = restorePending.current
-    if (!saved || !canvas.current) return
+    if (!active || !saved || !canvas.current) return
     const elements = [...canvas.current.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]')]
     const anchor = elements.find(element => element.dataset.semanticId === saved.anchor)
     const viewport = canvas.current.parentElement!
@@ -75,13 +87,14 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     return () => cancelAnimationFrame(frame)
   })
   useLayoutEffect(() => {
-    if (!state.searchReveal) return
+    if (!active || !state.searchReveal) return
     const key = semanticId(state.searchReveal)
     const element = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.dataset.semanticId === key)
     element?.scrollIntoView({ block: 'center', behavior: 'instant' }); element?.focus({ preventScroll: true })
-  }, [state.searchReveal, canvas])
+  }, [active, state.searchReveal, canvas])
   // Only the Overview owns this shortcut; terminal iframe input stays local.
   useEffect(() => {
+    if (!active) return
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); begin() }
@@ -92,9 +105,10 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
   })
   const onPop = useRef<() => void>(() => {})
   onPop.current = () => {
+    const previousDepth = historyEntries.current
+    historyEntries.current = ownedHistoryDepth()
     if (ignorePop.current) { ignorePop.current = false; return }
-    if (!snapshot.current) return
-    historyEntries.current = Math.max(0, historyEntries.current - 1)
+    if (!active || !snapshot.current || previousDepth <= historyEntries.current) return
     if (open) dismiss(false); else restore(false, false)
   }
   useEffect(() => {
@@ -105,7 +119,7 @@ export function useSearchSession({ scene, state, send, canvas, root, roots, setR
     return () => window.removeEventListener('popstate', back)
   }, [])
   return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
-    leaveHistory(Math.max(0, historyEntries.current - 1))
+    leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
     send({ type: 'reveal-search', target, targets }); setRoots(targets)
     const cluster = scene ? directNeighbors(scene, targets) : new Set([semanticId(target)])
     setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)

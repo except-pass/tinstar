@@ -223,7 +223,11 @@ or text-inferred connection is added. An outside-view result is temporarily
 revealed alongside the current rows, including planned work hidden by roadmap
 visibility. Clear search focus restores organizer, scope, donuts, density,
 expansions, scroll and selection. Escape first closes an open palette, then clears
-focus. Mobile Back dismisses the same transient layers. Focus is not persisted.
+focus. Mobile Back dismisses the same transient layers. Focus and its restoration
+snapshot survive section switches within the application; Clear or Escape after
+returning restores Overview without navigating back to another section. Search
+rewinds browser history only while the current entry belongs to that search
+session. Focus is not saved across reloads.
 
 The horizontal Pattern Dial shares the toolbar between Search and the two
 Workers/Cards status donuts. Its circular order is All → Stalled → Blocked →

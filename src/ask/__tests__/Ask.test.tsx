@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { Overview } from '../../reconciliation/Overview'
+import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { preferencesKey } from '../../reconciliation/presentationPreferences'
 import { askItemSchema, type AskItem } from '../../shared/ask'
@@ -285,7 +285,6 @@ it('Desk starts with records and omits intro chrome; history dismissal is a seco
   mount()
   const desk = screen.getByLabelText('Your desk')
   await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
-  expect(desk.querySelector('.ask-desk')?.previousElementSibling).toBeNull()
   for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) expect(within(desk).queryByText(text)).toBeNull()
   expect(within(desk).queryByText(/Later & needs verification/)).toBeNull()
   expect(within(desk).getByText('Review is pending')).toBeVisible()

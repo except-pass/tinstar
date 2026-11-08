@@ -5,7 +5,7 @@ import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
 import { releaseFixture } from './fixtures'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown }))
-vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
 // Ask's existing provider/transport is covered in ask tests; keep the same card-bound affordance here.
 vi.mock('../../ask/Ask', () => ({ AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
 let data: ReleasesRead

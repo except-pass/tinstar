@@ -7,7 +7,7 @@ import type { CommandResult, ViewCommand } from '../shared/reconciliationCommand
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true) {
   const [state, setState] = useState(loadPresentationPreferences)
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
@@ -44,6 +44,13 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     }
   }, [queue])
   useEffect(() => {
+    if (!active) {
+      // A later Overview registration has a new scene identity. Never replay
+      // acknowledgments for the view that was hidden by manual navigation.
+      pending.current = []; ready.current = []; seen.current.clear()
+      setConnection(null)
+      return
+    }
     let stopped = false, timer: ReturnType<typeof setTimeout>
     let credentials: { scene_id: string; key: string } | null = null
     let controller: AbortController | null = null
@@ -97,6 +104,6 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     void tick()
     window.addEventListener('pagehide', disconnect)
     return () => { stopped = true; clearTimeout(timer); controller?.abort(); window.removeEventListener('pagehide', disconnect); disconnect() }
-  }, [send])
+  }, [send, active])
   return { state, send, connection, bridgeError }
 }

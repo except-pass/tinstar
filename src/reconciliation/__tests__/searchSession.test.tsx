@@ -33,7 +33,7 @@ describe('search session organizer selection restoration', () => {
         const [roots, setRoots] = useState<import('../presentation').Target[]>([])
         const [details, setDetails] = useState<string[]>([])
         const [density, setDensity] = useState<OverviewDensity>('compact')
-        const session = useSearchSession({ scene, state, send, canvas, root, roots, setRoots, details, setDetails, density, setDensity })
+        const session = useSearchSession({ active: true, scene, state, send, canvas, root, roots, setRoots, details, setDetails, density, setDensity })
         return { state, send, session }
       })
       act(() => result.current.session.begin())
