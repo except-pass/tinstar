@@ -61,6 +61,7 @@ export class PullReader {
   }
   private async refresh(repository: string, key: string, owned: boolean, account: string, associated: PullIdentity[]): Promise<RepoRead> {
     const pulls: RepoRead['pulls'] = [], observedAt = new Date(this.now()).toISOString()
+    const closed = new Set<string>()
     let complete = false, error: string | null = null
     const add = (row: z.infer<typeof listing>[number]) => {
       const identity = releasePull(row.html_url)
@@ -99,7 +100,10 @@ export class PullReader {
         try {
           const row = listing.element.extend({ state: z.enum(['open', 'closed']) }).parse(await this.read(`/repos/${repository}/pulls/${number}`, `{${projection},state}`))
           if (row.number !== number) throw new Error('GitHub PR identity mismatch')
+          const identity = releasePull(row.html_url)
+          if (!identity || identity.repository !== repository || identity.number !== number) throw new Error('GitHub PR identity mismatch')
           if (row.state === 'open') add(row)
+          else closed.add(identity.id)
         } catch (reason) { errors.push(message(reason)) }
       }))
       complete = errors.length === 0
@@ -107,7 +111,7 @@ export class PullReader {
     }
     const previous = this.repos.get(key)?.data
     // Failed pagination retains previous rows as stale, including rows beyond the successful page.
-    const merged = new Map<string, Omit<PullSummary, 'links'>>((!complete && previous ? previous.pulls.map(pull => [pull.id, { ...pull, freshness: 'stale' as const }] as const) : []))
+    const merged = new Map<string, Omit<PullSummary, 'links'>>((!complete && previous ? previous.pulls.filter(pull => !closed.has(pull.id)).map(pull => [pull.id, { ...pull, freshness: 'stale' as const }] as const) : []))
     for (const pull of pulls) merged.set(pull.id, pull)
     const data: RepoRead = { pulls: [...merged.values()], coverage: { repository, scope: owned ? 'all-open' : 'authored-or-associated', complete,
       observedAt: pulls.length || complete ? observedAt : previous?.coverage.observedAt ?? null,

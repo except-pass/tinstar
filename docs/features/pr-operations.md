@@ -15,13 +15,12 @@ Repository scope defaults to the union of explicit PRs in the shared Releases as
 ```json
 {
   "prOperations": {
-    "repositories": ["owner/repository", "another/repository"],
-    "excludedRepositories": ["upstream/irrelevant"]
+    "repositories": ["owner/repository", "another/repository"]
   }
 }
 ```
 
-An explicit repository list replaces discovered scope; optional excludedRepositories removes repositories from either source. Neither option widens the foreign PR relevance rule. The page exposes each repository's coverage and errors. A request reads at most 32 repositories, four concurrently, and 1,000 open PRs per owned repository (100 per page). Foreign repositories use one author-filtered search (up to 100 results), then fetch summaries only for those results and explicit associations; omitted repositories/pages are visibly reported. Inventory and account/organization identity are cached for one minute and shared between clients. Inventory cache keys include the account, ownership and explicit foreign associations so scope changes cannot reuse broader rows. Search truncation or failure remains visibly partial; explicit associations are still attempted. Details read only when inspected, using the existing bounded QueuePullReader for check evidence and at most the first 100 review records (labelled partial when the page is full). Failed refreshes retain old evidence with a stale label, never fresh absence or green checks.
+An explicit repository list replaces discovered scope. This does not widen the foreign PR relevance rule. The page exposes each repository's coverage and errors. A request reads at most 32 repositories, four concurrently, and 1,000 open PRs per owned repository (100 per page). Foreign repositories use one author-filtered search (up to 100 results), then fetch summaries only for those results and explicit associations; omitted repositories/pages are visibly reported. Inventory and account/organization identity are cached for one minute and shared between clients. Inventory cache keys include the account, ownership and explicit foreign associations so scope changes cannot reuse broader rows. Search truncation or failure remains visibly partial; explicit associations are still attempted. Details read only when inspected, using the existing bounded QueuePullReader for check evidence and at most the first 100 review records (labelled partial when the page is full). Failed refreshes retain old evidence with a stale label, never fresh absence or green checks.
 
 Canonical PR identity and many-to-many card edges come directly from `src/shared/releases.ts` and the **same** `AssociationStore` instance used by Releases. PR Operations has no second link store and does not write Notion. The shared automatic association scan covers operational cards; “unlinked” means no link in that scope. Missing/partial/stale association sources remain unknown. Snapshot PR registration identifies reported workers; it is not a durable historical contributor index. Manager home and observed/configured machine remain distinct.
 

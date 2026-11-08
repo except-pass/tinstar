@@ -95,3 +95,25 @@ it('labels truncated authored search partial and rejects mismatched authored sea
   const wrong = new PullReader(async () => ({ total_count: 1, incomplete_results: false, items: [{ number: 1, html_url: row(1).html_url, user: { login: 'someone-else' } }] }))
   expect((await wrong.inventory(['owner/repo'], { account: 'ours', owners: [], associated: [] }))[0]?.coverage).toMatchObject({ complete: false, error: 'GitHub authored PR identity mismatch' })
 })
+
+it.each(['search failure', 'truncated search', 'summary failure'])('keeps confirmed closed PRs out of stale inventory after %s', async failure => {
+  let now = 0
+  const associated = [2, 3].map(number => ({ id: `owner/repo#${number}`, repository: 'owner/repo', number, url: row(number).html_url }))
+  const read = vi.fn(async (path: string) => {
+    if (path.startsWith('/search/issues?')) {
+      if (now && failure === 'search failure') throw new Error('Search unavailable')
+      return { total_count: now && failure === 'truncated search' ? 101 : 0, incomplete_results: false, items: [] }
+    }
+    const number = Number(path.split('/').at(-1))
+    if (now && number === 3) throw new Error('Summary unavailable')
+    return { ...row(number), state: now ? 'closed' : 'open' }
+  })
+  const reader = new PullReader(read, () => now)
+  const foreignScope = { account: 'ours', owners: ['ours'], associated }
+  expect((await reader.inventory(['owner/repo'], foreignScope))[0]?.pulls).toHaveLength(2)
+  now = 61_000
+  const [result] = await reader.inventory(['owner/repo'], foreignScope)
+  expect(result?.coverage.complete).toBe(false)
+  expect(result?.pulls.map(pull => [pull.number, pull.freshness])).toEqual([[3, 'stale']])
+  expect((await reader.inventory(['owner/repo'], foreignScope))[0]?.pulls).toEqual(result?.pulls)
+})

@@ -13,11 +13,11 @@ import { PullReader } from './reader'
 import { askConfigSchema } from '../ask/routes'
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
-async function configuredRepositories(root: string): Promise<{ repositories: string[] | null; excluded: string[] }> {
+async function configuredRepositories(root: string): Promise<string[] | null> {
   try {
     const config = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
-    return { repositories: config.prOperations?.repositories === undefined ? null : z.array(repositorySchema).parse(config.prOperations.repositories), excluded: z.array(repositorySchema).parse(config.prOperations?.excludedRepositories ?? []) }
-  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { repositories: null, excluded: [] }; throw new Error('PR repository configuration could not be read. Check prOperations.repositories and excludedRepositories in config.json.') }
+    return config.prOperations?.repositories === undefined ? null : z.array(repositorySchema).parse(config.prOperations.repositories)
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw new Error('PR repository configuration could not be read. Check prOperations.repositories in config.json.') }
 }
 /** Read-only artifact projection. Uses the exact Releases association store and join. */
 export class PullsApi {
@@ -48,7 +48,7 @@ export class PullsApi {
         return pull ? [pull] : []
       })]
       const configured = await configuredRepositories(this.root)
-      const all = [...new Set(configured.repositories ?? associated.map(pull => pull.repository))].filter(repository => !configured.excluded.includes(repository)).sort()
+      const all = [...new Set(configured ?? associated.map(pull => pull.repository))].sort()
       // A visible cap bounds per-request GitHub work, not the user's repository choices.
       const repositories = all.slice(0, 32)
       if (all.length > repositories.length) warnings.push(`Showing 32 of ${all.length} repositories. Set prOperations.repositories to choose the review scope.`)
