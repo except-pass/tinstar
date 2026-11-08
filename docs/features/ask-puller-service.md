@@ -31,7 +31,10 @@ gate. `npm update -g` skips that hook the same way unless allow-scripts
 includes tinstar, so a global install or update does not by itself set up the
 LaunchAgent. After every `npm install -g` or `npm update -g`, run the
 canonical idempotent service install (substitute origin, home and key
-reference):
+reference). Rerunning `tinstar ask-puller install` re-enables a disabled
+installation: it sets `enabled=true` and reloads the agent. When updating a
+deliberately disabled installation, skip this install step or run
+`tinstar ask-puller disable` again afterward:
 
 ```sh
 tinstar ask-puller install --url https://your-tinstar.example.ts.net:8450 --home "$HOME/repo/firstmate" --token-key tinstar.ask-bridge
@@ -68,7 +71,9 @@ environment:
 TINSTAR_ASK_URL=https://your-tinstar.example.ts.net:8450 TINSTAR_ASK_HOME="$HOME/repo/firstmate" TINSTAR_ASK_TOKEN_KEY=tinstar.ask-bridge npm install -g --allow-scripts=tinstar ./tinstar-<ver>.tgz
 ```
 
-If status is not healthy, run the canonical install above.
+If status is not healthy and the service should be enabled, run the canonical
+install above. For a deliberately disabled installation, skip it or run
+`tinstar ask-puller disable` again afterward.
 
 ## Verify and operate
 
@@ -92,8 +97,10 @@ also gives the next diagnostic action. No continuous agent watches the status.
 
 The plist lives at `~/Library/LaunchAgents/com.tinstar.ask-puller.plist` and
 launchd loads it into `gui/<uid>`. Login/reboot restores the enabled agent.
-Disable unloads and persists disabled state across upgrades and login. Enable
-or restart loads it again; restart preserves backoff. Uninstall unloads and
+Disable unloads and persists disabled state across automatic postinstall
+upgrades and login. Manual `tinstar ask-puller install` re-enables it; skip
+that step or disable again afterward to keep it disabled. Enable or restart
+loads it again; restart preserves backoff. Uninstall unloads and
 removes the plist/config; it retains private health for diagnosis and the lock
 inode for safe overlap. Never delete a lock inode to clear a stale-looking PID:
 the kernel releases the lock on process death.
@@ -102,14 +109,19 @@ When npm runs the shipped postinstall, a configured Mac regenerates and
 reloads the service when installed paths or configuration change, and ensures
 an enabled agent is loaded. On npm 11.19 and newer that hook may be skipped;
 after every global install or update, rerun the canonical install from the
-install section. Reinstall is idempotent. Disabled installations stay
-disabled; unconfigured Macs and all non-Mac installs do nothing. Source
+install section. Reinstall is idempotent for an enabled installation, but
+re-enables a disabled one (`enabled=true` and agent reload). For a deliberately
+disabled installation, skip the install step or run `tinstar ask-puller disable`
+again afterward. The postinstall hook itself preserves disabled state;
+unconfigured Macs and all non-Mac installs do nothing. Source
 checkouts also skip automatic service updates so `npm ci` cannot repoint an
 installed LaunchAgent at a disposable worktree; lifecycle setup commands
 require the installed Tin Star CLI. Status, disable and uninstall remain
 available. `--ignore-scripts` also skips the hook; rerun the canonical
-install afterward. A failed update hook reports failure; run the canonical
-install and then status from the installed package to repair it. No separate
+install afterward if the service should be enabled. A failed update hook
+reports failure; run the canonical install and then status from the installed
+package to repair it. In either case, for a deliberately disabled installation,
+skip the install step or run `tinstar ask-puller disable` again afterward. No separate
 service checkout or manually maintained plist is involved. Desktop-only and
 browser-only installs do not designate a Mac puller.
 
