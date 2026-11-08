@@ -51,8 +51,8 @@ observations. Shipped and Verify in Prod require the read-only reconciliation
 proof below. Neither Notion Done nor a version tag implies shipment. The drawer
 shows merge provenance, required targets, receipts, card dry-run eligibility and
 link history. The sync disclosure reports failures and unknown deployed versions
-explicitly. No Notion writer, automatic transition, production-verification
-routing, deployment action or mass backfill exists.
+explicitly. Transition and owner-verification drafts can be inspected, but no
+Notion writer, active Desk routing, deployment action or mass backfill exists.
 
 Multi-select PR action toolbar + shared custom-action framework: not present in
 main; deferred to its own card. The table preserves canonical row selection for
@@ -71,7 +71,7 @@ Releases now computes per-PR/component shipment and per-card **dry-run** eligibi
 `GET /api/releases/reconciliation` returns the same inspectable report used by the
 page; GET never writes cards, comments, Desk requests or GitHub. Replaying the
 same observations produces the same report ID and decisions. There is no
-transition switch or Notion writer in this slice.
+active transition switch or Notion writer in this build.
 
 A PR is shipped only when every explicit required target has a successful current
 production receipt and GitHub's effective merge commit is an ancestor of that
@@ -93,6 +93,53 @@ It appears in Verify in Prod and the drawer but performs no Desk or status actio
 Missing checkbox means no opt-in verification requirement; the reader does not
 create it. Other Notion statuses stay unrelated and cannot be completed by this
 report. Actual automation/routing and the board-guide/PM-bot rollout remain gated.
+
+### Default-OFF transition and Desk review
+
+`GET /api/releases/automation` and `automation` on the Releases collection return
+a pure, deterministic **review-only** plan. It proposes `Waiting for Prod Release`
+→ `Done` for eligible unflagged cards. An opted-in card instead proposes
+`Waiting for Prod Release` → `In Progress` with explicit production-check context
+and a draft for its current responsible owner. It never proposes completion of
+an opted-in card. Opening a drawer, navigating Desk, sending Ask, or replaying the
+report does not record a successful check. Verification remains open until the
+owner explicitly records the result through the existing card workflow. Cards in
+other statuses, archived cards and unresolved requirements cannot be transitioned.
+A missing verification owner holds that card visibly without preventing a
+neighboring eligible unflagged card's Done proposal.
+
+The optional trusted operator file
+`<getConfigRoot()>/releases/automation.json` is separate from deployment evidence:
+
+```json
+{ "version": 1, "enabled": false }
+```
+
+Omitting the file defaults to OFF. Invalid/unreadable settings remain OFF with a
+visible warning. **Even `enabled: true` is only a blocked enablement request in
+this build**: the response always has `enabled: false`, the UI shows OFF, and no
+Notion writer or Desk publisher exists. There is no HTTP method to activate or
+execute the plan. This boundary prevents premature live-board transitions before
+the parent approves activation together with the board-guide and PM-bot sweep
+updates in the same release. Do not change those operational instructions early.
+There is no mass-backfill path.
+
+Each proposal carries all required PRs, effective merge SHAs, per-component deploy
+identities/version/time and direct workflow/receipt links, plus short audit text.
+Its ID is stable for the same card, release evidence and routing owner; refreshing
+collection timestamps or unrelated work does not create a new proposal. Changed
+deployment evidence or verification owner changes the ID. No comments, audit
+events, status changes or active queue entries are emitted on replay. A future
+approved writer must re-read current status, opt-in flag, requirements and fresh
+evidence before execution, and durably deduplicate the proposal ID; this preview
+does not claim to implement exactly-once writes.
+
+Desk drafts reuse the existing `QueueItem` shape wrapped with their responsible
+owner. They retain card/PR/receipt links and use `future-or-conditional` readiness,
+`oneTouch: false`, no response anchor and no decision key. They stay outside
+`/api/reconciliation/queue` and default actionable Desk navigation while OFF. The
+shared global Desk/Ask implementation owns eventual publication and owner routing;
+Releases adds no parallel queue, Ask provider or response transport.
 
 GitHub read failures are separate from pending reads. A missing `gh-axi` displays
 `Sync error: gh-axi unavailable on server PATH`; access/CLI/read failures display

@@ -12,6 +12,7 @@ import { AssociationConflict, AssociationStore, associationInput } from './assoc
 import { ReleasePullReader } from './pulls'
 import { ReleaseEvidenceReader } from './evidence'
 import { ReleaseReconciler } from './reconcile'
+import { planReleaseAutomation, readAutomationSettings } from './automation'
 
 async function ownerLogins(root: string): Promise<string[]> {
   try {
@@ -27,7 +28,7 @@ export class ReleasesApi {
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]
-    if (!['/api/releases', '/api/releases/associations', '/api/releases/reconciliation'].includes(path!)) return false
+    if (!['/api/releases', '/api/releases/associations', '/api/releases/reconciliation', '/api/releases/automation'].includes(path!)) return false
     const allowlist = currentOriginAllowlist(), origin = req.headers.origin
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI', 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
@@ -37,7 +38,7 @@ export class ReleasesApi {
     // Same tailnet owner boundary as Ask: only the local serve proxy injects this identity.
     const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
     try {
-      if ((path === '/api/releases' || path === '/api/releases/reconciliation') && req.method === 'GET') {
+      if (path !== '/api/releases/associations' && req.method === 'GET') {
         const scene = await this.sources.scene()
         let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
         try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
@@ -54,7 +55,8 @@ export class ReleasesApi {
         const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
         data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
         const reconciled = await this.reconciler.get(data, scene, await this.evidence.get())
-        return ok(res, path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
+        reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+        return ok(res, path === '/api/releases/automation' ? reconciled.automation : path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
       }
       if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
       if (!writable || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'Authorized tailnet owner and UI handshake required', { headers })
