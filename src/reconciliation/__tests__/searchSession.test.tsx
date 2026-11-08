@@ -59,3 +59,53 @@ describe('search session organizer selection restoration', () => {
     expect(restored.state.selection).toBeNull()
   })
 })
+
+
+it.each(['Clear', 'Escape'] as const)('restores a focused workspace snapshot atomically and retains %s recovery', exit => {
+  const scene = fixtureScene(), baseline = initialPresentation()
+  const target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  const { result, rerender } = renderHook(({ active }) => {
+    const [state, setState] = useState(baseline), current = useRef(state)
+    const send = (action: PresentationAction) => {
+      current.current = applyPresentationAction(current.current, actionSchema.parse(action), scene).state
+      setState(current.current)
+    }
+    const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
+    const [roots, setRoots] = useState<import('../presentation').Target[]>([])
+    const [details, setDetails] = useState<string[]>([])
+    const [density, setDensity] = useState<OverviewDensity>('compact')
+    const session = useSearchSession({ active, scene, state, send, canvas, root, roots, setRoots, details, setDetails, density, setDensity })
+    return { state, send, session }
+  }, { initialProps: { active: true } })
+  act(() => result.current.session.begin(false))
+  act(() => result.current.session.choose(target))
+  const focused = {
+    ...result.current.state, search: { ...emptySearch(), query: 'focused lens' }, collapsed: ['group:saved'],
+    selection: target, navigation: { cardId: target.id, revision: 0 }, exceptionsOnly: true, roadmapExpanded: false,
+    linksVisible: false, arrangement: 'machine' as const, sort: 'activity' as const,
+  }
+  act(() => result.current.send({ type: 'restore-search-view', view: {
+    search: focused.search, searchReveal: focused.searchReveal, searchFocus: focused.searchFocus,
+    selection: focused.selection, collapsed: focused.collapsed, navigation: focused.navigation,
+    exceptionsOnly: focused.exceptionsOnly, roadmapExpanded: focused.roadmapExpanded, organizer: focused.organizer,
+    statusFilter: focused.statusFilter, donutFilter: focused.donutFilter, linksVisible: focused.linksVisible,
+    arrangement: focused.arrangement, sort: focused.sort,
+  } }))
+  const saved = result.current.session.captureView()
+  rerender({ active: false })
+  act(() => result.current.session.choose({ kind: 'card', id: scene.cards[1]!.id }))
+  act(() => result.current.session.restoreView(saved))
+  rerender({ active: true })
+  for (const field of ['search', 'searchReveal', 'searchFocus', 'selection', 'collapsed', 'navigation', 'exceptionsOnly', 'roadmapExpanded', 'organizer', 'statusFilter', 'donutFilter', 'linksVisible', 'arrangement', 'sort'] as const) {
+    expect(result.current.state[field]).toEqual(saved.state[field])
+  }
+  expect(result.current.session.captureView().roots).toEqual(saved.roots)
+  act(() => {
+    if (exit === 'Clear') result.current.session.clear()
+    else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(result.current.state.searchReveal).toBeNull()
+  expect(result.current.state.searchFocus).toBeUndefined()
+  expect(result.current.state.collapsed).toEqual(baseline.collapsed)
+  expect(result.current.state.exceptionsOnly).toBe(baseline.exceptionsOnly)
+})

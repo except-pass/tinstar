@@ -413,3 +413,46 @@ it('groups correlated follow-ups into one inline thread and switches independent
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
   expect(within(desk).getByRole('button', { name: /Independent investigation/ })).toHaveFocus()
 })
+
+
+it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn visible and independently retryable after a follow-up answers', async status => {
+  const first = { ...seed(), status, reply: null, error: status === 'failed' ? 'Delivery failed' : null, created_at: '2020-01-01T00:00:00Z' }
+  const followUp = { ...seed(), conversation_id: first.conversation_id, question: 'Answered follow-up', created_at: '2020-01-02T00:00:00Z' }
+  const neighbor = { ...seed(), question: 'Neighbor question' }
+  records = [first, followUp, neighbor]
+  mount()
+  const desk = screen.getByLabelText('Questions for First Mate')
+  const preview = await within(desk).findByRole('button', { name: /New answer.*Why is this waiting/ })
+  expect(preview).toHaveTextContent(status === 'failed' ? '1 failed' : '1 pending')
+  const retryName = `Retry delivery: ${first.question}`
+  expect(within(desk).getAllByRole('button', { name: retryName })).toHaveLength(1)
+  fireEvent.click(preview)
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  const earlier = within(thread).getByRole('region', { name: `Question: ${first.question}` })
+  expect(earlier).toHaveTextContent(status === 'failed' ? 'Delivery failed' : status === 'sent' ? 'Sent' : 'Delivered')
+  expect(earlier).toHaveTextContent('taking longer')
+  expect(within(desk).getAllByRole('button', { name: retryName })).toHaveLength(1)
+  expect(within(thread).queryByRole('button', { name: 'Retry delivery: Answered follow-up' })).toBeNull()
+  fireEvent.click(within(earlier).getByRole('button', { name: retryName }))
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${first.request_id}/retry`, expect.anything()))
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === `/api/ask/requests/${followUp.request_id}/retry`)).toBe(false)
+  expect(first.conversation_id).toBe(followUp.conversation_id)
+  expect(within(desk).getByRole('button', { name: /Neighbor question/ })).toBeVisible()
+})
+
+
+it('keeps independently pending turns recoverable in one conversation', async () => {
+  const first = { ...seed(), status: 'sent' as const, reply: null, question: 'First pending question', created_at: '2020-01-01T00:00:00Z' }
+  const second = { ...seed(), conversation_id: first.conversation_id, status: 'delivered' as const, reply: null, question: 'Second pending question', created_at: '2020-01-02T00:00:00Z' }
+  records = [first, second]
+  mount()
+  const preview = await screen.findByRole('button', { name: /2 pending.*First pending question/ })
+  fireEvent.click(preview)
+  for (const turn of [first, second]) {
+    const retry = screen.getByRole('button', { name: `Retry delivery: ${turn.question}` })
+    fireEvent.click(retry)
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${turn.request_id}/retry`, expect.anything()))
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
+  expect(screen.getAllByRole('button', { name: /Retry delivery:/ })).toHaveLength(2)
+})

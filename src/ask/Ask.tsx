@@ -134,7 +134,14 @@ function sourceAvailable(item: AskItem, scene: FloorScene | null) {
   if (target?.kind === 'claim') return !!scene?.claims.some(claim => claim.id === target.id && scene.cards.some(card => card.id === claim.cardId && !card.source.in_trash && !card.source.archived))
   return !!scene?.cards.some(card => card.id === item.context.anchor.page_id && !card.source.in_trash && !card.source.archived)
 }
-function AskThread({ turns, controls }: { turns: AskItem[]; controls: AskControls }) {
+function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskControls; now: number }) {
+  return <div>
+    <p role="status">{item.status === 'failed' ? 'Failed' : item.status === 'delivered' ? 'Delivered' : 'Sent'} · {item.error ?? 'Waiting for First Mate’s answer.'}</p>
+    {Date.parse(item.created_at) < now - 120_000 && <p>Delivery or an answer is taking longer. First Mate may be offline.</p>}
+    <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>
+  </div>
+}
+function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
   const latest = turns.at(-1)!
   return <section className="ask-thread" id={`ask-thread-${latest.conversation_id}`} aria-label={`Answer thread: ${turns[0]!.question}`}>
     <header><strong>Conversation</strong><button type="button" onClick={event => { controls.collapse(); event.currentTarget.closest('[data-ask-id]')?.querySelector<HTMLElement>('.ask-preview')?.focus({ preventScroll: true }) }}>Collapse answer</button></header>
@@ -145,7 +152,7 @@ function AskThread({ turns, controls }: { turns: AskItem[]; controls: AskControl
       {turn.reply ? <><h3>{turn.reply.summary}</h3><p className="ask-detail">{turn.reply.detail}</p>
         {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
         {!!turn.reply.suggested_actions.length && <><h4>Suggested next actions</h4><ul>{turn.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}
-      </> : <p role="status">{turn.error ?? 'Waiting for First Mate’s answer.'}</p>}
+      </> : <AskDelivery item={turn} controls={controls} now={now} />}
     </section>)}
     <footer><button type="button" onClick={() => controls.returnTo(latest)}>Return to source</button>{controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}<button type="button" onClick={() => controls.followUp(latest)}>Follow up</button></footer>
   </section>
@@ -165,14 +172,16 @@ export function AskDesk({ now }: { now: number }) {
     {groups.map(group => {
       const item = group.at(-1)!, expanded = controls.expanded === item.conversation_id, unread = group.some(turn => turn.reply && !turn.read_at)
       const turns = controls.items.filter(turn => turn.conversation_id === item.conversation_id).sort((a,b) => a.created_at.localeCompare(b.created_at))
+      const failed = turns.filter(turn => !turn.reply && turn.status === 'failed').length
+      const pending = turns.filter(turn => !turn.reply && turn.status !== 'failed').length
       return <article key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
-          <small>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])} · {ageLabel(Date.parse(item.updated_at), now)}</small>
+          <small>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])}{failed > 0 && ` · ${failed} failed`}{pending > 0 && ` · ${pending} pending`} · {ageLabel(Date.parse(item.updated_at), now)}</small>
           <strong>{turns[0]!.question}</strong><span>{item.context.anchor.label}</span>{!expanded && item.reply && <p>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>
         </button>
-        {expanded && <AskThread turns={turns} controls={controls} />}
-        {!expanded && item.error && <p role="status">{item.error}</p>}{!item.reply && Date.parse(item.created_at) < now - 120_000 && <p>Delivery or an answer is taking longer. First Mate may be offline.</p>}
-        {!item.reply && <button type="button" onClick={() => controls.action(item, 'retry')}>Retry delivery</button>}{!item.dismissed_at && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of group) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
+        {expanded && <AskThread turns={turns} controls={controls} now={now} />}
+        {!expanded && turns.filter(turn => !turn.reply).map(turn => <AskDelivery key={turn.request_id} item={turn} controls={controls} now={now} />)}
+        {!item.dismissed_at && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of group) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
       </article>
     })}
     <button type="button" className="ask-history" aria-pressed={history} onClick={() => setHistory(!history)}>{history ? 'Back to questions' : 'Question history'}</button>

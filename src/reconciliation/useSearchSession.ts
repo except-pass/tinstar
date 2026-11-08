@@ -65,9 +65,8 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     if (!state.searchFocus) snapshot.current = null
   }
   const restoreView = (saved: Snapshot, clear = false) => {
-    const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
-    send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
-    if (saved.state.searchFocus?.length) send({ type: 'reveal-search', target: saved.state.searchReveal ?? saved.state.searchFocus[0]!, targets: saved.state.searchFocus })
+    const { searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
+    send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), searchReveal: searchReveal ?? null, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
     setRoots(saved.roots); setDetails(saved.details); setDensity(saved.density); saveOverviewDensity(saved.density)
     restorePending.current = saved
   }
@@ -91,7 +90,7 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     return () => cancelAnimationFrame(frame)
   })
   useLayoutEffect(() => {
-    if (!active || !state.searchReveal) return
+    if (!active || restorePending.current || !state.searchReveal) return
     const key = semanticId(state.searchReveal)
     const element = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.dataset.semanticId === key)
     element?.scrollIntoView({ block: 'center', behavior: 'instant' }); element?.focus({ preventScroll: true })
