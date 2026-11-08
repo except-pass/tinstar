@@ -202,6 +202,13 @@ def manage(command, root, options):
         return
     if sys.platform != 'darwin':
         raise puller.PullerError('Ask LaunchAgent installation/lifecycle requires macOS', 'platform')
+    if command in ('install', 'upgrade', 'enable', 'restart') and (PACKAGE / '.git').exists():
+        # npm ci in a developer checkout must not repoint a persistent agent
+        # at a disposable worktree that can disappear after development.
+        if command == 'upgrade':
+            print('Ask puller: source checkout; keeping the installed LaunchAgent. Use the installed Tin Star CLI to update it.')
+            return
+        raise puller.PullerError('Use the installed Tin Star CLI', 'source-checkout')
     settings = read_json(root / 'ask-puller.json')
     if command in ('install', 'upgrade'):
         if command == 'upgrade' and not settings:
@@ -261,7 +268,8 @@ def main():
     except Exception as error:
         # No tracebacks: inputs and subprocess failures can contain secrets.
         code = error.code if isinstance(error, puller.PullerError) else 'local-state'
-        print('Ask puller: ' + code + '. Check configuration, bridge access, clavis and launchd; see the runbook.', file=sys.stderr)
+        advice = 'Use the installed Tin Star CLI; see the runbook.' if code == 'source-checkout' else 'Check configuration, bridge access, clavis and launchd; see the runbook.'
+        print('Ask puller: ' + code + '. ' + advice, file=sys.stderr)
         return 1
 
 

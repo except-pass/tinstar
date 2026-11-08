@@ -123,7 +123,11 @@ with m.single_flight(pathlib.Path(sys.argv[2])) as acquired:
             if args[0] == 'bootout':
                 loaded = False
             return subprocess.CompletedProcess(args, 0)
-        with patch.object(service.sys, 'platform', 'darwin'), patch.object(service, 'plist_path', return_value=self.agent), patch.object(service.shutil, 'which', return_value=str(clavis)), patch.object(service, 'launchctl', side_effect=launchctl), contextlib.redirect_stdout(io.StringIO()):
+        installed = self.root / 'installed-package'
+        template = installed / 'services' / 'ask-puller'
+        template.mkdir(parents=True)
+        shutil.copyfile(service.PACKAGE / 'services' / 'ask-puller' / 'agent.plist', template / 'agent.plist')
+        with patch.object(service, 'PACKAGE', installed), patch.object(service.sys, 'platform', 'darwin'), patch.object(service, 'plist_path', return_value=self.agent), patch.object(service.shutil, 'which', return_value=str(clavis)), patch.object(service, 'launchctl', side_effect=launchctl), contextlib.redirect_stdout(io.StringIO()):
             service.manage('install', self.root, self.options)
             config = service.read_json(self.root / 'ask-puller.json')
             self.assertTrue(config['enabled'])
@@ -156,6 +160,21 @@ with m.single_flight(pathlib.Path(sys.argv[2])) as acquired:
             self.assertFalse((self.root / 'ask-puller.json').exists())
             service.manage('upgrade', self.root, self.options)
             self.assertFalse(loaded)
+
+    def test_source_checkout_upgrade_cannot_replace_an_installed_agent(self):
+        checkout = self.root / 'disposable-checkout'
+        checkout.mkdir()
+        (checkout / '.git').write_text('gitdir: isolated-worktree')
+        before = (self.root / 'ask-puller.json').read_bytes()
+        with patch.object(service, 'PACKAGE', checkout), patch.object(service.sys, 'platform', 'darwin'), patch.object(service, 'launchctl') as launchctl, contextlib.redirect_stdout(io.StringIO()) as output:
+            service.manage('upgrade', self.root, self.options)
+            self.assertIn('keeping the installed LaunchAgent', output.getvalue())
+            for command in ('install', 'enable', 'restart'):
+                with self.assertRaises(service.puller.PullerError) as error:
+                    service.manage(command, self.root, self.options)
+                self.assertEqual(error.exception.code, 'source-checkout')
+            launchctl.assert_not_called()
+        self.assertEqual((self.root / 'ask-puller.json').read_bytes(), before)
 
     def test_non_mac_cli_refuses_install_and_npm_hook_is_inert(self):
         if sys.platform == 'darwin':

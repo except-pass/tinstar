@@ -72,7 +72,11 @@ Normal `npm install -g tinstar@<release>` / `npm update -g tinstar` runs the shi
 postinstall hook. A configured Mac regenerates/reloads the service when installed
 paths or configuration change and ensures an enabled agent is loaded. Reinstall
 is idempotent. Disabled installations stay disabled; unconfigured Macs and all
-non-Mac installs do nothing. `--ignore-scripts` suppresses this npm integration;
+non-Mac installs do nothing. Source checkouts also skip automatic service updates
+so `npm ci` cannot repoint
+an installed LaunchAgent at a disposable worktree; lifecycle setup commands
+require the installed Tin Star CLI. Status/disable/uninstall remain available.
+`--ignore-scripts` suppresses npm integration;
 after such an update, rerun the canonical install command with the saved settings.
 A failed update hook reports failure; run the CLI and status from the installed
 package to repair it. No separate service checkout or manually maintained plist
