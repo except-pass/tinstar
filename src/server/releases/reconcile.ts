@@ -8,7 +8,7 @@ import { receiptHash } from './cmsandbox'
 function latestReceipt(rows: DeploymentReceipt[]) {
   const sorted = [...rows].sort((a, b) => Date.parse(b.deployedAt) - Date.parse(a.deployedAt) || a.id.localeCompare(b.id))
   const latest = sorted[0]
-  const conflicting = latest && sorted.filter(row => row.deployedAt === latest.deployedAt).some(row =>
+  const conflicting = latest && sorted.filter(row => Date.parse(row.deployedAt) === Date.parse(latest.deployedAt)).some(row =>
     row.deployedSha !== latest.deployedSha || row.artifactDigest !== latest.artifactDigest || row.outcome !== latest.outcome || JSON.stringify(row.exceptions) !== JSON.stringify(latest.exceptions))
   return { receipt: latest ?? null, conflicting: !!conflicting }
 }

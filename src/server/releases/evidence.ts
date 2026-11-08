@@ -80,7 +80,7 @@ export class ReleaseEvidenceReader {
         result.status = 'error'; result.warnings.push('Production receipt export is unreadable, unsupported or conflicting; no shipment is certified')
       }
     }
-    result.collectedAt = times.sort()[0] ?? null
+    result.collectedAt = times.sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
     return result
   }
 }

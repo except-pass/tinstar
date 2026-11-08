@@ -42,6 +42,14 @@ describe('deterministic release dry run', () => {
     expect(JSON.stringify({ scene, data })).toBe(before)
     expect(await reconcileReleases(data, scene, evidence, ancestry)).toEqual(result)
   })
+  it.each(['2026-11-06T18:10:00+00:00', '2026-11-06T19:10:00+01:00', '2026-11-06T18:10:00.000Z'])('rejects conflicting receipts for the same instant serialized as %s', async deployedAt => {
+    const { scene, data, evidence, receipt, ancestry } = setup()
+    evidence.receipts.push({ ...receipt, id: 'rollback', deployedAt, outcome: 'rollback' })
+    const result = await reconcileReleases(data, scene, evidence, ancestry)
+    expect(result.pulls[0]!.deployment!.state).toBe('unknown')
+    expect(cardReports(result).every(card => card.decision === 'exception' && !card.eligible)).toBe(true)
+    expect(ancestry).not.toHaveBeenCalled()
+  })
   it('requires both PRs and every target before a waiting card could complete', async () => {
     const { scene, data, evidence, ancestry, receipt } = setup()
     const second = { ...data.pulls[0]!, id: 'owner/repo#2', number: 2, url: url(2), mergeSha: 'd'.repeat(40) }

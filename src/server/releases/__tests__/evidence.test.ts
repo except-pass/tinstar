@@ -23,6 +23,16 @@ describe('read-only production receipt snapshots', () => {
     expect(current.requirements.get('owner/repo#1')!.targets).toEqual([{ target: 'api-prod', component: 'api' }])
     expect((await new ReleaseEvidenceReader(fixture.root, () => Date.parse(collectedAt) + 301_000).get()).status).toBe('stale')
   })
+  it('selects the earliest snapshot by instant across timezone offsets', async () => {
+    const fixture = await setup()
+    const earlier = '2026-11-06T19:14:00+01:00'
+    const second = join(fixture.root, 'second.json')
+    fixture.settings.receiptFiles.push(second)
+    await fixture.save()
+    await writeFile(second, JSON.stringify({ ...fixture.snapshot, collectedAt: earlier }))
+    const result = await new ReleaseEvidenceReader(fixture.root, () => Date.parse(collectedAt)).get()
+    expect(result).toMatchObject({ status: 'fresh', collectedAt: earlier })
+  })
   it('does not treat a tag, malformed export, missing file or conflicting receipt as deployed evidence', async () => {
     const fixture = await setup(), reader = new ReleaseEvidenceReader(fixture.root, () => Date.parse(collectedAt))
     await fixture.save()

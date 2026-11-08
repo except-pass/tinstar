@@ -18,8 +18,13 @@ export const checkReleaseAncestry: AncestryCheck = async (repository, checkout, 
     }
     // An ancestor can have been reverted. Detect standard Git revert provenance
     // locally without publishing commit prose; other known exceptions come from receipts.
+    const parents = (await git(['rev-list', '--parents', '-n', '1', mergeSha])).stdout.trim().split(/\s+/).slice(1)
+    const introduced = parents.length > 1
+      ? (await git(['rev-list', mergeSha, `^${parents[0]}`])).stdout.trim().split(/\s+/)
+      : [mergeSha]
+    const revertedCommits = new Set(introduced)
     const history = await git(['log', '--format=%B', `${mergeSha}..${deployedSha}`])
-    if (new RegExp(`This reverts commit ${mergeSha}\\b`, 'i').test(history.stdout)) return { state: 'unknown', reason: 'A descendant commit explicitly reverts this merge' }
+    if ([...history.stdout.matchAll(/This reverts commit ([a-f0-9]{40,64})\b/gi)].some(match => revertedCommits.has(match[1]!.toLowerCase()))) return { state: 'unknown', reason: 'A descendant commit explicitly reverts this merge' }
     return { state: 'ancestor' }
   } catch { return { state: 'unknown', reason: 'Repository identity or ancestry could not be read' } }
 }
