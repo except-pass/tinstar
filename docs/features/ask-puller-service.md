@@ -71,9 +71,9 @@ environment:
 TINSTAR_ASK_URL=https://your-tinstar.example.ts.net:8450 TINSTAR_ASK_HOME="$HOME/repo/firstmate" TINSTAR_ASK_TOKEN_KEY=tinstar.ask-bridge npm install -g --allow-scripts=tinstar ./tinstar-<ver>.tgz
 ```
 
-If status is not healthy and the service should be enabled, run the canonical
-install above. For a deliberately disabled installation, skip it or run
-`tinstar ask-puller disable` again afterward.
+If status is not healthy, follow the canonical procedure in
+[Install on the Mac](#install-on-the-mac), including its disabled-installation
+guidance.
 
 ## Verify and operate
 
@@ -107,21 +107,16 @@ the kernel releases the lock on process death.
 
 When npm runs the shipped postinstall, a configured Mac regenerates and
 reloads the service when installed paths or configuration change, and ensures
-an enabled agent is loaded. On npm 11.19 and newer that hook may be skipped;
-after every global install or update, rerun the canonical install from the
-install section. Reinstall is idempotent for an enabled installation, but
-re-enables a disabled one (`enabled=true` and agent reload). For a deliberately
-disabled installation, skip the install step or run `tinstar ask-puller disable`
-again afterward. The postinstall hook itself preserves disabled state;
-unconfigured Macs and all non-Mac installs do nothing. Source
+an enabled agent is loaded. For the required update procedure and how to keep
+a deliberately disabled installation disabled, see
+[Install on the Mac](#install-on-the-mac). Unconfigured Macs without the
+setup environment variables and all non-Mac installs do nothing. Source
 checkouts also skip automatic service updates so `npm ci` cannot repoint an
 installed LaunchAgent at a disposable worktree; lifecycle setup commands
 require the installed Tin Star CLI. Status, disable and uninstall remain
-available. `--ignore-scripts` also skips the hook; rerun the canonical
-install afterward if the service should be enabled. A failed update hook
-reports failure; run the canonical install and then status from the installed
-package to repair it. In either case, for a deliberately disabled installation,
-skip the install step or run `tinstar ask-puller disable` again afterward. No separate
+available. `--ignore-scripts` also skips the hook. If the hook is skipped or
+reports failure, follow the same install procedure linked above, including its
+disabled-installation guidance, using the installed package. No separate
 service checkout or manually maintained plist is involved. Desktop-only and
 browser-only installs do not designate a Mac puller.
 
