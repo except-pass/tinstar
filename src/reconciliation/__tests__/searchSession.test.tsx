@@ -59,3 +59,5 @@ describe('search session organizer selection restoration', () => {
     expect(restored.state.selection).toBeNull()
   })
 })
+
+

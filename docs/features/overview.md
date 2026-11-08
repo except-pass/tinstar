@@ -189,8 +189,8 @@ search, restoring the search view, or Reset clears it. Saved grouping, order,
 search and status choices stay intact during navigation. If the card is missing
 from the current scene, the Desk reports that it is not on the floor and offers that clicked card's own
 Notion link. Navigation never answers, dismisses or writes a source record;
-Answer/Dismiss remain separate explicit controls. Mobile Desk navigation returns
-to the floor; reduced motion uses static highlighting.
+Answer/Dismiss remain separate explicit controls. The [Ask reference](ask.md)
+owns mobile conversation navigation; reduced motion uses static highlighting.
 
 Grouping, filters and authenticated MCP use the same reducer. Compact inline
 relationship roots are local to the current window and are not source writes. The [MCP reference](reconciliation-mcp.md#tools-and-authority)

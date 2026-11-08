@@ -12,6 +12,7 @@ export const donutFilterSchema = z.object({ cards: z.array(z.string().max(256)).
 
 export const targetSchema = z.object({ kind: z.enum(['card', 'execution', 'claim', 'manager', 'group', 'you', 'firstMate']), id: z.string().min(1).max(2048) }).strict()
 const searchViewSchema = z.object({
+  searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4096).optional(),
   search: searchFilterSchema.optional(),
   selection: targetSchema.nullable(), collapsed: z.array(z.string().max(2048)).max(4096),
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),

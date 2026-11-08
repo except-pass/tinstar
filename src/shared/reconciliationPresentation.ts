@@ -49,7 +49,7 @@ type Change =
   | { type: 'set-pattern'; pattern: Pattern | null }
   | { type: 'reveal-search'; target: Target; targets?: Target[] }
   | { type: 'clear-search' }
-  | { type: 'restore-search-view'; view: Pick<PresentationState, 'search' | 'selection' | 'collapsed' | 'navigation' | 'exceptionsOnly' | 'roadmapExpanded' | 'organizer' | 'statusFilter' | 'donutFilter' | 'linksVisible' | 'arrangement' | 'sort'> }
+  | { type: 'restore-search-view'; view: Pick<PresentationState, 'search' | 'searchReveal' | 'searchFocus' | 'selection' | 'collapsed' | 'navigation' | 'exceptionsOnly' | 'roadmapExpanded' | 'organizer' | 'statusFilter' | 'donutFilter' | 'linksVisible' | 'arrangement' | 'sort'> }
   | { type: 'set-organizer'; organizer: Organizer }
   | { type: 'set-status-filter'; filter: StatusFilter }
   | { type: 'set-donut-filter'; filter: DonutFilter }
@@ -126,7 +126,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'set-pattern': next.search = { ...(state.search ?? emptySearch()), patterns: action.pattern ? [action.pattern] : [] }; break
     case 'set-search': next.search = action.search; next.searchReveal = null; next.searchFocus = undefined; break
     case 'clear-search': next.search = emptySearch(); next.searchReveal = null; next.searchFocus = undefined; break
-    case 'restore-search-view': next = { ...next, ...action.view, searchReveal: null, searchFocus: undefined }; if (next.selection && !targetExists(scene, next.selection, next, now)) next.selection = null; break
+    case 'restore-search-view': next = { ...next, searchReveal: null, searchFocus: undefined, ...action.view }; if (next.selection && !targetExists(scene, next.selection, next, now)) next.selection = null; break
     case 'reveal-search': next.navigation = null; next.searchReveal = action.target; next.searchFocus = action.targets ?? [action.target]; next.selection = null; next.exceptionsOnly = false; next.roadmapExpanded = true; next.collapsed = []; break
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break

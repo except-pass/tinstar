@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shell/types'
 import { useFloorScene } from '../reconciliation/useFloorScene'
 import { useDeskQueue } from '../reconciliation/useDeskQueue'
@@ -11,11 +11,17 @@ import { DeskRail } from './DeskRail'
 import { useSearchSession } from '../reconciliation/useSearchSession'
 import { loadOverviewDensity, type OverviewDensity } from '../reconciliation/overviewDensity'
 import type { AskReturn } from '../shared/ask'
+import { emptySearch } from '../shared/smartSearch'
 import type { Target } from '../reconciliation/presentation'
+import { useViewSnapshot, type WorkspaceHistory } from './workspaceHistory'
+
+function overviewTarget(target: AskReturn['target']) {
+  return target.kind === 'card' || target.kind === 'execution' || target.kind === 'claim' ? target : null
+}
 
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
-  origin?: AskReturn; clearOrigin?: () => void
+  views?: WorkspaceHistory; origin?: AskReturn; clearOrigin?: () => void
   queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void
 }
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -25,8 +31,8 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ origin, onNavigate, onClearOrigin, overviewActive, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
-  onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
+  views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
   overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
@@ -38,7 +44,7 @@ export function DeskWorkspace({ origin, onNavigate, onClearOrigin, overviewActiv
   const send = useCallback((action: PresentationAction) => {
     const result = presentation.send(action)
     if (result?.outcome === 'applied' && (action.type === 'navigate-card' || action.type === 'reveal-search')) {
-      setCloseRequest(value => value + 1)
+      if (action.type === 'navigate-card') setCloseRequest(value => value + 1)
       if (!overviewActive) onOverview()
     }
     return result
@@ -48,11 +54,42 @@ export function DeskWorkspace({ origin, onNavigate, onClearOrigin, overviewActiv
   const [openRelationships, setOpenRelationships] = useState<Target[]>([])
   const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
   const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
-  const search = useSearchSession({ active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const search = useSearchSession({ views, active: overviewActive, scene: floor.scene, state: presentation.state, send, canvas, root, roots: openRelationships, setRoots: setOpenRelationships, density, setDensity, details: detailedCollapsed, setDetails: setDetailedCollapsed })
+  const handledOrigin = useRef<AskReturn | null>(null)
+  const restoringOverview = useViewSnapshot(views, 'overview', () => ({
+    query: presentation.state.search?.query ?? '', sort: presentation.state.sort ?? 'priority',
+    filter: { search: presentation.state.search ?? emptySearch(), status: presentation.state.statusFilter, donut: presentation.state.donutFilter, exceptions: presentation.state.exceptionsOnly },
+    group: presentation.state.organizer,
+  }), saved => {
+    handledOrigin.current = null
+    presentation.send({ type: 'set-search', search: { ...saved.filter.search, query: saved.query } })
+    presentation.send({ type: 'set-sort', sort: saved.sort })
+    if (saved.group) presentation.send({ type: 'set-organizer', organizer: saved.group })
+    if (saved.filter.status) presentation.send({ type: 'set-status-filter', filter: saved.filter.status })
+    if (saved.filter.donut) presentation.send({ type: 'set-donut-filter', filter: saved.filter.donut })
+    presentation.send({ type: 'set-exceptions', enabled: saved.filter.exceptions })
+  }, overviewActive && !!floor.scene)
+  useLayoutEffect(() => {
+    if (!origin) { handledOrigin.current = null; return }
+    const target = overviewTarget(origin.target)
+    if (!overviewActive || !floor.scene || origin.section !== 'overview' || !target || handledOrigin.current === origin) return
+    if (restoringOverview) return
+    if (!search.choose(target)) return
+    handledOrigin.current = origin
+    presentation.send({ type: 'flash', targets: [target] })
+  })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk }
+  const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk }
   return <WorkspaceContext.Provider value={workspace}>
-    <AskProvider scene={floor.scene} state={presentation.state} send={send} onReturn={destination => { if (destination.section !== 'overview') { setCloseRequest(value => value + 1); onNavigate?.(destination) } else if (!overviewActive) onOverview() }}>
+    <AskProvider scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
+      if (destination.section === 'overview') search.remember()
+      if (onNavigate) onNavigate(destination)
+      else if (destination.section === 'overview') {
+        const target = overviewTarget(destination.target)
+        if (!overviewActive) onOverview()
+        if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
+      }
+    }}>
       <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} onWorkers={onWorkers} onReceipts={onReceipts} workers={workers} messages={messages} submit={submit} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>

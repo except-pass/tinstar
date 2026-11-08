@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AskCardAction } from '../ask/Ask'
 import { AskSurface } from '../ask/AskSurface'
 import { useOriginFocus } from '../ask/useOriginFocus'
+import { useViewSnapshot } from '../ask/workspaceHistory'
 import { pullSource, type AskView } from '../shared/ask'
 import { apiFetch } from '../apiClient'
 import type { PullDetail, PullSummary } from '../shared/pulls'
@@ -15,7 +16,7 @@ import type { PullFootprint } from '../shared/pullFootprint'
 
 const columns: Array<[PullSort, string]> = [['repository', 'Repository'], ['title', 'PR'], ['author', 'Author'], ['changes', 'Changes / files'], ['checks', 'CI'], ['review', 'Review'], ['updated', 'Updated / age'], ['initiative', 'Initiative'], ['epic', 'Epic'], ['manager', 'Manager'], ['worker', 'Worker']]
 export function Pulls() {
-  const { data, error, refresh } = usePulls(), { scene, now, openDesk, origin, clearOrigin } = useDeskWorkspace()
+  const { data, error, refresh } = usePulls(), { scene, now, openDesk, origin, clearOrigin, views } = useDeskWorkspace()
   const [query, setQuery] = useState(origin?.view?.query ?? ''), [sort, setSort] = useState<PullSort>(() => columns.some(([key]) => key === origin?.view?.sort) ? origin!.view!.sort as PullSort : 'repository'), [descending, setDescending] = useState(origin?.view?.descending ?? false)
   const [selected, setSelected] = useState<Set<string>>(new Set()), [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [details, setDetails] = useState<Record<string, PullDetail>>({}), [failures, setFailures] = useState<Record<string, string>>({}), [busy, setBusy] = useState<Set<string>>(new Set())
@@ -49,6 +50,12 @@ export function Pulls() {
   // A refreshed head must never display changes/checks captured at the old head.
   const currentDetails = useMemo(() => Object.fromEntries(Object.entries(details).filter(([id, detail]) => inventory.some(pull => pull.id === id && pull.head === detail.head))), [inventory, details])
   const focusRef = useOriginFocus(destination)
+  useViewSnapshot(views, 'pulls', () => ({ query, sort: `${descending ? '-' : ''}${sort}` }), saved => {
+    setQuery(saved.query)
+    const key = saved.sort.replace(/^-/, '')
+    if (columns.some(([column]) => column === key)) setSort(key as PullSort)
+    setDescending(saved.sort.startsWith('-'))
+  }, !!data)
   const view: AskView = { scene: 'pulls', query, sort, descending }
   const rows = useMemo(() => visiblePulls(destination ? inventory.filter(pull => pull.id === destination.target.id) : inventory, destination ? '' : query, sort, descending, scene, currentDetails), [inventory, query, sort, descending, scene, currentDetails, destination])
   const actualSelection = [...selected].filter(id => data?.pulls.some(pull => pull.id === id))

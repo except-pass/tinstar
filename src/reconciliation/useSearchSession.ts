@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import type { WorkspaceHistory } from '../ask/workspaceHistory'
 import { directNeighbors, emptySearch } from '../shared/smartSearch'
-import { semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
+import { targetExists, semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
 
-interface Snapshot {
+interface ViewSnapshot {
   state: PresentationState
   roots: Target[]
   density: OverviewDensity
@@ -16,7 +17,8 @@ interface Snapshot {
 }
 
 /** One temporary focus lens over the existing reducer, with semantic restore. */
-export function useSearchSession({ active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+export function useSearchSession({ views, active, scene, state, send, canvas, root, roots, setRoots, density, setDensity, details, setDetails }: {
+  views?: WorkspaceHistory
   active: boolean
   scene: FloorScene | null
   state: PresentationState; send: (action: PresentationAction) => void; canvas: RefObject<HTMLDivElement>; root: RefObject<HTMLDivElement>
@@ -24,7 +26,7 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
   roots: Target[]; setRoots: Dispatch<SetStateAction<Target[]>>; density: OverviewDensity; setDensity: Dispatch<SetStateAction<OverviewDensity>>
 }) {
   const [open, setOpen] = useState(false)
-  const snapshot = useRef<Snapshot | null>(null), restorePending = useRef<Snapshot | null>(null)
+  const snapshot = useRef<ViewSnapshot | null>(null), restorePending = useRef<ViewSnapshot | null>(null)
   const [historySession] = useState(() => crypto.randomUUID())
   const historyEntries = useRef(0), ignorePop = useRef(false)
   const ownedHistoryDepth = useCallback(() => {
@@ -41,19 +43,21 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     if (!steps) return
     ignorePop.current = true; window.history.go(-steps)
   }
-  const begin = () => {
-    if (!snapshot.current) {
-      const viewport = canvas.current?.parentElement
-      const top = viewport?.getBoundingClientRect().top ?? 0
-      const anchor = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.getBoundingClientRect().bottom > top)
-      snapshot.current = { state, roots, density, details, anchor: anchor?.dataset.semanticId, offset: anchor ? anchor.getBoundingClientRect().top - top : 0, scroll: viewport?.scrollTop ?? 0, scrollLeft: viewport?.scrollLeft ?? 0,
-        focus: document.activeElement?.closest<HTMLElement>('[data-semantic-id]')?.dataset.semanticId }
-    }
-    if (!open && window.matchMedia?.('(max-width:850px)').matches) {
+  const captureBaseline = (): ViewSnapshot => {
+    const viewport = canvas.current?.parentElement
+    const top = viewport?.getBoundingClientRect().top ?? 0
+    const anchor = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.getBoundingClientRect().bottom > top)
+    return { state, roots, density, details, anchor: anchor?.dataset.semanticId, offset: anchor ? anchor.getBoundingClientRect().top - top : 0, scroll: viewport?.scrollTop ?? 0, scrollLeft: viewport?.scrollLeft ?? 0,
+      focus: document.activeElement?.closest<HTMLElement>('[data-semantic-id]')?.dataset.semanticId }
+  }
+  const remember = () => { if (!snapshot.current) snapshot.current = captureBaseline() }
+  const begin = (withHistory = true) => {
+    remember()
+    if (withHistory && !open && window.matchMedia?.('(max-width:850px)').matches) {
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
       historyEntries.current = ownedHistoryDepth()
-      try { window.history.pushState({ ...window.history.state, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
+      try { views?.capture(); window.history.pushState({ ...window.history.state, tinstarWorkspace: undefined, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++; views?.navigated() } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }
@@ -62,15 +66,16 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     setOpen(false)
     if (!state.searchFocus) snapshot.current = null
   }
+  const restoreView = (saved: ViewSnapshot, clear = false) => {
+    const { searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
+    send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), searchReveal: searchReveal ?? null, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
+    setRoots(saved.roots); setDetails(saved.details); setDensity(saved.density); saveOverviewDensity(saved.density)
+    restorePending.current = saved
+  }
   const restore = (clear = false, back = true) => {
     if (back) leaveHistory(ownedHistoryDepth())
-    const saved = snapshot.current
-    if (saved) {
-      const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
-      send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
-      setRoots(saved.roots); setDetails(saved.details); setDensity(saved.density); saveOverviewDensity(saved.density)
-      restorePending.current = saved
-    } else if (clear) send({ type: 'clear-search' })
+    if (snapshot.current) restoreView(snapshot.current, clear)
+    else if (clear) send({ type: 'clear-search' })
     snapshot.current = null; setOpen(false)
   }
   useLayoutEffect(() => {
@@ -87,7 +92,7 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     return () => cancelAnimationFrame(frame)
   })
   useLayoutEffect(() => {
-    if (!active || !state.searchReveal) return
+    if (!active || restorePending.current || !state.searchReveal) return
     const key = semanticId(state.searchReveal)
     const element = [...canvas.current?.querySelectorAll<HTMLElement>('.ov-item[data-semantic-id]') ?? []].find(element => element.dataset.semanticId === key)
     element?.scrollIntoView({ block: 'center', behavior: 'instant' }); element?.focus({ preventScroll: true })
@@ -118,10 +123,13 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
   }, [])
-  return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
+  return { remember, dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
+    if (!scene || [target, ...targets].some(item => !targetExists(scene, item, state))) return false
+    remember()
     leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
     send({ type: 'reveal-search', target, targets }); setRoots(targets)
-    const cluster = scene ? directNeighbors(scene, targets) : new Set([semanticId(target)])
+    const cluster = directNeighbors(scene, targets)
     setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)
+    return true
   } }
 }

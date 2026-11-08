@@ -67,17 +67,14 @@ under the secondary Actions menu moves only the Ask into searchable history.
 It does not dismiss a decision,
 change Notion, approve work, merge or deploy.
 
-Opening an item reveals its originating context and opens a compact answer
-sheet over the originating section, switching sections when necessary. Successful origin
-navigation closes the mobile Desk sheet without changing desktop collapse
-preferences or clearing the retained conversation. Work items use existing
-[Desk navigation](overview.md).
+Opening an item reveals its originating context, switching sections when
+necessary, while retaining the conversation in Desk. Work items use existing
+[Desk navigation](overview.md); inline answers and return controls are described
+[below](#typed-artifact-origins-and-returns).
 Link items retain the exact claim ID, reveal its endpoints and scroll to its card;
 the flash targets that relationship, including unverified Detailed lines, rather
 than every confirmed connection on the card. Inbox questions and answer previews
-wrap legibly. The answer sheet stays compact
-at rest; **Full answer & evidence** expands the retained detail, references and suggestions. The
-compact sheet leaves the returned task visible above it on mobile. Worker
+wrap legibly. Worker
 answers reveal and highlight the exact originating execution. Active and
 history items use the same return path. A task that cannot be shown gets the
 captured canonical source link rather than another object. Follow-up creates a new request in the same
@@ -125,8 +122,7 @@ URL locator to reveal the exact authorized PR or release row despite the current
 filter. Deployment/receipt origins reveal their read-only evidence inline in the
 main workspace. Source removal, receipt replacement and changed PR heads have
 visible fallback messages; source links remain available in the answer. Manual
-section navigation or clearing the origin ends pending focus. Inline answer
-threads remain a follow-up; answers retain the existing answer dialog.
+section navigation or clearing the origin ends pending focus.
 
 Desk returns to a PR with its captured query/sort intact, temporarily reveals,
 expands and focuses the canonical row, and keeps the answer open. A closed PR
@@ -135,6 +131,21 @@ not add closed PRs to the open inventory. The same configured repository and
 owned/authored/explicitly-associated relevance scope applies. Changed heads are
 labelled; failed or inaccessible reads retain the answer and original GitHub
 link. “Show all PRs in this view” removes only the temporary reveal.
+
+Answers expand inline in the persistent Desk, with neighboring conversation
+previews still available in one click. Correlated follow-ups share one thread;
+collapse, history, unread status, dismiss, references and suggested actions retain
+the existing request/permission boundaries. The composer remains a dialog.
+On mobile, opening a conversation keeps the Desk sheet open; close it to see
+the revealed origin in the main workspace.
+
+Normal browser history entries store the previous section's query, sort, filters
+and grouping before a Desk jump. Back (or the thread's Back to previous view
+control) restores those fields once source data is ready. Pending restoration
+cannot be overwritten by a departing loading view. Selection, collapsed groups,
+expanded rows, detail data and scroll positions are not restored across history.
+The expanded conversation stays visible during navigation and the one-step return.
+Unresolved source origins retry while current; newer navigation cancels that work.
 
 ## Configuration and trust boundary
 

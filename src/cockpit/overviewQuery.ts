@@ -70,7 +70,7 @@ export function linkLocation(workers: LinkableWorker[], location: OverviewLocati
 export function readOverviewSearch(search: string): OverviewLocation {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
   let origin: AskReturn | undefined
-  try { const parsed = askReturnSchema.safeParse(JSON.parse(params.get('origin') ?? 'null')); if (parsed.success && parsed.data.section === params.get('view')) origin = parsed.data } catch { /* Ignore an invalid locator; normal section navigation stays available. */ }
+  try { const parsed = askReturnSchema.safeParse(JSON.parse(params.get('origin') ?? 'null')); if (parsed.success && parsed.data.section === (params.get('view') ?? 'overview')) origin = parsed.data } catch { /* Ignore an invalid locator; normal section navigation stays available. */ }
   const worker = params.get('worker')
   const home = params.get('home')
   return worker && worker.trim()
@@ -91,7 +91,7 @@ export function writeOverviewSearch(currentSearch: string, next: OverviewLocatio
   else params.delete('view')
   if (next.card && !next.page && !next.worker) params.set('card', next.card)
   else params.delete('card')
-  if (next.origin && next.origin.section === next.page && !next.worker) params.set('origin', JSON.stringify(next.origin))
+  if (next.origin && next.origin.section === (next.page ?? 'overview') && !next.worker) params.set('origin', JSON.stringify(next.origin))
   else params.delete('origin')
   const text = params.toString()
   return text ? `?${text}` : ''
