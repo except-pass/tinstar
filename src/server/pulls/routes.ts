@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { ReconciliationSources } from '../reconciliation'
-import { releaseAssociations, releasePull } from '../../shared/releases'
+import { activeReleaseLinks, releaseAssociations, releasePull } from '../../shared/releases'
 import { getConfigRoot } from '../configRoot'
 import { AssociationStore } from '../releases/associations'
 import { currentOriginAllowlist } from '../api/originAllowlist'
@@ -43,12 +43,12 @@ export class PullsApi {
       let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true
       try { events = await this.store.read() } catch { auditAvailable = false; warnings.push('Shared association audit unavailable. Card linkage is unknown.') }
       const associations = releaseAssociations(scene, events)
-      const discovered = [...associations.pulls.map(pull => pull.repository), ...scene.executions.flatMap(execution => {
+      const associated = [...associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0), ...scene.executions.flatMap(execution => {
         const pull = typeof execution.source.pr.url === 'string' ? releasePull(execution.source.pr.url) : null
-        return pull ? [pull.repository] : []
+        return pull ? [pull] : []
       })]
       const configured = await configuredRepositories(this.root)
-      const all = [...new Set(configured ?? discovered)].sort()
+      const all = [...new Set(configured ?? associated.map(pull => pull.repository))].sort()
       // A visible cap bounds per-request GitHub work, not the user's repository choices.
       const repositories = all.slice(0, 32)
       if (all.length > repositories.length) warnings.push(`Showing 32 of ${all.length} repositories. Set prOperations.repositories to choose the review scope.`)
@@ -58,9 +58,10 @@ export class PullsApi {
         if (!identity || !repositories.includes(identity.repository) || !/^[a-f0-9]{40,64}$/.test(head)) return fail(res, 'BAD_REQUEST', 'Choose a PR in the current repository scope and its captured head.', { headers })
         return ok(res, await this.reader.detail(identity.url, head), { headers })
       }
-      const reads = await this.reader.inventory(repositories)
+      const identity = await this.reader.identity()
+      const reads = await this.reader.inventory(repositories, { ...identity, associated })
       const links = new Map(associations.pulls.map(pull => [pull.id, pull.links]))
-      return ok(res, { pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
+      return ok(res, { account: identity.account, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
         repositories: reads.map(read => read.coverage), warnings: [...warnings, ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }, { headers })
     } catch (error) { return fail(res, 'BACKEND_UNAVAILABLE', (error as Error).message, { headers }) }
   }
