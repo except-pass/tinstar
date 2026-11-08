@@ -16,6 +16,8 @@ Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and 
 
 The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue, with read-only production reconciliation and card completion previews. See its reference for evidence requirements and local link/unlink controls.
 
+For actions on selected PRs in PRs or Releases, see the [installed PR actions guide](docs/pr-actions.md).
+
 The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only operational-card audit, offline JSON replay and opt-in local semantic pilot.
 
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.

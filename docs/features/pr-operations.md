@@ -1,6 +1,6 @@
 # PR Operations
 
-The **PRs** destination shows one compact row per observed open GitHub PR. Repository is the first data column and sorts in both directions. Search matches repository, title, number, author and observed work/contributor context. Select rows without losing hidden selections; the selection summary appears only while a selection exists. Inspection and contextual Ask are available; installed actions remain a follow-on slice.
+The **PRs** destination shows one compact row per observed open GitHub PR. Repository is the first data column and sorts in both directions. Search matches repository, title, number, author and observed work/contributor context. Select rows without losing hidden selections; the selection summary appears only while a selection exists. Inspection and contextual Ask are available; see the [installed PR actions guide](../pr-actions.md) for simulated actions and their receipts.
 
 Click row body or its keyboard-accessible Inspect button to expand the actual description, additions/deletions/file count, check/review observations and explicit work/contributor evidence inline. GitHub links remain direct. Counts/checks/reviews are **unknown until inspected**; details are cached for two minutes per canonical PR and captured head. A changed head cannot reuse the old detail. Review approvals are observations, not a claim that all branch policy requirements are satisfied. For file categorization and coverage, see [Change footprint and contributor evidence](#change-footprint-and-contributor-evidence).
 
