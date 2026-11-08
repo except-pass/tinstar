@@ -8,6 +8,8 @@ it.each([
   ['src/generated/config.test.ts', 'Generated & Dependencies'], ['vendor/lib.cpp', 'Generated & Dependencies'], ['package-lock.json', 'Generated & Dependencies'],
   ['Tests/config.test.ts', 'Tests'], ['test-fixtures/data.json', 'Tests'], ['src/config.spec.ts', 'Tests'], ['docs/config.yaml', 'Docs'],
   ['README.md', 'Docs'], ['.github/workflows/ci.yml', 'Config'], ['vite.config.ts', 'Config'], ['src/main.ts', 'Code'], ['image.png', 'Other'],
+  ['CMakeLists.txt', 'Config'], ['src/CMakeLists.txt', 'Config'], ['notes.txt', 'Docs'],
+  ['generated/CMakeLists.txt', 'Generated & Dependencies'], ['tests/CMakeLists.txt', 'Tests'], ['docs/CMakeLists.txt', 'Docs'],
 ])('classifies %s using ordered deterministic rules', (path, category) => { expect(fileCategory(path)).toBe(category) })
 it('uses changed lines, preserves zero-line files and exposes handwritten code despite large generated changes', () => {
   const files = [{ ...file('src/main.ts'), category: 'Code' }, { ...file('package-lock.json'), additions: 9997, deletions: 0, category: 'Generated & Dependencies' }, { ...file('image.png'), additions: 0, deletions: 0, category: 'Other' }] as PullFile[]

@@ -14,7 +14,7 @@ export function fileCategory(filename: string): FootprintCategory {
   const path = filename.toLowerCase(), name = path.split('/').at(-1) ?? path
   if (/(^|\/)(node_modules|vendor|vendored|generated|__generated__|dist|build|coverage)(\/|$)/.test(path) || /(^|[._-])(generated|gen|min)\./.test(name) || /^(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|gemfile\.lock|poetry\.lock|uv\.lock|pipfile\.lock|composer\.lock|go\.sum|packages\.lock\.json)$/.test(name)) return 'Generated & Dependencies'
   if (/(^|\/)(__tests__|tests?|specs?|e2e|fixtures?|__fixtures__|test-fixtures|cypress|playwright)(\/|$)/.test(path) || /(^test_|[._-](test|spec)[._-])/.test(name) || /^(conftest|pytest)\./.test(name)) return 'Tests'
-  if (/(^|\/)(docs?|documentation)(\/|$)/.test(path) || /\.(md|mdx|rst|adoc|txt)$/.test(name) || /^(readme|license|changelog|authors|notice)(\.|$)/.test(name)) return 'Docs'
+  if (/(^|\/)(docs?|documentation)(\/|$)/.test(path) || (name !== 'cmakelists.txt' && /\.(md|mdx|rst|adoc|txt)$/.test(name)) || /^(readme|license|changelog|authors|notice)(\.|$)/.test(name)) return 'Docs'
   if (/(^|\/)(\.github|\.circleci|\.config|config|configs)(\/|$)/.test(path) || /\.(jsonc?|ya?ml|toml|ini|cfg|conf|properties)$/.test(name) || /(^|[._-])(config|settings|rc)\./.test(name) || /^\.(env|[\w-]+rc)(\.|$)/.test(name) || /^(dockerfile|compose|makefile|cmakelists\.txt)(\.|$)/.test(name)) return 'Config'
   if (/\.(tsx?|jsx?|mjs|cjs|vue|svelte|css|scss|sass|less|html?|py|pyi|go|rs|c|h|cc|cpp|hpp|cs|java|kt|kts|rb|php|swift|m|mm|sh|bash|zsh|ps1|sql|graphql|gql|proto|ex|exs|erl|hs|lua|r|jl|dart|scala|clj|cljs|tf|svg)$/.test(name)) return 'Code'
   return 'Other'
