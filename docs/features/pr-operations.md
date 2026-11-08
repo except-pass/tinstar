@@ -26,6 +26,6 @@ Canonical PR identity and many-to-many card edges come directly from `src/shared
 
 ## Navigation and receipts
 
-The activity rail contains **Overview, PRs, Releases**. Legacy Receipts and Workers rail entries are removed on all viewports. Overview's verified worker inspection/source links still work; its Desk header also opens the existing worker finder and message receipt inspector. Worker detail retains its local switcher, Ctrl+[ / Ctrl+] cycling and terminal focus. The receipt inspector reuses existing persisted messages, delivery/error state and retry behavior. The Ask inbox stays in Your Desk with its existing permissions and conversation lifecycle. PRs links back to Your Desk; typed PR Ask will reuse that inbox in its own slice.
+See [README navigation](../../README.md) for activity destinations, worker switching and message receipts. The Ask inbox stays in Your Desk with its existing permissions and conversation lifecycle. PRs links back to Your Desk; typed PR Ask will reuse that inbox in its own slice.
 
-Existing `?worker=...&home=...`, card links, browser history and Releases routes remain supported. PRs uses `?view=pulls`. A navigation switch closes auxiliary panels so they do not become empty orphan drawers. At narrow widths the PR table scrolls horizontally; metadata and GitHub links remain available.
+The [README URL table](../../README.md#worker-links) lists supported deep links. A navigation switch closes auxiliary panels so they do not become empty orphan drawers. At narrow widths the PR table scrolls horizontally; metadata and GitHub links remain available.
