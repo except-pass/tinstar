@@ -70,15 +70,25 @@ describe('mandatory check inventory', () => {
     expect(cmsandboxCheckPolicy.workloads.some(row => !row.complete)).toBe(true)
     expect(validateChecks({ ...snapshot(), changedPaths: ['libs/fuzzy-search/src/index.ts'] }, cmsandboxCheckPolicy).join()).toContain('Admin Merge disabled')
   })
-  it('allows a complete workload when every derived check is green and refuses each blocking state', () => {
+  it('globally refuses the shipped incomplete inventory even for green completed workloads', () => {
+    for (const workload of cmsandboxCheckPolicy.workloads.filter(row => row.complete)) {
+      const path = workload.prefixes.find(prefix => !workload.excludedPrefixes.some(excluded => prefix.startsWith(excluded)))!
+      const selected = { ...snapshot(), changedPaths: [path], checks: requiredFor(path) }
+      const refusal = `Admin Merge disabled: incomplete check inventory ${cmsandboxCheckPolicy.version}`
+      expect(validateChecks(selected, cmsandboxCheckPolicy)).toContain(refusal)
+      expect(validateOperation(installed(), selected, selected, merge, invocation, cmsandboxCheckPolicy).reasons).toContain(refusal)
+    }
+  })
+  it('allows a disposable complete workload fixture and refuses each blocking state', () => {
+    const fixturePolicy = { ...cmsandboxCheckPolicy, version: 'disposable-web-fmp-fixture', workloads: cmsandboxCheckPolicy.workloads.filter(workload => workload.complete && workload.prefixes.some(prefix => webFmp.startsWith(prefix)) && !workload.excludedPrefixes.some(prefix => webFmp.startsWith(prefix))) }
     const checks = requiredFor(webFmp)
     const selected = { ...snapshot(), changedPaths: [webFmp], checks }
-    expect(validateOperation(installed(), selected, selected, merge, invocation, cmsandboxCheckPolicy).reasons).toEqual([])
-    for (const conclusion of ['failure', 'skipped', 'cancelled', 'timed_out', 'neutral', null]) expect(validateChecks({ ...selected, checks: [{ ...checks[0], conclusion }, ...checks.slice(1)] }, cmsandboxCheckPolicy).length).toBeGreaterThan(0)
-    for (const status of ['queued', 'in_progress', 'pending', 'requested', 'waiting']) expect(validateChecks({ ...selected, checks: [{ ...checks[0], status, conclusion: null }, ...checks.slice(1)] }, cmsandboxCheckPolicy).length).toBeGreaterThan(0)
-    expect(validateChecks({ ...selected, checks: checks.slice(1) }, cmsandboxCheckPolicy).join()).toContain('Missing required check')
-    expect(validateChecks({ ...selected, checks: [{ ...checks[0], head: baseHead }, ...checks.slice(1)] }, cmsandboxCheckPolicy).join()).toContain('Stale check')
-    expect(validateChecks({ ...selected, checks: [{ ...checks[0], appId: 9 }, ...checks.slice(1)] }, cmsandboxCheckPolicy).join()).toContain('Missing required check')
+    expect(validateOperation(installed(), selected, selected, merge, invocation, fixturePolicy).reasons).toEqual([])
+    for (const conclusion of ['failure', 'skipped', 'cancelled', 'timed_out', 'neutral', null]) expect(validateChecks({ ...selected, checks: [{ ...checks[0], conclusion }, ...checks.slice(1)] }, fixturePolicy).length).toBeGreaterThan(0)
+    for (const status of ['queued', 'in_progress', 'pending', 'requested', 'waiting']) expect(validateChecks({ ...selected, checks: [{ ...checks[0], status, conclusion: null }, ...checks.slice(1)] }, fixturePolicy).length).toBeGreaterThan(0)
+    expect(validateChecks({ ...selected, checks: checks.slice(1) }, fixturePolicy).join()).toContain('Missing required check')
+    expect(validateChecks({ ...selected, checks: [{ ...checks[0], head: baseHead }, ...checks.slice(1)] }, fixturePolicy).join()).toContain('Stale check')
+    expect(validateChecks({ ...selected, checks: [{ ...checks[0], appId: 9 }, ...checks.slice(1)] }, fixturePolicy).join()).toContain('Missing required check')
   })
   it('refuses the actual failing GitHub checks recorded on a real PR, even when a synthetic coverage policy is complete', () => {
     const real = recorded.pulls.find(row => row.pull === 'https://github.com/fortresspower/cmsandbox/pull/3328')!

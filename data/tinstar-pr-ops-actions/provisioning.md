@@ -16,9 +16,10 @@ workloads, including transitive shared-library paths, have exact github-actions
 app 15368 names confirmed on two recent PRs. The rest stay incomplete: a
 matrix label was not observed (utility-messagebus), a wildcard path does not
 fit the prefix matcher, or the 62-PR sample did not confirm the derived set
-twice. The broker can accept a simulated merge only for a completed workload whose
-checks are all green. The installed button stays disabled while any path
-remains incomplete. Live execution is not enabled. The remaining inventory and a separately
+twice. The shared broker/check-policy boundary refuses every Admin Merge while
+any workload remains incomplete, including completed workloads with green checks.
+Per-workload acceptance uses only disposable test fixture policies. The installed
+button also stays disabled. Live execution is not enabled. The remaining inventory and a separately
 reviewed live broker/isolated runner are still prerequisites. This is an
 evidence gap, not a request for a new product decision.
 
