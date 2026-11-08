@@ -4,11 +4,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Pulls } from '../Pulls'
 import type { PullSummary } from '../../shared/pulls'
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: null, now: Date.parse('2026-11-06T20:00:00Z') }) }))
+const fileData = { head: 'a'.repeat(40), baseHead: 'b'.repeat(40), files: [], expectedFiles: 0, complete: true, observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null }
 const pulls: PullSummary[] = Array.from({ length: 50 }, (_, index) => ({ id: `${index < 25 ? 'alpha/repo' : 'zeta/repo'}#${index + 1}`, repository: index < 25 ? 'alpha/repo' : 'zeta/repo', number: index + 1,
   url: `https://github.com/${index < 25 ? 'alpha/repo' : 'zeta/repo'}/pull/${index + 1}`, title: `Change ${index + 1}`, author: 'contributor', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-06T19:00:00Z', observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', links: [] }))
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and expands genuine detail', async () => {
-  const read = vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/detail?') ? { head: 'a'.repeat(40), state: 'open', body: 'Real PR body\nsecond paragraph', additions: 4, deletions: 2, files: 3, checks: 'failed', review: 'Changes requested', reviewsComplete: true, reviews: [], observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null } : { pulls, repositories: [], warnings: [], associationsComplete: true } }))))
+  const read = vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? { head: 'a'.repeat(40), state: 'open', body: 'Real PR body\nsecond paragraph', additions: 4, deletions: 2, files: 3, checks: 'failed', review: 'Changes requested', reviewsComplete: true, reviews: [], observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null } : { pulls, repositories: [], warnings: [], associationsComplete: true } }))))
   vi.stubGlobal('fetch', read)
   render(<Pulls />)
   await screen.findByText('50 observed open')
@@ -43,7 +44,7 @@ it('shows the owner authorization error for inventory and detail', async () => {
   const view = render(<Pulls />)
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', `${message} `)
   view.unmount()
-  vi.stubGlobal('fetch', (input: string) => Promise.resolve(input.includes('/detail?') ? denied() : new Response(JSON.stringify({ ok: true, data: { pulls: [pulls[0]], repositories: [], warnings: [], associationsComplete: true } }))))
+  vi.stubGlobal('fetch', (input: string) => Promise.resolve((input.includes('/detail?') || input.includes('/files?')) ? denied() : new Response(JSON.stringify({ ok: true, data: { pulls: [pulls[0]], repositories: [], warnings: [], associationsComplete: true } }))))
   render(<Pulls />)
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect alpha/repo#1' }))
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', message)

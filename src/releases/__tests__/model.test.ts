@@ -75,3 +75,19 @@ describe('release associations and queue projection', () => {
     expect(index.search('Beta')[0]!.document.key).toBe(`pull:${pull.id}`)
   })
 })
+
+it('shares exact confirmed Notion worker-to-PR links across views and retains manual unlink authority', () => {
+  const scene = releaseFixture(), worker = scene.executions[0]!, card = scene.cards[0]!
+  worker.source.pr.url = 'https://github.com/owner/repo/pull/42'
+  const claim = scene.claims.find(claim => claim.executionId === worker.id)!
+  Object.assign(claim, { cardId: card.id, basis: 'explicit', verification: 'confirmed', state: 'current' })
+  const linked = releaseAssociations(scene).pulls.find(pull => pull.number === 42)!
+  expect(activeReleaseLinks(linked)).toEqual([expect.objectContaining({ cardId: card.id, sources: ['Verified Notion First Mate tasks → registered PR'] })])
+  expect(activeReleaseLinks(releaseAssociations(scene, [event({ pull: worker.source.pr.url, cardId: card.id })]).pulls.find(pull => pull.number === 42)!)).toEqual([])
+  for (const verification of ['unverified', 'conflicting'] as const) {
+    claim.verification = verification
+    expect(releaseAssociations(scene).pulls.find(pull => pull.number === 42)).toBeUndefined()
+  }
+  claim.verification = 'confirmed'; claim.state = 'historical'
+  expect(releaseAssociations(scene).pulls.find(pull => pull.number === 42)).toBeUndefined()
+})

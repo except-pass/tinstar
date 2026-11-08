@@ -16,6 +16,11 @@ export function releasePull(value: string): PullIdentity | null {
     return { id: `${repository}#${number}`, repository, number, url: `https://github.com/${repository}/pull/${number}` }
   } catch { return null }
 }
+/** Existing First Mate registrations, including retained backlog records. No ownership inference. */
+export function registeredPulls(scene: FloorScene): PullIdentity[] {
+  return [...scene.executions.map(worker => worker.source.pr.url), ...scene.backlog.map(row => row.source.pr_url)]
+    .flatMap(value => { const pull = typeof value === 'string' ? releasePull(value) : null; return pull ? [pull] : [] })
+}
 export interface AssociationEvent {
   id: string; pull: string; cardId: string; action: 'link' | 'unlink'; actor: string; at: string; reason: string
 }
@@ -55,8 +60,9 @@ export function declaredPulls(card: SceneCard): PullIdentity[] {
 
 /** PR/card edges are independent of worker assignment and retain audit history after unlink. */
 export function releaseAssociations(scene: FloorScene, events: AssociationEvent[] = []): ReleasesRead {
-  const associationsComplete = scene.coverage.intentions.status === 'fresh' && scene.coverage.intentions.coverage === 'complete'
-  const warnings = associationsComplete ? [] : ['Notion association source is stale, partial or unavailable']
+  const workerAssociationsComplete = scene.coverage.homes.every(home => home.observation.status === 'fresh' && home.observation.coverage === 'complete')
+  const associationsComplete = scene.coverage.intentions.status === 'fresh' && scene.coverage.intentions.coverage === 'complete' && workerAssociationsComplete
+  const warnings = [...(scene.coverage.intentions.status === 'fresh' && scene.coverage.intentions.coverage === 'complete' ? [] : ['Notion association source is stale, partial or unavailable']), ...(!workerAssociationsComplete ? ['Worker PR association source is stale, partial or unavailable'] : [])]
   const pulls = new Map<string, ReleasePull>()
   const ensure = (identity: PullIdentity) => {
     let pull = pulls.get(identity.id)
@@ -76,6 +82,18 @@ export function releaseAssociations(scene: FloorScene, events: AssociationEvent[
       const link = edge(ensure(identity), card.id)
       link.active = true; link.sources.push('Notion Link/GitHub property')
     }
+  }
+  // The same join serves Releases and PR Operations. Only Notion-owned,
+  // reconciled exact worker declarations can confirm an additional card edge.
+  for (const claim of scene.claims) {
+    if (claim.basis !== 'explicit' || claim.verification !== 'confirmed' || claim.state !== 'current') continue
+    const worker = scene.executions.find(worker => worker.id === claim.executionId)
+    const identity = worker && typeof worker.source.pr.url === 'string' ? releasePull(worker.source.pr.url) : null
+    const card = scene.cards.find(card => card.id === claim.cardId)
+    if (!identity || !card || card.source.archived || card.source.in_trash || !operationalStatuses.includes(String(card.source.properties.Status?.value))) continue
+    const link = edge(ensure(identity), claim.cardId)
+    link.active = true
+    if (!link.sources.includes('Verified Notion First Mate tasks → registered PR')) link.sources.push('Verified Notion First Mate tasks → registered PR')
   }
   for (const event of events) {
     const identity = releasePull(event.pull)

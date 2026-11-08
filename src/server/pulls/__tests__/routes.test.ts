@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { PullsApi } from '../routes'
 import { PullReader } from '../reader'
+import { PullFilesReader } from '../files'
 import { AssociationStore } from '../../releases/associations'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 const cleanups: Array<() => Promise<void>> = []
@@ -25,7 +26,7 @@ it('reuses the shared audit for many-to-many links, keeps unlinked PRs, and refu
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   seedOriginAllowlist((server.address() as { port: number }).port)
   const headers = { 'Tailscale-User-Login': 'owner@example.test' }
-  for (const path of ['/api/pulls', `/api/pulls/detail?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`]) {
+  for (const path of [`/api/pulls/files?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`, '/api/pulls', `/api/pulls/detail?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`]) {
     for (const denied of [{}, { 'Tailscale-User-Login': 'stranger@example.test' }] as Record<string, string>[]) {
       const response = await fetch(`${base}${path}`, { headers: denied })
       expect(response.status).toBe(403)
@@ -38,6 +39,12 @@ it('reuses the shared audit for many-to-many links, keeps unlinked PRs, and refu
   expect(detailBody.data.body).toBe('Private description')
   expect(detailBody.data.reviews[0].author).toBe('private-reviewer')
   detail.mockRestore()
+  const files = vi.spyOn(PullFilesReader.prototype, 'get').mockResolvedValue({ head: 'a'.repeat(40), files: [{ filename: 'src/a.ts' }], complete: true } as never)
+  const fileBody = await (await fetch(`${base}/api/pulls/files?url=https://github.com/owner/repo/pull/1&head=${'a'.repeat(40)}`, { headers })).json()
+  expect(fileBody.data.files[0].filename).toBe('src/a.ts')
+  expect((await fetch(`${base}/api/pulls/files?url=https://github.com/other/repo/pull/1&head=${'a'.repeat(40)}`, { headers })).status).toBe(400)
+  expect(files).toHaveBeenCalledTimes(1)
+  files.mockRestore()
   const body = await (await fetch(`${base}/api/pulls`, { headers })).json()
   expect(body.ok).toBe(true)
   expect(body.data.pulls).toHaveLength(2)

@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { ReconciliationSources } from '../reconciliation'
-import { activeReleaseLinks, releaseAssociations, releasePull } from '../../shared/releases'
+import { activeReleaseLinks, registeredPulls, releaseAssociations, releasePull } from '../../shared/releases'
 import { getConfigRoot } from '../configRoot'
 import { AssociationStore } from '../releases/associations'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { ok, fail } from '../api/envelope'
 import { PullReader } from './reader'
+import { PullFilesReader } from './files'
 import { askConfigSchema } from '../ask/routes'
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
@@ -21,10 +22,10 @@ async function configuredRepositories(root: string): Promise<string[] | null> {
 }
 /** Read-only artifact projection. Uses the exact Releases association store and join. */
 export class PullsApi {
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader()) {}
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader()) {}
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    if (!['/api/pulls', '/api/pulls/detail'].includes(url.pathname)) return false
+    if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files'].includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
@@ -43,20 +44,17 @@ export class PullsApi {
       let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true
       try { events = await this.store.read() } catch { auditAvailable = false; warnings.push('Shared association audit unavailable. Card linkage is unknown.') }
       const associations = releaseAssociations(scene, events)
-      const associated = [...associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0), ...scene.executions.flatMap(execution => {
-        const pull = typeof execution.source.pr.url === 'string' ? releasePull(execution.source.pr.url) : null
-        return pull ? [pull] : []
-      })]
+      const associated = [...associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0), ...registeredPulls(scene)]
       const configured = await configuredRepositories(this.root)
       const all = [...new Set(configured ?? associated.map(pull => pull.repository))].sort()
       // A visible cap bounds per-request GitHub work, not the user's repository choices.
       const repositories = all.slice(0, 32)
       if (all.length > repositories.length) warnings.push(`Showing 32 of ${all.length} repositories. Set prOperations.repositories to choose the review scope.`)
       if (!repositories.length) warnings.push('No repositories selected. Add prOperations.repositories to Tin Star config.json or register an explicit PR in the shared sources.')
-      if (url.pathname.endsWith('/detail')) {
+      if (url.pathname !== '/api/pulls') {
         const identity = releasePull(url.searchParams.get('url') ?? ''), head = url.searchParams.get('head') ?? ''
         if (!identity || !repositories.includes(identity.repository) || !/^[a-f0-9]{40,64}$/.test(head)) return fail(res, 'BAD_REQUEST', 'Choose a PR in the current repository scope and its captured head.', { headers })
-        return ok(res, await this.reader.detail(identity.url, head), { headers })
+        return ok(res, url.pathname.endsWith('/files') ? await this.files.get(identity.url, head) : await this.reader.detail(identity.url, head), { headers })
       }
       const identity = await this.reader.identity()
       const reads = await this.reader.inventory(repositories, { ...identity, associated })
