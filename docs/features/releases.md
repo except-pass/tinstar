@@ -79,7 +79,8 @@ component's deployed source. A digest without source provenance stays unknown.
 A merged PR absent from deployed source remains In Queue. Wrong repository,
 environment, target/component, missing mapping, partial/skipped/failed deployment,
 rollback, known disabled flag, cherry-pick without provenance, or revert prevents
-fulfillment. Standard Git revert messages are detected in descendant history;
+fulfillment. Standard Git revert messages naming the effective merge or a commit
+introduced by that merge are detected in descendant history;
 other known release exceptions must be published by the evidence source or
 listed on the requirement. No title matching, LLM judgment or tag-only inference
 is used.
@@ -177,8 +178,9 @@ untrusted producer authoritative.
 
 `outcome` can also be `failed`, `partial`, `skipped` or `rollback`; retain newer
 failures/partial attempts so an older success cannot override them. For each exact
-repo/target/component the latest attempt wins, with conflicting equal-time
-identities kept unknown. Identical receipt IDs replay without duplication;
+repo/target/component the latest attempt wins, comparing parsed timestamp instants
+regardless of UTC-offset spelling, with conflicting equal-time identities kept
+unknown. Identical receipt IDs replay without duplication;
 conflicting copies make the source an error. A digest-only receipt is readable
 but requires verified `deployedSha` provenance before ancestry can prove a PR.
 Known flags/reverts/cherry-picks or other exceptions are explicit strings in
