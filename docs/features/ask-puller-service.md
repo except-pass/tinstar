@@ -95,8 +95,9 @@ reasoning session, worker spawn or model retry/investigation on these paths.
 Actual new user questions can wake First Mate through its ordinary inbox.
 
 The pass has a 50-second total deadline, in addition to the adapter's individual
-network/process/read bounds. A nonoverlapping successful pass is eligible again
-after 60 seconds. Failures back off 60, 120, 240, 480, then at most 900 seconds;
+network/process/read bounds. Launchd schedules normal successful passes about
+60 seconds apart; successful polls tolerate timer jitter. Failures back off
+60, 120, 240, 480, then at most 900 seconds;
 launchd continues checking eligibility every 60 seconds without network, clavis
 or inbox work during backoff. Overlapping ticks exit without work or counter
 writes. Process death releases the lock and retains an interrupted health marker.

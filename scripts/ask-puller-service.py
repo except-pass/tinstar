@@ -71,7 +71,9 @@ def tick(root, now=None):
         for key in ('polls', 'noop_polls', 'work_polls', 'error_polls', 'captured', 'replied'):
             health.setdefault(key, 0)
         started = time.time() if now is None else now
-        if started < health.get('next_poll_at', 0):
+        # launchd owns the normal cadence. Gate only failures: a successful
+        # tick starting a few milliseconds early must not lose a whole minute.
+        if health.get('consecutive_failures', 0) and started < health.get('next_poll_at', 0):
             return 'backoff'
         health['polls'] = health.get('polls', 0) + 1
         health['last_attempt_at'] = started

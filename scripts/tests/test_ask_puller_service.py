@@ -76,6 +76,13 @@ class ServiceTests(unittest.TestCase):
             self.assertIsNone(self.health()['last_error_class'])
             self.assertNotIn('private-token', (self.root / 'ask-puller-health.json').read_text())
 
+    def test_successful_ticks_tolerate_launchd_timer_jitter(self):
+        with patch.object(service.puller, 'read_token', return_value='token'), patch.object(service.puller, 'pull_once', return_value={'captured': 0, 'replied': 0, 'queued': 0}) as poll:
+            self.assertEqual(service.tick(self.root, now=100), 'noop')
+            self.assertEqual(service.tick(self.root, now=159.99), 'noop')
+            self.assertEqual(poll.call_count, 2)
+        self.assertEqual(self.health()['noop_polls'], 2)
+
     def test_overlap_process_death_and_restart_release_kernel_lock(self):
         driver = """import importlib.util,pathlib,sys,time
 s=importlib.util.spec_from_file_location('p',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
