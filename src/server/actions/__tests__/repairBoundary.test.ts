@@ -18,7 +18,7 @@ it('audits live Repair refusals and reconciles an uncertain rerun without repeat
   let runtime: string | undefined
   const requests: { method: string; path: string; body: unknown }[] = []
   let scenario = '', changed = false, uncertain = false
-  const repository = 'fortresspower/cmsandbox', prefix = `/repos/${repository}`
+  const repository = 'fortresspower/cmsandbox'
   const serve = async (server: Server, port = 0) => {
     servers.push(server)
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve) })
@@ -90,7 +90,7 @@ it('audits live Repair refusals and reconciles an uncertain rerun without repeat
       return receipt
     }
     const update = { kind: 'repair.update' as const, expectedHead: head, ref: 'refs/heads/feature-1' }
-    const rerun = { kind: 'repair.rerun' as const, expectedHead: head, jobId: 123, runId: 456, attempt: 1 }
+    const rerun = { kind: 'repair.rerun' as const, expectedHead: head, jobId: 123, runId: 456, attempt: 1 as const }
     expect((await execute('stale', { ...update, expectedHead: 'c'.repeat(40) })).reasons.join()).toContain('Expected HEAD mismatch')
     expect((await execute('changed', update)).reasons.join()).toContain('immediately before Repair')
     expect(requests.filter(row => row.path.endsWith('/update-branch'))).toHaveLength(0)
