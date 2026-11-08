@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch } from '../apiClient'
+import { apiFetch, apiUrl } from '../apiClient'
 import { AskCardAction, AskProvider } from '../ask/Ask'
 import { useFloorScene } from '../reconciliation/useFloorScene'
 import { SmartSearch } from '../reconciliation/SmartSearch'
 import { initialPresentation, type Target, type FloorScene } from '../shared/reconciliationPresentation'
 import { activeReleaseLinks, type ReleasePull, type ReleasesRead } from '../shared/releases'
-import { filterReleases, releaseQueueCount, releaseDocuments, releaseFilters, releaseGroups, releaseState, type ReleaseFilter } from './model'
+import { productionSyncLabel, filterReleases, releaseQueueCount, releaseDocuments, releaseFilters, releaseGroups, releaseState, type ReleaseFilter } from './model'
 import '../reconciliation/overview.css'
 import './releases.css'
 
@@ -37,15 +37,22 @@ function AssociationForm({ scene, data, pull, refresh }: { scene: FloorScene; da
     <small>Local audit only. Notion properties stay unchanged.</small>
   </form>
 }
+function CardDryRun({ data, cardId }: { data: ReleasesRead; cardId: string }) {
+  const card = data.reconciliation?.cards.find(card => card.cardId === cardId)
+  if (!card) return null
+  const decision = { 'would-complete': 'Would mark Done', 'would-verify': 'Requires production verification', waiting: 'Waiting for required production changes', exception: 'Release evidence unresolved', unrelated: 'Card status is outside release automation' }[card.decision]
+  return <div className="rel-dry-run"><strong>Dry run: {decision}</strong><p>Owner: {card.owner} · {card.status} · {card.requiredPulls.length} required PRs</p>{card.reasons.length > 0 && <ul>{card.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}<small>No Notion or Desk transition is performed.</small></div>
+}
 function PullDrawer({ pull, scene, data, refresh, close }: { pull: ReleasePull | null; scene: FloorScene; data: ReleasesRead; refresh: () => void; close: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
   return <dialog ref={dialog} className="rel-drawer" aria-label={pull ? `Inspect ${pull.id}` : 'Link a PR'} onCancel={close}>
     <header><h2>{pull ? `${pull.repository} #${pull.number}` : 'Link a PR'}</h2><button autoFocus type="button" onClick={close} aria-label="Close release details">×</button></header>
     {pull && <><h3>{pull.title ?? 'PR details pending'}</h3><a href={pull.url} target="_blank" rel="noreferrer">Open PR in GitHub ↗</a>
-      <dl><dt>GitHub state</dt><dd>{pull.state} · {pull.freshness}</dd><dt>Merged</dt><dd>{pull.mergedAt ?? 'Unknown / not merged'}</dd><dt>Merge commit</dt><dd>{pull.mergeSha ?? 'Unknown'}</dd><dt>Observed</dt><dd>{pull.observedAt ?? 'Pending'}</dd><dt>Production</dt><dd>Unknown · no verified deployed-component receipt</dd></dl>
+      <dl><dt>GitHub state</dt><dd>{pull.state} · {pull.freshness}</dd><dt>Merged</dt><dd>{pull.mergedAt ?? 'Unknown / not merged'}</dd><dt>Merge commit</dt><dd>{pull.mergeSha ?? 'Unknown'}</dd><dt>Observed</dt><dd>{pull.observedAt ?? 'Pending'}</dd><dt>Production</dt><dd>{releaseState(pull)} · dry run</dd></dl>
       {pull.exceptions.length > 0 && <ul>{pull.exceptions.map(message => <li key={message}>{message}</li>)}</ul>}
-      <h3>Card associations</h3>{pull.links.map(link => <section key={link.cardId}><a href={cardHref(link.cardId)}>{title(scene, link.cardId)}</a> · {link.active ? 'Linked' : 'Unlinked locally'}<p>{link.sources.join(' · ')}</p>{link.events.map(event => <p key={event.id}>{event.action} · {event.actor} · {event.at}<br />{event.reason}</p>)}{link.active && <AskCardAction cardId={link.cardId} />}</section>)}
+      <h3>Production targets</h3>{pull.deployment?.targets.length ? pull.deployment.targets.map(target => <section key={`${target.target}:${target.component}`}><strong>{target.component} · {target.target}</strong><p>{target.state} · {target.reason}</p><p>Ancestry: {target.ancestry}</p>{target.receipt && <><p>{target.receipt.version ?? 'Version unknown'} · {target.receipt.deployedSha ?? target.receipt.artifactDigest ?? 'Identity unknown'}<br />{target.receipt.deployedAt}</p><a href={target.receipt.receiptUrl} target="_blank" rel="noreferrer">Read deployment receipt ↗</a> · <a href={target.receipt.workflowUrl} target="_blank" rel="noreferrer">Release workflow ↗</a></>}</section>) : <p>No required production component mapping.</p>}
+      <h3>Card associations</h3>{pull.links.map(link => <section key={link.cardId}><a href={cardHref(link.cardId)}>{title(scene, link.cardId)}</a> · {link.active ? 'Linked' : 'Unlinked locally'}<p>{link.sources.join(' · ')}</p>{link.events.map(event => <p key={event.id}>{event.action} · {event.actor} · {event.at}<br />{event.reason}</p>)}{link.active && <><CardDryRun data={data} cardId={link.cardId} /><AskCardAction cardId={link.cardId} /></>}</section>)}
     </>}
     <AssociationForm key={pull?.id ?? 'new'} scene={scene} data={data} pull={pull ?? undefined} refresh={refresh} />
   </dialog>
@@ -80,17 +87,17 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
       <div className="rel-filters">{releaseFilters.map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setFocus(null) }}>{value}{value === 'Exceptions' ? ` (${data.pulls.filter(pull => pull.exceptions.length).length + data.unassociatedCards.length})` : ''}</button>)}</div>
       <button type="button" onClick={() => setDrawer(null)}>Link PR</button>
     </header>
-    <details className="rel-sync"><summary>{warning || !data.associationsComplete ? 'Sources unavailable or incomplete · last known' : 'Production sync: awaiting deployment evidence'} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories</summary>
-      {warning && <p role="alert">{warning}</p>}{data.warnings.map(message => <p key={message}>{message}</p>)}
-      {[...new Set(data.pulls.map(pull => pull.repository))].map(repo => <p key={repo}>{repo} · deployed version unknown · last successful reconciliation: none</p>)}
-      <p>GitHub observations and link provenance are available in each row. Shipment requires a verified production component receipt.</p>
+    <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories</summary>
+      {warning && <p role="alert">{warning}</p>}{data.githubSync?.errors.map(message => <p role="alert" key={message}>{message}</p>)}{[...data.warnings, ...(data.reconciliation?.warnings ?? [])].map(message => <p key={message}>{message}</p>)}
+      {data.reconciliation?.targets.map(target => <p key={`${target.repository}:${target.target}:${target.component}`}>{target.repository} · {target.component} / {target.target} · {target.version ?? 'Version unknown'} · {target.deployedSha ?? target.artifactDigest ?? 'Identity unknown'} · observed {target.observedAt} · <a href={target.receiptUrl} target="_blank" rel="noreferrer">Receipt ↗</a></p>)}{!data.reconciliation?.targets.length && <p>Deployed component identities are unknown; no matching current receipt.</p>}
+      <p>Read-only reconciliation. No Notion or Desk transitions are performed.</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a>
     </details>
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
     <div className="rel-scroll"><table className="rel-table"><caption className="sr-only">Release queue · one row per GitHub PR; repeated group references share identity</caption><thead><tr><th><input type="checkbox" aria-label="Select visible PRs" checked={visible.length > 0 && visible.every(pull => selected.has(pull.id))} onChange={event => setSelection(event.target.checked ? [...new Set([...selection, ...visible.map(pull => pull.id)])] : selection.filter(id => !visible.some(pull => pull.id === id)))} /></th><th>GitHub PR</th><th>Change</th><th>Linked Notion cards</th><th>Merged</th><th>Release state</th><th>Inspect</th></tr></thead>
       {groups.map(group => <tbody key={group.id}><tr className="rel-group"><th colSpan={7}><button type="button" aria-expanded={!collapsed.includes(group.id)} onClick={() => setCollapsed(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])}>{collapsed.includes(group.id) ? '▸' : '▾'} {group.label} <small>{group.pulls.length}</small></button></th></tr>
         {!collapsed.includes(group.id) && group.pulls.map(pull => <tr key={pull.id} data-pull-id={pull.id} className={selected.has(pull.id) ? 'rel-selected' : ''}>
           <td><input type="checkbox" aria-label={`Select ${pull.id}`} checked={selected.has(pull.id)} onChange={event => setSelection(values => event.target.checked ? [...new Set([...values, pull.id])] : values.filter(id => id !== pull.id))} /></td>
-          <td><a href={pull.url} target="_blank" rel="noreferrer">{pull.repository}#{pull.number} ↗</a></td><td title={pull.title ?? 'GitHub details pending'}><button type="button" className="rel-title" onClick={() => setDrawer(pull.id)}>{pull.title ?? 'GitHub details pending'}</button></td>
+          <td><a href={pull.url} target="_blank" rel="noreferrer">{pull.repository}#{pull.number} ↗</a></td><td title={pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}><button type="button" className="rel-title" onClick={() => setDrawer(pull.id)}>{pull.title ?? (pull.readError ? 'GitHub read failed' : 'GitHub details pending')}</button></td>
           <td><span className="rel-cards">{activeReleaseLinks(pull).length ? activeReleaseLinks(pull).map(link => <a key={link.cardId} href={cardHref(link.cardId)} title={title(scene, link.cardId)}>{title(scene, link.cardId)}</a>) : <span>No linked card</span>}</span></td>
           <td><time dateTime={pull.mergedAt ?? undefined} title={pull.mergedAt ?? undefined}>{pull.mergedAt ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(Date.parse(pull.mergedAt)) : pull.state === 'open' ? 'Open' : 'Unknown'}</time></td>
           <td><span title={pull.exceptions.join('; ')}>{releaseState(pull)}</span></td><td><span className="rel-inspect">{activeReleaseLinks(pull).length === 1 && <AskCardAction cardId={activeReleaseLinks(pull)[0]!.cardId} icon />}<button type="button" aria-label={`Inspect ${pull.id}`} onClick={() => setDrawer(pull.id)}>ⓘ</button></span></td>

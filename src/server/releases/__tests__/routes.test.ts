@@ -75,4 +75,19 @@ describe('Releases HTTP boundary', () => {
     expect(await api.store.read()).toEqual([])
     expect((await fetch(`${base}/api/releases`, { headers: { Origin: 'https://evil.invalid' } })).status).toBe(403)
   })
+  it('publishes GitHub failures in sync state and offers a GET-only dry-run report without domain writes', async () => {
+    const { base, scene, read, api } = await setup()
+    scene.cards[0]!.source.properties.Link = { id: 'link', type: 'url', value: 'https://github.com/owner/repo/pull/1', hasMore: false }
+    scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
+    read.mockRejectedValue(Object.assign(new Error('private stderr'), { code: 'ENOENT' }))
+    const result = await (await fetch(`${base}/api/releases`)).json()
+    expect(result.data.githubSync).toMatchObject({ status: 'error', errors: [expect.stringContaining('gh-axi is unavailable')] })
+    expect(result.data.reconciliation).toMatchObject({ mode: 'dry-run', sourceStatus: 'unconfigured' })
+    expect(JSON.stringify(result)).not.toContain('private stderr')
+    const report = await (await fetch(`${base}/api/releases/reconciliation`)).json()
+    expect(report.data.mode).toBe('dry-run')
+    expect((await fetch(`${base}/api/releases/reconciliation`, { method: 'POST', headers, body: '{}' })).status).toBe(400)
+    expect(await api.store.read()).toEqual([])
+  })
+
 })

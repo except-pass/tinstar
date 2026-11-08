@@ -6,15 +6,15 @@ import { searchText, sceneSearchDocuments } from '../shared/searchDocuments'
 
 export type ReleaseFilter = 'In Queue' | 'Verify in Prod' | 'Shipped' | 'Exceptions'
 export const releaseFilters: ReleaseFilter[] = ['In Queue', 'Verify in Prod', 'Shipped', 'Exceptions']
-// Until component reconciliation is available, no observation certifies shipment.
-export const releaseState = (pull: ReleasePull) => pull.exceptions.length ? 'Exception' : pull.state === 'merged' ? 'Deployment unknown' : 'Merge unknown'
-export const queuedPulls = (pulls: ReleasePull[]) => pulls.filter(pull => pull.state === 'merged' && pull.freshness === 'fresh')
+export const releaseState = (pull: ReleasePull) => pull.exceptions.length ? 'Exception' : pull.deployment?.state === 'shipped' ? pull.deployment.verificationRequired ? 'Verify in Prod' : 'Shipped' : pull.deployment?.state === 'in-queue' ? 'In Queue' : pull.state === 'merged' ? 'Deployment unknown' : 'Merge unknown'
+export const queuedPulls = (pulls: ReleasePull[]) => pulls.filter(pull => pull.state === 'merged' && pull.freshness === 'fresh' && pull.deployment?.state !== 'shipped')
 export const releaseQueueCount = (data: ReleasesRead | null, error: string | null = null): number | null =>
   data?.associationsComplete && !error && data.pulls.every(pull => pull.freshness === 'fresh') ? queuedPulls(data.pulls).length : null
 export function filterReleases(pulls: ReleasePull[], filter: ReleaseFilter) {
   if (filter === 'Exceptions') return pulls.filter(pull => pull.exceptions.length > 0)
-  if (filter === 'In Queue') return pulls.filter(pull => pull.state === 'merged' || pull.state === 'unknown')
-  return [] // Verify/Shipped require evidence, never a tag or card status alone.
+  if (filter === 'In Queue') return pulls.filter(pull => pull.deployment?.state !== 'shipped' && (pull.state === 'merged' || pull.state === 'unknown'))
+  if (filter === 'Verify in Prod') return pulls.filter(pull => pull.deployment?.state === 'shipped' && pull.deployment.verificationRequired)
+  return pulls.filter(pull => pull.deployment?.state === 'shipped')
 }
 export function releaseGroups(scene: FloorScene, pulls: ReleasePull[], preset: 'initiative' | 'repository') {
   const groups = new Map<string, { id: string; label: string; pulls: ReleasePull[] }>()
@@ -46,4 +46,16 @@ export function releaseDocuments(scene: FloorScene, pulls: ReleasePull[], missin
       observedAt: pull.observedAt, expiresAt: scene.coverage.intentions.expiresAt, coverage: pull.freshness }
   })
   return [...documents, ...cardDocuments.filter(document => document.target.kind === 'card' && missingCardIds.includes(document.target.id))]
+}
+
+export function productionSyncLabel(data: ReleasesRead, error: string | null) {
+  if (error) return 'Sync error: release sources unavailable'
+  if (data.githubSync?.status === 'error') return data.githubSync.errors.some(message => message.includes('gh-axi is unavailable')) ? 'Sync error: gh-axi unavailable on server PATH' : 'Sync error: GitHub reader failed'
+  if (!data.associationsComplete) return 'Sync incomplete: card associations unavailable or partial'
+  if (data.reconciliation?.sourceStatus === 'error') return 'Sync error: production receipt source failed'
+  if (data.reconciliation?.sourceStatus === 'stale') return 'Sync stale: refresh production receipt snapshot'
+  if (data.reconciliation?.sourceStatus === 'unconfigured') return 'Production sync: evidence not configured'
+  if (data.reconciliation?.lastSuccessfulAt) return `Production sync: reconciled ${data.reconciliation.lastSuccessfulAt}`
+  if (data.reconciliation) return 'Production sync: dry run has unresolved evidence'
+  return 'Production sync: awaiting deployment evidence'
 }
