@@ -111,6 +111,19 @@ export class ActionExecutor {
         if (!unknown) receipt.actualGitHubWrites = 0
         receipt.reasons.push((error as Error).message)
         receipt.result = receipt.outcome === 'unknown' ? 'Provider outcome unknown; reconcile before any new invocation. No automatic retry.' : receipt.outcome === 'cancelled' ? 'Cancelled before sending any operation; no undo claimed.' : 'Skipped; no operation sent.'
+        if (unknown && receipt.operation?.kind === 'repair.rerun' && this.readJob) {
+          // Keep the uncertain acknowledgment before one read-only reconciliation.
+          // An advanced attempt proves the requested state, not which actor caused it.
+          await this.store.append(receipt)
+          try {
+            const operation = receipt.operation
+            const job = await this.readJob(captured.repository, operation.jobId)
+            if (job.id === operation.jobId && job.runId === operation.runId && job.head === operation.expectedHead && job.runAttempt > operation.attempt) {
+              receipt.outcome = 'completed'; receipt.verification = 'accepted'
+              receipt.result = 'Provider read confirms the selected run advanced beyond its original attempt. Write attribution remains unknown; no retry sent.'
+            }
+          } catch { /* Unavailable or ambiguous evidence keeps the unknown receipt. */ }
+        }
       } finally {
         clearTimeout(timeout)
         receipt.finishedAt = new Date().toISOString()

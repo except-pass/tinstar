@@ -15,7 +15,7 @@ const pull = {
   mergeable: true, mergeable_state: 'clean',
 }
 
-beforeEach(() => vi.mocked(liveReaderJson).mockReset())
+beforeEach(() => { vi.mocked(liveReaderJson).mockReset() })
 
 it.each([false, true])('observes a Releases PR through live Reader with merged=%s', async merged => {
   vi.mocked(liveReaderJson).mockResolvedValue({ ...pull, merged, state: merged ? 'closed' : 'open',
