@@ -1,3 +1,4 @@
+import { ActionControls } from '../actions/ActionControls'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from '../apiClient'
 import { AskSurface } from '../ask/AskSurface'
@@ -77,6 +78,7 @@ function PullDrawer({ pull, scene, data, refresh, close, askView }: { pull: Rele
     {pull && <><h3>{pull.title ?? 'PR details pending'}</h3><a href={pull.url} target="_blank" rel="noreferrer">Open PR in GitHub ↗</a>
       <dl><dt>GitHub state</dt><dd>{pull.state} · {pull.freshness}</dd><dt>Merged</dt><dd>{pull.mergedAt ?? 'Unknown / not merged'}</dd><dt>Merge commit</dt><dd>{pull.mergeSha ?? 'Unknown'}</dd><dt>Observed</dt><dd>{pull.observedAt ?? 'Pending'}</dd><dt>Production</dt><dd>{releaseState(pull)} · dry run</dd></dl>
       {pull.exceptions.length > 0 && <ul>{pull.exceptions.map(message => <li key={message}>{message}</li>)}</ul>}
+      <ActionControls targets={[pull]} view={askView} compact />
       <ProductionTargets pull={pull} askView={askView} />
       <h3>Card associations</h3>{pull.links.map(link => <section key={link.cardId}><a href={cardHref(link.cardId)}>{title(scene, link.cardId)}</a> · {link.active ? 'Linked' : 'Unlinked locally'}<p>{link.sources.join(' · ')}</p>{link.events.map(event => <p key={event.id}>{event.action} · {event.actor} · {event.at}<br />{event.reason}</p>)}{link.active && <><CardDryRun data={data} cardId={link.cardId} /><AskCardAction cardId={link.cardId} /></>}</section>)}
     </>}
@@ -130,6 +132,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
       <p>Read-only reconciliation. No Notion or Desk transitions are performed.</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a><ReleaseAutomationSummary plan={data.automation} />
     </details>
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
+    <ActionControls targets={data.pulls.filter(pull => selection.includes(pull.id))} view={askView} />
     <div className="rel-scroll"><table className="rel-table"><caption className="sr-only">Release queue · one row per GitHub PR; repeated group references share identity</caption><thead><tr><th><input type="checkbox" aria-label="Select visible PRs" checked={visible.length > 0 && visible.every(pull => selected.has(pull.id))} onChange={event => setSelection(event.target.checked ? [...new Set([...selection, ...visible.map(pull => pull.id)])] : selection.filter(id => !visible.some(pull => pull.id === id)))} /></th><th>GitHub PR</th><th>Change</th><th>Linked Notion cards</th><th>Merged</th><th>Release state</th><th>Inspect</th></tr></thead>
       {groups.map(group => <tbody key={group.id} data-view-group={group.id}><tr className="rel-group"><th colSpan={7}><button type="button" aria-expanded={!collapsed.includes(group.id)} onClick={() => setCollapsed(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])}>{collapsed.includes(group.id) ? '▸' : '▾'} {group.label} <small>{group.pulls.length}</small></button></th></tr>
         {(!collapsed.includes(group.id) || !!destination) && group.pulls.map(pull => <Fragment key={pull.id}><AskSurface subject={{ target: { kind: 'pull', id: pull.id, ...(pull.head ? { head: pull.head } : {}) }, label: `${pull.id} · ${pull.title ?? 'PR'}`, view: askView }} data-pull-id={pull.id} data-ask-origin={pull.id} tabIndex={-1} className={`${selected.has(pull.id) ? 'rel-selected' : ''}${destination?.target.kind === 'pull' && originMatches && destination.target.id === pull.id ? ' ask-origin' : ''}`}>
@@ -138,7 +141,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
           <td><span className="rel-cards">{activeReleaseLinks(pull).length ? activeReleaseLinks(pull).map(link => <a key={link.cardId} href={cardHref(link.cardId)} title={title(scene, link.cardId)}>{title(scene, link.cardId)}</a>) : <span>No linked card</span>}</span></td>
           <td><time dateTime={pull.mergedAt ?? undefined} title={pull.mergedAt ?? undefined}>{pull.mergedAt ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(Date.parse(pull.mergedAt)) : pull.state === 'open' ? 'Open' : 'Unknown'}</time></td>
           <td data-ask-field="deployment"><span title={pull.exceptions.join('; ')}>{releaseState(pull)}</span></td><td><span className="rel-inspect"><AskCardAction subject={{ target: { kind: 'pull', id: pull.id, ...(pull.head ? { head: pull.head } : {}) }, label: `${pull.id} · ${pull.title ?? 'PR'}`, view: askView }} icon /><button type="button" aria-label={`Inspect ${pull.id}`} onClick={() => setDrawer(pull.id)}>ⓘ</button></span></td>
-        </AskSurface>{destination && ['release', 'receipt'].includes(destination.target.kind) && <tr><td colSpan={7}><ProductionTargets pull={pull} askView={askView} /></td></tr>}</Fragment>)}
+        </AskSurface>{destination?.target.kind === 'pull' && destination.target.action_receipt_id && destination.target.id === pull.id && <tr><td colSpan={7}><ActionControls targets={[pull]} view={askView} compact focusReceipt={destination.target.action_receipt_id} /></td></tr>}{destination && ['release', 'receipt'].includes(destination.target.kind) && <tr><td colSpan={7}><ProductionTargets pull={pull} askView={askView} /></td></tr>}</Fragment>)}
       </tbody>)}
     </table></div>
     {!visible.length && <p className="rel-empty">{filter === 'Shipped' || filter === 'Verify in Prod' ? 'No verified production evidence available yet.' : 'No PRs in this view.'}</p>}

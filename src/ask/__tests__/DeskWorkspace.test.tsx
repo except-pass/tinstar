@@ -240,6 +240,9 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
 
 
 it('updates an expanded inline thread in place as independent answers arrive through the single poller', async () => {
+  // The inbox sorts newest first; wall-clock fixture construction can cross a
+  // millisecond and reverse these otherwise indistinguishable request buttons.
+  items = items.map((item, index) => ({ ...item, created_at: new Date(Date.now() - index * 1000).toISOString() }))
   vi.useFakeTimers()
   render(<Shell page="releases" />)
   await act(async () => {})

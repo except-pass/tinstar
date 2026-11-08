@@ -1,0 +1,868 @@
+{
+  "version": "cmsandbox-workflows-2026-11-08-v1",
+  "workflowCount": 145,
+  "sampled": [
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/_check.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/_check.yml",
+      "sha": "83597049b2d5f05300a4dc23ee774089c2c45d30",
+      "observedAt": "2026-11-08T17:05:05.685Z",
+      "name": "Shared script check",
+      "triggers": {
+        "workflow_call": {
+          "inputs": {
+            "prepare-environment": {
+              "description": "Resolve the caller's environment inside an existing allocation",
+              "type": "boolean",
+              "default": false
+            },
+            "requested_env": {
+              "description": "Explicit dev/prod override for in-job environment routing",
+              "type": "string",
+              "default": ""
+            },
+            "generate-version": {
+              "description": "Generate a default service version with environment preparation",
+              "type": "boolean",
+              "default": false
+            },
+            "name": {
+              "description": "Check display name",
+              "type": "string",
+              "default": "Check"
+            },
+            "run": {
+              "description": "Bash check commands",
+              "type": "string",
+              "required": true
+            },
+            "working-directory": {
+              "description": "Directory for check commands",
+              "type": "string",
+              "default": "."
+            },
+            "node-version": {
+              "description": "Node version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "cache-dependency-path": {
+              "description": "npm lockfiles; empty disables npm cache",
+              "type": "string",
+              "default": ""
+            },
+            "python-version": {
+              "description": "Python version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "python-cache-dependency-path": {
+              "description": "pip requirements; empty disables pip cache",
+              "type": "string",
+              "default": ""
+            },
+            "terraform-version": {
+              "description": "Terraform version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "protoc-version": {
+              "description": "Protoc version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "cerbos-version": {
+              "description": "Cerbos CLI version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "pool": {
+              "description": "Route longer credential-free checks to the CI pool",
+              "type": "boolean",
+              "default": false
+            },
+            "control-runner": {
+              "description": "Select the repository control runner for pool route jobs. Fork pull requests stay on GitHub-hosted runners.",
+              "type": "boolean",
+              "default": true
+            },
+            "logical-job": {
+              "description": "Stable pool accounting identity, independent of check name",
+              "type": "string",
+              "default": ""
+            },
+            "timeout-minutes": {
+              "description": "Check timeout",
+              "type": "number",
+              "default": 30
+            },
+            "fetch-depth": {
+              "description": "Checkout history depth",
+              "type": "number",
+              "default": 1
+            },
+            "checkout-ref": {
+              "description": "Checkout ref; empty uses the triggering SHA",
+              "type": "string",
+              "default": ""
+            },
+            "before-setup": {
+              "description": "Root commands before runtime setup",
+              "type": "string",
+              "default": ""
+            },
+            "prepare": {
+              "description": "Optional root script before a secondary checkout; emits repository and commit to GITHUB_OUTPUT",
+              "type": "string",
+              "default": ""
+            },
+            "checkout-path": {
+              "description": "Optional secondary checkout destination",
+              "type": "string",
+              "default": ""
+            },
+            "artifact-name": {
+              "description": "Optional check evidence artifact name",
+              "type": "string",
+              "default": ""
+            },
+            "artifact-path": {
+              "description": "Optional check evidence paths (relative to repository root)",
+              "type": "string",
+              "default": ""
+            },
+            "cleanup-run": {
+              "description": "Root commands after check success or failure",
+              "type": "string",
+              "default": ""
+            },
+            "after-run": {
+              "description": "Root commands after optional coverage and comment steps, before cleanup",
+              "type": "string",
+              "default": ""
+            },
+            "matrix": {
+              "description": "Variant identity forwarded to routing, evidence, and artifact names",
+              "type": "string",
+              "default": ""
+            },
+            "verify-docker": {
+              "description": "On a pool runner, require this job's private Docker socket, root, and cgroup",
+              "type": "boolean",
+              "default": false
+            },
+            "free-disk": {
+              "description": "On a GitHub-hosted runner, remove preinstalled toolchains before the command",
+              "type": "boolean",
+              "default": false
+            },
+            "mirror-same-sha": {
+              "description": "Skip the farm mirror when a workflow_run head SHA is not this job's SHA",
+              "type": "boolean",
+              "default": false
+            },
+            "dotnet-version": {
+              "description": ".NET SDK version; empty skips setup",
+              "type": "string",
+              "default": ""
+            },
+            "buildx": {
+              "description": "Set up Docker Buildx before the command",
+              "type": "boolean",
+              "default": false
+            },
+            "aws-role": {
+              "description": "OIDC role for image builds; empty keeps the job free of AWS credentials",
+              "type": "string",
+              "default": ""
+            },
+            "aws-region": {
+              "description": "AWS region for the optional OIDC role",
+              "type": "string",
+              "default": "us-east-2"
+            },
+            "ecr-login": {
+              "description": "before, after, or empty. before logs in before the command; after logs in before after-run",
+              "type": "string",
+              "default": ""
+            },
+            "codecov": {
+              "description": "v3, v4, or empty",
+              "type": "string",
+              "default": ""
+            },
+            "codecov-file": {
+              "description": "Coverage file for Codecov",
+              "type": "string",
+              "default": ""
+            },
+            "codecov-name": {
+              "description": "Codecov upload name",
+              "type": "string",
+              "default": ""
+            },
+            "codecov-flags": {
+              "description": "Codecov flags",
+              "type": "string",
+              "default": "unittests"
+            },
+            "codecov-test-results": {
+              "description": "Upload Codecov test results",
+              "type": "boolean",
+              "default": false
+            },
+            "junit": {
+              "description": "Publish JUnit results",
+              "type": "boolean",
+              "default": false
+            },
+            "github-script-path": {
+              "description": "Pull-request GitHub script path, relative to the repository",
+              "type": "string",
+              "default": ""
+            }
+          },
+          "outputs": {
+            "tf_environment": {
+              "description": "Prepared Terraform environment",
+              "value": "${{ jobs.check.outputs.tf_environment || jobs.route.outputs.tf_environment }}"
+            },
+            "aws_account_id": {
+              "description": "Prepared AWS account",
+              "value": "${{ jobs.check.outputs.aws_account_id || jobs.route.outputs.aws_account_id }}"
+            },
+            "aws_region": {
+              "description": "Prepared AWS region",
+              "value": "${{ jobs.check.outputs.aws_region || jobs.route.outputs.aws_region }}"
+            },
+            "react_app_dev_api": {
+              "description": "Prepared frontend API environment",
+              "value": "${{ jobs.check.outputs.react_app_dev_api || jobs.route.outputs.react_app_dev_api }}"
+            },
+            "posthog_host": {
+              "description": "Prepared PostHog ingestion host",
+              "value": "${{ jobs.check.outputs.posthog_host || jobs.route.outputs.posthog_host }}"
+            },
+            "version": {
+              "description": "Generated service version when requested",
+              "value": "${{ jobs.check.outputs.version || jobs.route.outputs.version }}"
+            },
+            "image-uri": {
+              "description": "Image URI when the command writes an image output",
+              "value": "${{ jobs.check.outputs.image-uri }}"
+            }
+          },
+          "secrets": {
+            "FARM_GIT_MIRROR_READ": {
+              "description": "Read-only farm Git mirror password",
+              "required": false
+            },
+            "DATA_RIVERS_PACKAGES_READ_TOKEN": {
+              "description": "Read-only GitHub Packages token, passed only by checks that need it",
+              "required": false
+            },
+            "CODECOV_TOKEN": {
+              "description": "Codecov upload token, passed only by checks that publish coverage",
+              "required": false
+            }
+          }
+        }
+      },
+      "jobs": [
+        {
+          "id": "route",
+          "name": "CI Pool route",
+          "uses": "./.github/workflows/_ci-route.yml",
+          "if": "${{ inputs.pool }}"
+        },
+        {
+          "id": "check",
+          "name": "${{ inputs.name }}",
+          "if": "${{ !cancelled() }}"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/_ci-route.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/_ci-route.yml",
+      "sha": "e7503e853fc0ef4f98f069e8415c77972fa20d11",
+      "observedAt": "2026-11-08T17:05:05.328Z",
+      "name": "CI pool route",
+      "triggers": {
+        "workflow_call": {
+          "inputs": {
+            "logical-job": {
+              "description": "Stable pool accounting identity",
+              "type": "string",
+              "required": true
+            },
+            "matrix": {
+              "description": "Variant identity. Empty sends {} to the controller.",
+              "type": "string",
+              "default": ""
+            },
+            "control-runner": {
+              "description": "Select the repository control runner. Fork pull requests stay on GitHub-hosted runners.",
+              "type": "boolean",
+              "default": true
+            },
+            "prepare-environment": {
+              "description": "Resolve the caller's environment on the hosted route job",
+              "type": "boolean",
+              "default": false
+            },
+            "requested_env": {
+              "description": "Explicit dev/prod override for environment routing",
+              "type": "string",
+              "default": ""
+            },
+            "generate-version": {
+              "description": "Generate a default service version with environment preparation",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "outputs": {
+            "target": {
+              "description": "Route target",
+              "value": "${{ jobs.route.outputs.target }}"
+            },
+            "attempt": {
+              "description": "Route attempt",
+              "value": "${{ jobs.route.outputs.attempt }}"
+            },
+            "reason": {
+              "description": "Route reason",
+              "value": "${{ jobs.route.outputs.reason }}"
+            },
+            "backend": {
+              "description": "Route backend",
+              "value": "${{ jobs.route.outputs.backend }}"
+            },
+            "lease": {
+              "description": "Route lease",
+              "value": "${{ jobs.route.outputs.lease }}"
+            },
+            "environment-result": {
+              "description": "Environment preparation outcome",
+              "value": "${{ jobs.route.outputs.environment-result }}"
+            },
+            "tf_environment": {
+              "description": "Prepared Terraform environment",
+              "value": "${{ jobs.route.outputs.tf_environment }}"
+            },
+            "aws_account_id": {
+              "description": "Prepared AWS account",
+              "value": "${{ jobs.route.outputs.aws_account_id }}"
+            },
+            "aws_region": {
+              "description": "Prepared AWS region",
+              "value": "${{ jobs.route.outputs.aws_region }}"
+            },
+            "react_app_dev_api": {
+              "description": "Prepared frontend API environment",
+              "value": "${{ jobs.route.outputs.react_app_dev_api }}"
+            },
+            "posthog_host": {
+              "description": "Prepared PostHog ingestion host",
+              "value": "${{ jobs.route.outputs.posthog_host }}"
+            },
+            "version": {
+              "description": "Generated service version when requested",
+              "value": "${{ jobs.route.outputs.version }}"
+            }
+          }
+        }
+      },
+      "jobs": [
+        {
+          "id": "route",
+          "name": "CI Pool route"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/_control-utility.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/_control-utility.yml",
+      "sha": "6b5fa46c55da66629dbbb13eecb0cdad705baf74",
+      "observedAt": "2026-11-08T17:05:46.113Z",
+      "name": "Control utility",
+      "triggers": {
+        "workflow_call": {
+          "inputs": {
+            "name": {
+              "description": "Check display name",
+              "type": "string",
+              "required": true
+            },
+            "run": {
+              "description": "Bash check commands",
+              "type": "string",
+              "required": true
+            },
+            "timeout-minutes": {
+              "description": "Job timeout",
+              "type": "number",
+              "default": 30
+            },
+            "fetch-depth": {
+              "description": "Checkout history depth",
+              "type": "number",
+              "default": 1
+            },
+            "python-version": {
+              "description": "Python version; empty uses the runner Python",
+              "type": "string",
+              "default": ""
+            },
+            "python-cache-dependency-path": {
+              "description": "pip requirements; empty disables pip cache",
+              "type": "string",
+              "default": ""
+            },
+            "artifact-name": {
+              "description": "Optional check evidence artifact name",
+              "type": "string",
+              "default": ""
+            },
+            "artifact-path": {
+              "description": "Optional check evidence paths (relative to repository root)",
+              "type": "string",
+              "default": ""
+            }
+          }
+        }
+      },
+      "jobs": [
+        {
+          "id": "prepare",
+          "name": "${{ inputs.name }}"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/concurrency-tests.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/concurrency-tests.yml",
+      "sha": "ac6ae9e840097558f603fcd73a78879c5fb3c162",
+      "observedAt": "2026-11-08T17:05:45.014Z",
+      "name": "Workflow and script contracts",
+      "triggers": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/**"
+          ]
+        }
+      },
+      "jobs": [
+        {
+          "id": "concurrency-tests",
+          "uses": "./.github/workflows/_check.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Workflow and script contracts",
+          "pool": true
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/image-verification-contract.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/image-verification-contract.yml",
+      "sha": "83a30c664e20d8c7f0365b229a631c990dff3a52",
+      "observedAt": "2026-11-08T17:05:45.755Z",
+      "name": "Image verification contract",
+      "triggers": {
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/scripts/verify-manager-analysis-image*",
+            ".github/workflows/_service-build-deploy.yml",
+            ".github/workflows/image-verification-contract.yml",
+            ".github/workflows/_check.yml",
+            ".github/workflows/_control-utility.yml"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/scripts/verify-manager-analysis-image*",
+            ".github/workflows/_service-build-deploy.yml",
+            ".github/workflows/image-verification-contract.yml",
+            ".github/workflows/_check.yml",
+            ".github/workflows/_control-utility.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "jobs": [
+        {
+          "id": "image-verification-contract",
+          "uses": "./.github/workflows/_control-utility.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Image verification contract"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/libs-fuzzy-search.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/libs-fuzzy-search.yml",
+      "sha": "ddd5f5ba46af9d4339aef23ce6332f1d71091264",
+      "observedAt": "2026-11-08T17:05:06.057Z",
+      "name": "Fuzzy Search Lib",
+      "triggers": {
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "libs/fuzzy-search/**",
+            "!libs/fuzzy-search/docs/**"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "libs/fuzzy-search/**",
+            "!libs/fuzzy-search/docs/**"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "jobs": [
+        {
+          "id": "verify",
+          "name": "Build, Test",
+          "uses": "./.github/workflows/_check.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Build, Test",
+          "pool": false
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/manager-siteconfiguration.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/manager-siteconfiguration.yml",
+      "sha": "273f6b6742933b616dc1dbd8d89e98627d572781",
+      "observedAt": "2026-11-08T17:05:07.077Z",
+      "name": "Manager Site Configuration",
+      "triggers": {
+        "workflow_dispatch": null,
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "components/manager-siteconfiguration/**",
+            "!components/manager-siteconfiguration/docs/**",
+            "!components/manager-siteconfiguration/obs/**",
+            "!components/manager-siteconfiguration/infra/**",
+            "!components/manager-siteconfiguration/ingestion-client/**",
+            "libs/equipment_points_matcher/**",
+            "libs/points-source/**",
+            "libs/metrics/**",
+            "libs/contracts/**",
+            "libs/cellular-provider-ra/**",
+            "libs/site-online/**",
+            "libs/site-telemetry/**"
+          ],
+          "tags": [
+            "v[0-9]+.[0-9]+.[0-9]+"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "components/manager-siteconfiguration/**",
+            "!components/manager-siteconfiguration/docs/**",
+            "!components/manager-siteconfiguration/obs/**",
+            "!components/manager-siteconfiguration/infra/**",
+            "!components/manager-siteconfiguration/ingestion-client/**",
+            "libs/equipment_points_matcher/**",
+            "libs/points-source/**",
+            "libs/metrics/**",
+            "libs/contracts/**",
+            "libs/cellular-provider-ra/**",
+            "libs/site-online/**",
+            "libs/site-telemetry/**"
+          ]
+        }
+      },
+      "jobs": [
+        {
+          "id": "verify-site-merge",
+          "name": "Verify Site merge final review",
+          "uses": "./.github/workflows/_check.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Verify Site merge final review",
+          "pool": true
+        },
+        {
+          "id": "build",
+          "uses": "./.github/workflows/_service-build-deploy.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
+        },
+        {
+          "id": "build-deploy",
+          "uses": "./.github/workflows/_service-build-deploy.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/mysql84-migration-safety.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/mysql84-migration-safety.yml",
+      "sha": "d9bc10573f38bd17e83936e91aebd287a1c8597d",
+      "observedAt": "2026-11-08T17:05:45.381Z",
+      "name": "MySQL 8.4 Migration Safety Contracts",
+      "triggers": {
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/scripts/guard-rds-plan.py",
+            ".github/workflows/**",
+            "components/**",
+            "docs/runbooks/mysql84/**",
+            "IaC/iam/github-actions-terraform-deploy/**",
+            "scripts/mysql84/**",
+            ".github/workflows/mysql84-migration-safety.yml",
+            ".github/workflows/_check.yml",
+            ".github/workflows/_control-utility.yml",
+            ".github/actions/ci-runner/**",
+            ".github/scripts/ci-pool-*.py",
+            ".github/scripts/ci_pool/**"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/scripts/guard-rds-plan.py",
+            ".github/workflows/**",
+            "components/**",
+            "docs/runbooks/mysql84/**",
+            "IaC/iam/github-actions-terraform-deploy/**",
+            "scripts/mysql84/**",
+            ".github/workflows/_check.yml",
+            ".github/workflows/_control-utility.yml",
+            ".github/actions/ci-runner/**",
+            ".github/scripts/ci-pool-*.py",
+            ".github/scripts/ci_pool/**"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "jobs": [
+        {
+          "id": "safety-contracts",
+          "name": "Migration safety contracts",
+          "uses": "./.github/workflows/_control-utility.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Migration safety contracts"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/pr-safety-check.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/pr-safety-check.yml",
+      "sha": "d15d8415663d96071c2e399ff5f218bd5cfa0a78",
+      "observedAt": "2026-11-08T17:05:04.954Z",
+      "name": "PR Safety Check",
+      "triggers": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ]
+        }
+      },
+      "jobs": [
+        {
+          "id": "check-dangerous-files",
+          "name": "Check for dangerous files",
+          "uses": "./.github/workflows/_control-utility.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Check for dangerous files"
+        }
+      ]
+    },
+    {
+      "path": "/repos/fortresspower/cmsandbox/contents/.github/workflows/web-fmp.yml",
+      "url": "https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/web-fmp.yml",
+      "sha": "e3443dc455768d82a5887df78b016233e6b8540b",
+      "observedAt": "2026-11-08T17:05:06.531Z",
+      "name": "Web FMP",
+      "triggers": {
+        "workflow_dispatch": {
+          "inputs": {
+            "deploy_env": {
+              "description": "Where to deploy this ONE component. 'prod' = a surgical Web FMP API and portal deploy with its infrastructure; no fleet fan-out. See docs/runbooks/surgical-prod-deploy.md.",
+              "type": "choice",
+              "options": [
+                "dev",
+                "prod"
+              ],
+              "default": "dev"
+            }
+          }
+        },
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "components/web-fmp/**",
+            "!components/web-fmp/docs/**",
+            "!components/web-fmp/obs/**",
+            "!components/web-fmp/infra/**",
+            "libs/vpp-explorer-core/**",
+            "libs/tariff-ui/**",
+            "components/manager-homeowner/src/public/protos/homeowner.proto",
+            "components/manager-analysis/src/public/protos/manager_analysis.proto",
+            "components/manager-siteconfiguration/src/public/site-management.proto",
+            "components/manager-siteconfiguration/src/public/alarm-subscriptions.proto",
+            "components/manager-vppOps/src/public/vpp_ops.proto",
+            "components/manager-feed/src/public/feed.proto",
+            "components/manager-vppOps/src/resolver/types.ts",
+            "libs/contracts/**",
+            "libs/site-online/**",
+            "libs/ra-workflow-client/**",
+            "docs/vpp/design/ops-center-handoff/**"
+          ],
+          "tags": [
+            "v[0-9]+.[0-9]+.[0-9]+"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+          ],
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "components/web-fmp/**",
+            "!components/web-fmp/docs/**",
+            "!components/web-fmp/obs/**",
+            "!components/web-fmp/infra/**",
+            "libs/vpp-explorer-core/**",
+            "libs/tariff-ui/**",
+            "components/manager-homeowner/src/public/protos/homeowner.proto",
+            "components/manager-analysis/src/public/protos/manager_analysis.proto",
+            "components/manager-siteconfiguration/src/public/site-management.proto",
+            "components/manager-siteconfiguration/src/public/alarm-subscriptions.proto",
+            "components/manager-vppOps/src/public/vpp_ops.proto",
+            "components/manager-feed/src/public/feed.proto",
+            "components/manager-vppOps/src/resolver/types.ts",
+            "libs/contracts/**",
+            "libs/site-online/**",
+            "libs/ra-workflow-client/**",
+            "docs/vpp/design/ops-center-handoff/**"
+          ]
+        }
+      },
+      "jobs": [
+        {
+          "id": "owner-reading-contract",
+          "name": "Owner reading wire contract",
+          "uses": "./.github/workflows/_check.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Owner reading wire contract",
+          "pool": true
+        },
+        {
+          "id": "ops-preview-contract",
+          "name": "Ops preview wire contract",
+          "uses": "./.github/workflows/_check.yml",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+          "withName": "Ops preview wire contract",
+          "pool": true
+        },
+        {
+          "id": "prepare",
+          "name": "Prepare",
+          "if": "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
+        },
+        {
+          "id": "build-backend",
+          "if": "${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.prepare.result == 'success') }}"
+        },
+        {
+          "id": "publish-backend",
+          "if": "github.event_name != 'pull_request'"
+        },
+        {
+          "id": "build-frontend",
+          "if": "${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.prepare.result == 'success') }}"
+        },
+        {
+          "id": "deploy",
+          "if": "github.event_name != 'pull_request'"
+        },
+        {
+          "id": "deploy-frontend",
+          "if": "github.event_name != 'pull_request'"
+        },
+        {
+          "id": "integration-test",
+          "name": "Integration Tests",
+          "if": false
+        },
+        {
+          "id": "designer-dev-smoke",
+          "uses": "./.github/workflows/_designer-dev-smoke.yml",
+          "if": "github.event_name != 'pull_request' && needs.prepare.outputs.tf_environment == 'dev'"
+        }
+      ]
+    }
+  ]
+}

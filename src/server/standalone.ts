@@ -9,6 +9,7 @@ import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { ReleasesApi } from './releases/routes'
 import { PullsApi } from './pulls/routes'
+import { ActionsApi } from './actions/routes'
 import { QuotaAxiPoller } from './quota/poller'
 import { ProviderCurrentObservationStores } from './providers/observation-stores'
 import { ProviderObservationIngestor } from './providers/observation-ingestor'
@@ -73,8 +74,9 @@ export function startServer(opts: ServerOptions) {
   const reconciliation = new ReconciliationSources()
   const releases = new ReleasesApi(reconciliation)
   const pulls = new PullsApi(reconciliation, releases.store)
+  const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
-  const asks = new AskApi(reconciliation, undefined, undefined, { pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() })
+  const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() })
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()
@@ -138,6 +140,7 @@ export function startServer(opts: ServerOptions) {
     try {
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
+      if (await actions.handle(req, res)) return
       if (await asks.handle(req, res)) return
       if (await reconciliationMcp.handle(req, res)) return
       if (await releases.handle(req, res)) return

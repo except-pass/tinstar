@@ -12,6 +12,7 @@ import { usePulls } from './usePulls'
 import { pullContext, visiblePulls, type PullSort } from './model'
 import './pulls.css'
 import { Footprint } from './Footprint'
+import { ActionControls } from '../actions/ActionControls'
 import type { PullFootprint } from '../shared/pullFootprint'
 
 const columns: Array<[PullSort, string]> = [['repository', 'Repository'], ['title', 'PR'], ['author', 'Author'], ['changes', 'Changes / files'], ['checks', 'CI'], ['review', 'Review'], ['updated', 'Updated / age'], ['initiative', 'Initiative'], ['epic', 'Epic'], ['manager', 'Manager'], ['worker', 'Worker']]
@@ -109,6 +110,7 @@ export function Pulls() {
     {data && <details className="pr-coverage"><summary>{data.repositories.length} repositories · {data.repositories.every(repo => repo.complete) ? 'Open PR inventory complete in this scope' : 'Inventory incomplete'}</summary>{data.repositories.map(repo => <p key={repo.repository}>{repo.repository} · {repo.scope === 'authored-or-associated' ? 'Authored or explicitly associated' : 'All open PRs'} · {repo.status} · {repo.observedAt ? new Date(repo.observedAt).toLocaleString() : 'No successful observation'}{repo.error && ` · ${repo.error}`}</p>)}<p>Repositories come from explicit PR sources or configuration. All open PRs in the authenticated account’s repositories and organizations; elsewhere, only PRs authored by {data.account ?? 'the authenticated account'} or explicitly associated with a card or worker. Counts, CI and reviews load when you inspect a row.</p></details>}
     {data?.repositories.filter(repo => repo.error).map(repo => <p role="alert" className="pr-notice" key={repo.repository}>{repo.repository}: {repo.error}</p>)}
     {actualSelection.length > 0 && <div className="pr-selection" role="status">{actualSelection.length} selected <button type="button" onClick={() => setSelected(new Set())}>Clear selection</button></div>}
+    <ActionControls targets={inventory.filter(pull => actualSelection.includes(pull.id))} view={view} />
     <div className="pr-scroll" tabIndex={0} role="region" aria-label="PR table, scroll horizontally for all columns"><table className="pr-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible PRs" checked={allSelected} onChange={() => setSelected(previous => { const next = new Set(previous); for (const row of rows) { if (allSelected) next.delete(row.id); else next.add(row.id) } return next })} /></th>
       {columns.map(([key, label]) => <th key={key} aria-sort={sort === key ? descending ? 'descending' : 'ascending' : 'none'}><button type="button" onClick={() => { setSort(key); setDescending(sort === key ? !descending : false) }}>{label}{sort === key ? descending ? ' ↓' : ' ↑' : ''}</button></th>)}<th>Inspect</th></tr></thead><tbody>
       {rows.map(pull => {
@@ -139,7 +141,7 @@ export function Pulls() {
             {contributor.claims.map(claim => <p key={claim.id}>{claim.state === 'historical' ? 'Historical' : claim.state === 'last-known' ? 'Last known' : claim.verification === 'confirmed' ? 'Confirmed' : claim.verification === 'conflicting' ? 'Conflicting / unknown' : 'Suggested / unverified'} work: <a data-ask-field="relationship" href={`?card=${claim.cardId}`}>{String(scene?.cards.find(card => card.id === claim.cardId)?.source.properties.Name?.value ?? claim.cardId)}</a> · {claim.sources.join(', ')} · observed {claim.observedAt ?? 'Unknown'}</p>)}
           </article>)}{!context.contributors.length && <p>Worker / manager unknown. No explicit PR registration observed in current or retained backlog sources.</p>}
           <p>Retained backlog registrations can identify retired tasks, but omit attempt, historical manager and machine. Coverage is not a permanent complete contributor index. {scene?.historyScope ?? 'Relationship history unavailable.'}</p>
-          <p>Action history unavailable.</p>
+          <ActionControls targets={[pull]} view={view} compact focusReceipt={destination?.target.kind === 'pull' ? destination.target.action_receipt_id : undefined} />
         </AskSurface></td></tr>}</Fragment>
       })}
     </tbody></table></div>{data && !rows.length && <p className="pr-notice">{data.pulls.length ? 'No matching PRs.' : data.repositories.every(repo => repo.complete) && data.repositories.length ? 'No open PRs in this repository scope.' : 'No PRs observed. Check repository coverage above.'}</p>}

@@ -34,7 +34,7 @@ trust a client-supplied Tailscale identity header (see [Ask](ask.md)).
 
 ## Evidence and current boundaries
 
-GitHub supplies PR title, captured head, merged state/time and effective merge commit. Reads
+GitHub supplies PR title, captured head and base branch, merged state/time and effective merge commit. Reads
 use the existing gh-axi scalar transport, at most four PR reads per refresh and
 no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.
@@ -54,10 +54,10 @@ link history. The sync disclosure reports failures and unknown deployed versions
 explicitly. Transition and owner-verification drafts can be inspected, but no
 Notion writer, active Desk routing, deployment action or mass backfill exists.
 
-Multi-select PR action toolbar + shared custom-action framework: not present in
-main; deferred to its own card. The table preserves canonical row selection for
-future reuse, existing Ask/inspect and direct GitHub/Tin Star links. It does not
-introduce an action execution engine.
+The table's canonical PR selection feeds the shared
+[installed PR actions framework](../pr-actions.md), which owns simulated actions,
+installation and action receipts. Existing Ask/inspect and direct GitHub/Tin Star
+links remain available.
 
 Read-only reconciliation consumes actual component receipts (including cmsandbox
 coordinator results where available), checks merge ancestry per repository and
