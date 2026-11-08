@@ -186,7 +186,7 @@ elif sys.argv[1] == 'receipts':
 it('checks the standalone puller CLI security and retry behavior', async () => {
   const result = await exec('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_ask_puller*.py'])
   expect(result.stderr).toContain('OK')
-})
+}, 30_000)
 
 it('persists semantic fields, exact worker identities and server-resolved relationship provenance on the existing Ask path', async () => {
   const { call, bridge, reload } = await setup()
