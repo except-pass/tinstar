@@ -167,14 +167,14 @@ for (const mode of ['release', 'receipt', 'removed-target', 'wrong-component', '
 }
 
 test('real Ask HTTP service persists independent typed questions and enforces source and owner boundaries', async ({ page, request }, testInfo) => {
-  const root = mkdtempSync(resolve('.ask-live-')), scene = fixtureScene()
+  const root = mkdtempSync(resolve('.ask-live-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const token = 'disposable-bridge-token-0000000000000000'
   const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test', 'other@example.test'], bridgeToken: token }), { pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => ({ pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false, generatedAt: scene.generatedAt }) })
   liveAsk = createApi()
   seedOriginAllowlist(Number(new URL(base).port))
   const headers = { 'Tailscale-User-Login': 'owner@example.test', 'X-Tinstar-UI': '1' }
   const transcript: unknown[] = []
-  const call = async (path: string, data?: unknown, auth = headers) => {
+  const call = async (path: string, data?: unknown, auth: Record<string, string> = headers) => {
     const response = data === undefined ? await request.get(base + '/api/ask/' + path, { headers: auth }) : await request.post(base + '/api/ask/' + path, { headers: auth, data })
     const body = await response.json(); transcript.push({ path, status: response.status(), body }); return { status: response.status(), body }
   }
