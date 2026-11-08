@@ -35,7 +35,8 @@ trust a client-supplied Tailscale identity header (see [Ask](ask.md)).
 ## Evidence and current boundaries
 
 GitHub supplies PR title, captured head and base branch, merged state/time and effective merge commit. Reads
-use the existing gh-axi scalar transport, at most four PR reads per refresh and
+use the shared scalar reader (gh-axi by default, or the live Reader broker described
+in the [installed PR actions guide](../pr-actions.md)), at most four PR reads per refresh and
 no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.
 Failures retain visibly stale facts. The navigation badge and page queue count
@@ -55,7 +56,7 @@ explicitly. Transition and owner-verification drafts can be inspected, but no
 Notion writer, active Desk routing, deployment action or mass backfill exists.
 
 The table's canonical PR selection feeds the shared
-[installed PR actions framework](../pr-actions.md), which owns simulated actions,
+[installed PR actions framework](../pr-actions.md), which owns action execution modes,
 installation and action receipts. Existing Ask/inspect and direct GitHub/Tin Star
 links remain available.
 
@@ -141,11 +142,11 @@ owner. They retain card/PR/receipt links and use `future-or-conditional` readine
 shared global Desk/Ask implementation owns eventual publication and owner routing;
 Releases adds no parallel queue, Ask provider or response transport.
 
-GitHub read failures are separate from pending reads. A missing `gh-axi` displays
+GitHub read failures are separate from pending reads. In default CLI mode, a missing `gh-axi` displays
 `Sync error: gh-axi unavailable on server PATH`; access/CLI/read failures display
 `Sync error: GitHub reader failed`. The disclosure lists safe error descriptions,
 never stderr/credentials. Fix the **service** PATH/auth, not only an interactive
-shell. Recovered reads clear the error; stale prior facts remain labeled.
+shell. In live mode, broker/access failures also remain sync errors; the reader never falls back to CLI authentication. Recovered reads clear the error; stale prior facts remain labeled.
 
 ### Configure existing sources
 

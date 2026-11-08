@@ -3,6 +3,9 @@ import { releasePull } from '../../shared/releases'
 import { validateChecks } from './checkPolicy'
 
 const readPermissions = { metadata: 'read', contents: 'read', pull_requests: 'read', checks: 'read', statuses: 'read', actions: 'read' } as const
+export class BrokerEffectError extends Error {
+  constructor(message: string, readonly outcome: 'not-sent' | 'unknown') { super(message) }
+}
 export const appProfiles = {
   Reader: { repositories: readerRepositories, permissions: readPermissions },
   Repair: { repositories: ['fortresspower/cmsandbox'], permissions: { ...readPermissions, contents: 'write', pull_requests: 'write', actions: 'write' } },
@@ -11,22 +14,27 @@ export const appProfiles = {
 export const profileFor = (kind: string) => kind === 'merge.admin' ? 'Merge' : kind.startsWith('repair.') ? 'Repair' : 'Reader'
 const scoped = (value: string, patterns: string[]) => patterns.some(pattern => pattern === '**' || pattern === value || pattern.endsWith('/**') && value.startsWith(pattern.slice(0, -2)))
 export interface BrokerInvocation { actor: string; explicit: boolean; origin: 'user' | 'ask-answer'; job?: { id: number; runId: number; head: string; status: string; conclusion: string | null; runAttempt: number; dependentJobs: number[] | null } }
-export function validateOperation(installed: InstalledAction, captured: ActionSnapshot, live: ActionSnapshot, raw: unknown, invocation: BrokerInvocation, policy: CheckPolicy): { operation: ActionOperation | null; reasons: string[] } {
-  const parsed = operationSchema.safeParse(raw)
-  if (!parsed.success) return { operation: null, reasons: ['Operation outside typed broker scope (only exact-head squash and PR-mode ruleset 6108448 bypass are supported)'] }
-  const operation = parsed.data, reasons: string[] = [], kind = operation.kind
+export function validateTarget(installed: InstalledAction, captured: ActionSnapshot, live: ActionSnapshot, invocation: BrokerInvocation): string[] {
+  const reasons: string[] = []
   const identity = releasePull(captured.url)
   if (!identity || identity.id !== captured.id || identity.repository !== captured.repository || identity.number !== captured.number || live.id !== captured.id || live.url !== captured.url || live.repository !== captured.repository || live.number !== captured.number) reasons.push('PR identity mismatch')
   if (!invocation.actor || !invocation.explicit || invocation.origin !== 'user') reasons.push('Explicit authenticated user invocation required; an Ask answer grants no authority')
   const { manifest, grant } = installed
   if (grant.digest !== manifest.digest || grant.version !== manifest.version) reasons.push('Installed version/grant mismatch')
-  if (!manifest.capabilities.includes(kind) || !grant.capabilities.includes(kind)) reasons.push(`Missing installed capability ${kind}`)
   if (!manifest.repositories.includes(captured.repository as typeof readerRepositories[number]) || !grant.repositories.includes(captured.repository)) reasons.push(`Repository outside installed grant: ${captured.repository}`)
   if (!scoped(live.base, manifest.branches) || !scoped(live.base, grant.branches)) reasons.push('Target branch outside installed grant')
   if (!readerRepositories.includes(live.repository as typeof readerRepositories[number])) reasons.push('Repository outside approved Reader scope')
   if (captured.head !== live.head || captured.base !== live.base || captured.baseHead !== live.baseHead || captured.headRef !== live.headRef || captured.headRepository !== live.headRepository) reasons.push('Captured head/base changed; refresh and explicitly replan')
   if (live.changedPaths.some(path => !scoped(path, manifest.paths) || !scoped(path, grant.paths))) reasons.push('Changed path outside installed grant')
+  if (!live.pathsComplete && (!manifest.paths.includes('**') || !grant.paths.includes('**'))) reasons.push('Complete changed paths required for scoped reads')
   if (Date.now() - Date.parse(live.observedAt) > 30_000 || !Number.isFinite(Date.parse(live.observedAt))) reasons.push('Fresh immediate provider observation required')
+  return reasons
+}
+export function validateOperation(installed: InstalledAction, captured: ActionSnapshot, live: ActionSnapshot, raw: unknown, invocation: BrokerInvocation, policy: CheckPolicy): { operation: ActionOperation | null; reasons: string[] } {
+  const parsed = operationSchema.safeParse(raw)
+  if (!parsed.success) return { operation: null, reasons: ['Operation outside typed broker scope; Admin Merge is disabled'] }
+  const operation = parsed.data, kind = operation.kind, reasons = validateTarget(installed, captured, live, invocation)
+  if (!installed.manifest.capabilities.includes(kind) || !installed.grant.capabilities.includes(kind)) reasons.push(`Missing installed capability ${kind}`)
   if (kind.startsWith('repair.') || kind === 'merge.admin') {
     if (live.repository !== 'fortresspower/cmsandbox') reasons.push('Write proposals are cmsandbox only')
     if (live.state !== 'open' || live.draft) reasons.push('Selected real PR must be open and ready')
@@ -43,6 +51,7 @@ export function validateOperation(installed: InstalledAction, captured: ActionSn
     }
   }
   if (kind === 'merge.admin') {
+    reasons.push('Admin Merge is globally disabled; no live Merge adapter exists')
     if (live.base !== 'main') reasons.push('Admin Merge targets main only')
     if (live.pendingMerge !== false) reasons.push('Pending or ambiguous merge state')
     if (live.threadsResolved !== true) reasons.push('Resolved review threads must be proven')

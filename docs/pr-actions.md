@@ -1,61 +1,75 @@
-# Installed PR actions (simulated)
+# Installed PR actions
 
-PRs and Releases share local installed versions, owner grants, receipts and per-PR
-locks. Select PRs, inspect an example's source, manifest and test evidence, then install
-that immutable version. Use the installed buttons to simulate an investigation or
-proposal. Fix CI also offers explicit safe-update and one-failed-job rerun proposals
-for a single selected PR. The receipt always records actual GitHub writes = 0.
+PRs and Releases share the existing registry, executor, scoped owner grants, receipts,
+per-PR locks and repository write serialization. The default remains trusted fixture
+simulation with actual GitHub writes = 0. Custom source can be inspected/installed but
+is not evaluated in default mode.
 
-Invocation requires current captured heads and observed base branches. Unknown bases
-disable the buttons; stacked PRs retain their actual base. A changed head or base at
-capture requires refresh before invocation. Repair options apply only to Fix CI;
-they do not affect Explain or other read actions on one or multiple selected PRs.
+An operator can explicitly enable Reader/Repair using
+`TINSTAR_ACTIONS_LIVE=reader-repair` after the safety review and App provisioning.
+There is one broker process and executor implementation. The separate broker identity
+owns the live registry/grants/audit store and is the only process that reads App keys
+or mints installation tokens. The web process uses a private Unix socket; it never
+receives authentication. Missing socket, credentials, IDs or safe runtime refuses
+with a not-provisioned reason. There is no ambient-login or unsandboxed fallback.
 
-“Make a button…” opens the existing Desk Ask composer. First Mate can return a JSON
-candidate containing `manifest` and `source`; paste it under Inspect a Custom candidate.
-Installation stores source for inspection. Custom code is never evaluated: approved
-OS isolation is unavailable. Only Tin Star's trusted simulation fixture interpreter
-runs. Model answers and receipt Ask responses cannot install, grant or merge anything.
+Live Reader supports GET-only PR/list/files/reviews, check/status, run/job and narrowly
+scoped branch/workflow evidence. Every token names one approved repository numeric ID
+and the minimal endpoint permissions. Its scope is the approved ten repositories;
+external `kunchenguid/firstmate` is unavailable in App mode. Inventory displays Reader
+App identity separately from the configured review-author account and derives scope
+from verified repository metadata. While live mode is OFF the existing application
+GET path stays in place.
 
-The registry defaults to `join(getConfigRoot(), 'actions')`, respecting
-`TINSTAR_CONFIG_HOME`. Set `TINSTAR_ACTIONS_DIR` explicitly to use a different absolute
-actions directory, including `$HOME/.tinstar/actions` if desired. Retained versions contain
-`manifest.json`, `implementation.mjs`, and an owner-bound `installation.json`; `active.json`
-is atomically replaced. Inspect exposes grants, source and test evidence. Rollback
-selects an old version with its own grants and retains all receipts. Running work
-continues on its original inspected version.
+Live Repair is cmsandbox only and requires one explicitly selected owner operation:
+safe update-branch with `expected_head_sha`, or a single failed job rerun bound to the
+selected PR/head/run/job. Fresh provider evidence and installed grants are checked
+before effects, including after token minting. No patch/ref/force/delete/main/tag,
+workflow edit, broad rerun, dispatch, comment or merge endpoint is available. Reruns
+require proven zero dependent jobs; see the runbook for current static push-run-only
+topology coverage. GitHub reruns dependent jobs too, so unknown graphs remain held.
 
-Receipts persist intent before a proposal and retain per-PR results, exact evidence,
-actor, installed digest, plan/order and credential profile names. No token is minted
-or exercised. Cancellation stops unsent proposals. On restart, unfinished intent is
-marked unknown; the same idempotency key never retries it automatically. The existing
-shared lock implementation is reused for cross-view/process exclusion. Unknown
-dependencies serialize with an explanation. Selected exact base-ref/base-SHA dependencies
-are ordered before their children; no coordinator dispatch is invented.
+Live installed source executes in firstmate-selected Linux bubblewrap isolation:
+distinct namespace uid/gid, read-only staged runtime and action, private proc/tmp,
+cleared environment, no host files/credentials/control sockets or network. Its only
+outside channel is bounded typed broker IPC. Seccomp denies process creation and OS
+limits bound CPU, memory, tasks, files, descriptors, output and wall clock. There is
+one source slot to protect shared host capacity. Unsupported isolation refuses to run.
 
-Admin Merge simulation uses the versioned
-[cmsandbox check inventory](../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json),
-which owns the workflow provenance, exact check identities and per-workload completion
-status. The shared check-policy boundary refuses every Admin Merge while any workload
-is incomplete, including completed workloads with green checks. The installed button
-also stays disabled. Per-workload acceptance is exercised only with disposable
-[test fixture policies](../src/server/actions/__tests__/broker.test.ts).
-Names that were only derived never authorize a merge. Live execution still performs
-no GitHub writes. Recorded failures live in
-[data/tinstar-pr-ops-actions](../data/tinstar-pr-ops-actions).
-REST review summaries cannot prove resolved threads, so current live snapshots retain
-unknown review-thread/rule evidence. These are visible technical holds, with no hidden
-switch that enables writes. A future live adapter and isolated runner require their
-own review and provisioning. Exact owner steps are in
-[provisioning.md](../data/tinstar-pr-ops-actions/provisioning.md).
+Admin Merge is **globally disabled**, including when a fixture CI matrix is complete.
+No live Merge App profile, key reader or adapter is reachable. The existing
+[cmsandbox check inventory](../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json)
+still enforces its incomplete-workload holds; completing it does not activate Merge.
 
-Run `npm run test:unit -- src/server/actions src/actions` for registry, broker, real-check
-refusal, lifecycle, ten-target and UI coverage. Source digests prevent code changing
-under reviewed grants; typed capability and target refusals protect production data
-and credentials. No unrelated file pins, policy expiry date or automatic kill switch
-are introduced.
+Select PRs with current captured head/base, inspect a candidate's source, manifest and
+tests, then explicitly install its immutable version. Custom creation uses the existing
+Desk Ask composer. Model replies cannot install, grant or invoke a privileged operation.
+Live installation happens in the broker's store, separately from simulation grants.
+Rollback selects a retained version with its own grants and keeps all receipts.
 
-The GitHub job-rerun endpoint also reruns dependent jobs. Current REST job/run reads
-cannot prove a job has no dependents, so rerun proposals remain held unless independent
-topology evidence proves zero dependents. There is no fallback to a run-wide rerun.
-[Provider behavior](https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-job-from-a-workflow-run).
+Simulation registry defaults to `join(getConfigRoot(), 'actions')`, respecting
+`TINSTAR_CONFIG_HOME`; `TINSTAR_ACTIONS_DIR` can select another absolute directory.
+Live broker paths are private operator configuration and default under
+`/var/lib/tinstar-action-broker`. Source digests bind reviewed grants to executable
+code; typed scope and isolation protect production data and credentials.
+
+Receipts persist exact intent before a provider effect and retain actor, PR/head/base,
+source/version/grants, run/job identity, request, outcome and times. UI/Ask distinguish
+simulation, accepted requests, completed local reads and unknown outcomes. Accepted is
+not verified repair, merge or deployment. Unknown write counts are not presented as
+zero. After an uncertain job rerun, one read-only reconciliation can record completion
+if the selected run advanced beyond its original attempt; write attribution remains
+unknown and no retry is sent. Cancellation stops unsent requests; restart never automatically retries an
+ambiguous effect. Same-head ambiguous Repair and consumed job reruns remain held.
+
+Run focused safety coverage with:
+
+```bash
+npm run test:unit -- src/server/actions src/actions src/server/pulls --maxWorkers=1 --minWorkers=1
+```
+
+All provider tests use fakes; malicious-source tests exercise real local OS isolation.
+No test creates an App, mints a token against GitHub or writes to GitHub. Owner-only
+App registration, key placement, activation, read verification, limits and rollback
+are in [provisioning.md](../data/tinstar-pr-ops-actions/provisioning.md). Merge provisioning
+is not requested.

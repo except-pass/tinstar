@@ -14,8 +14,7 @@ async function request(path: string, payload?: unknown) {
   if (!response.ok || !result.ok) throw new Error(result.error?.message ?? 'Local action request failed')
   return result.data
 }
-/** One component/store/executor contract in both PRs and Releases. No mutation route
- * exists; the API only simulates trusted fixtures and records local receipts. */
+/** One installed-action contract in PRs and Releases; live mode uses the broker. */
 export function ActionControls({ targets, view, compact = false, focusReceipt }: { targets: Target[]; view: AskView; compact?: boolean; focusReceipt?: string }) {
   const asks = useAskControls(), root = useRef<HTMLDivElement>(null)
   const [unavailable, setUnavailable] = useState('')
@@ -58,16 +57,16 @@ export function ActionControls({ targets, view, compact = false, focusReceipt }:
   }, [focusReceipt, catalog])
   const rows = catalog?.receipts.filter(receipt => targets.some(target => target.url === receipt.captured.url)) ?? []
   return <div ref={root} className={`installed-actions${compact ? ' is-compact' : ''}`} aria-label="Installed PR actions">
-    {(!compact || !!catalog?.installed.length) && <span className="action-buttons">{catalog?.installed.map(action => <button key={action.manifest.id} type="button" disabled={!!disabled(action)} title={disabled(action) || `Simulate ${action.manifest.name}`} onClick={() => invoke(action)}>{action.manifest.name}{' '}<small> · Simulated</small></button>)}</span>}
+    {(!compact || !!catalog?.installed.length) && <span className="action-buttons">{catalog?.installed.map(action => <button key={action.manifest.id} type="button" disabled={!!disabled(action)} title={disabled(action) || `${catalog?.live ? 'Run' : 'Simulate'} ${action.manifest.name}`} onClick={() => invoke(action)}>{action.manifest.name}{' '}<small> · {catalog?.live ? 'Live' : 'Simulated'}</small></button>)}</span>}
     {!compact && <>
-      {targets.length === 1 && catalog?.installed.some(action => action.manifest.id === 'fix-ci') && <details><summary>Fix CI repair options · simulated</summary><label>Explicit operation <select value={repairChoice} onChange={event => setRepairChoice(event.target.value as typeof repairChoice)}><option value="none">Classify / propose repair</option><option value="update">Safe update selected branch</option><option value="rerun">Rerun one failed job once</option></select></label>{repairChoice === 'rerun' && <><label>Failed job ID <input value={jobId} onChange={event => setJobId(event.target.value)} /></label><label>Run ID <input value={jobRunId} onChange={event => setJobRunId(event.target.value)} /></label></>}</details>}
+      {targets.length === 1 && catalog?.installed.some(action => action.manifest.id === 'fix-ci') && <details><summary>Fix CI repair options · {catalog?.live ? 'live' : 'simulated'}</summary><label>Explicit operation <select value={repairChoice} onChange={event => setRepairChoice(event.target.value as typeof repairChoice)}><option value="none">Classify / propose repair</option><option value="update">Safe update selected branch</option><option value="rerun">Rerun one failed job once</option></select></label>{repairChoice === 'rerun' && <><label>Failed job ID <input value={jobId} onChange={event => setJobId(event.target.value)} /></label><label>Run ID <input value={jobRunId} onChange={event => setJobRunId(event.target.value)} /></label></>}</details>}
       {targets.length > 1 && <label>Mode <select value={mode} onChange={event => setMode(event.target.value as typeof mode)}><option value="direct">Direct</option><option value="coordinated">Coordinated · serialized plan</option></select></label>}
       <button type="button" onClick={() => setInspect(value => !value)}>Inspect / install actions</button>
       {targets[0] && <button type="button" onClick={() => asks?.open({ target: { kind: 'pull', id: targets[0]!.id, ...(targets[0]!.head ? { head: targets[0]!.head } : {}) }, label: 'Make a button that does X on selected PRs', question: 'Make a button that does X on selected PRs.', view, field_key: 'description', field_value: 'Make a button that does X on selected PRs. Return deterministic implementation.mjs source, manifest, tests and requested capabilities for owner inspection. Installation is separate; custom code execution is held until approved OS isolation exists.' })}>Make a button…</button>}
       {pending && <button type="button" onClick={() => void perform(async () => { await request('/api/actions/cancel', { runId }) })}>Cancel unsent proposals</button>}
       {inspect && <section className="action-inspect" aria-label="Inspect installed actions">
         <p role={unavailable ? 'status' : undefined}>{unavailable}</p>
-        <p>Simulated actions · actual GitHub writes = 0. {catalog?.runner}</p>
+        <p>{catalog?.live ? 'Live Reader/Repair actions. Admin Merge disabled.' : 'Simulated actions · actual GitHub writes = 0.'} {catalog?.runner}</p>
         <p>Admin Merge disabled: {catalog?.policy.unknownReason}</p>
         <div>{catalog?.examples.map(example => <button key={example.manifest.id} type="button" onClick={() => { setCandidate(example); setInspected(false) }}>Inspect {example.manifest.name} candidate</button>)}</div>
         {catalog?.installed.map(action => <section key={action.manifest.id}>
@@ -84,7 +83,7 @@ export function ActionControls({ targets, view, compact = false, focusReceipt }:
       </section>}
     </>}
     {busy && <span role="status">Recording local action…</span>}{error && <p role="alert">{error}</p>}
-    {!!rows.length && <details open={!!runId || !!focusReceipt} className="action-history"><summary onClick={() => void refresh()}>Action receipts ({rows.length}) · GitHub writes = 0</summary>{rows.map(receipt => <ActionReceiptView key={receipt.id} receipt={receipt} view={view} />)}</details>}
+    {!!rows.length && <details open={!!runId || !!focusReceipt} className="action-history"><summary onClick={() => void refresh()}>Action receipts ({rows.length}) · GitHub writes = {rows.some(row => row.actualGitHubWrites === null) ? 'unknown' : rows.reduce((count, row) => count + (row.actualGitHubWrites ?? 0), 0)}</summary>{rows.map(receipt => <ActionReceiptView key={receipt.id} receipt={receipt} view={view} />)}</details>}
   </div>
 }
 function ActionReceiptView({ receipt, view }: { receipt: ActionReceipt; view: AskView }) {
@@ -93,7 +92,7 @@ function ActionReceiptView({ receipt, view }: { receipt: ActionReceipt; view: As
   const subject = { target, label: `Action receipt · ${receipt.actionId} · ${receipt.outcome}`, view }
   return <AskSurface as="section" subject={subject} tabIndex={-1} data-action-receipt={receipt.id} data-ask-field="receipt" className="action-receipt">
     <strong>{receipt.outcome === 'simulated' ? 'Simulated' : receipt.outcome} · {receipt.actionId}</strong> <AskCardAction subject={subject} icon />
-    <p>{receipt.intendedEffect}<br />{receipt.result}</p><p>Actor {receipt.actor} · {receipt.version} · {receipt.credentialProfile} · actual GitHub writes = 0</p>
+    <p>{receipt.intendedEffect}<br />{receipt.result}</p><p>Actor {receipt.actor} · {receipt.version} · {receipt.credentialProfile} · actual GitHub writes = {receipt.actualGitHubWrites ?? 'unknown'}</p>
     {receipt.reasons.map(reason => <p key={reason}>{reason}</p>)}<a href={receipt.captured.url} target="_blank" rel="noreferrer">Open exact PR ↗</a>
     <details><summary>Inspect complete receipt</summary><pre>{JSON.stringify(receipt, null, 2)}</pre></details>
   </AskSurface>

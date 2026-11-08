@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { parsePullUrl } from '../fleet/attention'
+import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
 
 export interface PullReadiness {
   status: 'fresh' | 'stale' | 'unknown'
@@ -14,10 +15,27 @@ export interface PullReadiness {
 }
 const exec = promisify(execFile)
 
-/** gh-axi's projected scalar response avoids retrieving bodies/reviews/transcripts.
+/** CLI scalar projections avoid retrieving bodies/reviews/transcripts; live mode
+ * normalizes broker JSON to the Queue and Releases scalar contracts.
  * Reject unsupported output as unknown rather than mistaking it for green checks.
  */
 export async function readGithubScalars(path: string, projection: string): Promise<Record<string, unknown>> {
+  if (liveActionsEnabled()) {
+    const raw = await liveReaderJson(path) as Record<string, unknown>
+    if (/\/pulls\/\d+$/.test(path)) return {
+      state: raw.state, merged: raw.merged, draft: raw.draft,
+      head: (raw.head as { sha: string })?.sha, mergeable: raw.mergeable, mergeable_state: raw.mergeable_state,
+      title: raw.title, merged_at: raw.merged_at, merge_commit_sha: raw.merge_commit_sha,
+      head_sha: (raw.head as { sha: string })?.sha, base_ref: (raw.base as { ref: string })?.ref,
+    }
+    if (/\/check-runs\?/.test(path)) {
+      const checks = raw.check_runs as Array<{ status: string; conclusion: string }>
+      return { total: raw.total_count, returned: checks.length, pending: checks.filter(row => row.status !== 'completed').length,
+        failed: checks.filter(row => row.status === 'completed' && !['success', 'neutral', 'skipped'].includes(row.conclusion)).length }
+    }
+    if (/\/status\?/.test(path)) return { total: raw.total_count, state: raw.state }
+    throw new Error('Scalar Reader operation outside PR evidence scope')
+  }
   const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection], { timeout: 5_000, maxBuffer: 64 * 1024 })
   return Object.fromEntries(stdout.trim().split('\n').map(line => {
     const match = /^([a-z_]+): (.*)$/.exec(line)
@@ -104,4 +122,3 @@ export class QueuePullReader {
     return value
   }
 }
-

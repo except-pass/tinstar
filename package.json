@@ -7,7 +7,8 @@
   "description": "A visual cockpit for a First Mate worker fleet.",
   "type": "module",
   "bin": {
-    "tinstar": "bin/tinstar.js"
+    "tinstar": "bin/tinstar.js",
+    "tinstar-action-broker": "bin/tinstar-action-broker.js"
   },
   "files": [
     "bin/",
@@ -41,7 +42,7 @@
     "dev": "concurrently --kill-others -n be,fe -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:observability": "docker compose -f observability/docker-compose.yml up",
     "build": "tsc -b && vite build",
-    "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build:server": "npx esbuild src/server/standalone.ts src/server/actions/brokerMain.ts --entry-names=[name] --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
     "stable": "npm run build:all && node bin/tinstar.js --no-open",

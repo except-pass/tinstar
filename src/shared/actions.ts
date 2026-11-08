@@ -49,14 +49,15 @@ export const operationSchema = z.discriminatedUnion('kind', [
 ])
 export type ActionOperation = z.infer<typeof operationSchema>
 export interface ActionReceipt {
+  execution?: 'live' | 'simulation';
   id: string; runId: string; idempotencyKey: string; actor: string; actionId: string; version: string; digest: string;
   mode: 'direct' | 'coordinated'; view: AskView; captured: ActionSelection; live: ActionSnapshot | null;
   declared: Capability[]; granted: Capability[]; attempted: string[]; exercised: Capability[];
   credentialProfile: 'Reader' | 'Repair' | 'Merge'; coordinator: string; worker: string;
   plan: string[]; order: number; startedAt: string; finishedAt: string | null;
-  intendedEffect: string; operation: ActionOperation | null; outcome: 'intent' | 'simulated' | 'skipped' | 'cancelled' | 'unknown';
+  intendedEffect: string; operation: ActionOperation | null; outcome: 'intent' | 'simulated' | 'skipped' | 'cancelled' | 'unknown' | 'accepted' | 'completed';
   reasons: string[]; checkPolicyVersion: string | null; checkEvidence: CheckEvidence[];
   providerRequest: { method: string; path: string; body: Record<string, unknown>; ruleScope?: { id: 6108448; mode: 'pull_request' } } | null;
-  actualGitHubWrites: 0; resultingSha: null; verification: 'not-performed'; result: string;
+  actualGitHubWrites: number | null; resultingSha: null; verification: 'not-performed' | 'accepted'; result: string;
 }
-export interface ActionCatalog { installed: InstalledAction[]; examples: ActionCandidate[]; runner: string; policy: CheckPolicy; receipts: ActionReceipt[] }
+export interface ActionCatalog { installed: InstalledAction[]; examples: ActionCandidate[]; runner: string; policy: CheckPolicy; receipts: ActionReceipt[]; live?: boolean }

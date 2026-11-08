@@ -14,6 +14,7 @@ export interface PullRepository {
 }
 export interface PullsRead {
   account?: string
+  authenticatedActor?: string; credentialProfile?: string
   pulls: PullSummary[]; repositories: PullRepository[]; warnings: string[]; associationsComplete: boolean
 }
 export interface PullDetail {

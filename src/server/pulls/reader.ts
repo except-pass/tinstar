@@ -3,6 +3,7 @@ import type { PullDetail, PullRepository, PullSummary } from '../../shared/pulls
 import { releasePull, type PullIdentity } from '../../shared/releases'
 import { QueuePullReader } from '../reconciliation/queuePulls'
 import { githubJson } from './github'
+import { liveActionsEnabled, liveReaderIdentity } from '../actions/liveClient'
 
 const listing = z.array(z.object({
   number: z.number().int().positive(), title: z.string(), html_url: z.string(),
@@ -13,7 +14,8 @@ const listing = z.array(z.object({
 const details = z.object({ head: z.object({ sha: z.string() }), state: z.string(), body: z.string().nullable(),
   additions: z.number().nonnegative(), deletions: z.number().nonnegative(), changed_files: z.number().nonnegative() })
 const reviews = z.array(z.object({ user: z.object({ login: z.string() }).nullable(), state: z.string(), html_url: z.string() }))
-export interface PullScope { account: string; owners: string[]; associated: PullIdentity[] }
+export interface PullScope { account: string; owners: string[]; associated: PullIdentity[]; repositories?: string[]; authenticatedActor?: string; credentialProfile?: string }
+type PullActor = Omit<PullScope, 'associated'>
 type RepoRead = { pulls: Omit<PullSummary, 'links'>[]; coverage: PullRepository }
 
 /** Demand cache, shared across clients. Four repo reads at once, bounded pages;
@@ -23,12 +25,17 @@ export class PullReader {
   private pending = new Map<string, Promise<RepoRead>>()
   private detailCache = new Map<string, { until: number; data: PullDetail }>()
   private detailPending = new Map<string, Promise<PullDetail>>()
-  private identityCache?: { until: number; data: Pick<PullScope, 'account' | 'owners'> }
-  private identityPending?: Promise<Pick<PullScope, 'account' | 'owners'>>
+  private identityCache?: { until: number; data: PullActor }
+  private identityPending?: Promise<PullActor>
   constructor(private read = githubJson, private now = Date.now, private readiness = new QueuePullReader()) {}
-  async identity(): Promise<Pick<PullScope, 'account' | 'owners'>> {
+  async identity(): Promise<PullActor> {
     if (this.identityCache && this.identityCache.until > this.now()) return this.identityCache.data
     if (!this.identityPending) this.identityPending = (async () => {
+      if (this.read === githubJson && liveActionsEnabled()) {
+        const data = await liveReaderIdentity()
+        this.identityCache = { until: this.now() + 60_000, data }
+        return data
+      }
       const user = z.object({ login: z.string().min(1) }).parse(await this.read('/user', '{login}'))
       const owners = [user.login.toLowerCase()]
       for (let page = 1; ; page++) {
@@ -46,7 +53,7 @@ export class PullReader {
     const result: RepoRead[] = []
     for (let index = 0; index < repositories.length; index += 4) {
       result.push(...await Promise.all(repositories.slice(index, index + 4).map(repository => {
-        const owned = scope.owners.includes(repository.split('/')[0]!)
+        const owned = scope.repositories ? scope.repositories.includes(repository) : scope.owners.includes(repository.split('/')[0]!)
         const associated = scope.associated.filter(pull => pull.repository === repository)
         // Never reuse a broader inventory after identity or explicit links change.
         const key = JSON.stringify([repository, scope.account, owned, owned ? [] : [...new Set(associated.map(pull => pull.number))].sort((a, b) => a - b)])
