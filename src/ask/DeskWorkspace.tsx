@@ -60,9 +60,9 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     if (!origin) { handledOrigin.current = null; return }
     const target = overviewTarget(origin.target)
     if (!overviewActive || !floor.scene || origin.section !== 'overview' || !target || handledOrigin.current === origin) return
+    if (views?.restoration.snapshot?.section === 'overview') { handledOrigin.current = origin; return }
+    if (!search.choose(target)) return
     handledOrigin.current = origin
-    if (views?.restoration.snapshot?.section === 'overview') return
-    search.choose(target)
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
@@ -74,7 +74,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
       else if (destination.section === 'overview') {
         const target = overviewTarget(destination.target)
         if (!overviewActive) onOverview()
-        if (target) { search.choose(target); presentation.send({ type: 'flash', targets: [target] }) }
+        if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
       <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} onWorkers={onWorkers} onReceipts={onReceipts} workers={workers} messages={messages} submit={submit} /></div>

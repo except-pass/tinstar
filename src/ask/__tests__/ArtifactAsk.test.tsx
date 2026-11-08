@@ -333,3 +333,94 @@ it.each([false, true])('handles a deferred Overview origin deep link with newer 
     expect(view.container.querySelector(`.ov-card[data-entity-id="${target.id}"].flashed`)).toBeTruthy()
   }
 })
+
+
+it.each(['Clear', 'Escape'])('recovers the matching Overview baseline after Back twice and Forward using %s', async method => {
+  history.replaceState(null, '', '/')
+  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  records = [askItemSchema.parse({ ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Focus Overview', context: {
+    target, view: { scene: 'overview' }, anchor: { kind: 'work', page_id: target.id, label: 'Source', url: null, observed_at: date }, return_to: { section: 'overview', target },
+  } }), { ...item({ kind: 'pull', id: pull.id }, 'pulls'), question: 'Visit PR' }]
+  const view = render(<App />)
+  const before = [...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Focus Overview/ }))
+  await waitFor(() => expect(history.state?.tinstarWorkspace?.view?.recovery).toBeTruthy())
+  expect(history.state.tinstarWorkspace.view.recovery.recovery).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: /New answer.*Visit PR/ }))
+  await screen.findByRole('region', { name: 'Pull requests' })
+  const pop = async (direction: 'back' | 'forward') => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history[direction](); await popped })
+  }
+  await pop('back'); await pop('back'); await pop('forward')
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  if (method === 'Clear') fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+  else fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  expect([...view.container.querySelectorAll('.ov-card')].map(row => row.getAttribute('data-entity-id'))).toEqual(before)
+})
+
+it.each(['Clear', 'Escape'])('recovers a direct Overview origin using %s', method => {
+  const scene = fixtureScene(), target = { kind: 'card' as const, id: scene.cards[0]!.id }
+  history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
+  const view = render(<App />)
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  if (method === 'Clear') fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+  else fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  expect(view.container.querySelectorAll('.ov-card').length).toBeGreaterThan(1)
+})
+
+it.each((['card', 'execution', 'claim'] as const).flatMap(kind => [false, true].map(cancel => ({ kind, cancel }))))('resolves a fresh $kind origin from a non-null older scene, cancellation=$cancel', async ({ kind, cancel }) => {
+  const scene = fixtureScene()
+  const id = kind === 'card' ? scene.cards[0]!.id : kind === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id
+  const target = { kind, id }
+  fixture.scene = { ...scene, cards: kind === 'card' ? scene.cards.filter(row => row.id !== id) : scene.cards,
+    executions: kind === 'execution' ? scene.executions.filter(row => row.id !== id) : scene.executions,
+    claims: kind === 'claim' ? scene.claims.filter(row => row.id !== id) : scene.claims, claimHistory: [] }
+  history.replaceState(null, '', `/?origin=${encodeURIComponent(JSON.stringify({ section: 'overview', target }))}`)
+  const view = render(<App />)
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  if (cancel) fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: /^Releases/ }))
+  fixture.scene = scene
+  view.rerender(<App />)
+  if (cancel) {
+    expect(location.search).toContain('view=releases')
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: 'Overview' }))
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+    return
+  }
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  expect(view.container.querySelector('.flashed')).toBeTruthy()
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: /^Releases/ }))
+  fixture.scene = { ...scene }
+  view.rerender(<App />)
+  expect(location.search).toContain('view=releases')
+})
+
+it('keeps PR query, sort and scroll edits made after Back through Forward and Back', async () => {
+  records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
+  render(<App />)
+  const query = await screen.findByRole('textbox', { name: 'Find PRs' })
+  fireEvent.change(query, { target: { value: 'owner' } })
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
+  await waitFor(() => expect(location.search).toContain('view=releases'))
+  const pop = async (direction: 'back' | 'forward') => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    await act(async () => { history[direction](); await popped })
+  }
+  await pop('back')
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Find PRs' }), { target: { value: 'artifact' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Author', exact: true }))
+  const viewport = screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' })
+  viewport.scrollTop = 175; viewport.scrollLeft = 80; fireEvent.scroll(viewport)
+  await waitFor(() => {
+    expect(history.state.tinstarWorkspace.view.query).toBe('artifact')
+    expect(history.state.tinstarWorkspace.view.position.left).toBe(80)
+  })
+  await pop('forward'); await pop('back')
+  expect(await screen.findByRole('textbox', { name: 'Find PRs' })).toHaveValue('artifact')
+  expect(screen.getByRole('button', { name: 'Author ↑' })).toBeVisible()
+  await waitFor(() => expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollTop).toBe(175))
+  expect(screen.getByRole('region', { name: 'PR table, scroll horizontally for all columns' }).scrollLeft).toBe(80)
+})

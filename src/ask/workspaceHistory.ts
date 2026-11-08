@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 type Section = 'overview' | 'pulls' | 'releases'
 interface Snapshot { section: Section; view: unknown }
@@ -14,18 +14,30 @@ export function useWorkspaceHistory(section: Section | null) {
     adapters.current.set(key, adapter)
     return () => { if (adapters.current.get(key) === adapter) adapters.current.delete(key) }
   }, [])
+  const frame = useRef<number | null>(null)
+  const cancelCapture = useCallback(() => { if (frame.current !== null) cancelAnimationFrame(frame.current); frame.current = null }, [])
+  useEffect(() => cancelCapture, [cancelCapture])
   const capture = useCallback(() => {
+    cancelCapture()
     const key = active.current, adapter = key && adapters.current.get(key)
     if (!key || !adapter) return
     const view = adapter.capture(); saved.current.set(key, view)
-    try { history.replaceState({ ...history.state, tinstarWorkspace: { section: key, view } }, '', location.href) } catch { /* Restricted history still permits ordinary navigation. */ }
-  }, [])
+    try {
+      const snapshot = { section: key, view }
+      if (JSON.stringify(history.state?.tinstarWorkspace) !== JSON.stringify(snapshot)) history.replaceState({ ...history.state, tinstarWorkspace: snapshot }, '', location.href)
+    } catch { /* Restricted history still permits ordinary navigation. */ }
+  }, [cancelCapture])
+  const scheduleCapture = useCallback((key: Section) => {
+    if (active.current !== key || frame.current !== null) return
+    frame.current = requestAnimationFrame(() => { frame.current = null; if (active.current === key) capture() })
+  }, [capture])
   const pop = useCallback(() => {
+    cancelCapture()
     setCanBack(!!history.state?.tinstarAskReturn)
     setRestoration(previous => ({ revision: previous.revision + 1, snapshot: history.state?.tinstarWorkspace }))
-  }, [])
-  const navigated = useCallback(() => { setCanBack(!!history.state?.tinstarAskReturn); setRestoration(previous => ({ revision: previous.revision + 1, snapshot: undefined })) }, [])
-  return { register, capture, pop, navigated, restoration, canBack, back: () => history.back(), saved: (key: Section) => saved.current.get(key) }
+  }, [cancelCapture])
+  const navigated = useCallback(() => { cancelCapture(); setCanBack(!!history.state?.tinstarAskReturn); setRestoration(previous => ({ revision: previous.revision + 1, snapshot: undefined })) }, [cancelCapture])
+  return { register, capture, scheduleCapture, pop, navigated, restoration, canBack, back: () => history.back(), saved: (key: Section) => saved.current.get(key) }
 }
 export type WorkspaceHistory = ReturnType<typeof useWorkspaceHistory>
 
@@ -35,11 +47,19 @@ export function useViewSnapshot<T>(history: WorkspaceHistory | undefined, sectio
   const revision = useRef<number | null>(null)
   useLayoutEffect(() => history?.register(section, { capture: () => latest.current.capture() }), [history?.register, section])
   useLayoutEffect(() => {
-    if (!history || !ready || revision.current === history.restoration.revision) return
+    if (!history || !ready) return
+    if (revision.current === history.restoration.revision) { history.scheduleCapture(section); return }
     const entry = history.restoration.snapshot
     const view = entry?.section === section ? entry.view : revision.current === null ? history.saved(section) : undefined
     revision.current = history.restoration.revision
     if (view !== undefined) latest.current.restore(view as T)
+    else history.scheduleCapture(section)
+  }, [history, section, ready])
+  useEffect(() => {
+    if (!history || !ready) return
+    const capturePosition = () => history.scheduleCapture(section)
+    document.addEventListener('scroll', capturePosition, true)
+    return () => document.removeEventListener('scroll', capturePosition, true)
   }, [history, section, ready])
 }
 
