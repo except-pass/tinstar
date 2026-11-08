@@ -33,10 +33,16 @@ shared lock implementation is reused for cross-view/process exclusion. Unknown
 dependencies serialize with an explanation. Selected exact base-ref/base-SHA dependencies
 are ordered before their children; no coordinator dispatch is invented.
 
-Admin Merge is disabled for all current workloads because the check inventory is
-incomplete. The versioned candidate matrix and recorded real failures live in
-[data/tinstar-pr-ops-actions](../data/tinstar-pr-ops-actions). Names inferred from source
-but not corroborated by checks are marked as such and never authorize a merge.
+Admin Merge simulation uses the versioned
+[cmsandbox check inventory](../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json),
+which owns the workflow provenance, exact check identities and per-workload completion
+status. The shared check-policy boundary refuses every Admin Merge while any workload
+is incomplete, including completed workloads with green checks. The installed button
+also stays disabled. Per-workload acceptance is exercised only with disposable
+[test fixture policies](../src/server/actions/__tests__/broker.test.ts).
+Names that were only derived never authorize a merge. Live execution still performs
+no GitHub writes. Recorded failures live in
+[data/tinstar-pr-ops-actions](../data/tinstar-pr-ops-actions).
 REST review summaries cannot prove resolved threads, so current live snapshots retain
 unknown review-thread/rule evidence. These are visible technical holds, with no hidden
 switch that enables writes. A future live adapter and isolated runner require their

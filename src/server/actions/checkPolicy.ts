@@ -1,4 +1,4 @@
-import policyData from '../../../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v1.json'
+import policyData from '../../../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json'
 import type { ActionSnapshot, CheckPolicy } from '../../shared/actions'
 
 export const cmsandboxCheckPolicy: CheckPolicy = policyData
@@ -6,6 +6,7 @@ export const cmsandboxCheckPolicy: CheckPolicy = policyData
  * Retain all matching observations: a passing retry cannot hide a failed observation. */
 export function validateChecks(snapshot: ActionSnapshot, policy: CheckPolicy): string[] {
   const reasons: string[] = []
+  if (policy.workloads.some(workload => !workload.complete)) reasons.push(`Admin Merge disabled: incomplete check inventory ${policy.version}`)
   if (policy.repository !== snapshot.repository || !policy.version || !policy.common.length || !policy.workloads.length) reasons.push('Nonempty versioned check inventory unavailable')
   if (!snapshot.pathsComplete || !snapshot.changedPaths.length) reasons.push('Complete changed-path inventory required')
   const matching = policy.workloads.filter(workload => snapshot.changedPaths.some(path => workload.prefixes.some(prefix => path.startsWith(prefix)) && !workload.excludedPrefixes.some(prefix => path.startsWith(prefix))))

@@ -5,13 +5,12 @@ mint, GitHub mutation client or switch that enables real execution. None of the 
 below were executed. Firstmate must review the final safety-test evidence before the
 owner registers or installs Apps or adds any bypass actor.
 
-**Current technical hold:** `cmsandbox-check-policy.v1.json` has a nonempty candidate
-inventory, with exact name + publishing app identities and provenance, but no workload
-is marked complete. 145 workflows exist; the ten sampled PR heads do not establish
-all path/transitive workload requirements. Current reusable workflow names also differ
-from some recorded names. Consequently Admin Merge is disabled for all paths. Completing
-the inventory and obtaining a separately reviewed live broker/isolated runner are
-prerequisites. This is an evidence gap, not a request for a new product decision.
+**Current technical hold:** the
+[versioned cmsandbox check inventory](cmsandbox-check-policy.v2.json) remains incomplete.
+See [Installed PR actions](../../docs/pr-actions.md) for the shared broker refusal and
+simulation behavior. Completing the inventory and obtaining a separately reviewed
+live broker/isolated runner remain prerequisites. This is an evidence gap, not a
+request for a new product decision.
 
 ## Registration and installation — owner/admin only
 
