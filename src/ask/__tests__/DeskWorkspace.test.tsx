@@ -174,7 +174,7 @@ it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s ori
   source.queue = fixtureQueue()
   if (origin === 'execution' || origin === 'claim') {
     const scene = fixtureScene()
-    items[0].context.target = { kind: origin, id: origin === 'execution' ? scene.executions[0].id : scene.claims[0].id }
+    items[0]!.context.target = { kind: origin, id: origin === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id }
   }
   render(<NavigationShell />)
   await screen.findAllByText('Where is the evidence?')
@@ -182,7 +182,7 @@ it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s ori
   fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   const desk = screen.getByRole('dialog', { name: 'Your desk' })
   if (origin === 'queue') fireEvent.click(desk.querySelector<HTMLButtonElement>(`[data-desk-card-id="${fixtureId(1)}"]`)!)
-  else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0])
+  else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0]!)
   expect(desk).not.toBeVisible()
   expect(screen.getByRole('region', { name: 'Overview' })).toBeVisible()
   expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
@@ -210,7 +210,7 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
   expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
   fireEvent.click(within(nav).getByRole('button', { name: /^Releases/ }))
   expect(window.location.search).toContain('view=releases')
-  fireEvent.click(within(nav).getByRole('button', { name: 'Overview', exact: true }))
+  fireEvent.click(within(nav).getByRole('button', { name: 'Overview' }))
   expect(window.location.search).toBe('')
   expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
   if (method === 'repeated search') {
@@ -227,7 +227,7 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
     expect(go).not.toHaveBeenCalled()
   }
   expect(window.location.search).toBe('')
-  expect(within(nav).getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page')
+  expect(within(nav).getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
   expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
   expect([...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))).toEqual(before)
   expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollLeft).toBe(21)
