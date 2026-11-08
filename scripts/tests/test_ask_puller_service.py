@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 from unittest.mock import patch
 
@@ -113,6 +115,119 @@ with m.single_flight(pathlib.Path(sys.argv[2])) as acquired:
             self.assertEqual(service.tick(self.root, now=0), 'error')
         self.assertEqual(self.health()['last_error_class'], 'timeout')
         self.assertFalse(self.health()['in_progress'])
+
+    def test_deadline_during_later_capture_preserves_same_id_retry(self):
+        self.check_delivery_deadline('capture')
+
+    def test_deadline_during_mapped_reply_stops_later_posts(self):
+        self.check_delivery_deadline('reply')
+
+    def check_delivery_deadline(self, phase):
+        requests = [{'request_id': str(i), 'inbox_request_id': 'tinstar-ask-' + str(i),
+                     'body': 'fixture question'} for i in range(3)]
+        posts = []
+        acknowledged = set()
+        received_slow_reply = threading.Event()
+        release_reply = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def respond(self, data):
+                self.send_response(200)
+                self.end_headers()
+                try:
+                    self.wfile.write(json.dumps({'ok': True, 'data': data}).encode())
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def do_GET(self):
+                self.respond({'pending': [r for r in requests if r['request_id'] not in acknowledged]
+                              if phase == 'capture' else [],
+                              'tracked': [{'request_id': r['request_id'], 'note_id': 'note-' + r['request_id']}
+                                          for r in requests if phase == 'reply' or r['request_id'] in acknowledged]})
+
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                posts.append(payload)
+                if 'note' in payload:
+                    acknowledged.add(payload['request_id'])
+                if phase == 'reply' and payload['request_id'] == '1':
+                    received_slow_reply.set()
+                    release_reply.wait(5)
+                self.respond({})
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(release_reply.set)
+        self.settings['url'] = 'http://127.0.0.1:' + str(server.server_port)
+        credential = self.root / 'clavis'
+        credential.write_text('#!' + sys.executable + '\nprint("fixture-private-token")\n')
+        credential.chmod(0o700)
+        self.settings['clavis'] = str(credential)
+        service.write_json(self.root / 'ask-puller.json', self.settings)
+        script = self.home / 'bin' / 'fm-inbox.sh'
+        script.write_text('#!' + sys.executable + '\n' + """import json, os, pathlib, sys, time
+home = pathlib.Path(os.environ['FM_HOME'])
+if sys.argv[1] == 'note':
+    request_id = sys.argv[3]
+    with (home / 'calls.jsonl').open('a') as stream:
+        stream.write(json.dumps(request_id) + '\\n')
+    note_path = home / (request_id + '.json')
+    first = not note_path.exists()
+    note = {'saved': True, 'id': 'note-' + request_id.removeprefix('tinstar-ask-'), 'request_id': request_id}
+    note_path.write_text(json.dumps(note))
+    if first and request_id == 'tinstar-ask-1':
+        time.sleep(5)
+    print(json.dumps(note))
+else:
+    print((home / 'receipts.json').read_text())
+""")
+        script.chmod(0o700)
+        receipts = {'schema': 'fm-inbox-receipts.v1', 'pending': [], 'handled': [], 'omitted': []}
+        if phase == 'reply':
+            receipts['pending'] = [{'id': 'note-' + r['request_id'], 'request_id': r['inbox_request_id'],
+                                    'reply': {'body': 'fixture answer'}} for r in requests]
+        (self.home / 'receipts.json').write_text(json.dumps(receipts))
+        with patch.object(service, 'PASS_TIMEOUT', 1):
+            self.assertEqual(service.tick(self.root, now=100), 'error')
+        health = self.health()
+        self.assertEqual(health['last_error_class'], 'timeout')
+        self.assertEqual(health['error_polls'], 1)
+        self.assertEqual(health['consecutive_failures'], 1)
+        self.assertEqual(health['next_poll_at'], 160)
+        self.assertFalse(health['in_progress'])
+        self.assertNotIn('last_success_at', health)
+        self.assertEqual(health['work_polls'], 0)
+        self.assertEqual(health['noop_polls'], 0)
+        self.assertNotIn('fixture-private-token', json.dumps(health))
+        before = list(posts)
+        self.assertEqual(service.tick(self.root, now=159), 'backoff')
+        self.assertEqual(posts, before)
+        if phase == 'capture':
+            self.assertEqual([p['request_id'] for p in posts], ['0'])
+            self.assertTrue(all('error' not in p for p in posts))
+            calls = self.home / 'calls.jsonl'
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                             ['tinstar-ask-0', 'tinstar-ask-1'])
+            saved = (self.home / 'tinstar-ask-1.json').read_bytes()
+            self.assertEqual(service.tick(self.root, now=160), 'work')
+            self.assertEqual((self.home / 'tinstar-ask-1.json').read_bytes(), saved)
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                             ['tinstar-ask-0', 'tinstar-ask-1', 'tinstar-ask-1', 'tinstar-ask-2'])
+            self.assertEqual([p['request_id'] for p in posts], ['0', '1', '2'])
+            self.assertEqual(self.health()['last_success_at'], 160)
+            self.assertEqual(self.health()['consecutive_failures'], 0)
+        else:
+            self.assertTrue(received_slow_reply.is_set())
+            self.assertEqual([p['request_id'] for p in posts], ['0', '1'])
+            self.assertTrue(all('reply' in p for p in posts))
+            self.assertFalse((self.home / 'calls.jsonl').exists())
+        release_reply.set()
 
     def test_lifecycle_install_upgrade_disable_enable_restart_uninstall(self):
         (self.home / 'bin' / 'fm-inbox.sh').touch()

@@ -41,10 +41,14 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+class PassDeadlineError(Exception):
+    pass
+
+
 @contextmanager
 def deadline(seconds):
     def expired(signum, frame):
-        raise puller.PullerError('Poll deadline reached', 'timeout')
+        raise PassDeadlineError('Poll deadline reached')
     previous = signal.signal(signal.SIGALRM, expired)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
@@ -99,7 +103,7 @@ def tick(root, now=None):
             failures = health.get('consecutive_failures', 0) + 1
             delay = min(MAX_BACKOFF, INTERVAL * 2 ** min(failures - 1, 4))
             health.update(last_error_at=time.time() if now is None else now,
-                          last_error_class=error.code if isinstance(error, puller.PullerError) else 'local-state',
+                          last_error_class='timeout' if isinstance(error, PassDeadlineError) else error.code if isinstance(error, puller.PullerError) else 'local-state',
                           consecutive_failures=failures, next_poll_at=started + delay)
             health['error_polls'] = health.get('error_polls', 0) + 1
             outcome = 'error'
