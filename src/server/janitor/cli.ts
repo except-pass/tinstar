@@ -5,6 +5,7 @@ import type { SourceSnapshot } from '../reconciliation'
 import { notionPageId } from '../reconciliation/notion'
 import { auditCategories, type AuditContext } from '../../shared/janitor'
 import { JanitorAuditor } from './audit'
+import { runSemanticPilot, semanticClusters } from './semantic'
 import type { AuditInput, JanitorReport } from './report'
 
 const propertySchema = z.object({ id: z.string().nullable(), type: z.string().nullable(), value: z.unknown(), hasMore: z.boolean() }).passthrough()
@@ -45,9 +46,10 @@ export function auditSummary(report: JanitorReport) {
 
 export async function runJanitorCli(args: string[], stdout: (text: string) => void = text => process.stdout.write(text), fetcher: typeof fetch = fetch) {
   const { values } = parseArgs({ args, options: { server: { type: 'string' }, input: { type: 'string' }, format: { type: 'string', default: 'json' },
-    'save-input': { type: 'string' }, 'context-limit': { type: 'string', default: '12' }, 'context-card': { type: 'string', multiple: true }, at: { type: 'string' }, help: { type: 'boolean' } } })
+    'save-input': { type: 'string' }, semantic: { type: 'boolean' }, endpoint: { type: 'string' }, model: { type: 'string' },
+    'model-calls': { type: 'string' }, 'model-tokens': { type: 'string' }, 'model-time-ms': { type: 'string' }, 'model-timeout-ms': { type: 'string' }, 'busy-file': { type: 'string' }, 'context-limit': { type: 'string', default: '12' }, 'context-card': { type: 'string', multiple: true }, at: { type: 'string' }, help: { type: 'boolean' } } })
   if (values.help) {
-    stdout('Usage: npm run --silent janitor:report -- (--server URL | --input FILE) [--format json|summary] [--save-input FILE] [--at ISO_TIME] [--context-limit 0..40] [--context-card PAGE_ID ...]\nReads existing Tin Star sources and up to 12 candidate card contexts by default. Saved input replays offline. JSON is the default; no model, Desk item or Notion write.\n')
+    stdout('Usage: npm run --silent janitor:report -- (--server URL | --input FILE) [--format json|summary] [--save-input FILE] [--at ISO_TIME] [--context-limit 0..40] [--context-card PAGE_ID ...] [--semantic] [--endpoint PRIVATE_OLLAMA_ORIGIN] [--model NAME] [--model-calls N] [--model-tokens N] [--model-time-ms N] [--model-timeout-ms N] [--busy-file FILE]\nReads existing Tin Star sources and up to 12 candidate card contexts by default. Saved input replays offline. JSON is the default; no Desk item or Notion write. Opt-in --semantic adds bounded local-only proposals (defaults: 4 calls, 32000 conservative token budget, 120000 ms/run, 45000 ms/call). Set --busy-file to the operator reservation marker; a present marker defers inference. Cache: TINSTAR_CONFIG_HOME/janitor/semantic (default ~/.config/tinstar). Endpoint/model may also use TINSTAR_JANITOR_ENDPOINT/TINSTAR_JANITOR_MODEL. No hosted fallback.\n')
     return
   }
   if (!!values.server === !!values.input) throw new Error('Choose one source: --server URL or --input FILE (see --help)')
@@ -69,5 +71,12 @@ export async function runJanitorCli(args: string[], stdout: (text: string) => vo
       return result.success ? result.data as AuditContext : { outcome: 'unavailable', blocks: [], omissions: 'Unsupported card context response' }
     } : undefined })
   if (values['save-input']) await writeFile(values['save-input'], JSON.stringify(result.input, null, 2) + '\n', { mode: 0o600 })
-  stdout(values.format === 'summary' ? auditSummary(result.report) : JSON.stringify(result.report, null, 2) + '\n')
+  const budget = (value: string | undefined) => value === undefined ? undefined : Number(value)
+  const semantic = values.semantic ? await runSemanticPilot(semanticClusters(result.report, result.input), {
+    endpoint: values.endpoint, model: values.model, maxCalls: budget(values['model-calls']), maxTokens: budget(values['model-tokens']),
+    maxRunMs: budget(values['model-time-ms']), timeoutMs: budget(values['model-timeout-ms']), busyFile: values['busy-file'],
+  }, fetcher) : undefined
+  stdout(values.format === 'summary' ? auditSummary(result.report) + (semantic
+    ? `Local semantic: ${semantic.metrics.modelCalls} calls, ${semantic.metrics.cacheHits} cache hits, ${semantic.metrics.abstentions} abstentions; ${semantic.warnings.join('; ')}\n`
+    : '') : JSON.stringify({ ...result.report, ...(semantic ? { semantic } : {}) }, null, 2) + '\n')
 }
