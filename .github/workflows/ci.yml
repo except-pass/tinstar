@@ -33,6 +33,18 @@ jobs:
       - name: Install live test dependencies
         run: sudo apt-get update && sudo apt-get install -y ttyd tmux nats-server bubblewrap
 
+      # Noble restricts unprivileged user namespaces even with bwrap installed.
+      # Allow only bwrap to create them; keep the host-wide restriction enabled.
+      - name: Permit bubblewrap isolation through AppArmor
+        run: |
+          sudo apparmor_parser -r <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile tinstar-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+
       - name: Install dependencies
         run: npm ci
 
