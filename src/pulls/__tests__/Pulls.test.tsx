@@ -102,7 +102,7 @@ it.each([
   ['current', 'conflicting', 'Conflicting / unknown', 'failed'],
   ['current', 'unverified', 'Suggested / unverified', 'failed'],
 ] as const)('labels %s/%s claim evidence as %s work', async (state, verification, label, condition) => {
-  const scene = fixtureScene({ now: clock.now })
+  const scene: FloorScene = fixtureScene({ now: clock.now })
   const worker = scene.executions[0]!
   worker.source.pr = { url: pulls[0]!.url, head: fileData.head, source: 'task metadata' }
   const claim = scene.claims.find(claim => claim.executionId === worker.id)!
