@@ -189,7 +189,13 @@ describe('compact search palette and temporary graph focus', () => {
     expect(go.mock.calls).toEqual([[-1], [-1]])
   })
 
-  it('restores Detailed collapsed state and density, and handles mobile Back in two levels', () => {
+  it('restores Detailed collapsed state and density, and handles mobile Back in two levels', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    window.history.replaceState(null, '', window.location.href)
+    const back = async () => {
+      const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+      await act(async () => { window.history.back(); await popped })
+    }
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
     fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
@@ -199,10 +205,10 @@ describe('compact search palette and temporary graph focus', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('Release'); fireEvent.keyDown(input(), { key: 'Enter' })
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
-    act(() => window.dispatchEvent(new PopStateEvent('popstate')))
+    await back()
     expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'true')
-    act(() => window.dispatchEvent(new PopStateEvent('popstate')))
+    await back()
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'false')
     expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'detailed')
   })

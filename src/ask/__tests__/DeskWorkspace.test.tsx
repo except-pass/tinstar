@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useState } from 'react'
+import App from '../../App'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace } from '../DeskWorkspace'
 import { AskCardAction } from '../Ask'
@@ -15,6 +16,7 @@ const read = vi.fn()
 const record = () => askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'Where is the evidence?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null })
 let items: ReturnType<typeof record>[]
 beforeEach(() => {
+  window.history.replaceState(null, '', '/')
   Element.prototype.scrollIntoView = vi.fn()
   localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -24,8 +26,12 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false }
   read.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : null
-    const data = url === '/api/ask/requests' ? items : url === '/api/reconciliation/ui' ? body.type === 'register' ? { scene_id: 'test', key: 'secret' } : { commands: [] } : {}
-    return new Response(JSON.stringify({ ok: true, data }))
+    const data = url === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
+      : url === '/api/fleet/messages' ? []
+      : url === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
+      : url === '/api/quota' ? { providers: [], checkedAt: null, fetchedAt: null, commandError: null }
+      : url === '/api/ask/requests' ? items : url === '/api/reconciliation/ui' ? body.type === 'register' ? { scene_id: 'test', key: 'secret' } : { commands: [] } : {}
+    return new Response(JSON.stringify(url === '/api/quota' ? data : { ok: true, data }))
   })
   vi.stubGlobal('fetch', read)
 })
@@ -183,4 +189,50 @@ it.each(['queue', 'ask', 'execution', 'claim'])('dismisses mobile Desk on %s ori
   fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(desk)
   expect(within(desk).getAllByText('Where is the evidence?')).toHaveLength(2)
+})
+
+it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Overview through App history using %s', async method => {
+  Object.defineProperty(window, 'innerWidth', { value: 390 })
+  const go = vi.spyOn(window.history, 'go')
+  const view = render(<App />)
+  await screen.findAllByText('Where is the evidence?')
+  const nav = screen.getByRole('navigation', { name: 'Activity' })
+  const before = [...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))
+  const viewport = view.container.querySelector('.ov-canvas')!.parentElement!
+  viewport.scrollLeft = 21
+  const choose = (query: string) => {
+    fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+    const input = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
+    fireEvent.change(input, { target: { value: query } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+  }
+  choose('Roadmap: planned integration')
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  fireEvent.click(within(nav).getByRole('button', { name: /^Releases/ }))
+  expect(window.location.search).toContain('view=releases')
+  fireEvent.click(within(nav).getByRole('button', { name: 'Overview', exact: true }))
+  expect(window.location.search).toBe('')
+  expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
+  if (method === 'repeated search') {
+    choose('Build live reconciliation')
+    expect(go).not.toHaveBeenCalled()
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    await act(async () => { await popped })
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-1)
+  } else {
+    if (method === 'Clear') fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    else fireEvent.keyDown(window, { key: 'Escape' })
+    expect(go).not.toHaveBeenCalled()
+  }
+  expect(window.location.search).toBe('')
+  expect(within(nav).getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page')
+  expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  expect([...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))).toEqual(before)
+  expect(view.container.querySelector('.ov-canvas')!.parentElement!.scrollLeft).toBe(21)
+  const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+  await act(async () => { window.history.back(); await popped })
+  expect(window.location.search).toContain('view=releases')
+  expect(within(nav).getByRole('button', { name: /^Releases/ })).toHaveAttribute('aria-current', 'page')
 })

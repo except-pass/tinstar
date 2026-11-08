@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import { directNeighbors, emptySearch } from '../shared/smartSearch'
 import { semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
@@ -25,11 +25,21 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
 }) {
   const [open, setOpen] = useState(false)
   const snapshot = useRef<Snapshot | null>(null), restorePending = useRef<Snapshot | null>(null)
+  const [historySession] = useState(() => crypto.randomUUID())
   const historyEntries = useRef(0), ignorePop = useRef(false)
+  const ownedHistoryDepth = useCallback(() => {
+    const entry = window.history.state?.tinstarSearch
+    return entry?.session === historySession ? entry.depth as number : 0
+  }, [historySession])
+  useLayoutEffect(() => {
+    historyEntries.current = active ? ownedHistoryDepth() : 0
+  }, [active, ownedHistoryDepth])
   const leaveHistory = (count: number) => {
-    if (!count) return
-    historyEntries.current = Math.max(0, historyEntries.current - count)
-    ignorePop.current = true; window.history.go(-count)
+    const depth = ownedHistoryDepth()
+    const steps = Math.min(count, depth)
+    historyEntries.current = depth - steps
+    if (!steps) return
+    ignorePop.current = true; window.history.go(-steps)
   }
   const begin = () => {
     if (!snapshot.current) {
@@ -42,17 +52,18 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     if (!open && window.matchMedia?.('(max-width:850px)').matches) {
       // A same-document entry lets mobile Back dismiss the transient layer.
       // Restricted history degrades to the visible close control and Escape.
-      try { window.history.pushState({ ...window.history.state, tinstarSearch: true }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
+      historyEntries.current = ownedHistoryDepth()
+      try { window.history.pushState({ ...window.history.state, tinstarSearch: { session: historySession, depth: historyEntries.current + 1 } }, '', window.location.href); historyEntries.current++ } catch { /* navigation remains usable */ }
     }
     setOpen(true)
   }
   const dismiss = (back = true) => {
-    if (back) leaveHistory(Math.min(1, historyEntries.current))
+    if (back) leaveHistory(Math.min(1, ownedHistoryDepth()))
     setOpen(false)
     if (!state.searchFocus) snapshot.current = null
   }
   const restore = (clear = false, back = true) => {
-    if (back) leaveHistory(historyEntries.current)
+    if (back) leaveHistory(ownedHistoryDepth())
     const saved = snapshot.current
     if (saved) {
       const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
@@ -94,9 +105,10 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
   })
   const onPop = useRef<() => void>(() => {})
   onPop.current = () => {
+    const previousDepth = historyEntries.current
+    historyEntries.current = ownedHistoryDepth()
     if (ignorePop.current) { ignorePop.current = false; return }
-    if (!active || !snapshot.current) return
-    historyEntries.current = Math.max(0, historyEntries.current - 1)
+    if (!active || !snapshot.current || previousDepth <= historyEntries.current) return
     if (open) dismiss(false); else restore(false, false)
   }
   useEffect(() => {
@@ -107,7 +119,7 @@ export function useSearchSession({ active, scene, state, send, canvas, root, roo
     return () => window.removeEventListener('popstate', back)
   }, [])
   return { dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
-    leaveHistory(Math.max(0, historyEntries.current - 1))
+    leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
     send({ type: 'reveal-search', target, targets }); setRoots(targets)
     const cluster = scene ? directNeighbors(scene, targets) : new Set([semanticId(target)])
     setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)
