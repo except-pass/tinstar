@@ -12,7 +12,7 @@ card prose. Card links open the real card in Tin Star (`?card=<page-id>`).
 
 The reader imports explicit GitHub PR URLs in active cards' `Link`, `GitHub`,
 `GitHub PRs` and `Pull requests` properties. It does not guess links from titles,
-worker assignments or prose. Done/archived historical cards are not mass imported.
+similar worker assignments or prose. The shared join also accepts confirmed, current, explicit Notion First Mate tasks claims for exact worker executions with registered PRs; unverified, conflicting and historical claims do not create active edges. PR Operations uses this same association projection (see `src/shared/releases.ts`). Done/archived historical cards are not mass imported.
 A missing PR declaration on a Waiting for Prod Release card appears under
 Exceptions, outside the PR table.
 
@@ -20,7 +20,7 @@ Additional many-to-many associations and local exclusions are audited in
 `<getConfigRoot()>/releases/associations.json`. The append-only event history
 records a retry ID, PR URL, card ID, link/unlink, authenticated owner, UTC time
 and reason. Unlink locally excludes that edge while retaining its Notion source
-and audit history; it does not edit Notion. A later link can restore it. An
+and audit history; it does not edit Notion. A later link can restore it. These manual events apply after automatic associations. An
 unreadable/corrupt audit is reported visibly and never overwritten as an empty
 store. Local audit persistence uses atomic replacement under the existing single
 server/config-root boundary. There is no shared database or new service.
@@ -40,7 +40,7 @@ no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.
 Failures retain visibly stale facts. The navigation badge and page queue count
 are unknown (`?`) while any association's GitHub state is unresolved, the Notion
-association source is stale, partial or unavailable, or the local association
+association source or worker PR source is stale, partial or unavailable, or the local association
 audit is unreadable. Collection-level source warnings remain visible even when
 no PRs are known; an incomplete observation never becomes a complete zero.
 The eventual count is unique merged PRs awaiting
