@@ -888,12 +888,12 @@ describe('spring-loaded Ask and Inspector rail', () => {
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
     const overlay = document.querySelector<HTMLElement>('.swipe-rail')!
     visual.offsetLeft = 200; visual.offsetTop = 300; visual.width = 180
-    fireEvent(visual, new Event('scroll'))
+    act(() => { visual.dispatchEvent(new Event('scroll')) })
     expect(Number.parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(208)
     expect(Number.parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(308)
     expect(Number.parseFloat(overlay.style.width)).toBe(164)
     visual.width = 390
-    fireEvent(visual, new Event('resize'))
+    act(() => { visual.dispatchEvent(new Event('resize')) })
     expect(Number.parseFloat(overlay.style.width)).toBe(220)
   })
 
