@@ -73,16 +73,50 @@ export async function toolsList(url, authorization) {
   } while (cursor)
   return tools
 }
+// Only messages constructed here may be printed; SDK/network errors can contain secrets.
+class CatalogMismatch extends Error {}
 export function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
   return value
 }
+function schemaMeaning(schema) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => {
+    // Normalize only schema sets. Defaults, examples, const values and tuple
+    // schemas are data: their array ordering must retain its meaning.
+    if (['required', 'enum', 'type', 'allOf', 'anyOf', 'oneOf'].includes(key) && Array.isArray(value)) {
+      const items = value.map(item => ['allOf', 'anyOf', 'oneOf'].includes(key) ? schemaMeaning(item) : canonical(item))
+      return [key, items.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]
+    }
+    if (['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'].includes(key) && value && typeof value === 'object') {
+      return [key, Object.fromEntries(Object.entries(value).map(([name, child]) => [name, schemaMeaning(child)]))]
+    }
+    if (['items', 'prefixItems', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties', 'contains', 'not', 'if', 'then', 'else', 'propertyNames', 'contentSchema'].includes(key)) {
+      return [key, Array.isArray(value) ? value.map(schemaMeaning) : schemaMeaning(value)]
+    }
+    return [key, value]
+  }))
+}
+const toolMeaning = tool => canonical({ ...tool,
+  ...(tool.inputSchema === undefined ? {} : { inputSchema: schemaMeaning(tool.inputSchema) }),
+  ...(tool.outputSchema === undefined ? {} : { outputSchema: schemaMeaning(tool.outputSchema) }),
+})
 export function compareCatalogs(facade, target, approved) {
   const names = facade.map(tool => tool.name).sort()
-  if (!approved.length || new Set(names).size !== names.length || JSON.stringify(names) !== JSON.stringify([...approved].sort())) throw new Error('Facade differs from approved tools')
-  const normalize = tools => canonical([...tools].sort((a, b) => a.name.localeCompare(b.name)))
-  if (JSON.stringify(normalize(facade)) !== JSON.stringify(normalize(target))) throw new Error('Tunnel target differs from facade catalog')
+  const missing = approved.filter(name => !names.includes(name)).sort()
+  const added = names.filter(name => !approved.includes(name))
+  const duplicates = names.filter((name, index) => names.indexOf(name) !== index)
+  const approvedDuplicates = approved.filter((name, index) => approved.indexOf(name) !== index)
+  if (!approved.length || missing.length || added.length || duplicates.length || approvedDuplicates.length) {
+    throw new CatalogMismatch(`Facade differs from approved tools: missing=${JSON.stringify(missing)}, added=${JSON.stringify(added)}, duplicate=${JSON.stringify(duplicates)}, approved-duplicate=${JSON.stringify(approvedDuplicates)}`)
+  }
+  const normalize = tools => [...tools].sort((a, b) => a.name.localeCompare(b.name)).map(toolMeaning)
+  if (JSON.stringify(normalize(facade)) !== JSON.stringify(normalize(target))) {
+    const targetNames = target.map(tool => tool.name)
+    const changed = facade.filter(tool => target.some(other => other.name === tool.name && JSON.stringify(toolMeaning(tool)) !== JSON.stringify(toolMeaning(other)))).map(tool => tool.name)
+    throw new CatalogMismatch(`Tunnel target differs from facade catalog: missing=${JSON.stringify(names.filter(name => !targetNames.includes(name)))}, added=${JSON.stringify(targetNames.filter(name => !names.includes(name)))}, changed=${JSON.stringify(changed)}, duplicate=${JSON.stringify(targetNames.filter((name, index) => targetNames.indexOf(name) !== index))}`)
+  }
 }
 export function publicationEvidence(status, metrics, facadeStartedAt, targetUrl) {
   const facadeStart = Date.parse(facadeStartedAt), tunnelStart = Date.parse(status.started_at)
@@ -131,14 +165,16 @@ async function main() {
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
       approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE ?? fileURLToPath(new URL('./approved-tools.json', import.meta.url)), facadeStartedAt })
         break
-      } catch {
+      } catch (error) {
+        if (error instanceof CatalogMismatch) throw error
         if (Date.now() >= deadline) throw new Error('MCP startup checks unavailable')
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
     console.log('MCP smoke passed; ready, approved target catalog matches facade, fresh startup poll verified')
-  } catch {
+  } catch (error) {
     console.error(`${phase} post-deploy smoke failed (credentials and response bodies withheld)`)
+    if (error instanceof CatalogMismatch) console.error(error.message)
     process.exitCode = 1
   }
 }

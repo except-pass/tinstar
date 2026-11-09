@@ -15,7 +15,7 @@ const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: '
 const script = resolve('scripts/deploy/floor-deploy.sh')
 // A deploy runs this suite with its own exported configuration. Never let those
 // unit names, live paths/URLs or shell/Node startup hooks leak into fixtures.
-const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
+const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'FAIL_TYPECHECK', 'MISSING_UNIT', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
 const deploymentEnv = (key: string) => key.startsWith('TINSTAR_') || relatedEnv.has(key)
 beforeEach(async () => {
   for (const key of Object.keys(process.env)) if (deploymentEnv(key)) vi.stubEnv(key, undefined)
@@ -32,6 +32,8 @@ async function fixture() {
   await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: token } }), { mode: 0o600 })
   await writeFile(join(root, 'caller'), caller, { mode: 0o600 })
   await writeFile(join(root, 'approved.json'), '["get_scene"]')
+  await writeFile(join(root, 'package.json'), '{}')
+  await writeFile(join(root, 'package-lock.json'), '{}')
   let ready = true, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
   const api = new AskApi({ scene: async () => { throw new Error('Smoke must not query First Mate') } }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   let base = ''
@@ -58,15 +60,32 @@ async function fixture() {
   const bin = join(root, 'bin'); await mkdir(bin)
   // Exercise real shell control flow with executable command doubles; no units
   // or git checkout outside the temporary fixture can be touched by these tests.
-  const command = '#!/bin/bash\nname=${0##*/}\nprintf "%s %s\\n" "$name" "$*" >> "$COMMAND_LOG"\nif [[ "$name $*" == "npm run test:unit" && "${FAIL_TESTS:-}" == 1 ]]; then exit 42; fi\n'
-  for (const name of ['git', 'npm', 'sudo']) await writeFile(join(bin, name), command, { mode: 0o700 })
+  const command = `#!/bin/bash
+name=\${0##*/}
+printf '%s %s\\n' "$name" "$*" >> "$COMMAND_LOG"
+if [[ "$name" == systemctl ]]; then
+  if [[ "\${MISSING_UNIT:-}" == 1 ]]; then echo not-found; else echo loaded; fi
+fi
+if [[ "$name $*" == *'rev-parse HEAD' ]]; then echo fixture-head; fi
+if [[ "$name $*" == 'npm run typecheck' && "\${FAIL_TYPECHECK:-}" == 1 ]]; then exit 41; fi
+if [[ "$name $*" == 'npm run test:unit'* && "\${FAIL_TESTS:-}" != '' ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == --outputFile=* ]]; then
+      if [[ "$FAIL_TESTS" != 3 ]]; then printf '%s' '{"testResults":[{"name":"tests/slow.test.ts","status":"failed"},{"name":"tests/other.test.ts","status":"failed"},{"name":"tests/passing.test.ts","status":"passed"}]}' > "\${arg#--outputFile=}"; fi
+      exit 42
+    fi
+  done
+  if [[ "$FAIL_TESTS" == 1 ]]; then exit 42; fi
+fi
+`
+  for (const name of ['git', 'npm', 'sudo', 'systemctl']) await writeFile(join(bin, name), command, { mode: 0o700 })
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !deploymentEnv(key)))
   const env = { ...inherited, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: join(root, 'commands.log'), TINSTAR_DEPLOY_SOURCE: root,
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
-  const run = async (checkOnly = false, override: Record<string, string> = {}) => {
-    try { const result = await exec('bash', [script, ...(checkOnly ? ['--check-only'] : [])], { env: { ...env, ...override } }); return { ...result, code: 0 } }
+  const run = async (checkOnly = false, override: Record<string, string> = {}, args: string[] = []) => {
+    try { const result = await exec('bash', [script, ...(checkOnly ? ['--check-only'] : []), ...args], { env: { ...env, ...override } }); return { ...result, code: 0 } }
     catch (error) { const result = error as { stdout: string; stderr: string; code: number }; return result }
   }
   return { root, base, run, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
@@ -78,8 +97,10 @@ describe('floor deploy executable', () => {
     const result = await run()
     expect(result.code, result.stderr).toBe(0)
     const commands = (await readFile(join(root, 'commands.log'), 'utf8')).trim().split('\n')
-    expect(commands).toEqual(['git status --porcelain', 'git fetch origin main', 'git checkout --detach origin/main', 'npm ci --include=dev', 'npm run typecheck', 'npm run test:unit', 'npm run build:all',
+    expect(commands.filter(line => line.startsWith('sudo -n systemctl restart'))).toEqual([
       'sudo -n systemctl restart tinstar-floor', 'sudo -n systemctl restart tinstar-mcp-facade', 'sudo -n systemctl restart tinstar-mcp-tunnel'])
+    expect(commands.findIndex(line => line.startsWith('npm run test:unit -- --reporter=default --reporter=json --outputFile='))).toBeGreaterThan(commands.indexOf('npm run typecheck'))
+    expect(commands.indexOf('npm run build:all')).toBeGreaterThan(commands.indexOf('npm run typecheck'))
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))).toEqual([])
     await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(result.stdout).toContain('Ask and MCP smoke passed')
@@ -115,7 +136,7 @@ describe('floor deploy executable', () => {
     const commands = await readFile(join(root, 'commands.log'), 'utf8')
     expect(commands).toContain('sudo -n systemctl restart tinstar-mcp-facade\nsudo -n systemctl restart preview-shim\nsudo -n systemctl restart tinstar-mcp-tunnel')
   })
-  it('blocks before build or restart when tests fail and refuses the next deploy before git', async () => {
+  it('reruns failures once, blocks before build/restart, and refuses the next deploy before fetching', async () => {
     const { root, run } = await fixture()
     const result = await run(false, { FAIL_TESTS: '1' })
     expect(result.code).toBe(42)
@@ -123,9 +144,117 @@ describe('floor deploy executable', () => {
     expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=unit-tests')
     const commands = await readFile(join(root, 'commands.log'), 'utf8')
     expect(commands).not.toContain('build:all')
-    expect(commands).not.toContain('sudo')
+    expect(commands).not.toContain('sudo -n systemctl restart')
     expect((await run()).code).not.toBe(0)
-    expect(await readFile(join(root, 'commands.log'), 'utf8')).toBe(commands)
+    expect((await readFile(join(root, 'commands.log'), 'utf8')).match(/git fetch origin main/g)).toHaveLength(1)
+    expect(commands).toContain('npm run test:unit -- tests/slow.test.ts --no-file-parallelism --maxWorkers=1 --minWorkers=1 --isolate')
+    expect(commands).toContain('npm run test:unit -- tests/other.test.ts --no-file-parallelism --maxWorkers=1 --minWorkers=1 --isolate')
+    expect(commands).not.toContain('npm run test:unit -- tests/passing.test.ts')
+  })
+  it('warns and audits when only the isolated serial rerun passes', async () => {
+    const { root, run } = await fixture()
+    const result = await run(false, { FAIL_TESTS: '2' })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stderr).toContain('WARNING Tin Star deploy: Full suite failed; isolated serial rerun passed: tests/slow.test.ts, tests/other.test.ts')
+    const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ action: 'warning', gate: 'unit-tests', head: 'fixture-head' })
+    expect(entries[0].reason).toContain('tests/slow.test.ts, tests/other.test.ts')
+    expect(await readFile(join(root, 'commands.log'), 'utf8')).toContain('sudo -n systemctl restart tinstar-floor')
+  })
+  it('blocks when the failed-file report is unavailable', async () => {
+    const { root, run } = await fixture()
+    const result = await run(false, { FAIL_TESTS: '3' })
+    expect(result.code).toBe(42)
+    expect(result.stderr).toContain('cannot isolate a rerun')
+    expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toContain('build:all')
+  })
+  it('clears a block with a visible structured audit even with unreadable credentials', async () => {
+    const { root, run } = await fixture()
+    await writeFile(join(root, 'deploy.blocked'), 'phase=unit-tests\n')
+    await rm(join(root, 'config.json'))
+    const reason = 'Investigated timeout; retry "serially"\nwith owner approval'
+    const result = await run(false, {}, ['--clear-block', reason])
+    expect(result.code, result.stderr).toBe(0)
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const lines = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!)).toMatchObject({ action: 'clear-block', gate: 'block', reason, head: 'fixture-head', user: expect.any(String), time: expect.any(String) })
+    expect(Number.isFinite(Date.parse(JSON.parse(lines[0]!).time))).toBe(true)
+    expect(result.stderr).toContain(lines[0])
+    expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toContain('npm')
+  })
+  it('requires a reason for every override and clear-block', async () => {
+    const { root, run } = await fixture()
+    for (const args of [['--override'], ['--override', '  '], ['--clear-block'], ['--clear-block', '']]) {
+      expect((await run(false, {}, args)).code).toBe(2)
+    }
+    await expect(readFile(join(root, 'deploy.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(root, 'deploy.blocked.audit.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+  it('audits every overridden gate, clears the old block, and does not persist an override', async () => {
+    const { root, run } = await fixture()
+    await writeFile(join(root, 'deploy.blocked'), 'phase=unit-tests\n')
+    const result = await run(false, { FAIL_TESTS: '1', FAIL_TYPECHECK: '1' }, ['--override', 'Owner accepts known failures'])
+    expect(result.code, result.stderr).toBe(0)
+    const lines = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n')
+    expect(lines.map(line => JSON.parse(line).gate)).toEqual(['invocation', 'block', 'typecheck', 'unit-tests'])
+    for (const line of lines) {
+      expect(JSON.parse(line)).toMatchObject({ action: JSON.parse(line).gate === 'invocation' ? 'override-request' : 'override', reason: 'Owner accepts known failures', head: 'fixture-head', user: expect.any(String), time: expect.any(String) })
+      expect(result.stderr).toContain(line)
+    }
+    expect(result.stderr).toContain('completed with audited overrides')
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await run(false, { FAIL_TYPECHECK: '1' })).code).toBe(41)
+  }, 15_000) // Two complete deploy invocations include several child processes.
+  it('logs override requests even when no gate fails', async () => {
+    const { root, run } = await fixture()
+    const result = await run(true, {}, ['--override', 'Owner requested a recovery check'])
+    expect(result.code, result.stderr).toBe(0)
+    const line = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim()
+    expect(JSON.parse(line)).toMatchObject({ action: 'override-request', gate: 'invocation', reason: 'Owner requested a recovery check' })
+    expect(result.stderr).toContain(line)
+  })
+  it('stops before deploying or clearing if the audit log cannot be written', async () => {
+    const { root, run } = await fixture()
+    await mkdir(join(root, 'deploy.blocked.audit.jsonl'))
+    await writeFile(join(root, 'deploy.blocked'), 'phase=unit-tests\n')
+    for (const option of ['--clear-block', '--override']) {
+      const result = await run(false, {}, [option, 'Investigated failure'])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('Cannot append deploy audit log')
+      expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=unit-tests')
+    }
+    expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toContain('npm')
+  })
+  it('names an MCP scope difference and permits an audited override', async () => {
+    const { root, run } = await fixture()
+    await writeFile(join(root, 'approved.json'), '["old_tool"]')
+    const failed = await run(true)
+    expect(failed.code).not.toBe(0)
+    expect(failed.stderr).toContain('missing=["old_tool"], added=["get_scene"]')
+    const result = await run(true, {}, ['--override', 'Deliberate scope change'])
+    expect(result.code, result.stderr).toBe(0)
+    const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(entries.map(entry => entry.gate)).toEqual(['invocation', 'block', 'post-deploy-smoke'])
+  }, 15_000) // Two complete deploy invocations include several child processes.
+  it.each(['credentials', 'units', 'ports', 'source'])('checks %s before taking the lock or installing dependencies', async kind => {
+    const { root, run } = await fixture()
+    const env: Record<string, string> = {}
+    if (kind === 'credentials') await rm(join(root, 'caller'))
+    if (kind === 'units') env.MISSING_UNIT = '1'
+    if (kind === 'ports') env.TINSTAR_BRIDGE_URL = 'http://127.0.0.1:1'
+    if (kind === 'source') env.TINSTAR_DEPLOY_SOURCE = join(root, 'missing-source')
+    const result = await run(false, env)
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toContain('preflight failed; no deploy started')
+    if (kind === 'source') expect(result.stderr).toContain('disk space unavailable or below 256 MiB:')
+    if (kind === 'ports') expect(result.stderr).toContain('bridge: invalid URL or unavailable port')
+    await expect(readFile(join(root, 'deploy.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands).not.toContain('npm')
+    expect(commands).not.toContain('git fetch')
+    expect(commands).not.toContain('sudo -n systemctl restart')
   })
   it('cleans the synthetic partition when a bridge check fails after creating the question', async () => {
     const { root, run, setFailBridgeRead } = await fixture()
@@ -142,7 +271,9 @@ describe('floor deploy executable', () => {
     if (reason === 'stale publication') setStarted('2026-11-09T17:00:00Z')
     const result = await run(true, reason === 'owner failure' ? { TINSTAR_OWNER_URL: 'http://127.0.0.1:1' } : {})
     expect(result.code).not.toBe(0)
-    expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=post-deploy-smoke')
+    if (reason === 'owner failure') {
+      await expect(readFile(join(root, 'deploy.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } else expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=post-deploy-smoke')
     if (reason !== 'owner failure') expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))).toEqual([])
     expect(result.stderr.match(/ALERT/g)).toHaveLength(1)
     expect(result.stdout + result.stderr).not.toContain(token)
@@ -155,11 +286,21 @@ it('compares full catalog semantics, tolerates object order and rejects duplicat
   expect(() => compareCatalogs(tools, [{ inputSchema: { properties: {}, type: 'object' }, description: 'Scene', name: 'get_scene' }], ['get_scene'])).not.toThrow()
   for (const target of [[], [...tools, ...tools], [{ ...tools[0], inputSchema: { type: 'object' } }]]) expect(() => compareCatalogs(tools, target, ['get_scene'])).toThrow()
   expect(() => compareCatalogs(tools, tools, ['get_scene', 'unexpected'])).toThrow()
+  expect(() => compareCatalogs(tools, tools, ['get_scene', 'get_scene'])).toThrow()
+  const schema = { name: 'schema', inputSchema: { type: 'object', required: ['a', 'b'], properties: { a: { enum: ['x', 'y'] } } } }
+  expect(() => compareCatalogs([schema], [{ ...schema, inputSchema: { ...schema.inputSchema, required: ['b', 'a'], properties: { a: { enum: ['y', 'x'] } } } }], ['schema'])).not.toThrow()
 })
+it('preserves array values in schema defaults and tool metadata', () => {
+  const tool = { name: 'data', inputSchema: { type: 'object', default: { required: ['a', 'b'] } }, _meta: { enum: ['x', 'y'] } }
+  expect(() => compareCatalogs([tool], [{ ...tool, inputSchema: { ...tool.inputSchema, default: { required: ['b', 'a'] } } }], ['data'])).toThrow()
+  expect(() => compareCatalogs([tool], [{ ...tool, _meta: { enum: ['y', 'x'] } }], ['data'])).toThrow()
+})
+
 it('requires the current target, facade freshness and a successful post-start poll', () => {
   const status = { started_at: '2026-11-09T18:00:02Z', channels: [{ name: 'main', enabled: true, probe_status: 'ok', details: [{ value: 'http://target/mcp' }] }] }
   const metric = 'commands_poll_last_successful_timestamp_seconds 1794247205\n'
   expect(() => publicationEvidence(status, metric, '2026-11-09T18:00:01Z', 'http://target/mcp')).not.toThrow()
+  expect(() => publicationEvidence({ ...status, started_at: '2026-11-09T13:00:02-05:00' }, metric, '2026-11-09T19:00:01+01:00', 'http://target/mcp')).not.toThrow()
   for (const [s, m, at, url] of [[status, '', '2026-11-09T18:00:01Z', 'http://target/mcp'], [status, metric, '2026-11-09T18:00:03Z', 'http://target/mcp'], [status, metric, '2026-11-09T18:00:01Z', 'http://other/mcp'], [{ ...status, started_at: '' }, metric, '2026-11-09T18:00:01Z', 'http://target/mcp']] as const) expect(() => publicationEvidence(s, m, at, url)).toThrow()
 })
 it('reads tools/list from the executable MCP interface', async () => {
