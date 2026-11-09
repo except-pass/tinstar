@@ -86,6 +86,7 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     localRevision.current++
     setItems(previous => previous.some(old => old.request_id === item.request_id) ? previous.map(old => old.request_id === item.request_id ? item : old) : [...previous, item])
     setExpanded(item.conversation_id)
+    setReplySeed(previous => previous && previous.key === replySeed?.key && previous.conversationId === item.conversation_id ? { ...previous, seed: {} } : previous)
   }
   return <Controls.Provider value={{ scene, state, submit, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, action }}>{children}
     {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
@@ -125,8 +126,7 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
   const linkedCard = claim && scene?.cards.find(card => card.id === claim.cardId)
   const label = parent?.context.anchor.label ?? seed.label ?? (isArtifactTarget(seed.target) ? seed.target.id : worker ? workerTitle(worker) : linkedCard ? `Relationship · ${cardTitle(linkedCard)}` : card ? cardTitle(card) : chosen)
   const bound = !!parent || !!seed.target || !!chosen
-  const [selectionSent, setSelectionSent] = useState(false)
-  const element = !selectionSent && (seed.target || chosen === seed.cardId) ? seed.element : undefined
+  const element = (seed.target || chosen === seed.cardId) ? seed.element : undefined
   // Freeze the whole uncertain envelope, including its exact parent. A refresh
   // may discover another turn before a lost acknowledgment is retried.
   const key = useRef(inline ? crypto.randomUUID() : clientKey), retryBody = useRef<unknown>(null)
@@ -137,9 +137,9 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
     event.preventDefault()
     if (locked.current || !bound || !question.trim()) return
     locked.current = true; setBusy(true); setError(null)
-    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...(!selectionSent && (seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
+    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
     void submit(retryBody.current).then(() => {
-      if (inline) { setSelectionSent(true); setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
+      if (inline) { setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
     }).catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
   }}>
     {!inline && <><header><h2 id={titleId}>Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
