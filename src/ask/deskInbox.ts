@@ -1,5 +1,10 @@
 import type { AskItem } from '../shared/ask'
 
+// A saved note can be delivered while waking First Mate explicitly failed.
+export function deliveryFailed(item: AskItem) {
+  return !item.reply && (item.status === 'failed' || !!item.error)
+}
+
 export type DeskView = 'needs-you' | 'waiting' | 'history'
 
 /** Count conversations, not transport requests or individual follow-up turns. */
@@ -15,7 +20,7 @@ export function deskConversations(items: AskItem[]) {
     const latest = turns.at(-1)!
     const archived = turns.every(turn => !!turn.dismissed_at)
     const unread = !archived && turns.some(turn => !turn.dismissed_at && turn.reply && !turn.read_at)
-    const failed = turns.some(turn => !turn.dismissed_at && !turn.reply && turn.status === 'failed')
+    const failed = turns.some(turn => !turn.dismissed_at && deliveryFailed(turn))
     const view: DeskView = archived ? 'history' : unread || failed || latest.reply ? 'needs-you' : 'waiting'
     const updatedAt = turns.reduce((latest, turn) => turn.updated_at > latest ? turn.updated_at : latest, '')
     return { id, turns, latest, unread, failed, view, updatedAt }
@@ -23,5 +28,5 @@ export function deskConversations(items: AskItem[]) {
 }
 
 export function answerStatus(item: AskItem) {
-  return item.reply ? item.read_at ? 'Answered' : 'New answer' : item.status === 'failed' ? 'Delivery failed' : 'Waiting for answer'
+  return item.reply ? item.read_at ? 'Answered' : 'New answer' : deliveryFailed(item) ? 'Delivery failed' : 'Waiting for answer'
 }

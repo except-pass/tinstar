@@ -11,7 +11,7 @@ import { AskActions, AskSelectionRejected } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
-import { answerStatus, deskConversations, type DeskView } from './deskInbox'
+import { answerStatus, deliveryFailed, deskConversations, type DeskView } from './deskInbox'
 import './ask.css'
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -186,12 +186,12 @@ function sourceAvailable(item: AskItem, scene: FloorScene | null) {
 }
 function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskControls; now: number }) {
   return <div>
-    <p role="status">{answerStatus(item)}{item.status === 'failed' && item.error ? ` · ${item.error}` : ''}</p>
+    <p role="status">{answerStatus(item)}{deliveryFailed(item) && item.error ? ` · ${item.error}` : ''}</p>
     <details className="ask-delivery-diagnostics"><summary>Delivery details</summary>
       <p>{item.status === 'delivered' ? 'Delivered' : item.status === 'failed' ? 'Delivery failed' : 'Sent'}{item.error ? ` · ${item.error}` : ''}</p>
       {Date.parse(item.created_at) < now - 120_000 && <p>Waiting for First Mate’s answer. First Mate may be offline.</p>}
     </details>
-    {item.status === 'failed' && <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>}
+    {deliveryFailed(item) && <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>}
   </div>
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {

@@ -48,3 +48,8 @@ it('does not revive archived unread replies when a new pending turn shares their
 it.each(['sent', 'delivered'] as const)('uses waiting copy for %s without inferring failure from elapsed time', status => {
   expect(answerStatus(request({ status, created_at: '2020-01-01T00:00:00Z' }))).toBe('Waiting for answer')
 })
+it('classifies a saved question with a confirmed wake failure as actionable', () => {
+  const item = request({ status: 'delivered', error: 'First Mate saved the question but was not woken. Retry delivery.' })
+  expect(answerStatus(item)).toBe('Delivery failed')
+  expect(deskConversations([item])[0]).toMatchObject({ view: 'needs-you', failed: true })
+})

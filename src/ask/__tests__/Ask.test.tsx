@@ -433,8 +433,9 @@ it('groups correlated follow-ups into one inline thread and switches independent
 })
 
 
-it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn inspectable and retries only a true failure', async status => {
-  const first = { ...seed(), status, reply: null, error: status === 'failed' ? 'Delivery failed' : null, created_at: '2020-01-01T00:00:00Z' }
+it.each([['failed', 'Delivery failed'], ['sent', null], ['delivered', null], ['delivered', 'First Mate saved the question but was not woken. Retry delivery.']] as const)('keeps an earlier %s turn with error %s inspectable and retries only a true failure', async (status, error) => {
+  const failed = status === 'failed' || !!error
+  const first = { ...seed(), status, reply: null, error, created_at: '2020-01-01T00:00:00Z' }
   const followUp = { ...seed(), conversation_id: first.conversation_id, question: 'Answered follow-up', created_at: '2020-01-02T00:00:00Z' }
   const neighbor = { ...seed(), question: 'Neighbor question' }
   records = [first, followUp, neighbor]
@@ -447,11 +448,11 @@ it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn insp
   fireEvent.click(preview)
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   const earlier = within(thread).getByRole('region', { name: `Question: ${first.question}` })
-  expect(within(earlier).getByRole('status')).toHaveTextContent(status === 'failed' ? 'Delivery failed' : 'Waiting for answer')
+  expect(within(earlier).getByRole('status')).toHaveTextContent(failed ? 'Delivery failed' : 'Waiting for answer')
   const details = within(earlier).getByText('Delivery details')
   fireEvent.click(details)
   expect(earlier).toHaveTextContent(status === 'failed' ? 'Delivery failed' : status === 'sent' ? 'Sent' : 'Delivered')
-  if (status === 'failed') {
+  if (failed) {
     fireEvent.click(within(earlier).getByRole('button', { name: retryName }))
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${first.request_id}/retry`, expect.anything()))
   } else expect(within(earlier).queryByRole('button', { name: retryName })).toBeNull()
