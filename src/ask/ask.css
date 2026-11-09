@@ -44,8 +44,10 @@
 .ask-desk .ask-preview strong{font-weight:650}
 .ask-desk .ask-preview span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:11px/14px system-ui}
 .ask-desk .ask-preview small{font:11px/14px system-ui}
-.ask-desk .ask-archive{position:absolute;right:0;top:2px;min-width:44px;min-height:44px;padding:4px;font-size:12px;background:none;border:0;opacity:.65}
+.ask-desk .ask-archive{position:absolute;right:0;top:2px;min-width:44px;min-height:44px;padding:4px;font-size:12px;background:none;border:0;opacity:.65;display:grid;place-items:center}
+.ask-archive svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .ask-desk article:hover .ask-archive,.ask-desk article:focus-within .ask-archive{opacity:1}
+@media(hover:none),(max-width:850px){.ask-desk .ask-archive{opacity:1}}
 .ask-desk article[data-unread=true]{border-left:0}
 .ask-desk article[data-unread=true]::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:2px;background:#63cfb0;animation:ask-answer-pulse 2.5s ease-in-out infinite}
 @keyframes ask-answer-pulse{0%,100%{opacity:1}50%{opacity:.4}}

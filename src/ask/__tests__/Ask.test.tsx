@@ -1030,6 +1030,8 @@ it('archives directly with Undo and restores searchable History without reading 
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dependency' } })
   fireEvent.click(await screen.findByRole('button', { name: 'Restore to inbox' }))
   await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo archive' })).toBeNull())
+  expect(screen.queryByText('Conversation archived.')).toBeNull()
   expect(records[0]!.read_at).toBeNull()
 })
 

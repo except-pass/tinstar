@@ -262,6 +262,9 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
   const controls = useContext(Controls)
   const [search, setSearch] = useState('')
   const [archived, setArchived] = useState<AskItem | null>(null)
+  useEffect(() => {
+    if (archived && controls?.items.some(item => item.conversation_id === archived.conversation_id && !item.dismissed_at)) setArchived(null)
+  }, [archived, controls?.items])
   if (!controls) return null
   const history = view === 'history'
   const groups = deskConversations(controls.items).map(group => ({ ...group, visible: group.view === view && (!history || !search || group.turns.some(item => `${item.question} ${item.context.anchor.label} ${item.reply?.summary ?? ''} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))) })).filter(group => group.visible || group.id === controls.expanded)
@@ -279,7 +282,7 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
           <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && answer?.reply && <p {...askElement('answer', 'First Mate answer')}>{answer.reply.summary}</p>}
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
-        <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : '⌑'}</button>
+        <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} title={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 3h14v4H3zM5 7v10h10V7M10 9v5m-3-3 3 3 3-3" /></svg>}</button>
       </AskSurface>
     })}
   </section>
