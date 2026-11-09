@@ -240,9 +240,9 @@ conditions remain. Pattern selection uses the existing search-filter reducer and
 with the ordinary view preferences. Non-matches are hidden. Matches retain only
 their direct linked counterparts as secondary context; uncertain cards stay
 visible with a Can't tell marker and a tooltip explaining the missing evidence.
-An empty result names the selected pattern, for example No blocked work. Blocked
-requires Status Waiting For plus non-empty Waiting For text; worker freshness
-does not change that card-owned fact. Done/Archived never match Blocked or Stalled.
+An empty result names the selected pattern, for example No blocked work. See the
+[shared execution-health contract](#shared-execution-health-contract) for pattern
+evidence requirements.
 
 Center and neighbor counts preview unique matching work under the other filters,
 ignoring the dial's current pattern. They are overlapping predicates, not pie
@@ -316,7 +316,7 @@ until the next source observation expiry or new scene, with bounded query caches
 First Mate liveness reconciler. It returns canonical verified worker IDs/count,
 running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
 `null` for unpublished runnable/resolver/progress evidence, and per-pattern
-`match`, `no-match` or `unavailable` plus concrete evidence. Null never means zero.
+`match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
 The existing liveness precedence and authoritative source/link coverage remain
 unchanged. This feature implements no recovery, watchdog or scheduling behavior.
 
@@ -325,10 +325,10 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Pattern | Required evidence / current behavior |
 |---|---|
 | Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
-| Blocked | Work status is Waiting For with a nonempty Waiting For field, plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
+| Blocked | Fresh, complete Notion evidence with status Waiting For and a nonempty Waiting For field; worker freshness is not required. Done/Archived never match. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
-| Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
+| Stalled | Requires no running/runnable path and no active resolver. Done/Archived never match. Otherwise unavailable when runnable/resolver coverage is needed but unpublished; a running neighbor explicitly rules it out. |
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
