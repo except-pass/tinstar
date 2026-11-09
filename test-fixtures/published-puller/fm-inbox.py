@@ -15,7 +15,7 @@ if sys.argv[1] == 'note':
         body = json.dumps({'schema':'tinstar.ask-reply.v1','request_id':content['request_id'],
             'summary':'Preserved answer','detail':'Preserved evidence',
             'references':[{'label':'Evidence','url':'https://example.test'},{'label':'Unsafe','url':'javascript:alert(1)'}],
-            'suggested_actions':[{'id':'unsafe','label':'Run code','instruction':'eval(source)'}]})
+            'suggested_actions':[{'id':'unsafe','label':'Run code','instruction':'`eval(source)`'}]})
     reply = {'id':note_id,'at':'2026-11-09T16:31:00.000Z','body':body,'cursor':str(len(notes) + 1)}
     notes.append({'id':note_id,'request_id':request,'reply':reply})
     path.write_text(json.dumps(notes))

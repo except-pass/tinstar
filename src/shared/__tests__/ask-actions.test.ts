@@ -26,14 +26,41 @@ describe('Ask recommendations', () => {
     'Open www.example.test', 'Open github.com/team/repo', 'Open [evidence](relative/path)',
     'javascript:alert(1)', 'data:text/html,hello', 'file:/etc/passwd', 'mailto:owner@example.test',
     '`run this`', '```sh echo unsafe```', '<script>alert(1)</script>', '<img src=x onerror=alert(1)>',
-    '$(touch /tmp/example)', '${SECRET}', 'Run first && run second', 'Run first || run second', 'Run first | run second',
-    'const value = 1', 'eval (source)', 'print("unsafe")', 'fetch("payload")', 'os.system("unsafe")',
-    '#!/bin/sh', 'bash -c unsafe', 'python3 -c unsafe', 'curl example.test', 'rm -rf /',
     'Post\nthen close', 'Post\rthen close', 'Post\tthen close', '\nPost the verdict', 'Post the verdict\n',
-    'Post\u0000then close', 'Post\u007fthen close', 'Post\u2028then close',
-  ])('rejects explicit links or executable containers: %s', instruction => {
+    'Post\u0000then close', 'Post\u007fthen close', 'Post\u2028then close', 'Post\u2029then close', 'Post\u0085then close',
+  ])('rejects links, markup, backticks and control characters: %s', instruction => {
     expect(askActionSchema.safeParse({ ...close, instruction }).success).toBe(false)
     expect(askActionSchema.safeParse({ ...close, label: instruction }).success).toBe(false)
+  })
+
+  it('accepts the three real First Mate check-in recommendations', () => {
+    const examples = [
+      {
+        "id": "checkin-1800z",
+        "label": "Check-in 1 PM ET",
+        "instruction": "Set this card's Next check-in to 2026-11-09 18:00Z (1 PM ET, after the planned Site Config deploy) and set Waiting For to 'PR 3335 merge + Site Configuration-only PROD deploy (v1.24.0)'. Last touched by = Firstmate."
+      },
+      {
+        "id": "checkin-tomorrow",
+        "label": "Check-in tomorrow",
+        "instruction": "Set Next check-in to 2026-11-10 14:00Z (9 AM ET) and set Waiting For to 'PR 3335 merge + Site Configuration-only PROD deploy (v1.24.0)'. Last touched by = Firstmate."
+      },
+      {
+        "id": "leave",
+        "label": "Leave as is",
+        "instruction": "Make no change to the card; Firstmate updates it when the Site Config deploy lands."
+      }
+    ]
+    expect(askSuggestionsSchema.parse(examples)).toEqual(examples)
+  })
+
+  it.each([
+    `Recheck (CI); it's = true, at: "deploy" & + / # % ! ? v1.24.0`,
+    'Compare 3 < 5 and 8 > 6; retain {the context}',
+    'eval(source)', 'Run first && run second', 'Recheck -- optional',
+  ])('accepts inert text and ordinary punctuation in both fields: %s', text => {
+    expect(askActionSchema.parse({ ...close, instruction: text }).instruction).toBe(text)
+    expect(askActionSchema.parse({ ...close, label: text }).label).toBe(text)
   })
 
   it('accepts bounded prose and identifiers without changing the meaning', () => {

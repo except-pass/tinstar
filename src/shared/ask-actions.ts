@@ -2,15 +2,17 @@ import { z } from 'zod'
 
 export const askActionIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/)
 
-// Actionable suggestions are prose. Reject explicit link/source containers so
-// recommendations cannot double as navigation or executable payloads. These
-// checks do not authorize an action; instruction text is never interpreted here.
+// Action instructions are inert prose, never executed. Reject links, HTML and
+// backticks so a suggestion stays a plain-text button rather than a container.
 const linkSyntax = /(?:\/\/|\b(?:https?|javascript|data|file|mailto):|\bwww\.|\[[^\]]*\]\s*\(|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|test)(?:\b|\/))/i
-const sourceSyntax = /[`{};<>]|\$\(|\$\{|&&|\|\||\s\|\s|(?:^|\s)--?[A-Za-z]|\b(?:eval|exec|require|import|print|alert)\s*\(|\b(?:const|let|var)\s+\w+\s*=|\b\w+(?:\.\w+)*\([^)]*\)|^(?:#!|(?:bash|sh|python\d*|node|curl|wget)\s)/i
-const prose = (max: number) => z.string().min(1).max(max).refine(
-  value => !!value.trim() && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(value) && !linkSyntax.test(value) && !sourceSyntax.test(value.trim()),
-  'Use single-line prose without URLs or executable source; put evidence links in references',
-).transform(value => value.trim())
+const htmlSyntax = /<\/?[a-z][^>]*>|<!--[^>]*-->|<![a-z][^>]*>/i
+const prose = (max: number) => z.string().min(1).max(max)
+  .refine(value => !!value.trim(), 'Use nonblank prose')
+  .refine(value => !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value), 'Control characters and line separators are not allowed')
+  .refine(value => !value.includes('`'), 'Backticks and code fences are not allowed')
+  .refine(value => !htmlSyntax.test(value), 'HTML tags are not allowed')
+  .refine(value => !linkSyntax.test(value), 'URLs and link syntax are not allowed; put URLs in references')
+  .transform(value => value.trim())
 
 export const askActionSchema = z.object({
   id: askActionIdSchema,
