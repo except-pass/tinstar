@@ -123,7 +123,8 @@ it.each([
   if (condition === 'failed' || condition.startsWith('execution-')) {
     const contributor = evidence.closest('article')!
     expect(within(contributor).getByText('Last known', { selector: 'strong' })).toBeTruthy()
-    expect(within(contributor).getByText(/Source task metadata/).textContent).not.toContain(' · fresh · ')
+    expect(within(contributor).getByText('task metadata')).toBeTruthy()
+    expect(within(contributor).getByTitle('Contributor freshness. Right-click or long-press to ask.').textContent).toBe(condition === 'execution-unavailable' ? 'unknown' : 'stale')
   }
   if (label !== 'Confirmed') expect(screen.queryByText(/^Confirmed work:/)).toBeNull()
 })
