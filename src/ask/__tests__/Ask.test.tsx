@@ -1061,3 +1061,48 @@ it('serializes immediate Undo behind a pending archive', async () => {
   await waitFor(() => expect(actions).toEqual(['dismiss', 'restore']))
   await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
 })
+
+it('keeps a later answer unread in an already expanded waiting conversation', async () => {
+  records = [{ ...seed(), status: 'sent', reply: null }]
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  const { container } = mount()
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Desk views' })).getByRole('button', { name: /^Waiting/ }))
+  const preview = await screen.findByRole('button', { name: /Waiting for answer.*Why is this waiting/ })
+  fireEvent.click(preview)
+  expect(preview).toHaveAttribute('aria-expanded', 'true')
+  try {
+    records[0] = { ...records[0]!, status: 'answered', reply: seed().reply }
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(container.querySelector('[data-ask-id]')).toHaveAttribute('data-unread', 'true')
+    expect(records[0]!.read_at).toBeNull()
+    fireEvent.click(preview)
+    expect(container.querySelector('[data-ask-id]')).toHaveAttribute('data-unread', 'false')
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(records[0]!.read_at).toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('preserves optimistic archive and Undo across polls until both writes settle', async () => {
+  records = [seed()]
+  const original = globalThis.fetch
+  const finish: Array<() => void> = []
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (/\/(dismiss|restore)$/.test(url)) await new Promise<void>(resolve => { finish.push(resolve) })
+    return original(url, init)
+  }))
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  const { container } = mount()
+  const archive = await screen.findByRole('button', { name: 'Archive conversation' })
+  try {
+    fireEvent.click(archive)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(container.querySelector('[data-ask-id]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
+    await act(async () => { finish[0]!(); await vi.advanceTimersByTimeAsync(5000) })
+    expect(records[0]!.dismissed_at).toBeTruthy()
+    expect(container.querySelector('[data-ask-id]')).toBeTruthy()
+    await act(async () => { finish[1]!(); await vi.advanceTimersByTimeAsync(0) })
+    expect(records[0]!.dismissed_at).toBeNull()
+    expect(container.querySelector('[data-ask-id]')).toBeTruthy()
+  } finally { vi.useRealTimers() }
+})

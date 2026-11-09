@@ -58,14 +58,16 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
   const [replySeed, setReplySeed] = useState<AskControls['replySeed']>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const localRevision = useRef(0), refreshRevision = useRef(0)
+  const pendingMutations = useRef(0)
   const visibilityActions = useRef<Promise<unknown>>(Promise.resolve())
   const refresh = useCallback(async () => {
+    if (pendingMutations.current) return
     const before = localRevision.current, revision = ++refreshRevision.current
     try {
       const parsed = askItemsSchema.safeParse(await request<AskItem[]>('requests'))
       if (!parsed.success) throw new Error('Questions could not be read')
       const items = parsed.data
-      if (before === localRevision.current && revision === refreshRevision.current) { setItems(items); setError(null) }
+      if (!pendingMutations.current && before === localRevision.current && revision === refreshRevision.current) { setItems(items); setError(null) }
     }
     catch (reason) { if (revision === refreshRevision.current) setError((reason as Error).message) }
   }, [])
@@ -74,6 +76,7 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     parent ??= items.find(item => item.request_id === seed.followUpTo)
     if (parent) {
       setExpanded(parent.conversation_id)
+      markRead(parent)
       setReplySeed({ conversationId: parent.conversation_id, seed, key: crypto.randomUUID() })
       return
     }
@@ -86,22 +89,39 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
       setItems(rows => rows.map(row => row.conversation_id === item.conversation_id ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null } : row))
       setExpanded(null)
     }
-    const revision = localRevision.current
+    pendingMutations.current++
     const perform = () => request(`requests/${item.request_id}/${value}`, {})
     const task = value === 'retry' ? perform() : visibilityActions.current.then(perform)
     if (value !== 'retry') visibilityActions.current = task.catch(() => undefined)
-    void task.then(() => { if (revision === localRevision.current) void refresh() }).catch(reason => {
-      setError((reason as Error).message)
-      if (revision === localRevision.current) void refresh()
+    void task.catch(reason => setError((reason as Error).message)).finally(() => {
+      pendingMutations.current--
+      if (!pendingMutations.current) void refresh()
     })
+  }
+
+  const markRead = (item: AskItem) => {
+    const unread = items.filter(turn => turn.conversation_id === item.conversation_id && turn.reply && !turn.read_at)
+    if (unread.length) {
+      localRevision.current++
+      pendingMutations.current++
+      const opened = new Set(unread.map(turn => turn.request_id)), at = new Date().toISOString()
+      setItems(rows => rows.map(row => opened.has(row.request_id) ? { ...row, read_at: at } : row))
+      void Promise.allSettled(unread.map(turn => request(`requests/${turn.request_id}/read`, {}))).then(results => {
+        const failed = results.find(result => result.status === 'rejected')
+        if (failed?.status === 'rejected') setError((failed.reason as Error).message)
+      }).finally(() => {
+        pendingMutations.current--
+        if (!pendingMutations.current) void refresh()
+      })
+    }
   }
 
   const returnTo = (item: AskItem) => {
     setExpanded(item.conversation_id)
     onReturn(askReturn(item.context))
-    const unread = items.filter(turn => turn.conversation_id === item.conversation_id && turn.reply && !turn.read_at)
-    if (unread.length) void Promise.all(unread.map(turn => request(`requests/${turn.request_id}/read`, {}))).then(refresh).catch(reason => setError((reason as Error).message))
+    markRead(item)
   }
+
   const retain = (item: AskItem) => {
     localRevision.current++
     setItems(previous => previous.some(old => old.request_id === item.request_id) ? previous.map(old => old.request_id === item.request_id ? item : old) : [...previous, item])
@@ -253,7 +273,7 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
     {groups.map(group => {
       const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
       const answer = turns.filter(turn => turn.reply).sort((a, b) => Number(!a.read_at) - Number(!b.read_at) || (a.answered_at ?? a.created_at).localeCompare(b.answered_at ?? b.created_at)).at(-1)
-      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread && !expanded} data-expanded={expanded}>
+      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
           <small {...askElement('status', 'Question status')}>{unread ? 'New answer' : group.failed ? 'Delivery failed' : item.reply ? 'Answered' : answerStatus(item)} · {ageLabel(Date.parse(group.updatedAt), now)}</small>
           <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && answer?.reply && <p {...askElement('answer', 'First Mate answer')}>{answer.reply.summary}</p>}
