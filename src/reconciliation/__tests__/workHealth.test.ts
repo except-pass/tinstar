@@ -125,6 +125,17 @@ describe('read-only task readiness projection', () => {
     expect(health(scene)).toMatchObject({ runnable: null, activeResolverCount: null,
       patterns: { active: { outcome: 'unavailable' }, stalled: { outcome: 'unavailable' } } })
   })
+  it.each(['own', 'blocker', 'backlog-origin', 'execution-origin'] as const)('keeps queued %s readiness unknown with unknown execution activity', kind => {
+    const scene = sceneFor()
+    const worker = kind === 'own' ? assigned(scene) : scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+    const row = rowFor(scene, worker.identity.task_id!)
+    row.source.state = 'queued'
+    worker.source.current_state.state = 'unknown'
+    if (kind === 'blocker') rowFor(scene).source.unresolved_blocker_ids = ['untracked-worker']
+    if (kind === 'backlog-origin') row.source.queue = { ...queue, originTaskId: 'blocked-worker' }
+    if (kind === 'execution-origin') worker.source.queue = { ...queue, originTaskId: 'blocked-worker' }
+    expect(health(scene)).toMatchObject({ runnable: null, patterns: { active: { outcome: 'unavailable' }, stalled: { outcome: 'unavailable' } } })
+  })
   it('does not count a task own worker again as its resolver', () => {
     const scene = sceneFor(); rowFor(scene).source.unresolved_blocker_ids = ['blocked-worker']
     expect(health(scene).activeResolverCount).toBe(0)

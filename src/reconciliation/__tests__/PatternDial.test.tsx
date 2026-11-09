@@ -108,6 +108,17 @@ describe('source-truthful aggregate previews', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent('Home snapshot stale or unreadable: /fixture/hulk')
     expect(screen.getByRole('tooltip')).toHaveTextContent('Runnable coverage incomplete for /fixture/hulk')
   })
+  it('keeps conclusive visible counts complete despite an unrelated stale home', () => {
+    const scene = fixtureReadinessScene({ now, stale: true })
+    for (const card of scene.cards) card.source.properties.Status!.value = 'Done'
+    const view = initialPresentation(), previews = patternPreviews(scene, view, now)
+    for (const pattern of ['active', 'stalled'] as const) {
+      expect(previews[pattern]).toEqual({ count: 0, unknown: false, reasons: [] })
+      const filtered = patternPreviews(scene, { ...view, donutFilter: { cards: [], workers: ['Running'] } }, now)
+      expect(filtered[pattern].unknown).toBe(true)
+      expect(filtered[pattern].reasons.join(' ')).toContain('Home snapshot stale or unreadable: /fixture/hulk')
+    }
+  })
   it('marks absent/partial inputs unknown instead of presenting an invented zero', () => {
     const scene = fixtureScene({ now, unavailable: true })
     expect(patternPreviews(scene, initialPresentation(), now).unstaffed).toMatchObject({ count: 0, unknown: true })

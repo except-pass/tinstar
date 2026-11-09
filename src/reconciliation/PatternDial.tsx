@@ -15,7 +15,8 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
   const workersUnknown = !scene.coverage.homes.length || scene.coverage.homes.some(home => !freshObservation(home.observation, now))
   return Object.fromEntries(dialPatterns.map(pattern => {
     const unavailable = pattern === 'all' ? [] : health.filter(item => item.patterns[pattern].outcome === 'unavailable')
-    const needsHomes = pattern === 'active' || pattern === 'stalled' || (pattern === 'all' && !!state.donutFilter?.workers.length)
+    const needsHomes = !!state.donutFilter?.workers.length || !!state.search?.query.trim() ||
+      !!state.search?.facets.some(facet => facet.field === 'machine' || facet.field === 'manager' || facet.field === 'entity')
     const reasons = [...new Set([
       ...(sourceUnknown ? [scene.searchReadFailed ? 'Source read failed; showing last known work' : 'Notion source is unavailable, stale or incomplete'] : []),
       ...unavailable.flatMap(item => item.patterns[pattern as Exclude<DialPattern, 'all'>].reason.split('; ')),

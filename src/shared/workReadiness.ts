@@ -59,7 +59,11 @@ export function workReadiness(scene: FloorScene, workers: Execution[], linksKnow
       runnableKnown = false; reasons.add(`Runnable coverage incomplete for ${row.home}`); return
     }
     const source = row.source
-    const working = (context.executions.get(key(row.home, String(source.id))) ?? []).some(worker => currentActivity(worker, now) === 'working')
+    const activities = (context.executions.get(key(row.home, String(source.id))) ?? []).map(worker => currentActivity(worker, now))
+    if (activities.includes('unknown')) {
+      runnableKnown = false; reasons.add(`Runnable state unknown for ${row.home}: ${source.id}`); return
+    }
+    const working = activities.includes('working')
     if (!working && source.state === 'queued' && source.hold_reason === null && source.hold_until === null &&
       (source.queue?.holdKind ?? null) === null && !source.hold_bucket && source.captain_actionable !== true && source.unresolved_blocker_ids!.length === 0) runnablePaths.add(row.id)
   }
