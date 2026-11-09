@@ -55,7 +55,10 @@ export class AskApi {
     if (path === '/api/ask/bridge') {
       if (req.headers.origin || !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`)) return fail(res, 'FORBIDDEN', 'Bridge authorization required', { headers, status: 401 })
       try {
-        if (req.method === 'GET') return ok(res, await this.store.bridgeWork(), { headers })
+        if (req.method === 'GET') {
+          const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
+          return ok(res, conversation ? await this.store.conversation(z.string().uuid().parse(conversation)) : await this.store.bridgeWork(), { headers })
+        }
         if (req.method === 'POST') { await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req))); return ok(res, { accepted: true }, { headers }) }
         return fail(res, 'BAD_REQUEST', 'Use GET or POST', { headers, status: 405 })
       } catch (error) { return this.error(res, error, headers) }
@@ -97,8 +100,10 @@ export class AskApi {
         }
         if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value || JSON.stringify(input.element) !== JSON.stringify(context.element))) throw new AskConflict('Question field differs from the original')
         if (input.target ? JSON.stringify(input.target) !== JSON.stringify(context.target) : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
-        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
+        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to, input.follow_up_to && (input.element || input.field_key || input.field_value !== undefined) ? { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key } : {}), ...(input.field_value !== undefined ? { field_value: input.field_value } : {}) } : undefined)), { headers })
       }
+      const conversation = /^\/api\/ask\/conversations\/([a-f0-9-]{36})$/.exec(path)
+      if (conversation && req.method === 'GET') return ok(res, await this.store.conversation(conversation[1]!, login), { headers })
       const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|retry)$/.exec(path)
       if (match && req.method === 'POST') return ok(res, publicAsk(await this.store.action(login, match[1]!, match[2] as 'read' | 'dismiss' | 'retry')), { headers })
       return fail(res, 'NOT_FOUND', 'Unknown Ask route or method', { headers })

@@ -145,7 +145,8 @@ link. “Show all PRs in this view” removes only the temporary reveal.
 Answers expand inline in the persistent Desk, with neighboring conversation
 previews still available in one click. Correlated follow-ups share one thread;
 collapse, history, unread status, dismiss, references and suggested actions retain
-the existing request/permission boundaries. The composer remains a dialog.
+the existing request/permission boundaries. See [continuous text conversations](#continuous-text-conversations)
+for the shared composer and inline reply behavior.
 On mobile, opening a conversation keeps the Desk sheet open; close it to see
 the revealed origin in the main workspace.
 
@@ -304,8 +305,9 @@ The remaining parent-card items are follow-up slices:
 - Worker context enriched with observed attempt/home beyond the execution ID
   anchor; removable additional context chips beyond the single originating
   Work, Worker or Link context.
-- Right-drag voice entry, activation-only microphone permission, transcription
-  review/edit, text fallback and discoverable accessible voice controls.
+- Discoverable microphone controls with press-and-hold and accessible tap-toggle
+  recording, local transcription, cancellation and text fallback. Voice remains
+  a separate slice; right-drag is not the primary entry path.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery; unified priority for decisions, unread answers,
   investigations and failures.
@@ -339,3 +341,70 @@ deterministic question type. The authoritative shape and limits live in
 server-owned item origins, bridge delivery, inline threads and Desk returns
 remain the same path. The sheet shows the captured element and an editable
 suggestion, using the composer keyboard controls described above.
+
+## Continuous text conversations
+
+Expanded Desk conversations include a persistent **Reply to First Mate** field.
+It uses the same text composer as card, worker, relationship, PR and Release Ask
+entry: Enter sends, Shift+Enter adds a line, and composing with an IME does not
+send. Escape closes a new-question dialog; in an inline reply it returns focus
+to the conversation's collapse control and preserves the draft. Semantic Ask on
+Desk advice also replies in that conversation. Section switches preserve the
+mounted thread and draft; server history survives reload and another browser.
+Voice capture/transcription is a separate feature slice.
+
+A follow-up persists its exact `follow_up_to`, the stable conversation ID and the
+original typed source context. Its literal question is sent with ordered prior
+user questions, First Mate replies (including references and suggested actions),
+and any operator action selections. Each history turn retains its request ID,
+timestamp and provenance. Legacy answers without a recorded reply timestamp use
+the request timestamp, explicitly marked `timestamp_basis: legacy_request`.
+History is quoted prior conversation, never fresh evidence or authorization.
+
+Semantic replies retain the selected element and field hints separately as
+`captured_selection`, without replacing the original source context. The
+selection accompanies the current dispatch and its persisted user history turn.
+A successful send consumes the suggested draft and selection; an uncertain
+retry retains the original submission envelope.
+
+The existing `tinstar.ask.v1` inbox JSON adds
+`conversation: {schema: "tinstar.ask-conversation.v1", turns, omitted, retrieval}`.
+The current question stays outside prior turns. Bodies freeze at request creation
+(legacy pending requests freeze on first bridge read) so a lost acknowledgment,
+retry or delayed answer cannot change a note under its idempotency ID. The
+installed `scripts/ask-puller.py` continues forwarding `pending[].body` verbatim;
+no Mac puller update, parallel bridge or scheduler is needed.
+
+Dispatched history retains a contiguous suffix of complete turns within **24 KiB
+of serialized UTF-8 JSON**, including escaping. When older turns do not fit,
+`omitted` identifies their count, first/last turn IDs and timestamps. It never
+silently truncates a message or supplies an invented summary. Captured context
+has its own 24 KiB budget: excessive saved view state and optional evidence are
+omitted with explicit field names, while the canonical typed anchor survives.
+Full unpruned history and captured context are retrievable through:
+
+- `GET /api/ask/conversations/<conversation_id>` with the existing owner/UI authentication.
+- `GET /api/ask/bridge?conversation_id=<conversation_id>` with the existing bridge bearer authentication.
+
+Retrieval may contain newer turns; match the omitted IDs. If full history cannot
+be retrieved, ask for it before relying on the missing content. Pending batches
+account for outer JSON escaping and stay below the installed puller's 2 MiB read
+bound. The store remains the only persisted conversation source; private frozen
+bodies and retry-key aliases never enter browser records.
+
+The shared selected-action seam is
+`AskStore.createActionSelection(owner, {answer_id, action_id, client_key}, lookupAction)`.
+The host supplies canonical membership lookup from the stored answer. The store
+checks owner, answered request, current-answer freshness and single-choice
+consumption atomically. Same-key retries and another device's same action recover
+one request before staleness checks; competing choices conflict. Converged device
+keys remain bound to that request across reloads.
+
+A selection creates a normal correlated bridge request, with canonical instruction
+as its question and `action_selection` metadata identifying selection, answer,
+action, label, authenticated actor and selection time. History labels it
+`role: action_selection`, provenance `operator_selection`, distinct from model
+recommendation and free text. Tin Star executes nothing. Its statuses describe
+sent/delivered/answered/failed delivery; First Mate's ordinary immutable answer
+supplies the outcome. The selections HTTP route, typed recommendations and action
+buttons belong to the companion feature.

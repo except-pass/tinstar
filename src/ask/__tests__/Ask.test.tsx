@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { preferencesKey } from '../../reconciliation/presentationPreferences'
@@ -37,6 +37,8 @@ beforeEach(() => {
         if (body.target) { row.context.target = body.target; row.context.anchor.kind = body.target.kind === 'execution' ? 'worker' : 'link' }
         if (body.element) row.context.element = body.element
         if (body.field_key) { row.context.field_key = body.field_key; row.context.field_value = body.field_value }
+        const parent = records.find(record => record.request_id === body.follow_up_to)
+        if (parent) { row.conversation_id = parent.conversation_id; row.follow_up_to = parent.request_id; row.context = parent.context }
         records.push(row); data = row
       } else data = records
     }
@@ -186,9 +188,9 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(screen.getByRole('button', { name: /New answer.*Why is this waiting/ }))
     expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('no longer on the floor')
     expect(screen.getByRole('link', { name: /Open originating source/ })).toHaveAttribute('href', original.context.anchor.url)
-    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What evidence changed?' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reply to First Mate' }), { target: { value: 'What evidence changed?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send reply' }))
     await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, card_id: fixtureId(1) }))
   })
 })
@@ -311,10 +313,10 @@ it('returns a retained worker answer after remount to its exact filtered executi
   expect(returned).toHaveClass('flashed')
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
   expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Captured worker')
-  fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
-  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
-  fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What has changed?' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toHaveValue('')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Reply to First Mate' }), { target: { value: 'What has changed?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send reply' }))
   await waitFor(() => expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: worker.id }, follow_up_to: answer.request_id }))
 })
 
@@ -409,8 +411,8 @@ it('groups correlated follow-ups into one inline thread and switches independent
   expect(screen.getAllByRole('region', { name: /Answer thread/ })).toHaveLength(1)
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Independent investigation')
   expect(screen.queryByRole('dialog')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Reply to First Mate' }), { key: 'Escape' })
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toHaveFocus()
   expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
   expect(within(desk).getByRole('button', { name: /Independent investigation/ })).toHaveFocus()
@@ -467,9 +469,9 @@ it.each(['swipe', 'right-click', 'icon', 'Desk follow-up'])('supports Enter, Shi
   if (entry === 'icon') fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
   if (entry === 'Desk follow-up') {
     fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
   }
-  const question = screen.getByRole('textbox', { name: 'Question' })
+  const question = screen.getByRole('textbox', { name: entry === 'Desk follow-up' ? 'Reply to First Mate' : 'Question' })
   fireEvent.change(question, { target: { value: 'What needs attention?\nInclude the evidence.' } })
   fireEvent.keyDown(question, { key: 'Enter', shiftKey: true })
   fireEvent.keyDown(question, { key: 'Enter', isComposing: true })
@@ -498,4 +500,88 @@ it('sends an unedited overdue suggestion with the displayed element and original
   expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: 'next_check_in', field_value: '2026-11-05T15:00:00Z', element: { field_name: 'next_check_in', type: 'overdue', value: '2026-11-05T15:00:00Z' } })
   expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Sent')
   expect(records[0]!.context.anchor.page_id).toBe(fixtureId(1))
+})
+
+it('keeps the reply inline across three turns, reloads and an independent thread', async () => {
+  const first = seed(); records = [first, { ...seed(), question: 'Unrelated thread' }]
+  const view = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const composer = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  expect(screen.queryByRole('button', { name: 'Follow up' })).toBeNull()
+  for (const question of ['Can it proceed?', 'Who can review it?']) {
+    fireEvent.change(composer, { target: { value: question } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(composer).toHaveValue(''))
+    expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(composer)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  }
+  expect(requests.map(body => body.follow_up_to)).toEqual([first.request_id, records[2]!.request_id])
+  expect(requests[0]!.client_key).not.toBe(requests[1]!.client_key)
+  expect(records.filter(row => row.conversation_id === first.conversation_id)).toHaveLength(3)
+  view.unmount(); mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  for (const question of [first.question, 'Can it proceed?', 'Who can review it?']) expect(thread).toHaveTextContent(question)
+  expect(thread).not.toHaveTextContent('Unrelated thread')
+})
+
+it('preserves an uncertain inline draft and exact retry envelope after a refresh advances its parent', async () => {
+  const original = seed(); records = [original]
+  const real = vi.mocked(fetch).getMockImplementation()!
+  const attempts: unknown[] = []
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (args[0] === '/api/ask/requests' && args[1]?.method === 'POST') {
+      attempts.push(JSON.parse(String(args[1].body)))
+      return new Response(JSON.stringify({ ok: false, error: { message: 'Connection lost' } }), { status: 503 })
+    }
+    return real(...args)
+  })
+  const intervals = vi.spyOn(globalThis, 'setInterval')
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  fireEvent.change(field, { target: { value: 'Can it proceed?' } })
+  fireEvent.keyDown(field, { key: 'Enter' })
+  await screen.findByRole('alert')
+  expect(field).toHaveValue('Can it proceed?')
+  records.push({ ...seed(), conversation_id: original.conversation_id, question: 'Arrived on another device', created_at: '2099-01-01T00:00:00Z' })
+  const refresh = intervals.mock.calls.find(([, delay]) => delay === 5000)![0] as () => void
+  await act(async () => refresh())
+  await screen.findByText('Arrived on another device')
+  fireEvent.keyDown(field, { key: 'Enter' })
+  await waitFor(() => expect(attempts).toHaveLength(2))
+  expect(attempts[1]).toEqual(attempts[0])
+  fireEvent.change(field, { target: { value: 'Edited follow-up' } })
+  fireEvent.keyDown(field, { key: 'Enter' })
+  await waitFor(() => expect(attempts).toHaveLength(3))
+  expect(attempts[2]).toMatchObject({ follow_up_to: records[1]!.request_id, question: 'Edited follow-up' })
+  expect((attempts[2] as { client_key: string }).client_key).not.toBe((attempts[0] as { client_key: string }).client_key)
+})
+
+it('routes a semantic Ask on retained Desk advice into the same inline conversation', async () => {
+  const original = seed(); records = [original]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const answer = within(screen.getByRole('region', { name: /Answer thread/ })).getByRole('heading', { name: original.reply!.summary })
+  fireEvent.contextMenu(answer)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByLabelText('Element context').textContent).toContain(original.reply!.summary)
+  const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  fireEvent.change(field, { target: { value: 'What did you mean by that?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send reply' }))
+  await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, question: 'What did you mean by that?', element: expect.objectContaining({ value: original.reply!.summary }) }))
+  await waitFor(() => expect(field).toHaveValue(''))
+  expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(field)
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
+  fireEvent.click(screen.getByRole('button', { name: /Conversation open|Open question|New answer/ }))
+  const reopened = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  expect(reopened).toHaveValue('')
+  expect(screen.queryByLabelText('Element context')).toBeNull()
+  fireEvent.change(reopened, { target: { value: 'An ordinary follow-up' } })
+  fireEvent.keyDown(reopened, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(2))
+  expect(requests[1]).toMatchObject({ question: 'An ordinary follow-up' })
+  expect(requests[1]).not.toHaveProperty('element')
+  expect(requests[1]).not.toHaveProperty('field_key')
+  expect(requests[1]).not.toHaveProperty('field_value')
 })

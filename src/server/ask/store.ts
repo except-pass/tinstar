@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askRecordSchema, askReplySchema, askBody, inboxRequestId, type AskRecord, type AskContext, type BridgeUpdate } from '../../shared/ask'
+import { askRecordSchema, askReplySchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
 
 export class AskConflict extends Error {}
 export class AskNotFound extends Error {}
@@ -44,26 +44,31 @@ export class AskStore {
     return structuredClone((await this.load()).filter(row => row.owner === owner))
   }
   async find(owner: string, requestId: string) { return (await this.list(owner)).find(row => row.request_id === requestId) }
-  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string) {
+  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string, capturedSelection?: AskCapturedSelection) {
     return this.change(rows => {
-      const previous = rows.find(row => row.owner === owner && row.client_key === clientKey)
+      const previous = rows.find(row => row.owner === owner && (row.client_key === clientKey || row.client_key_aliases?.includes(clientKey)))
       if (previous) {
-        if (previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
+        if (JSON.stringify(previous.captured_selection) !== JSON.stringify(capturedSelection) || previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
           JSON.stringify(previous.context.target) !== JSON.stringify(context.target) ||
-          (followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
+          (previous.follow_up_to !== undefined ? previous.follow_up_to !== (followUpTo ?? null) : followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
         return previous
       }
       const parent = followUpTo ? rows.find(row => row.request_id === followUpTo && row.owner === owner) : null
       if (followUpTo && !parent) throw new AskNotFound('Original question unavailable')
-      const requestId = randomUUID(), at = this.now()
-      const row: AskRecord = {
-        request_id: requestId, conversation_id: parent?.conversation_id ?? requestId, owner, client_key: clientKey,
-        question, input_mode: 'text', context: parent?.context ?? context, created_at: at, updated_at: at,
-        status: 'sent', answered_at: null, note_id: null, announced: null, reply: null, reply_cursor: null, error: null, read_at: null, dismissed_at: null,
-      }
-      rows.push(row)
-      return row
+      return this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent, undefined, capturedSelection)
     })
+  }
+  private appendRequest(rows: AskRecord[], owner: string, clientKey: string, question: string, context: AskContext, parent?: AskRecord | null, selection?: AskActionSelection, capturedSelection?: AskCapturedSelection) {
+    const requestId = randomUUID(), at = this.now()
+    const row: AskRecord = {
+      request_id: requestId, conversation_id: parent?.conversation_id ?? requestId, owner, client_key: clientKey,
+      follow_up_to: parent?.request_id ?? null, ...(selection ? { action_selection: selection } : {}),
+      question, input_mode: 'text', context, ...(capturedSelection ? { captured_selection: capturedSelection } : {}), created_at: at, updated_at: at,
+      status: 'sent', answered_at: null, note_id: null, announced: null, reply: null, reply_cursor: null, error: null, read_at: null, dismissed_at: null,
+    }
+    row.dispatch_body = askBody(row, conversationTurns(rows.filter(previous => previous.owner === owner && previous.conversation_id === row.conversation_id)))
+    rows.push(row)
+    return row
   }
   action(owner: string, requestId: string, action: 'read' | 'dismiss' | 'retry') {
     return this.change(rows => {
@@ -76,14 +81,63 @@ export class AskStore {
       return row
     })
   }
+  async conversation(conversationId: string, owner?: string) {
+    await this.writing
+    const rows = (await this.load()).filter(row => row.conversation_id === conversationId && (owner === undefined || row.owner === owner))
+    if (!rows.length) throw new AskNotFound('Conversation unavailable')
+    return { schema: 'tinstar.ask-conversation.v1' as const, conversation_id: conversationId,
+      context: structuredClone(rows[0]!.context), turns: structuredClone(conversationTurns(rows)), omitted: null }
+  }
+  /** Chunk 2 supplies canonical membership lookup from its typed reply actions.
+   * The callback runs inside the writer lock; no browser instruction is trusted.
+   * A selection is a new bridge request, never an action executed by Tin Star. */
+  createActionSelection(owner: string, input: AskSelectionInput, lookupAction: (answer: AskRecord, actionId: string) => { id: string; label: string; instruction: string } | undefined) {
+    const selectionInput = askSelectionInputSchema.parse(input)
+    return this.change(rows => {
+      const { answer_id: answerId, action_id: actionId, client_key: clientKey } = selectionInput
+      const previous = rows.find(row => row.owner === owner && (row.client_key === clientKey || row.client_key_aliases?.includes(clientKey)))
+      if (previous) {
+        if (previous.action_selection?.answer_id !== answerId || previous.action_selection.action_id !== actionId) throw new AskConflict('Retry key belongs to another selection')
+        return previous
+      }
+      const answer = rows.find(row => row.owner === owner && row.request_id === answerId)
+      if (!answer?.reply) throw new AskNotFound('Original answer unavailable')
+      // Both same-key retries and another device's same-action retry recover the
+      // original request even after its answer is superseded by a later reply.
+      const consumed = rows.find(row => row.owner === owner && row.action_selection?.answer_id === answerId)
+      if (consumed) {
+        if (consumed.action_selection!.action_id !== actionId) throw new AskConflict('Another action was already selected for this answer')
+        ;(consumed.client_key_aliases ??= []).push(clientKey)
+        return consumed
+      }
+      const replies = conversationTurns(rows.filter(row => row.owner === owner && row.conversation_id === answer.conversation_id)).filter(turn => turn.role === 'assistant')
+      if (replies.at(-1)?.request_id !== answerId) throw new AskConflict('Answer has been superseded')
+      const action = lookupAction(structuredClone(answer), actionId)
+      if (!action || action.id !== actionId) throw new AskNotFound('Action unavailable in the saved answer')
+      const selection = askActionSelectionSchema.parse({ selection_id: randomUUID(), answer_id: answerId, action_id: action.id,
+        instruction: action.instruction, label: action.label, actor: owner, selected_at: this.now() })
+      return this.appendRequest(rows, owner, clientKey, selection.instruction, answer.context, answer, selection)
+    })
+  }
   async bridgeWork() {
+    // Persist legacy payloads on first dispatch too. Capturing under the writer
+    // lock freezes each note body before a puller can save it and lose its ack.
+    const eligible = (row: AskRecord) => row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error
+    const collect = (rows: AskRecord[]) => {
+      const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
+      for (const row of rows) {
+        if (!eligible(row)) continue
+        row.dispatch_body ??= askBody(row, conversationTurns(rows.slice(0, rows.indexOf(row)).filter(previous => previous.owner === row.owner && previous.conversation_id === row.conversation_id)))
+        const entry = { request_id: row.request_id, inbox_request_id: inboxRequestId(row.request_id), body: row.dispatch_body }
+        // Includes outer JSON escaping. The old Mac puller reads at most 2 MiB.
+        if (pending.length && (pending.length >= 50 || jsonBytes(pending) + jsonBytes(entry) > 1024 * 1024)) break
+        pending.push(entry)
+      }
+      return { pending, tracked: rows.filter(row => row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
+    }
     await this.writing
     const rows = await this.load()
-    return {
-      pending: rows.filter(row => row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error).slice(0, 50)
-        .map(row => ({ request_id: row.request_id, inbox_request_id: inboxRequestId(row.request_id), body: askBody(row) })),
-      tracked: rows.filter(row => row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })),
-    }
+    return rows.some(row => eligible(row) && row.dispatch_body === undefined) ? this.change(collect) : collect(rows)
   }
   ingest(update: BridgeUpdate) {
     return this.change(rows => {

@@ -310,3 +310,200 @@ it('retains exact element context in the existing bridge, retry and follow-up pr
   const follow = await call('requests', { ...input(), follow_up_to: id })
   expect(follow.data.data).toMatchObject({ conversation_id: id, context: { element } })
 })
+
+it('persists Desk selections separately from the source across retry and history', async () => {
+  const { call, bridge, reload } = await setup()
+  const first = (await call('requests', input())).data.data
+  const element = { field_name: 'answer', label: 'First Mate answer', value: 'Wait for review', type: 'generic' }
+  const selection = { element, field_key: 'description', field_value: element.value }
+  const body = { ...input(), ...selection, follow_up_to: first.request_id, question: 'What does this mean and what needs attention?' }
+  const selected = (await call('requests', body)).data.data
+  expect(selected).toMatchObject({ context: first.context, captured_selection: selection })
+  const payload = () => bridge().then(result => JSON.parse(result.data.data.pending.find((row: { request_id: string }) => row.request_id === selected.request_id).body.split('\n')[1]))
+  expect(await payload()).toMatchObject({ question: body.question, captured_selection: selection, context: first.context })
+  reload()
+  expect((await call('requests', body)).data.data.request_id).toBe(selected.request_id)
+  expect((await call('requests', { ...body, element: { ...element, value: 'Different advice' } })).status).toBe(409)
+  const next = (await call('requests', { ...input(), follow_up_to: selected.request_id })).data.data
+  expect(next.captured_selection).toBeUndefined()
+  const pending = (await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === next.request_id)
+  expect(JSON.parse(pending.body.split('\n')[1]).conversation.turns).toContainEqual(expect.objectContaining({ request_id: selected.request_id, role: 'user', captured_selection: selection }))
+  const history = (await call('conversations/' + first.conversation_id)).data.data
+  expect(history.turns).toContainEqual(expect.objectContaining({ request_id: selected.request_id, captured_selection: selection }))
+})
+
+describe('actual conversation history delivered through the existing bridge', () => {
+  const envelope = (body: string) => JSON.parse(body.split('\n')[1]!)
+  const answer = async (bridge: Awaited<ReturnType<typeof setup>>['bridge'], id: string, index: number, detail = 'The Feed change needs a fresh review.') => {
+    const reply = { summary: `Answer ${index}`, detail, references: [{ label: 'Feed PR evidence', url: 'https://github.com/except-pass/tinstar/pull/3194' }], suggested_actions: ['Check the review'] }
+    await bridge({ request_id: id, note: note(id, `thread-note-${index}`) })
+    expect((await bridge({ request_id: id, reply: { id: `thread-note-${index}`, at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: id, ...reply }), cursor: String(index) } })).status).toBe(200)
+    return reply
+  }
+  it('delivers three ordered turns with sources, exact parent IDs, literal pronouns and no other owner/conversation', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', { ...input(), question: 'What blocks the Feed PR?' })).data.data
+    const reply = await answer(bridge, first.request_id, 1)
+    await call('requests', { ...input(), question: 'An independent secret' })
+    await call('requests', { ...input(), question: 'Another owner secret' }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })
+    const secondInput = { ...input(), question: 'Can it proceed now?', follow_up_to: first.request_id }
+    const second = (await call('requests', secondInput)).data.data
+    expect(second).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: first.request_id })
+    let payload = envelope((await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === second.request_id).body)
+    expect(payload).toMatchObject({ schema: 'tinstar.ask.v1', request_id: second.request_id, conversation_id: first.conversation_id, follow_up_to: first.request_id, question: 'Can it proceed now?', context: first.context,
+      conversation: { omitted: null, turns: [
+        { role: 'user', request_id: first.request_id, text: first.question, at: first.created_at, provenance: { source: 'owner_input' } },
+        { role: 'assistant', request_id: first.request_id, reply, provenance: { source: 'fm_inbox_reply', note_id: 'thread-note-1', cursor: '1' } },
+      ] },
+    })
+    const secondReply = await answer(bridge, second.request_id, 2, 'It still needs that review.')
+    reload()
+    expect((await call('requests', secondInput)).data.data.request_id).toBe(second.request_id)
+    const third = (await call('requests', { ...input(), question: 'Who can give it?', follow_up_to: second.request_id })).data.data
+    payload = envelope((await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === third.request_id).body)
+    expect(payload.question).toBe('Who can give it?')
+    expect(payload.conversation.turns.map((turn: { role: string }) => turn.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+    expect(payload.conversation.turns[3].reply).toEqual(secondReply)
+    expect(JSON.stringify(payload)).not.toMatch(/independent secret|owner secret/)
+    reload()
+    const history = (await call(`conversations/${first.conversation_id}`)).data.data
+    expect(history.turns.filter((turn: { role: string }) => turn.role === 'user').map((turn: { text: string }) => turn.text)).toEqual([first.question, second.question, third.question])
+    expect(history.omitted).toBeNull()
+    expect((await call(`conversations/${first.conversation_id}`, undefined, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+    expect((await call(`requests`, { ...input(), follow_up_to: first.request_id }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+    expect((await call(`conversations/${first.conversation_id}`, undefined, {})).status).toBe(403)
+    expect((await bridge()).data.data.pending[0]).not.toHaveProperty('dispatch_body')
+  })
+  it('freezes the emitted note over lost acknowledgments, late replies, future turns and reloads', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    const followInput = { ...input(), follow_up_to: first.request_id, question: 'And what about it?' }
+    const second = (await call('requests', followInput)).data.data
+    const initial = (await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === second.request_id)
+    await answer(bridge, first.request_id, 1, 'A later answer, unavailable when the follow-up was sent.')
+    await call('requests', { ...input(), follow_up_to: second.request_id, question: 'A future question' })
+    await call(`requests/${second.request_id}/retry`, {})
+    reload()
+    const retried = (await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === second.request_id)
+    expect(retried).toEqual(initial)
+    expect(envelope(retried.body).conversation.turns).toHaveLength(1)
+    expect((await call('requests', { ...followInput, follow_up_to: undefined })).status).toBe(409)
+    expect((await call('requests')).data.data[0]).not.toHaveProperty('dispatch_body')
+  })
+  it('labels omitted complete turns and retrieves the full transcript through both authenticated APIs', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    await answer(bridge, first.request_id, 1, '漢'.repeat(16000))
+    const second = (await call('requests', { ...input(), question: 'What about that?', follow_up_to: first.request_id })).data.data
+    await answer(bridge, second.request_id, 2)
+    const third = (await call('requests', { ...input(), question: 'What next?', follow_up_to: second.request_id })).data.data
+    const payload = envelope((await bridge()).data.data.pending[0].body)
+    expect(payload.request_id).toBe(third.request_id)
+    expect(payload.conversation.omitted).toMatchObject({ count: 2, reason: 'history_byte_budget', first: { id: `${first.request_id}:user` }, last: { id: `${first.request_id}:assistant` } })
+    expect(payload.conversation.turns.map((turn: { request_id: string }) => turn.request_id)).toEqual([second.request_id, second.request_id])
+    reload()
+    const full = (await bridge()).data.data.pending[0].body
+    expect(envelope(full).conversation.omitted).toEqual(payload.conversation.omitted)
+    const browser = (await call(`conversations/${first.conversation_id}`)).data.data
+    const fetched = (await call(`bridge?conversation_id=${first.conversation_id}`, undefined, { Authorization: `Bearer ${token}` })).data.data
+    expect(fetched).toEqual(browser)
+    expect(fetched.turns).toHaveLength(5)
+    expect(fetched.turns[1].reply.detail).toBe('漢'.repeat(16000))
+    expect((await call(`bridge?conversation_id=${first.conversation_id}`, undefined, { Authorization: 'Bearer wrong' })).status).toBe(401)
+  })
+  it('projects legacy records and freezes their first delivery without migrating away replies or parent context', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-legacy-thread-'))
+    const original = new AskStore(root, () => '2026-11-09T15:00:00.000Z')
+    const first = await original.create(owner, randomUUID(), 'Legacy question', context())
+    await original.ingest({ request_id: first.request_id, note: note(first.request_id) })
+    await original.ingest({ request_id: first.request_id, reply: { id: 'note-1', at: first.created_at, cursor: '1', body: 'Legacy answer' } })
+    const second = await original.create(owner, randomUUID(), 'Legacy follow-up', context(), first.request_id)
+    const rows = JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))
+    for (const row of rows) { delete row.follow_up_to; delete row.dispatch_body; delete row.answered_at }
+    await writeFile(join(root, 'ask-requests.json'), JSON.stringify(rows))
+    const legacy = new AskStore(root)
+    const body = (await legacy.bridgeWork()).pending[0]!.body
+    expect(envelope(body).conversation.turns.map((turn: { role: string }) => turn.role)).toEqual(['user', 'assistant'])
+    expect(envelope(body).conversation.turns[1].reply.detail).toBe('Legacy answer')
+    expect((await legacy.create(owner, second.client_key, second.question, context(), first.request_id)).request_id).toBe(second.request_id)
+    expect((await new AskStore(root).bridgeWork()).pending[0]!.body).toBe(body)
+  })
+  it('delivers operator selections as durable requests and uses the normal First Mate reply as their outcome', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-selected-request-'))
+    const store = new AskStore(root, () => '2026-11-09T15:00:00.000Z')
+    const first = await store.create(owner, randomUUID(), 'What can we do?', context())
+    await store.ingest({ request_id: first.request_id, note: note(first.request_id) })
+    await store.ingest({ request_id: first.request_id, reply: { id: 'note-1', at: first.created_at, cursor: '1', body: 'Check the review.' } })
+    // Chunk 2 supplies lookup from typed actions; this fixture maps a stored
+    // answer to a canonical recommendation without exposing a selection route.
+    const lookup = (answer: typeof first, actionId: string) => answer.reply?.detail === 'Check the review.' && actionId === 'check-review' ? { id: actionId, label: 'Check review', instruction: 'Please check the Feed PR review.' } : undefined
+    const input = { answer_id: first.request_id, action_id: 'check-review', client_key: randomUUID() }
+    const secondDevice = { ...input, client_key: randomUUID() }
+    const [selected, sameAction] = await Promise.all([store.createActionSelection(owner, input, lookup), store.createActionSelection(owner, secondDevice, lookup)])
+    expect(sameAction.request_id).toBe(selected.request_id)
+    expect(selected).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: first.request_id, status: 'sent', question: 'Please check the Feed PR review.',
+      action_selection: { answer_id: first.request_id, action_id: 'check-review', actor: owner, label: 'Check review', instruction: 'Please check the Feed PR review.', selected_at: first.created_at } })
+    expect(selected.action_selection!.selection_id).toMatch(/^[a-f0-9-]{36}$/)
+    const body = (await store.bridgeWork()).pending[0]!
+    expect(body.inbox_request_id).toBe(inboxRequestId(selected.request_id))
+    expect(envelope(body.body)).toMatchObject({ request_id: selected.request_id, question: selected.question, action_selection: selected.action_selection, conversation: { turns: [{ role: 'user' }, { role: 'assistant' }] } })
+    await store.ingest({ request_id: selected.request_id, note: note(selected.request_id, 'selected-note') })
+    const reply = { id: 'selected-note', at: first.created_at, cursor: '2', body: 'I checked it: review is still pending.' }
+    await store.ingest({ request_id: selected.request_id, reply })
+    await store.ingest({ request_id: selected.request_id, reply })
+    const reloaded = new AskStore(root)
+    // Replay precedes supersession by the selected request's newer reply.
+    expect((await reloaded.createActionSelection(owner, input, lookup)).request_id).toBe(selected.request_id)
+    expect((await reloaded.createActionSelection(owner, secondDevice, lookup)).request_id).toBe(selected.request_id)
+    await expect(reloaded.createActionSelection(owner, { ...secondDevice, answer_id: selected.request_id }, lookup)).rejects.toThrow('Retry key')
+    expect((await reloaded.createActionSelection(owner, { ...input, client_key: randomUUID() }, lookup)).request_id).toBe(selected.request_id)
+    await expect(reloaded.createActionSelection(owner, { ...input, action_id: 'competing-action' }, lookup)).rejects.toThrow('Retry key')
+    await expect(reloaded.createActionSelection(owner, { ...input, action_id: 'competing-action', client_key: randomUUID() }, lookup)).rejects.toThrow('already selected')
+    await expect(reloaded.create(owner, input.client_key, selected.question, context(), first.request_id)).rejects.toThrow('Retry key')
+    const next = await reloaded.create(owner, randomUUID(), 'Did it work?', context(), selected.request_id)
+    const nextPayload = envelope((await reloaded.bridgeWork()).pending.find(row => row.request_id === next.request_id)!.body)
+    expect(nextPayload.conversation.turns.map((turn: { role: string }) => turn.role)).toEqual(['user', 'assistant', 'action_selection', 'assistant'])
+    expect(nextPayload.conversation.turns[2]).toMatchObject({ request_id: selected.request_id, selection: selected.action_selection, provenance: { source: 'operator_selection' } })
+    expect(nextPayload.conversation.turns[3].reply.detail).toBe(reply.body)
+    expect((await reloaded.list(owner)).filter(row => row.action_selection)).toHaveLength(1)
+  })
+  it('rejects foreign/unanswered actions, forged selection content and superseded recommendations atomically', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-stale-selection-'))
+    const store = new AskStore(root, () => '2026-11-09T15:00:00.000Z')
+    const first = await store.create(owner, randomUUID(), 'Question', context())
+    const lookup = vi.fn((_answer: typeof first, actionId: string) => actionId === 'canonical' ? { id: actionId, label: 'Canonical action', instruction: 'Canonical saved instruction' } : undefined)
+    const input = { answer_id: first.request_id, action_id: 'canonical', client_key: randomUUID() }
+    await expect(store.createActionSelection(owner, input, lookup)).rejects.toThrow('unavailable')
+    await expect(store.createActionSelection(other, input, lookup)).rejects.toThrow('unavailable')
+    expect(() => store.createActionSelection(owner, { ...input, instruction: 'Forged' } as typeof input, lookup)).toThrow()
+    await store.ingest({ request_id: first.request_id, note: note(first.request_id) })
+    await store.ingest({ request_id: first.request_id, reply: { id: 'note-1', at: first.created_at, cursor: '1', body: 'First answer' } })
+    await expect(store.createActionSelection(owner, { ...input, action_id: 'absent' }, lookup)).rejects.toThrow('saved answer')
+    const second = await store.create(owner, randomUUID(), 'Follow-up', context(), first.request_id)
+    await store.ingest({ request_id: second.request_id, note: note(second.request_id, 'note-2') })
+    await store.ingest({ request_id: second.request_id, reply: { id: 'note-2', at: first.created_at, cursor: '2', body: 'New answer' } })
+    lookup.mockClear()
+    await expect(store.createActionSelection(owner, input, lookup)).rejects.toThrow('superseded')
+    expect(lookup).not.toHaveBeenCalled()
+    expect((await store.list(owner)).filter(row => row.action_selection)).toHaveLength(0)
+  })
+  it('bounds escaped Unicode history, large view state and pending batches for the installed Mac puller', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-bounded-thread-'))
+    const store = new AskStore(root)
+    const large = context(); large.view.collapsed = Array.from({ length: 500 }, () => '漢'.repeat(2048))
+    const first = await store.create(owner, randomUUID(), '\u0000'.repeat(4000), large)
+    const rows = [first, ...Array.from({ length: 54 }, () => {
+      const id = randomUUID()
+      return { ...first, request_id: id, conversation_id: id, client_key: randomUUID(), context: context(), dispatch_body: undefined }
+    })]
+    await writeFile(join(root, 'ask-requests.json'), JSON.stringify(rows))
+    const work = await new AskStore(root).bridgeWork()
+    expect(Buffer.byteLength(JSON.stringify(work))).toBeLessThan(2 * 1024 * 1024)
+    expect(work.pending.length).toBeLessThan(50)
+    const payload = envelope(work.pending[0]!.body)
+    expect(payload.context.anchor).toEqual(large.anchor)
+    expect(payload.context_omitted).toContain('view.collapsed')
+    expect(payload.question).toBe('\u0000'.repeat(4000))
+    expect(Buffer.byteLength(work.pending[0]!.body)).toBeLessThan(96 * 1024)
+  })
+})

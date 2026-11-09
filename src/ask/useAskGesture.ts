@@ -48,7 +48,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
     const pointerMove = (e: PointerEvent) => { if (e.pointerId === pointerId) { if (hasSelection()) cancel(); else move(e.clientX, e.clientY, e) } }
     const pointerEnd = (e: PointerEvent) => { if (e.pointerId === pointerId) { end(); pointerId = null } }
     const pointerCancel = (e: PointerEvent) => { if (e.pointerId === pointerId) cancel() }
-    const click = (e: MouseEvent) => { if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation() } }
+    const click = (e: MouseEvent) => { if (e.target instanceof Element && e.target.closest('.ask-composer')) return; if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation() } }
     element.addEventListener('tinstar:element-ask', elementAsk)
     element.addEventListener('touchstart', touchStart, { passive: true })
     element.addEventListener('touchmove', touchMove, { passive: false })
