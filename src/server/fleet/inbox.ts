@@ -129,7 +129,7 @@ export class FleetOutbox {
         : snapshotReady && message.kind === 'answer' && !callOpen(message) ? 'done'
         : receipt.acknowledged ? 'acknowledged' : 'saved'
       const reply = receipt?.reply?.body ?? null
-      if (state === 'done' || reply !== null || Date.now() - (message.sentAt ?? 0) > 86_400_000) finished.add(message.requestId)
+      if (state === 'done' || message.kind === 'answer' && reply !== null || Date.now() - (message.sentAt ?? 0) > 86_400_000) finished.add(message.requestId)
       return { ...message, state, announced: receipt?.announced ?? null, reply, canReceive: observation?.canReceive ?? 'unknown' }
     })
     if (finished.size) {
@@ -158,7 +158,7 @@ export class FleetOutbox {
         const note = JSON.parse(result.stdout) as { saved?: boolean }
         if (!note.saved) return { saved: false, error: result.stderr.trim() || 'First Mate did not save the message', canReceive: 'unknown' }
         const canReceive = await readiness(message.home).catch(() => 'unknown' as const)
-        return { saved: true, error: result.code === 3 ? 'Saved, but First Mate was not woken. Use Retry under Messages to wake it.' : null, canReceive }
+        return { saved: true, error: result.code === 3 ? 'Saved, but First Mate was not woken. Use Retry delivery in the delivery details to wake it.' : null, canReceive }
       } catch (error) { return { saved: false, error: (error as Error).message, canReceive: 'unknown' } }
     })
   }

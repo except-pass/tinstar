@@ -100,6 +100,35 @@ describe('Overview shell and retained terminal navigation', () => {
     expect(screen.queryByText('Noted')).toBeNull()
     expect(panelOpen()).toBe(false)
   })
+  it('recovers worker notes with the original request and shows their replies', async () => {
+    window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
+    const note = { requestId: 'note-id', home: worker.home, taskId: worker.id, decisionKey: null, kind: 'message', text: 'Check deployment', state: 'saved', announced: false, reply: null as string | null, canReceive: true }
+    const posts: unknown[] = []
+    vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/fleet/messages')) {
+        if (init?.method === 'POST') {
+          posts.push(JSON.parse(String(init.body)))
+          note.state = 'acknowledged'; note.announced = true; note.reply = 'Deployment checked'
+          return Promise.resolve(json({ ok: true, data: { saved: true, error: null, canReceive: true } }))
+        }
+        return Promise.resolve(json({ ok: true, data: [note, { ...note, requestId: 'other', home: '/other', text: 'Other home note' }] }))
+      }
+      if (url.endsWith('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'alpha' })
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
+    fireEvent.click(screen.getByText('Tell First Mate about this', { selector: 'summary' }))
+    expect(await screen.findByText('Check deployment', { selector: 'p' })).toBeTruthy()
+    expect(screen.queryByText('Other home note', { selector: 'p' })).toBeNull()
+    fireEvent.click(screen.getByText('Delivery details', { selector: 'summary' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })) })
+    expect(posts).toEqual([{ requestId: 'note-id', kind: 'message', text: 'Check deployment' }])
+    expect(await screen.findByText('Deployment checked', { selector: 'p' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry delivery' })).toBeNull()
+  })
   it('closes a narrow worker drawer after selection and Escape', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('1099'), media: query, addEventListener() {}, removeEventListener() {} }))

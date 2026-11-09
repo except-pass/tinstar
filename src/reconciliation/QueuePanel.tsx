@@ -6,7 +6,7 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { decisionItems, type DeskQueue } from '../shared/reconciliationQueue'
-import { Composer } from '../cockpit/shell/present'
+import { Composer, ResponseRetry } from '../cockpit/shell/present'
 import { SlideToDismiss } from '../cockpit/shell/NeedsYouPanel'
 import { cardTitle, cardStatus } from './overviewModel'
 import { requestAnchor } from '../shared/deskSource'
@@ -110,13 +110,3 @@ function SourceActions({ source, submit }: { source: QueueSource; submit: (draft
   </fieldset>
 }
 
-function ResponseRetry({ message, submit }: { message: OutboxMessage; submit: (draft: Draft) => Promise<SubmitResult> }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  return <><button type="button" disabled={busy} onClick={() => {
-    setBusy(true); setError(null)
-    void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
-      .then(result => setError(result.error ?? (!result.saved ? 'Answer could not be saved.' : null)))
-      .catch(reason => setError((reason as Error).message)).finally(() => setBusy(false))
-  }}>Retry delivery</button>{error && <p role="alert">{error}</p>}</>
-}
