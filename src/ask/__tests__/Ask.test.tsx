@@ -567,7 +567,7 @@ it('routes a semantic Ask on retained Desk advice into the same inline conversat
   expect(screen.getByLabelText('Element context').textContent).toContain(original.reply!.summary)
   const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
   fireEvent.change(field, { target: { value: 'What did you mean by that?' } })
-  fireEvent.keyDown(field, { key: 'Enter' })
+  fireEvent.click(screen.getByRole('button', { name: 'Send reply' }))
   await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, question: 'What did you mean by that?', element: expect.objectContaining({ value: original.reply!.summary }) }))
   await waitFor(() => expect(field).toHaveValue(''))
   expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(field)
