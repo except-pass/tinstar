@@ -1,4 +1,4 @@
-import { CachedObservation } from './observation'
+import { CachedObservation, retainMissing } from './observation'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, readWorkerLinks, type WorkerLinks } from './workerLinks'
 import type { ReconciliationConfig } from './config'
@@ -153,5 +153,5 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
         hasMore, truncatedRelations, missingSchemaProperties,
         scope: 'configured-data-source-properties; card bodies and related external sources not collected' },
     }
-  }, 60_000, 120_000, config ? 'Notion read failed or returned an unsupported response; verify token access and data source' : 'Notion token and dataSourceId are not configured')
+  }, 30_000, 120_000, config ? 'Notion read failed or returned an unsupported response; verify token access and data source' : 'Notion token and dataSourceId are not configured', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
 }

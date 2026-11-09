@@ -436,3 +436,68 @@ describe('config and HTTP boundary', () => {
     } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
   })
 })
+
+it('forces a source read past its TTL while coalescing concurrent manual refreshes', async () => {
+  const read = vi.fn().mockResolvedValue({ data: ['known'], observedAt: new Date().toISOString(), coverage: 'complete' })
+  const cache = new CachedObservation(read, 30_000, 120_000, 'Unavailable')
+  await cache.get(); await cache.get()
+  expect(read).toHaveBeenCalledTimes(1)
+  const [a, b] = await Promise.all([cache.get(true), cache.get(true)])
+  expect(a).toEqual(b)
+  expect(read).toHaveBeenCalledTimes(2)
+})
+
+it('retains missing cards on an incomplete Notion read while accepting changed status, then removes them on a complete read', async () => {
+  let generation = 0
+  const other = { ...page, id: '30950ce6d42280d3a541cbd66c274f6a' }
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+    if (init?.method === 'GET') {
+      const properties = { ...schema.properties }
+      if (generation === 1) delete (properties as Partial<typeof schema.properties>).Link
+      return response({ ...schema, properties })
+    }
+    return response({ results: generation === 0 ? [page, other] : generation === 1 ? [{ ...page, properties: { ...page.properties, Status: { type: 'select', select: { name: 'Done' } } } }] : [other], has_more: false })
+  })
+  const cache = notionObservation({ token: 'secret', dataSourceId: id }, fetcher)
+  const initial = await cache.get()
+  expect(initial.coverage).toBe('complete')
+  generation++
+  const partial = await cache.get(true)
+  expect(partial).toMatchObject({ status: 'partial', coverage: 'partial' })
+  expect(partial.data!.cards).toHaveLength(2)
+  expect(partial.data!.cards.find(card => card.id === initial.data!.cards[0]!.id)!.properties.Status!.value).toBe('Done')
+  generation++
+  expect((await cache.get(true)).data!.cards.map(card => card.id)).toEqual([other.id])
+})
+
+it('retains workers omitted by a partial home publication and accepts a complete removal', async () => {
+  const dir = await temp(), file = join(dir, 'fleet.json')
+  const initial = snapshot()
+  initial.generated = new Date().toISOString()
+  initial.tasks.push({ ...initial.tasks[0]!, id: 'other-task' })
+  await writeFile(file, JSON.stringify(initial))
+  const cache = fleetObservation({ home: '/farm/hulk', snapshotFile: file })
+  expect((await cache.get()).data!.tasks).toHaveLength(2)
+  const next = { ...initial, tasks: [initial.tasks[0]!], main_inventory: { valid: false } }
+  await writeFile(file, JSON.stringify(next))
+  const partial = await cache.get(true)
+  expect(partial.coverage).toBe('partial')
+  expect(partial.data!.tasks).toHaveLength(2)
+  await writeFile(file, JSON.stringify({ ...next, main_inventory: { valid: true } }))
+  expect((await cache.get(true)).data!.tasks).toHaveLength(1)
+})
+
+it('routes a manual refresh through the existing scene endpoint', async () => {
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] })
+  const scene = await sources.scene()
+  const read = vi.spyOn(sources, 'scene').mockResolvedValue(scene)
+  const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('no port')
+  seedOriginAllowlist(address.port)
+  try {
+    await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene`)
+    await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene?refresh=1`)
+    expect(read.mock.calls).toEqual([[false], [true]])
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+})

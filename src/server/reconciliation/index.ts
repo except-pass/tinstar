@@ -30,13 +30,13 @@ export class ReconciliationSources {
     this.notion = notionObservation(config.notion)
   }
 
-  async snapshot() {
+  async snapshot(force = false) {
     // At most four local snapshot processes at once, even for a large farm.
     const homes: Array<{ source: FleetSource & { machineBasis: string }; observation: Awaited<ReturnType<ReturnType<typeof fleetObservation>['get']>> }> = []
-    const notion = this.notion.get()
+    const notion = this.notion.get(force)
     for (let offset = 0; offset < this.fleet.length; offset += 4) {
       homes.push(...await Promise.all(this.fleet.slice(offset, offset + 4).map(async ({ source, observation }) => ({
-        source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' }, observation: await observation.get(),
+        source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' }, observation: await observation.get(force),
       }))))
     }
     const intentions = await notion
@@ -50,8 +50,8 @@ export class ReconciliationSources {
 
   async card(id: string) { return this.context.get(id) }
 
-  async scene() {
-    const scene = this.reconciler.reconcile(await this.snapshot())
+  async scene(force = false) {
+    const scene = this.reconciler.reconcile(await this.snapshot(force))
     return { ...scene, searchIndex: this.search.get(scene) }
   }
 
@@ -80,5 +80,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     if (!id || !scene.cards.some(c => c.id === id)) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene() : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : await sources.snapshot(), { headers })
 }

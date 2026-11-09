@@ -22,11 +22,11 @@ export class CachedObservation<T> {
   private retryAt = 0
 
   constructor(private readonly read: () => Promise<ReadResult<T>>, private readonly ttlMs: number,
-    private readonly maxAgeMs: number, private readonly failureMessage: string, private readonly now = Date.now) {}
+    private readonly maxAgeMs: number, private readonly failureMessage: string, private readonly now = Date.now, private readonly mergePartial?: (previous: T, current: T) => T) {}
 
-  get(): Promise<Observation<T>> {
+  get(force = false): Promise<Observation<T>> {
     if (this.pending) return this.pending
-    if (this.cached && this.now() < this.retryAt) return Promise.resolve(this.current())
+    if (!force && this.cached && this.now() < this.retryAt) return Promise.resolve(this.current())
     this.pending = this.refresh().finally(() => { this.pending = null })
     return this.pending
   }
@@ -42,7 +42,7 @@ export class CachedObservation<T> {
       const observed = Date.parse(result.observedAt)
       if (!Number.isFinite(observed) || observed > this.now() + 60_000) throw new Error('invalid source timestamp')
       this.cached = {
-        ...result, status: result.coverage === 'complete' ? 'fresh' : 'partial',
+        ...result, data: result.coverage === 'partial' && this.cached?.data && this.mergePartial ? this.mergePartial(this.cached.data, result.data) : result.data, status: result.coverage === 'complete' ? 'fresh' : 'partial',
         attemptedAt, expiresAt: new Date(observed + this.maxAgeMs).toISOString(), error: null,
       }
     } catch {
@@ -57,4 +57,10 @@ export class CachedObservation<T> {
     this.retryAt = this.now() + this.ttlMs
     return this.current()
   }
+}
+
+/** An incomplete publication cannot establish that an omitted record vanished. */
+export function retainMissing<T>(previous: readonly T[], current: readonly T[], key: (value: T) => string): T[] {
+  const published = new Set(current.map(key))
+  return [...current, ...previous.filter(value => !published.has(key(value)))]
 }

@@ -36,7 +36,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
-  const floor = useFloorScene(), { queue, error: queueError } = useDeskQueue()
+  const floor = useFloorScene(overviewActive), { queue, error: queueError } = useDeskQueue()
   const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)

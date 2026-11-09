@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readFleetSnapshot } from '../fleet/snapshot'
-import { CachedObservation } from './observation'
+import { CachedObservation, retainMissing } from './observation'
 import type { FleetSource } from './config'
 import { record, text } from './values'
 import { cardReferences } from './references'
@@ -63,5 +63,8 @@ export function fleetObservation(source: FleetSource) {
         ]), cardReferences: cardReferences(row, 'backlog') })) : null,
       },
     }
-  }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source')
+  }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source', Date.now, (previous, current) => ({ ...current,
+    tasks: retainMissing(previous.tasks, current.tasks, task => JSON.stringify(task.identity)),
+    backlog: previous.backlog || current.backlog ? retainMissing(previous.backlog ?? [], current.backlog ?? [], entry => String(entry.id)) : null,
+  }))
 }

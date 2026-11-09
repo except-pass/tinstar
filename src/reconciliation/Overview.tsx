@@ -304,7 +304,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     : <section className="ov-inspector" aria-label="Inspector">{content}</section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
-  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch } = useDeskWorkspace()
+  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch, refresh, refreshing, lastSuccessfulSyncAt } = useDeskWorkspace()
   const navigatedCard = useRef<string | null>(null)
   useEffect(() => {
     if (!initialCardId || !scene?.cards.some(card => card.id === initialCardId) || navigatedCard.current === initialCardId) return
@@ -371,7 +371,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
+      <FloorToolbar sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)
         if (value === 'compact' && state.selection) {
           const selected = state.selection
