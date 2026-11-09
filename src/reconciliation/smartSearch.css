@@ -31,6 +31,11 @@
 .ov-pattern-tooltip { position:fixed; z-index:100; width:min(330px,calc(100vw - 16px)); box-sizing:border-box; padding:12px; background:#152a30; color:#c4d5db; border:1px solid #507a76; border-radius:8px; box-shadow:0 8px 24px #0009; font:12px/1.5 ui-monospace,monospace; pointer-events:none; }
 .ov-pattern-tooltip p { margin:7px 0 0; }
 .ov-pattern-tooltip small { display:block; margin-top:8px; color:#a2b5bd; }
+.ov-pattern-menu { position:fixed; z-index:101; box-sizing:border-box; width:min(220px,calc(100vw - 16px)); margin:0; padding:4px; background:#152a30; color:#c4d5db; border:1px solid #507a76; border-radius:8px; box-shadow:0 8px 24px #0009; }
+.ov-pattern-menu button { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:28px; margin:0; padding:3px 8px; border:1px solid transparent; border-radius:4px; background:transparent; color:#c4d5db; font:12px/1.3 ui-monospace,monospace; text-align:left; cursor:pointer; }
+.ov-pattern-menu button[aria-selected="true"] { color:#c4ecdc; background:#203b3b; }
+.ov-pattern-menu button[data-active="true"] { outline:2px solid #85d2b8; outline-offset:-2px; }
+.ov-pattern-menu small { font:11px ui-monospace,monospace; color:#a2b5bd; }
 .ov-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 @media(max-width:1200px) {
   .ov-toolbar .ov-customize-trigger>span { display:none; }
