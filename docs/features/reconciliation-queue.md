@@ -52,13 +52,12 @@ The live discovery proof is saved outside the repository at `/home/farm/fm-home/
 `?view=decisions` lists the same queue across all three readiness categories,
 including future/conditional requests. Search by title, card ID or next action.
 Selecting a linked card uses the existing presentation focus, visible through
-`get_scene`; that selection is retained in browser presentation preferences.
+`get_scene`; persistence follows the [presentation preference rules](overview.md).
 Unlinked requests expose their details and evidence without offering card focus.
 
-Overview and Decisions share one registered MCP scene while switching between
-them. `present_view` focus and flash remain in Decisions. Flash reveals a row
+The [MCP session contract](reconciliation-mcp.md#start-and-connect) governs bridge availability.
+`present_view` focus and flash remain in Decisions. Flash reveals a row
 outside the current search or scroll position, then restores the list scroll
 unless the user interacts. Steady selection and a brief flash use distinct
 styles. A card missing from either the queue or source scene cannot receive an
-applied visible flash; failed source reads report unavailable coverage. PRs and
-Releases continue to disconnect the presentation bridge while inactive.
+applied visible flash; failed source reads report unavailable coverage.

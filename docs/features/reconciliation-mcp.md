@@ -14,7 +14,7 @@ npm run build:all
 TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar.js --host 127.0.0.1 --port 5281 --no-open
 ```
 
-Open `http://127.0.0.1:5281/`. Each Overview has an ephemeral `scene_id` available through `list_ui_sessions` (also the root `data-scene-id` attribute for browser tests). Two tabs have separate IDs, revisions and selections. A reload creates a new ID. The Overview must remain open to apply commands; background browser throttling can delay acknowledgments.
+Open `http://127.0.0.1:5281/`. Each window has an ephemeral `scene_id` available through `list_ui_sessions` (also the view's `data-scene-id` attribute for browser tests). Two tabs have separate IDs, revisions and selections. A reload creates a new ID. Overview and Decisions keep the same registered scene while switching between them; other views disconnect the presentation bridge until return. One of these two views must remain open to apply commands; background browser throttling can delay acknowledgments. See the [Decisions reference](reconciliation-queue.md#decisions-tab) for its focus and flash behavior.
 
 The first backend start creates `<TINSTAR_CONFIG_HOME>/mcp-token` (default `~/.config/tinstar/mcp-token`), a random per-install token with mode 0600. Tin Star never prints it or sends it to the browser. Config permission trouble disables MCP with a visible API error while source viewing continues. The operator can rotate the token by removing that file while the backend is stopped, restarting, and updating their client’s private secret. Do not paste it into chat, command history, screenshots or source control.
 
@@ -140,8 +140,9 @@ base-scope and donut-filter semantics, including persistence and clear behavior.
 `get_scene` returns
 `records.groups` computed for this window's organizer and filters; group IDs and
 outer IDs are valid expansion/focus targets. `read_record` accepts both. Status
-options come from the source schema and observed cards. Organizer/status choices
-persist browser-locally after React commits, including assistant changes.
+options come from the source schema and observed cards. Browser persistence,
+including assistant changes after React commits, follows the
+[presentation preference rules](overview.md).
 Legacy `set-arrangement` maps `secondMate` to Manager, `machine` to Machine and
 `initiative` to one group, without inferring Initiative from parents. Legacy
 `set-sort` maps activity to Last activity descending and priority to Priority

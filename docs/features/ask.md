@@ -57,11 +57,11 @@ item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
 
 Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
-Overview, PRs, Releases and worker navigation. Section changes, rail collapse and
+Overview, Decisions, PRs, Releases and worker navigation. Section changes, rail collapse and
 mobile close keep the inbox, history, composer draft and answer selection mounted.
 The existing owner-scoped store, 5-second Ask refresh and First Mate bridge are
-unchanged. The Overview UI-command bridge disconnects while Overview is hidden
-and reconnects on return without clearing its presentation state.
+unchanged. UI-command bridge availability follows the
+[MCP session contract](reconciliation-mcp.md#start-and-connect).
 
 Desktop Desk opens by default. Drag the visible divider to resize, or focus it
 and use Left/Right (16px) and Home/End (bounds). **Desk size → Reset Desk size**

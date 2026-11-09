@@ -329,4 +329,68 @@ test('Decisions reports unavailable sources and never acknowledges a flash witho
   if (ack.outcome === 'queued') await expect.poll(async () => { ack = await call('get_command', { scene_id, command_id: 'decisions-unavailable-flash' }); return ack.outcome }).toBe('queue-source-unavailable')
   expect(ack.outcome).toBe('queue-source-unavailable')
   await expect(page).toHaveURL(/view=decisions/)
+  const directory = process.env.TINSTAR_MCP_PROOF
+  if (directory) await page.screenshot({ path: join(directory, 'decisions-unavailable.png'), fullPage: true })
+})
+
+test('Decisions restores replaced and cleared flashes and keeps manual scroll ownership', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { ...queue, items: [
+    ...queue.items.filter(item => !item.cardIds.includes(dirtId)),
+    ...Array.from({ length: 35 }, (_, index) => ({ ...queue.items[0]!, id: `scroll-request:${index}`, cardIds: [], title: `Scroll request ${index}`, evidence: [] })),
+    queue.items.find(item => item.cardIds.includes(dirtId))!,
+  ] } } }))
+  await page.goto(`${base}/?view=decisions`)
+  await windowId(page)
+  const list = page.getByLabel('Decision requests')
+  const row = page.locator(`.decisions-row[data-card-id="${dirtId}"]`)
+  const positions = () => list.evaluate(node => {
+    const result: number[][] = []
+    for (let element: HTMLElement | null = node as HTMLElement; element; element = element.parentElement) result.push([element.scrollTop, element.scrollLeft])
+    return result
+  })
+  await list.evaluate(node => { node.scrollTop = 40 })
+  const original = await positions()
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-first')
+  await expect(row).toBeInViewport()
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-replaced')
+  await expect(row).toBeInViewport()
+  await present(page, { type: 'clear-transient' }, 'scroll-cleared')
+  await expect.poll(positions).toEqual(original)
+  const restoredAfterClear = await positions()
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-manual')
+  await expect(row).toBeInViewport()
+  await list.dispatchEvent('wheel', { deltaY: -100 })
+  await list.evaluate(node => { node.scrollTop = 120 })
+  const owned = await positions()
+  await present(page, { type: 'clear-transient' }, 'scroll-owned-clear')
+  await expect.poll(positions).toEqual(owned)
+  const directory = process.env.TINSTAR_MCP_PROOF
+  if (directory) {
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(directory, 'decisions-scroll-transcript.json'), JSON.stringify({ original, restoredAfterClear, manualOwned: owned, final: await positions(), mcp: transcript }, null, 2))
+  }
+})
+
+test('Decisions shows unknown actions, unlinked requests and stale coverage honestly', async ({ page }) => {
+  const altered = structuredClone(queue)
+  altered.items = [
+    { ...altered.items[0]!, id: 'unknown-action-proof', cardIds: [fixtureId(4)], action: null },
+    { ...altered.items[0]!, id: 'unlinked-proof', title: 'Unlinked recovery request', cardIds: [], evidence: [] },
+  ]
+  altered.coverage.intentions.status = 'stale'
+  const ownershipScene = structuredClone(scene)
+  ownershipScene.cards.find(card => card.id === fixtureId(4))!.nextAction = 'Will'
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: ownershipScene } }))
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: altered } }))
+  await page.goto(`${base}/?view=decisions`)
+  await windowId(page)
+  await expect(page.getByRole('status').filter({ hasText: 'Some sources are stale' })).toBeVisible()
+  await page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`).click()
+  await expect(page.getByLabel('Selected decision')).toContainText('Next action not published')
+  await expect(page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`)).not.toContainText('Will')
+  await page.getByLabel('Decision requests').getByText('Unlinked recovery request', { exact: true }).click()
+  await expect(page.getByText('No linked card; card focus and flash are unavailable.')).toBeVisible()
+  const directory = process.env.TINSTAR_MCP_PROOF
+  if (directory) await page.screenshot({ path: join(directory, 'decisions-stale-unlinked.png'), fullPage: true })
 })

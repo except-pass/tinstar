@@ -7,7 +7,7 @@ import { askItemSchema } from '../src/shared/ask'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 import { resolve } from 'node:path'
 import { decideStaticServe } from '../src/server/staticServe'
-import { fixtureId, fixtureScene } from '../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureQueue, fixtureScene } from '../test-fixtures/reconciliation/scenes'
 
 // A real built client with isolated API fixtures; manual preview proof uses real sources.
 let server: ReturnType<typeof createServer>, base: string
@@ -33,7 +33,7 @@ test.beforeEach(async ({ page }) => {
     const data = path === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
       : path === '/api/fleet/messages' ? []
         : path === '/api/reconciliation/scene' ? { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
-          : path === '/api/reconciliation/queue' ? { items: [] }
+          : path === '/api/reconciliation/queue' ? fixtureQueue()
             : path === '/api/reconciliation/ui' ? body?.type === 'register' ? { scene_id: 'browser-fixture', key: 'key' } : { commands: [] }
               : path === '/api/ask/requests' ? [0, 1].map(index => ({ request_id: `00000000-0000-4000-8000-00000000000${index}`, conversation_id: `10000000-0000-4000-8000-00000000000${index}`, question: `Independent question ${index}`, input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Fixture task', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null }))
                 : path === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
@@ -52,7 +52,7 @@ test('one persistent Desk across sections with pointer/keyboard sizing and reloa
   await page.mouse.move(divider.x - 117, divider.y + 150); await page.mouse.up()
   await expect(separator).toHaveAttribute('aria-valuenow', '440')
   const nav = page.getByRole('navigation', { name: 'Activity' })
-  for (const section of ['PRs', 'Releases', 'Overview']) {
+  for (const section of ['Decisions', 'PRs', 'Releases', 'Overview']) {
     await nav.getByRole('button', { name: section === 'Releases' ? /^Releases/ : section, exact: section !== 'Releases' }).click()
     await expect(desk).toHaveAttribute('data-mount-witness', 'same-desk')
     await expect(separator).toHaveAttribute('aria-valuenow', '440')

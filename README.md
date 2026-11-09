@@ -8,7 +8,7 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in a single-row toolbar with linked status donuts and relationships between the columns. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
-**Your desk** stays available across Overview, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Desk button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
+**Your desk** stays available across Overview, Decisions, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Desk button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
 
 For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.
 
@@ -28,7 +28,7 @@ Expand a Desk conversation and use **Reply to First Mate** to continue inline wi
 
 Use **Open in ChatGPT** on an Overview work card or PR row for an external discussion. See the [Open in ChatGPT reference](docs/features/open-in-chatgpt.md) for URL prefill limits, copy-prompt recovery and metadata privacy.
 
-The activity strip provides **Overview**, **PRs** and **Releases**. The [PR Operations reference](docs/features/pr-operations.md) covers the read-only review table, repository scope and required owner access. In the **Your desk** header, **Find worker** opens the worker switcher and **Message receipts** opens the receipt inspector. These tools use a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. The worker switcher searches by id or project (Enter opens the first match). From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
+The activity strip provides **Overview**, **Decisions**, **PRs** and **Releases**. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the read-only review table, repository scope and required owner access. In the **Your desk** header, **Find worker** opens the worker switcher and **Message receipts** opens the receipt inspector. These tools use a collapsible side panel; below 1100px it opens as a drawer. Quota meters stay at the panel's bottom. The worker switcher searches by id or project (Enter opens the first match). From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
 A worker opens a live terminal with its objective, project, worktree, branch and pull request in a detail rail (**Details** on windows 1200px wide or narrower). In the collapsible prompt composer, **Ctrl+Enter** (or **Cmd+Enter**) pastes the prompt into the worker's pane and presses Enter. It retains recent prompts, stash slots and quick menu keys. Paste a screenshot or drop a file to upload it under the config root's `screenshots/` folder and insert its `@path`. Mark a worker **Direct** in the detail rail to indicate you are working with it yourself; First Mate receives an inbox note when the mark changes. A snapshot kind of `secondmate` shows a **Second mate** badge in that rail. Each worker keeps the same face and color across reloads.
 
@@ -38,6 +38,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 | URL | Opens |
 | --- | --- |
+| `/?view=decisions` | Decisions queue. |
 | `/?view=pulls` | PR Operations review table. |
 | `/?view=releases` | Releases PR queue. |
 | `/?card=NOTION_PAGE_ID` | Reveal that authorized card in Overview. |
@@ -75,7 +76,7 @@ Configure the home in `~/.config/tinstar/config.json`:
 
 The home must contain First Mate's `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`. Direct dismiss also runs `bin/fm-captain-hold.sh` or `bin/fm-send.sh` from that same directory. Tinstar reads the fleet snapshot and opens private terminal views linked to worker windows. It does not create or stop workers. See [the integration reference](docs/features/firstmate-observer.md) for the current boundary.
 
-For conversational control of Overview, use the [authenticated MCP connection instructions](docs/features/reconciliation-mcp.md#start-and-connect), including the [scoped outbound facade for ChatGPT](docs/features/reconciliation-mcp.md#scoped-outbound-tunnel-facade).
+For conversational control of Overview and Decisions, use the [authenticated MCP connection instructions](docs/features/reconciliation-mcp.md#start-and-connect), including the [scoped outbound facade for ChatGPT](docs/features/reconciliation-mcp.md#scoped-outbound-tunnel-facade).
 
 ## Access and configuration
 
