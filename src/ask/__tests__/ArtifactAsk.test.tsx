@@ -51,7 +51,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localS
 it('keeps PR inspect normal while CI right-click opens the shared editable, genuinely PR-bound Ask', async () => {
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
-  const ci = await screen.findByText('failed', { selector: 'td' })
+  const ci = await screen.findByRole('cell', { name: 'failed' })
   fireEvent.contextMenu(ci)
   const question = screen.getByRole('textbox', { name: 'Question' })
   expect(question).toHaveValue('What is happening with CI for this PR?')

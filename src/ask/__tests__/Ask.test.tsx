@@ -840,6 +840,18 @@ describe('spring-loaded Ask and Inspector rail', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('springs back when a blocking dialog opens during a drag', async () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20)
+    const modal = document.createElement('dialog')
+    await act(async () => { modal.open = true; document.body.appendChild(modal) })
+    expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+    modal.remove()
+    touch(task, 'touchEnd', 20)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+  })
+
   it.each([20, 180])('cancels context departure without dispatch at %s', x => {
     vi.useFakeTimers()
     try {
@@ -896,20 +908,20 @@ describe('spring-loaded Ask and Inspector rail', () => {
     expect(screen.queryByText('Release to open Inspector')).toBeNull()
   })
 
-  it('repositions the active rail when the visual viewport pans or resizes', () => {
-    const visual = Object.assign(new EventTarget(), { width: 390, height: 700, offsetLeft: 0, offsetTop: 0 })
-    vi.stubGlobal('visualViewport', visual)
-    const { container } = mount(), task = card(container)
-    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
-    const overlay = document.querySelector<HTMLElement>('.swipe-rail')!
-    visual.offsetLeft = 200; visual.offsetTop = 300; visual.width = 180
-    act(() => { visual.dispatchEvent(new Event('scroll')) })
-    expect(Number.parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(208)
-    expect(Number.parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(308)
-    expect(Number.parseFloat(overlay.style.width)).toBe(164)
-    visual.width = 390
-    act(() => { visual.dispatchEvent(new Event('resize')) })
-    expect(Number.parseFloat(overlay.style.width)).toBe(220)
+  it.each(['card', 'worker', 'relationship'] as const)('keeps a %s reveal beside its body without a portal', kind => {
+    const { container } = mount()
+    const task = card(container)
+    if (kind === 'relationship') drag(task, [180, 100])
+    const target = kind === 'card' ? task : kind === 'worker' ? worker(container) : container.querySelector<HTMLElement>('.ov-related[data-claim-id]')!
+    const root = target.matches('.ov-related') ? target.querySelector('.swipe-reveal')! : target.closest('.swipe-reveal')!
+    touch(target, 'touchStart'); touch(target, 'touchMove', 20, 100)
+    const reveal = root.querySelector('.swipe-rail')!
+    expect(reveal.parentElement).toBe(root)
+    expect(root).toHaveClass('is-swiping')
+    expect(root.querySelector('.swipe-body')).toBeTruthy()
+    expect(document.body.querySelectorAll('.swipe-rail')).toHaveLength(1)
+    expect(reveal).toHaveTextContent('Ask')
+    touch(target, 'touchCancel')
   })
 
   it('marks the rail still when reduced motion is requested', () => {
@@ -920,5 +932,77 @@ describe('spring-loaded Ask and Inspector rail', () => {
     expect(document.querySelector('.swipe-rail')).toHaveClass('swipe-rail-still')
     touch(task, 'touchCancel')
     expect(document.querySelector('.swipe-rail')).toBeNull()
+  })
+})
+
+// Exercise the actual Overview adapters, including the Inspector's relationship
+// rows, with both input paths. The SVG connector retains its existing tests above.
+describe.each(['card', 'worker', 'relationship'] as const)('%s in-place swipe', kind => {
+  const surface = (container: HTMLElement) => {
+    if (kind === 'card') return card(container)
+    if (kind === 'worker') return worker(container)
+    fireEvent.click(within(card(container).parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+    return container.querySelector<HTMLElement>('.ov-related[data-claim-id]')!
+  }
+  const reveal = (target: HTMLElement) => target.matches('.ov-related') ? target.querySelector<HTMLElement>('.swipe-reveal')! : target.closest<HTMLElement>('.swipe-reveal')!
+  const pointer = (target: HTMLElement, type: string, x: number) => fireEvent(target, new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, button: 0, clientX: x, clientY: 100, pointerType: 'mouse' }))
+  const input = (target: HTMLElement, mode: 'mouse' | 'touch') => ({
+    start: () => mode === 'touch' ? touch(target, 'touchStart') : pointer(target, 'pointerdown', 100),
+    move: (x: number) => mode === 'touch' ? touch(target, 'touchMove', x) : pointer(target, 'pointermove', x),
+    end: (x: number) => mode === 'touch' ? touch(target, 'touchEnd', x) : pointer(target, 'pointerup', x),
+    cancel: () => mode === 'touch' ? touch(target, 'touchCancel') : pointer(target, 'pointercancel', 20),
+  })
+
+  it.each(['mouse', 'touch'] as const)('opens an unsent Ask from a left %s release, including labeled fields', mode => {
+    const { container } = mount(), target = surface(container)
+    const field = target.querySelector<HTMLElement>('[data-ask-field="status"]')!
+    const events = input(field, mode)
+    events.start(); events.move(20)
+    const box = reveal(target), body = box.querySelector<HTMLElement>('.swipe-body')!
+    expect(Number.parseFloat(body.style.getPropertyValue('--swipe-travel'))).toBeLessThan(-72)
+    expect(box.querySelector('.swipe-rail')?.parentElement).toBe(box)
+    expect(box).toHaveClass('is-swiping')
+    events.end(20)
+    expect(screen.getByRole('dialog')).toHaveTextContent(kind === 'relationship' ? 'Relationship' : kind === 'worker' ? 'linked worker' : 'Build live reconciliation')
+    expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
+    expect(requests).toHaveLength(0)
+    expect(body.style.transform).toBe('')
+    expect(box.querySelector('.swipe-rail')).toBeNull()
+  })
+
+  it.each(['mouse', 'touch'] as const)('opens the same Inspector focus from a right %s release', mode => {
+    const { container } = mount(), target = surface(container), expanded = target.getAttribute('aria-expanded')
+    const events = input(target, mode)
+    events.start(); events.move(180); events.end(180)
+    const inspector = screen.getByLabelText('Inspector')
+    expect(inspector).toHaveTextContent(kind === 'relationship' ? 'Latest activity' : kind === 'worker' ? 'linked worker' : 'Build live reconciliation')
+    if (kind === 'relationship') expect(container.querySelector('.ov-line.hot')).toBeTruthy()
+    else expect(target).toHaveClass('selected')
+    expect(target.getAttribute('aria-expanded')).toBe(expanded)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(reveal(target).querySelector('.swipe-rail')).toBeNull()
+  })
+
+  it.each(['mouse', 'touch'] as const)('restores position and leaves focus unchanged on neutral/cancelled %s release', mode => {
+    vi.useFakeTimers()
+    try {
+      const { container } = mount(), target = surface(container), box = reveal(target), body = box.querySelector<HTMLElement>('.swipe-body')!
+      const before = screen.queryByLabelText('Inspector')?.textContent ?? null
+      for (const cancel of [false, true]) {
+        const events = input(target, mode)
+        events.start(); events.move(20)
+        if (cancel) events.cancel()
+        else { events.move(50); events.end(50) }
+        expect(box.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+        expect(body).toHaveClass('is-returning')
+        expect(box.querySelector('.swipe-action')).toBeNull()
+        events.end(20)
+        act(() => vi.advanceTimersByTime(220))
+        expect(body.style.transform).toBe('')
+        expect(box).not.toHaveClass('is-swiping')
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(screen.queryByLabelText('Inspector')?.textContent ?? null).toBe(before)
+      }
+    } finally { vi.useRealTimers() }
   })
 })

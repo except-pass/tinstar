@@ -34,8 +34,13 @@ not a draft or captured field value, remains First Mate's evidence.
 Movement under 12 CSS pixels stays a tap. At 12 pixels, horizontal movement
 must be at least 1.4 times vertical movement to lock. Vertical and diagonal
 movement stay native and scroll. A horizontal drag that can still scroll an
-overflow ancestor in that direction stays native. Once locked, a floating rail
-stays anchored near the pointer-down point while its thumb tracks displacement:
+overflow ancestor in that direction stays native. Work cards, worker cards and
+relationship detail rows share an in-place reveal: the card body follows the
+drag inside a clipping box, exposing teal Ask on a left swipe or blue Inspector
+on a right swipe. The rail is clipped to the exposed strip during dragging and
+spring return, preserving transparent content on cards, blocks and table cells.
+Travel resists past the arm point and stays within 80% of the
+card width. Only an armed action shows its label and release prompt.
 Ask arms at 72 pixels left and disarms
 at 58, Inspector arms at 72 pixels right and disarms at 58. Release uses the
 current arm, not the farthest point, and reversing through a disarm threshold
@@ -43,12 +48,11 @@ clears that prompt immediately. Ask release opens the composer and does not
 send. Inspector release opens the Inspector where that surface provides an
 Inspector action; elsewhere, rightward drags stay native and show no Inspector
 release prompt. Pointer cancellation, lost capture, scroll, Escape, window blur,
-visibility loss and additional touches cancel without an action. Neutral release
-and cancellation return the rail thumb to center before dismissal; reduced
-motion dismisses it immediately. The rail sits above touch/pen contact or beside
-the mouse origin, repositions within the visual viewport, and stays inside the
-owning open dialog when present. Desktop drags on
-semantic fields leave text selection native; an active selection prevents an
+visibility loss, an opening blocking modal and additional touches cancel without
+an action. Neutral release and cancellation spring the body back in 220 ms;
+reduced motion restores it immediately. The reveal stays inside its own card
+without a portal. Desktop drags can start on semantic fields while leaving
+text selection native; an active selection prevents an
 item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
 
