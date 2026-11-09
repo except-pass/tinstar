@@ -75,6 +75,25 @@ print(json.dumps(m.pull_once(sys.argv[2],m.read_token('ci.ask-bridge'),pathlib.P
     degraded: true, summary: 'Preserved answer', detail: 'Preserved evidence',
     references: [{ label: 'Evidence', url: 'https://example.test' }], suggested_actions: [],
   })
+  const warnings = rows[0]!.reply.rejected_actions
+  assert.ok(warnings)
+  assert.equal(warnings.length, 1)
+  assert.equal(warnings[0]!.id, 'unsafe')
+  assert.match(warnings[0]!.reason, /Backticks/)
+  if (release.version !== '6.0.0') {
+    const receipts = JSON.parse(await readFile(join(home, 'warning-receipts.json'), 'utf8'))
+    assert.deepEqual(Object.values(receipts), [{
+      request_id: ids[0], note_id: 'published-' + ids[0], reply_warnings: warnings,
+    }])
+    const notes = JSON.parse(await readFile(join(home, 'notes.json'), 'utf8'))
+    const update = { request_id: ids[0], reply: notes.find((note: { id: string }) => note.id === 'published-' + ids[0]).reply }
+    const response = await fetch(base + '/api/ask/bridge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(update),
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual((await response.json()).data.reply_warnings, warnings)
+  }
   assert.equal(rows[1]!.reply?.detail, 'Independent reply survives an unrelated malformed answer')
   assert.equal(typeof rows[2]!.error, 'string')
   assert.equal(rows[3]!.error, null)
