@@ -240,6 +240,11 @@ Workers/Cards status donuts. Its circular order is All → Stalled → Blocked �
 Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
 scroll horizontally or use Left/Right on the dial to move one detent. Vertical
 scroll is unaffected and trackpad momentum cannot race through several patterns.
+Hold the dial for about half a second, or press Enter or Alt+Down, to open every
+pattern in that order with the same counts and reminders. Arrows move in the list,
+Enter selects one, and Escape closes it and returns focus to the dial. Moving more
+than a few pixels cancels the hold, so a swipe still turns one detent and a short
+click still selects a neighbor or pins the center reminder.
 Picking any detent, including All, clears temporary search focus and its restore
 session. All also clears the pattern; other search/facet, donut and base-scope
 conditions remain. Pattern selection uses the existing search-filter reducer and persists

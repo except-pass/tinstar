@@ -5,7 +5,7 @@ import { fixtureId, fixtureReadinessScene, fixtureScene } from '../../../test-fi
 import { PatternDial, patternPreviews } from '../PatternDial'
 import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
 import { emptySearch } from '../../shared/smartSearch'
-import { stalledOutcome, workHealth } from '../../shared/workHealth'
+import { dialNames, dialPatterns, patternReminders, stalledOutcome, workHealth } from '../../shared/workHealth'
 const now = Date.parse('2026-11-06T18:00:00Z')
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks() })
 function mount(saved = initialPresentation()) {
@@ -20,6 +20,25 @@ const selected = () => document.querySelector<HTMLButtonElement>('.ov-pattern-se
 const state = () => JSON.parse(screen.getByTestId('view').textContent!) as PresentationState
 
 describe('Pattern Dial', () => {
+  it('keeps keyboard navigation on the listbox and selects its active option', () => {
+    mount({ ...initialPresentation(), search: { ...emptySearch(), patterns: ['blocked'] } })
+    fireEvent.keyDown(selected(), { key: 'Enter' })
+    const list = screen.getByRole('listbox')
+    expect(list).toHaveFocus()
+    for (const option of screen.getAllByRole('option')) expect(option.tabIndex).toBe(-1)
+    for (const [key, pattern] of [
+      ['ArrowDown', 'decision'], ['ArrowRight', 'unstaffed'],
+      ['ArrowUp', 'decision'], ['ArrowLeft', 'blocked'], ['ArrowUp', 'stalled'],
+    ]) {
+      fireEvent.keyDown(list, { key })
+      expect(list).toHaveFocus()
+      expect(list).toHaveAttribute('aria-activedescendant', `ov-pattern-option-${pattern}`)
+    }
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(state().search?.patterns).toEqual(['stalled'])
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(selected()).toHaveFocus()
+  })
   it('steps circularly with one click or arrow, and All removes only the pattern', () => {
     const saved = { ...initialPresentation(), donutFilter: { cards: ['In Progress'], workers: ['Running'] }, search: { query: 'release', facets: [{ field: 'machine' as const, value: 'Hulk' }], patterns: ['stalled' as const] } }
     mount(saved)
@@ -78,6 +97,86 @@ describe('Pattern Dial', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
     fireEvent.click(selected()); fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }))
     expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it('opens every pattern on hold or keyboard without turning a click or a swipe', () => {
+    vi.useFakeTimers()
+    mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    const point = (type: string, x: number, y: number, target: Element = dial) => fireEvent(target, Object.assign(new Event(type, { bubbles: true }), { pointerType: 'mouse', clientX: x, clientY: y, button: 0 }))
+    const stalled = screen.getByRole('button', { name: /^Select Stalled/ })
+    point('pointerdown', 10, 10, stalled)
+    act(() => vi.advanceTimersByTime(200))
+    point('pointerup', 10, 10, stalled)
+    fireEvent.click(stalled)
+    expect(selected()).toHaveTextContent('Stalled')
+    expect(screen.queryByRole('listbox')).toBeNull()
+
+    point('pointerdown', 30, 10)
+    point('pointermove', 39, 10)
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    point('pointerup', 30, 12)
+    expect(selected()).toHaveTextContent('Stalled')
+
+    const touch = (type: string, x: number, y: number) => fireEvent(dial, Object.assign(new Event(type, { bubbles: true }), { pointerType: 'touch', clientX: x, clientY: y, button: 0 }))
+    touch('pointerdown', 150, 10)
+    touch('pointermove', 190, 12)
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    touch('pointerup', 70, 15)
+    expect(selected()).toHaveTextContent('Blocked')
+    fireEvent.click(selected())
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    point('pointerdown', 40, 10, selected())
+    act(() => vi.advanceTimersByTime(499))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    act(() => vi.advanceTimersByTime(1))
+    const list = screen.getByRole('listbox', { name: 'Operational patterns' })
+    expect(list).toHaveAttribute('aria-activedescendant', 'ov-pattern-option-blocked')
+    point('pointerup', 40, 10, selected())
+    fireEvent.click(selected())
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(selected()).toHaveTextContent('Blocked')
+    expect(screen.getAllByRole('option')).toHaveLength(dialPatterns.length)
+    const previews = patternPreviews(fixtureScene({ now }), state(), now)
+    const texts = dialPatterns.map(pattern => {
+      const option = screen.getByRole('option', { name: new RegExp(`^${dialNames[pattern]},`) })
+      const text = previews[pattern].unknown ? previews[pattern].count ? `${previews[pattern].count}+` : '?' : String(previews[pattern].count)
+      expect(option.querySelector('small')?.textContent).toBe(text)
+      expect(option).toHaveAttribute('title', expect.stringContaining(patternReminders[pattern]))
+      if (previews[pattern].unknown) expect(option).toHaveAttribute('title', expect.stringContaining('? means unknown'))
+      return text
+    })
+    expect(texts).toEqual(expect.arrayContaining(['1']))
+    expect(texts.some(text => text.endsWith('+'))).toBe(true)
+    expect(texts).toContain('?')
+    expect(screen.getByRole('option', { name: /^Blocked,/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('option', { name: /^Needs me,/ }))
+    expect(selected()).toHaveTextContent('Needs me')
+    expect(selected()).toHaveFocus()
+    expect(state().search?.patterns).toEqual(['decision'])
+    expect(screen.queryByRole('listbox')).toBeNull()
+
+    fireEvent.keyDown(selected(), { key: 'Enter' })
+    expect(screen.getByRole('option', { name: /^Needs me,/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('listbox')).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Enter' })
+    expect(selected()).toHaveTextContent('Unstaffed')
+    expect(selected()).toHaveFocus()
+    expect(state().search?.patterns).toEqual(['unstaffed'])
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /^Select Mismatch/ }), { key: 'ArrowDown', altKey: true })
+    expect(screen.getByRole('listbox')).toHaveFocus()
+    expect(selected()).toHaveTextContent('Unstaffed')
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowLeft' })
+    expect(selected()).toHaveTextContent('Unstaffed')
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(selected()).toHaveFocus()
+    expect(state().search?.patterns).toEqual(['unstaffed'])
   })
 })
 
