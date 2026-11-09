@@ -56,15 +56,42 @@ describe('Pattern Dial', () => {
     fireEvent.keyDown(selected(), { key: 'ArrowRight' })
     expect(selected()).toHaveTextContent('All')
   })
-  it('coalesces a horizontal wheel burst and lets ordinary vertical scrolling through', () => {
+  it('steps one pattern per wheel notch in either direction and keeps the page still', () => {
     vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
     const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
-    expect(fireEvent.wheel(dial, { deltaX: 0, deltaY: 80 })).toBe(true)
+    const outside = screen.getByRole('button', { name: 'Outside' })
+    const turn = (deltaY: number, deltaMode = 0) => { time += 100; return fireEvent.wheel(dial, { deltaX: 0, deltaY, deltaMode }) }
+    expect(turn(12)).toBe(false)
     expect(selected()).toHaveTextContent('All')
-    expect(fireEvent.wheel(dial, { deltaX: 40, deltaY: 1 })).toBe(false)
-    for (let i = 0; i < 8; i++) { time += 30; fireEvent.wheel(dial, { deltaX: 25, deltaY: 0 }) }
+    expect(turn(100)).toBe(false)
     expect(selected()).toHaveTextContent('Stalled')
-    time += 250; fireEvent.wheel(dial, { deltaX: 30, deltaY: 0 })
+    expect(turn(-100)).toBe(false)
+    expect(selected()).toHaveTextContent('All')
+    expect(turn(-100)).toBe(false)
+    expect(selected()).toHaveTextContent('Active')
+    expect(turn(3, 1)).toBe(false)
+    expect(selected()).toHaveTextContent('All')
+    expect(fireEvent.wheel(outside, { deltaX: 0, deltaY: 100, deltaMode: 0 })).toBe(true)
+    expect(selected()).toHaveTextContent('All')
+  })
+  it('takes one step from a trackpad momentum burst, then another from a settled or deliberate scroll', () => {
+    vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    const burst = (deltaX: number, deltaY: number, count: number) => {
+      for (let i = 0; i < count; i++) { time += 16; expect(fireEvent.wheel(dial, { deltaX, deltaY, deltaMode: 0 })).toBe(false) }
+    }
+    burst(0, 20, 8)
+    expect(selected()).toHaveTextContent('Stalled')
+    burst(0, 80, 6)
+    expect(selected()).toHaveTextContent('Stalled')
+    time += 100
+    fireEvent.wheel(dial, { deltaX: 0, deltaY: 100, deltaMode: 0 })
+    expect(selected()).toHaveTextContent('Blocked')
+    time += 250
+    fireEvent.wheel(dial, { deltaX: 50, deltaY: 4, deltaMode: 0 })
+    expect(selected()).toHaveTextContent('Needs me')
+    time += 250
+    fireEvent.wheel(dial, { deltaX: -50, deltaY: 0, deltaMode: 0 })
     expect(selected()).toHaveTextContent('Blocked')
   })
   it('handles horizontal touch swipes once and does not turn vertical gestures into filters', () => {

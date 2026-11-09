@@ -8,6 +8,12 @@ import './smartSearch.css'
 
 const HOLD_MS = 500
 const HOLD_SLOP = 8
+/** Pixel distance that counts as one detent. Smaller trackpad deltas add up to it. */
+const WHEEL_NOTCH_PX = 40
+/** Quiet gap that ends a flick. Without it, momentum events would spin every pattern. */
+const WHEEL_SETTLE_MS = 220
+/** A full pixel notch after this gap is a new wheel click, not the same flick. */
+const WHEEL_DELIBERATE_GAP_MS = 80
 
 /** Counts share the normal scene projection, ignoring only the current detent. */
 export function patternPreviews(scene: FloorScene, state: PresentationState, now: number) {
@@ -38,7 +44,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
   const counts = useMemo(() => patternPreviews(scene, state, now), [scene, state, now])
   const index = dialPatterns.indexOf(selected), previous = dialPatterns[(index + dialPatterns.length - 1) % dialPatterns.length]!, next = dialPatterns[(index + 1) % dialPatterns.length]!
   const host = useRef<HTMLDivElement>(null), center = useRef<HTMLButtonElement>(null), tip = useRef<HTMLDivElement>(null), menuEl = useRef<HTMLDivElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>(), holdTimer = useRef<ReturnType<typeof setTimeout>>(), wheelAt = useRef(-Infinity)
+  const timer = useRef<ReturnType<typeof setTimeout>>(), holdTimer = useRef<ReturnType<typeof setTimeout>>(), wheelAt = useRef(-Infinity), wheelAcc = useRef(0), wheelHeld = useRef(false)
   const touch = useRef<{ x: number; y: number } | null>(null), holdOrigin = useRef<{ x: number; y: number } | null>(null)
   const swiped = useRef(false), held = useRef(false), restoring = useRef(false), menuRef = useRef(false)
   const [shown, setShown] = useState(false), [pinned, setPinned] = useState(false), [menu, setMenu] = useState(false), [active, setActive] = useState(index), [position, setPosition] = useState({ left: 8, top: 56 }), [menuPos, setMenuPos] = useState({ left: 8, top: 56 })
@@ -59,12 +65,27 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
   useEffect(() => {
     const wheel = (event: WheelEvent) => {
       if (menuRef.current) return
-      if (Math.abs(event.deltaX) < 12 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+      const dx = event.deltaX, dy = event.deltaY
+      if (dx === 0 && dy === 0) return
       event.preventDefault()
-      // Momentum bursts are one gesture. Require a quiet interval before another detent.
-      const at = performance.now(), quiet = at - wheelAt.current > 220
+      const at = performance.now(), gap = at - wheelAt.current
+      if (gap > WHEEL_SETTLE_MS) { wheelAcc.current = 0; wheelHeld.current = false }
       wheelAt.current = at
-      if (quiet) step(event.deltaX > 0 ? 1 : -1)
+      const delta = Math.abs(dy) >= Math.abs(dx) ? dy : dx
+      if (delta === 0) return
+      const notch = event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL
+      const deliberate = notch || (Math.abs(delta) >= WHEEL_NOTCH_PX && gap >= WHEEL_DELIBERATE_GAP_MS)
+      let direction = delta > 0 ? 1 : -1
+      if (wheelHeld.current) {
+        if (!deliberate) return
+      } else if (!deliberate) {
+        wheelAcc.current += delta
+        if (Math.abs(wheelAcc.current) < WHEEL_NOTCH_PX) return
+        direction = wheelAcc.current > 0 ? 1 : -1
+      }
+      wheelAcc.current = 0
+      wheelHeld.current = true
+      step(direction)
     }
     const element = host.current
     element?.addEventListener('wheel', wheel, { passive: false })
@@ -146,7 +167,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(previous)}`} onClick={() => choose(previous)}><span>{dialNames[previous]}</span><small>{count(previous)}</small></button>
     <button ref={center} type="button" className="ov-pattern-selected" aria-label={`${label(selected)}. Show explanation`} aria-describedby="ov-pattern-description" aria-expanded={menu} aria-haspopup="listbox" aria-controls="ov-pattern-list" onMouseEnter={showLater} onMouseLeave={() => { stopTimer(); if (!pinned) setShown(false) }} onFocus={() => { if (!restoring.current) showLater() }} onBlur={() => { stopTimer(); if (!pinned) setShown(false) }} onClick={() => { stopTimer(); setPinned(!pinned); setShown(!pinned) }}><strong>{dialNames[selected]}</strong><small>{count(selected)}</small><span aria-hidden="true">ⓘ</span></button>
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(next)}`} onClick={() => choose(next)}><span>{dialNames[next]}</span><small>{count(next)}</small></button>
-    <span id="ov-pattern-description" className="ov-sr-only">{patternReminders[selected]}{counts[selected].unknown ? ` ${counts[selected].reasons.join('; ')}. ? means unknown, + means confirmed matches with incomplete coverage.` : ''} Swipe sideways or use Left and Right arrow keys to change pattern. Enter or Alt+Down lists every pattern.</span>
+    <span id="ov-pattern-description" className="ov-sr-only">{patternReminders[selected]}{counts[selected].unknown ? ` ${counts[selected].reasons.join('; ')}. ? means unknown, + means confirmed matches with incomplete coverage.` : ''} Swipe sideways, scroll, or use Left and Right arrow keys to change pattern. Enter or Alt+Down lists every pattern.</span>
     {shown && !menu && createPortal(<div ref={tip} role="tooltip" className="ov-pattern-tooltip" style={position}><strong>{dialNames[selected]} · {count(selected)} matching tasks</strong><p>{patternReminders[selected]}</p>{counts[selected].unknown && <small>{counts[selected].reasons.join("; ")}. ? means unknown; + means confirmed matches with incomplete coverage.</small>}</div>, document.body)}
     {menu && createPortal(<div ref={menuEl} id="ov-pattern-list" role="listbox" aria-label="Operational patterns" aria-activedescendant={`ov-pattern-option-${dialPatterns[active]}`} tabIndex={-1} className="ov-pattern-menu" style={menuPos} onKeyDown={onMenuKey}>
       {dialPatterns.map(pattern => <button type="button" tabIndex={-1} key={pattern} id={`ov-pattern-option-${pattern}`} role="option" aria-selected={pattern === selected} aria-label={label(pattern)} title={reminder(pattern)} data-active={pattern === dialPatterns[active] ? 'true' : undefined} onMouseEnter={() => setActive(dialPatterns.indexOf(pattern))} onClick={() => choose(pattern, true)}><span>{dialNames[pattern]}</span><small>{count(pattern)}</small></button>)}
