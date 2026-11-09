@@ -2,9 +2,9 @@
 
 How a `tinstar` release is cut. The steps are gated, in order — each one has a *why* so it survives without tribal memory. The headline trap is at the bottom: **the plugin API is a separate npm package and ships on its own gate.**
 
-A release is **cut directly from `main`**: a version-bump commit, tagged `vN.N.0`, then published to npm. `main` is the primary development branch — features land continuously as their own squashed PRs (see [contributing.md](contributing.md)), and a release bundles whatever has accumulated on `main` since the last tag. There is no longer a long-lived `V5.x` dev branch.
+A release is **cut directly from `main`**: a version-bump commit, tagged `vN.N.0`, then distributed as a release tarball. `main` is the primary development branch — features land continuously as their own squashed PRs (see [contributing.md](contributing.md)), and a release bundles whatever has accumulated on `main` since the last tag. There is no longer a long-lived `V5.x` dev branch.
 
-For 6.0.0, the release PR prepares the version stamps and [release notes](release-notes-v6-0.md). Tagging, GitHub Release, npm publish, and a fresh installed-package check happen only after that PR reaches `main`. A running `~/tinstar-server` installation is upgraded only when its operator chooses.
+For 6.0.0, the release PR prepares the version stamps and [release notes](release-notes-v6-0.md). Tagging, GitHub Release, tarball distribution, and a fresh installed-package check happen only after that PR reaches `main`. A running `~/tinstar-server` installation is upgraded only when its operator chooses.
 
 ---
 
@@ -57,24 +57,30 @@ Write `docs/release-notes-vN-N.md` — a pointer-map of *why* each theme exists,
    ```
    If the run fails, **no release was created** — fix forward and cut the next patch (`vN.N.1`); don't leave a tag with no release behind it.
 
-## Publish to npm — TWO packages, each gated
+## Package distribution
 
-`npm publish` needs the publisher logged in **and an OTP** (npm 2FA). Publish from the tagged commit (`git checkout vN.N.0`).
+### The app — `tinstar`
 
-### 1. The app — `tinstar`
+Tin Star is distributed as a release tarball, not published to the npm registry.
+From the tagged commit, build and pack the app:
 
 ```bash
-npm publish --otp=NNNNNN
-# EOTP? the prepublishOnly rebuild blew npm's 30s OTP window — re-run skipping it:
-npm publish --ignore-scripts --otp=NNNNNN
+npm run build:all
+npm pack
 ```
 
-Root `package.json` `files` **excludes `packages/`**, so this publish does *not* ship `@tinstar/plugin-api`. That is intentional — see the next gate.
+Distribute the resulting `tinstar-<version>.tgz`. Mac puller installation and
+upgrades follow the [Ask puller runbook](features/ask-puller-service.md#install-on-the-mac).
+Root `package.json` `files` excludes `packages/`, so the tarball does not ship
+`@tinstar/plugin-api`.
 
-After publication, follow the [published puller fixture update procedure](../test-fixtures/published-puller/README.md)
-so subsequent PRs check compatibility with the latest released client.
+After packaging, follow the [published puller fixture update procedure](../test-fixtures/published-puller/README.md)
+so subsequent PRs check compatibility with the released client.
 
-### 2. The plugin API — `@tinstar/plugin-api` — **only if its surface changed**
+### The plugin API — `@tinstar/plugin-api` — **only if its surface changed**
+
+Publish the plugin API from the tagged commit with the publisher logged in and
+an OTP for npm 2FA.
 
 `@tinstar/plugin-api` is the typed SDK plugin authors compile against. It is a **separate publish** with its own gate. Republish it **iff its shipped surface changed** since the last published version. The shipped surface is exactly `packages/plugin-api/src/index.ts` (the package's `files` is `["src/index.ts","README.md"]` — it ships raw `.ts`, no build).
 
@@ -95,7 +101,7 @@ cd packages/plugin-api
 npm publish --otp=NNNNNN     # publishConfig.access=public — scoped packages default to restricted
 ```
 
-The `tinstar` org must already exist on npm (scoped name → "Scope not found" otherwise). Do **not** migrate `tinstar` itself to a scope — it owns the bare name and can't be renamed.
+The `tinstar` org must already exist on npm (scoped name → "Scope not found" otherwise). The app uses the tarball distribution procedure above.
 
 As of 6.0.0 the V5 plugin host is removed. A version stamp in `packages/plugin-api/package.json` does not by itself mean that package should be published: apply the shipped-surface diff gate above. Deprecating `@tinstar/plugin-api` on npm is a separate explicit publish decision.
 
@@ -111,7 +117,7 @@ As of 6.0.0 the V5 plugin host is removed. A version stamp in `packages/plugin-a
 - [ ] main bumped to next (N.N+1).0-dev.0 after tagging
 - [ ] Tag vN.N.0 pushed → desktop CI + GitHub Release
 - [ ] Watched release.yml to green (all 3 OS) + confirmed `gh release view vN.N.0` has 5 binaries
-- [ ] npm publish tinstar@N.N.0 (OTP)
+- [ ] Build, pack and distribute tinstar-N.N.0.tgz
 - [ ] Install the published package fresh in a separate location and confirm that it starts against a configured First Mate home; capture the live fleet from the installed build outside the repository
 - [ ] Gate: git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts
       → non-empty? npm publish @tinstar/plugin-api@N.N.0 (OTP)   empty? skip, note why

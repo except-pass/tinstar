@@ -223,9 +223,12 @@ browser-only installs do not designate a Mac puller.
 Every launchd tick is a plain Python process. It obtains the nonblocking kernel
 lock shared with the single-pass adapter, reads persisted backoff, reads the
 credential from clavis, and calls the existing authenticated bridge. Empty work
-never invokes the inbox. Delivered questions with no reply only read stored
-receipts. Only pending questions call `note --request-id tinstar-ask-<UUID>`;
-only mapped replies are posted. The inbox's durable same-ID replay prevents
+with no outstanding warning journal never invokes the inbox. Delivered questions
+with no reply only read stored receipts. Pending questions call
+`note --request-id tinstar-ask-<UUID>`; mapped replies are posted. Warning journals
+also trigger the follow-up inbox delivery described in
+[Rejected-action receipts for First Mate](#rejected-action-receipts-for-first-mate).
+The inbox's durable same-ID replay prevents
 new notes/wakes after uncertain HTTP delivery or restart. There is no model,
 reasoning session, worker spawn or model retry/investigation on these paths.
 Actual new user questions can wake First Mate through its ordinary inbox.
