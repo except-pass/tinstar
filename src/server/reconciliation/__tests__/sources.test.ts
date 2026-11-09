@@ -185,6 +185,53 @@ describe('fleet collection', () => {
     expect(scene.counts).toMatchObject({ running: 1, finished: 0 })
   })
 
+  it('reads complete when only second-mate rows lack a spawn generation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'mates.json')
+    const task = snapshot().tasks[0]!
+    await writeFile(file, JSON.stringify({ ...snapshot(), tasks: [
+      { ...task, id: 'worker', spawn_gen: 'attempt-1' },
+      { ...task, id: 'catalog', kind: 'secondmate', spawn_gen: null },
+      { ...task, id: 'cmsh', role: 'secondmate', spawn_gen: null },
+      { ...task, id: 'kdf', spawn_gen: '' },
+    ], secondmate_current: { records: [{ id: 'kdf' }] } }))
+    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
+    expect(result).toMatchObject({ status: 'fresh', coverage: 'complete' })
+    expect(result.data?.tasks.map(row => [row.identity.task_id, row.kind, row.identity.spawn_gen])).toEqual([
+      ['worker', null, 'attempt-1'],
+      ['catalog', 'secondmate', null],
+      ['cmsh', null, null],
+      ['kdf', null, ''],
+    ])
+  })
+
+  it('stays partial when a normal task row lacks a spawn generation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'task-gap.json')
+    const task = snapshot().tasks[0]!
+    await writeFile(file, JSON.stringify({ ...snapshot(), tasks: [
+      { ...task, id: 'hulk', spawn_gen: null },
+      { ...task, id: 'catalog', kind: 'secondmate', spawn_gen: null },
+    ] }))
+    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
+    expect(result).toMatchObject({ status: 'partial', coverage: 'partial' })
+    expect(result.data?.tasks.map(row => row.identity.task_id)).toEqual(['hulk', 'catalog'])
+  })
+
+  it('stays partial when spawned task rows repeat an id', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(); const file = join(dir, 'duplicate-tasks.json')
+    const task = snapshot().tasks[0]!
+    await writeFile(file, JSON.stringify({ ...snapshot(), tasks: [
+      { ...task, id: 'worker', spawn_gen: 'attempt-1' },
+      { ...task, id: 'worker', spawn_gen: 'attempt-2' },
+      { ...task, id: 'catalog', kind: 'secondmate', spawn_gen: null },
+    ] }))
+    const result = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
+    expect(result).toMatchObject({ status: 'partial', coverage: 'partial' })
+    expect(result.data?.tasks).toHaveLength(3)
+  })
+
   it('marks missing attempt/backlog inventory partial', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
     const dir = await temp(); const file = join(dir, 'partial.json')

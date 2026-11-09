@@ -26,6 +26,25 @@ const readinessFields = (value: unknown): {
   return { ...lists, current_role: text(row.current_role), hold_bucket: text(row.hold_bucket) }
 }
 
+// Persistent second mates are not spawned tasks and have no spawn generation.
+// Kind, role, or a secondmate_current record id identifies the row.
+const secondMateIds = (snapshot: { secondmate_current?: unknown }) => {
+  const records = record(snapshot.secondmate_current).records
+  const ids = new Set<string>()
+  if (!Array.isArray(records)) return ids
+  for (const row of records) {
+    const id = text(record(row).id)
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+const secondMateRow = (task: unknown, mates: ReadonlySet<string>) => {
+  const row = record(task)
+  const id = text(row.id)
+  return text(row.kind) === 'secondmate' || text(row.role) === 'secondmate' || (id !== null && mates.has(id))
+}
+
 export function fleetObservation(source: FleetSource) {
   // File publication includes snapshot generation and transport between homes.
   const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
@@ -57,11 +76,15 @@ export function fleetObservation(source: FleetSource) {
       backlog: { ...fields(task.backlog, ['id', 'title', 'state', 'hold_reason', 'blocked_by', 'hold_until']), ...readinessFields(task.backlog) },
     }))
     const backlog = snapshot.backlog?.records
+    const mates = secondMateIds(snapshot)
+    const spawned = tasks.filter((_, index) => !secondMateRow(snapshot.tasks[index], mates))
     // Duplicate backlog IDs can hide contradictory dispatch notes behind a first-match join.
+    // Second-mate rows stay in the snapshot and do not count against task-link completeness.
     const complete = Array.isArray(backlog) && snapshot.backlog?.present === true &&
       record(snapshot.main_inventory).valid === true && backlog.every(row => !!text(record(row).id)) &&
       new Set(backlog.map(row => text(record(row).id))).size === backlog.length &&
-      tasks.every(task => !!task.identity.task_id && !!task.identity.spawn_gen) &&
+      tasks.every(task => !!task.identity.task_id) &&
+      spawned.every(task => !!task.identity.spawn_gen) &&
       new Set(tasks.map(task => task.identity.task_id)).size === tasks.length
     return {
       observedAt: snapshot.generated, coverage: complete ? 'complete' as const : 'partial' as const,

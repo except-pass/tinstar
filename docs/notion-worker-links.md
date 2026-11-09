@@ -276,8 +276,10 @@ practical target; merely copying an old snapshot does not renew it.
 
 Publish the complete `fm-fleet-snapshot.v1` JSON for the exact configured
 `fm_home`, a current parseable `generated` timestamp, and `tasks` as an array.
-Every task needs a unique nonempty `id` and its real nonempty `spawn_gen`;
-this completeness rule currently includes secondmate rows. Also publish
+Every spawned task needs a unique nonempty `id` and its real nonempty
+`spawn_gen`. Persistent second-mate rows stay in the snapshot and do not count
+against this rule. A second-mate row is one whose `kind` or `role` is
+`secondmate`, or whose `id` is listed in `secondmate_current.records`. Also publish
 `main_inventory.valid: true` and `backlog: { present: true, records: [...] }`,
 with unique nonempty backlog record IDs. Explicit empty arrays are valid only
 when they are the actual complete inventory. Preserve incomplete data as partial;
