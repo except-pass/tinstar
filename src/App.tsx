@@ -4,7 +4,7 @@ import { findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOver
 import { directLabel } from './cockpit/groupWorkers'
 import { ActivityBar } from './cockpit/shell/ActivityBar'
 import { ContextPanel } from './cockpit/shell/ContextPanel'
-import { Composer, ResponseRetry, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
+import { Composer, WorkerNotes, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
 import { DRAWER_MEDIA, isDrawerLayout, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
@@ -335,12 +335,7 @@ export default function App() {
               <div className="cockpit-status-detail"><StateChip state={current.state} /><MateBadge kind={current.kind} /><span className="cockpit-status-text" title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
               <section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
               <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
-              <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} />{messages.filter(message => message.kind === 'message' && message.home === current.home && message.taskId === current.id).map(message => <article key={message.requestId} className="cockpit-messages">
-                <p>{message.text}</p>
-                <p>{message.reply ? 'Answered' : message.state === 'sending' || message.state === 'saved' && message.announced === false ? 'Delivery failed' : 'Waiting for answer'}</p>
-                {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
-                <details><summary>Delivery details</summary><pre>{JSON.stringify(message, null, 2)}</pre>{(message.state === 'sending' || message.state === 'saved' && message.announced === false) && <ResponseRetry message={message} submit={submit} />}</details>
-              </article>)}</details>
+              <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /><WorkerNotes messages={messages.filter(message => message.kind === 'message' && message.home === current.home && message.taskId === current.id)} submit={submit} /></details>
             </div>
           </div>
         </aside>

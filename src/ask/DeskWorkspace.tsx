@@ -3,6 +3,7 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { useFloorScene } from '../reconciliation/useFloorScene'
 import { useDeskQueue } from '../reconciliation/useDeskQueue'
 import { usePresentation } from '../reconciliation/usePresentation'
+import { WorkerNotes } from '../cockpit/shell/present'
 import { QueuePanel } from '../reconciliation/QueuePanel'
 import { decisionItems } from '../shared/reconciliationQueue'
 import type { PresentationAction } from '../shared/reconciliationPresentation'
@@ -121,10 +122,12 @@ function WorkspaceRail({ closeRequest, openRequest, onClose, workers, messages, 
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
   useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
+  const retainedNotes = messages.filter(message => message.kind === 'message' && !workers.some(worker => worker.home === message.home && worker.id === message.taskId))
   const attention = decisions + groups.filter(group => group.failed && !group.unread && group.view !== 'history').length
   return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention} onClose={onClose}>
     <nav className="desk-tabs" aria-label="Desk views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
     <div hidden={view !== 'needs-you' || !(decisions || queueError || state.queueItemId || state.queueCardId)}><QueuePanel scene={scene ?? undefined} messages={messages} submit={submit} workers={workers} state={state} send={send} queue={queue} error={queueError} now={now} /></div>
+    {retainedNotes.length > 0 && <details className="cockpit-worker-message"><summary>Retained worker notes · {retainedNotes.length}</summary><WorkerNotes messages={retainedNotes} submit={submit} /></details>}
     <AskDesk now={now} view={view} showEmpty={view !== 'needs-you' || !decisions} />
   </DeskRail>
 }

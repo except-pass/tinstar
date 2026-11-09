@@ -67,3 +67,12 @@ export function ResponseRetry({ message, submit }: { message: OutboxMessage; sub
       .catch(reason => setError((reason as Error).message)).finally(() => setBusy(false))
   }}>Retry delivery</button>{error && <p role="alert">{error}</p>}</>
 }
+
+export function WorkerNotes({ messages, submit }: { messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult> }) {
+  return <>{messages.map(message => <article key={message.requestId} className="cockpit-messages">
+                <small>{message.taskId ?? 'First Mate'} · {message.home}</small><p>{message.text}</p>
+                <p>{message.reply ? 'Answered' : message.state === 'sending' || message.state === 'saved' && message.announced === false ? 'Delivery failed' : 'Waiting for answer'}</p>
+                {message.reply && <blockquote><strong>First Mate replied</strong><p>{message.reply}</p></blockquote>}
+                <details><summary>Delivery details</summary><pre>{JSON.stringify(message, null, 2)}</pre>{(message.state === 'sending' || message.state === 'saved' && message.announced === false) && <ResponseRetry message={message} submit={submit} />}</details>
+              </article>)}</>
+}
