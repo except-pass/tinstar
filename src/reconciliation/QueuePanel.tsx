@@ -1,3 +1,5 @@
+import { AskSurface } from '../ask/AskSurface'
+import { askElement } from '../ask/element'
 import { useEffect, useRef, useState } from 'react'
 import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shell/types'
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
@@ -39,10 +41,10 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const deskCards = (item: QueueItem, focused = false) => item.cardIds.length ? item.cardIds.map(id => {
     const card = scene?.cards.find(card => card.id === id)
-    return <button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
+    return <AskSurface as="div" subject={{ cardId: id }} key={id}><button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
       if (scene && !card) { setUnavailable(id); return }
       setUnavailable(null); send({ type: 'navigate-card', cardId: id })
-    }}><small>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small>{cardStatus(card)}</small>}</button>
+    }}><small {...askElement('status', 'Desk readiness')}>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong {...askElement('title', 'Task')}>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small {...askElement('status')}>{cardStatus(card)}</small>}</button></AskSurface>
   }) : <h3>{requestText(item.title)}</h3>
   const next = actionable.filter(item => item.id !== selected?.id)
   return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>

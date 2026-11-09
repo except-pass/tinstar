@@ -293,3 +293,20 @@ it('anchors a closed PR resolved on demand and retains captured versus current h
   expect((await call('requests', body)).data.data.request_id).toBe(saved.data.data.request_id)
   expect(origin).toHaveBeenCalledTimes(1)
 })
+
+it('retains exact element context in the existing bridge, retry and follow-up protocol', async () => {
+  const { call, bridge, reload } = await setup()
+  const element = { field_name: 'next_check_in', label: 'Overdue 3d · Next check-in Nov 6, 10:00 AM ET', value: '2026-11-06T15:00:00Z', type: 'overdue' }
+  const body = { ...input(), field_key: 'next_check_in', field_value: element.value, element }
+  const first = await call('requests', body), id = first.data.data.request_id
+  expect(first.status).toBe(200)
+  expect(first.data.data.context).toMatchObject({ element, return_to: { section: 'overview', target: { kind: 'card', id: fixtureId(1) } } })
+  const pending = (await bridge()).data.data.pending[0]
+  expect(pending.body).toContain(JSON.stringify(element))
+  expect(JSON.parse(pending.body.split('\n')[1]).context.element).toEqual(element)
+  reload()
+  expect((await call('requests', body)).data.data.request_id).toBe(id)
+  expect((await call('requests', { ...body, element: { ...element, label: 'Different field' } })).status).toBe(409)
+  const follow = await call('requests', { ...input(), follow_up_to: id })
+  expect(follow.data.data).toMatchObject({ conversation_id: id, context: { element } })
+})

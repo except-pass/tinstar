@@ -309,3 +309,25 @@ The remaining parent-card items are follow-up slices:
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
   physical iPhone Safari and Android Chrome touch/microphone verification remains
   an explicit review gate when devices are available.
+
+## Shared element entry points
+
+`useElementAsk` and `askElement` in `src/ask/` provide one field contract for
+Overview cards (including expanded relationship hints and Inspector fields), PR
+rows/details, Releases rows/evidence, and Desk items. Existing `data-ask-field`
+markup works with the same hook. Hover or focus a field to reveal the floating
+Ask control without changing layout. Tab from a focused field reaches that
+control; Shift+F10 / Context Menu still opens the semantic draft directly.
+Right-click and a stationary 550 ms touch hold use the same context builder and
+existing field templates. Moving more than 10 px, scrolling, cancellation or a
+second touch cancels the hold; a successful hold cancels the item swipe and its
+synthetic click. Selecting text inside one item offers **Ask about this**. A
+selection crossing item boundaries or outside an item does not.
+
+The existing create/context schemas now also accept optional `element` metadata:
+`{field_name, label, value, type}`. This captures the displayed element label
+(e.g. `Overdue 3d` plus the formatted check-in), its exact value and deterministic
+question type. Existing `field_key` / `field_value`, server-owned item origins,
+bridge delivery, inline threads and Desk returns remain the same path. The sheet
+shows the captured element and an editable suggestion; Enter submits it,
+Shift+Enter stays a newline, IME Enter does not submit, and Escape closes it.

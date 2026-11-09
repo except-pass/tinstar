@@ -31,6 +31,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
       if (ask) openRef.current?.()
     }
     const cancel = () => { if (gesture?.lock === 'text') suppressUntil = Date.now() + 700; gesture = null; pointerId = null; setHint(false) }
+    const elementAsk = () => { cancel(); suppressUntil = Date.now() + 1000 }
     const ignored = (event: Event) => ignoreControls && event.target instanceof Element && event.target !== element && !!event.target.closest('a,button,input,select,textarea')
     const touchStart = (e: TouchEvent) => { if (ignored(e)) return; const t = e.touches[0]; if (e.touches.length === 1 && t) start(t.clientX, t.clientY); else cancel() }
     const touchMove = (e: TouchEvent) => { const t = e.touches[0]; if (e.touches.length === 1 && t) move(t.clientX, t.clientY, e); else cancel() }
@@ -46,6 +47,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
     // must not discard the gesture before touchend.
     const pointerCancel = (e: PointerEvent) => { if (e.pointerId === pointerId) cancel() }
     const click = (e: MouseEvent) => { if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation() } }
+    element.addEventListener('tinstar:element-ask', elementAsk)
     element.addEventListener('touchstart', touchStart, { passive: true })
     element.addEventListener('touchmove', touchMove, { passive: false })
     element.addEventListener('touchend', end)
@@ -57,6 +59,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
     element.addEventListener('lostpointercapture', pointerCancel)
     element.addEventListener('click', click, true)
     return () => {
+      element.removeEventListener('tinstar:element-ask', elementAsk)
       element.removeEventListener('touchstart', touchStart); element.removeEventListener('touchmove', touchMove)
       element.removeEventListener('touchend', end); element.removeEventListener('touchcancel', cancel)
       element.removeEventListener('pointerdown', pointerStart); element.removeEventListener('pointermove', pointerMove)

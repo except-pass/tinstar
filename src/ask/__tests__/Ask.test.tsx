@@ -35,6 +35,7 @@ beforeEach(() => {
         const row = { ...seed(), question: body.question, status: 'sent' as const, reply: null }
         row.context.anchor.page_id = body.target?.kind === 'execution' ? body.target.id : body.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === body.target.id)!.cardId : body.card_id
         if (body.target) { row.context.target = body.target; row.context.anchor.kind = body.target.kind === 'execution' ? 'worker' : 'link' }
+        if (body.element) row.context.element = body.element
         if (body.field_key) { row.context.field_key = body.field_key; row.context.field_value = body.field_value }
         records.push(row); data = row
       } else data = records
@@ -455,4 +456,45 @@ it('keeps independently pending turns recoverable in one conversation', async ()
   }
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
   expect(screen.getAllByRole('button', { name: /Retry delivery:/ })).toHaveLength(2)
+})
+
+it.each(['swipe', 'right-click', 'icon', 'Desk follow-up'])('supports Enter, Shift+Enter, IME and Escape in the %s composer', async entry => {
+  if (entry === 'Desk follow-up') records = [seed()]
+  const { container } = mount(), task = card(container)
+  if (entry === 'swipe') { touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100); touch(task, 'touchEnd') }
+  if (entry === 'right-click') { fireEvent.click(task); fireEvent.contextMenu(task.querySelector('.ov-task-status')!) }
+  if (entry === 'icon') fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  if (entry === 'Desk follow-up') {
+    fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+  }
+  const question = screen.getByRole('textbox', { name: 'Question' })
+  fireEvent.change(question, { target: { value: 'What needs attention?\nInclude the evidence.' } })
+  fireEvent.keyDown(question, { key: 'Enter', shiftKey: true })
+  fireEvent.keyDown(question, { key: 'Enter', isComposing: true })
+  expect(requests).toHaveLength(0)
+  fireEvent.keyDown(question, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ question: 'What needs attention?\nInclude the evidence.' })
+  if (entry === 'Desk follow-up') expect(requests[0]).toHaveProperty('follow_up_to')
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Question' }), { key: 'Escape' })
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('sends an unedited overdue suggestion with the displayed element and original item linkage', async () => {
+  const source = scene.cards.find(card => card.id === fixtureId(1))!
+  source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-05T15:00:00Z' }, hasMore: false }
+  const { container } = mount(), task = card(container)
+  fireEvent.click(task)
+  fireEvent.mouseOver(task.querySelector('.ov-check')!)
+  fireEvent.click(screen.getByRole('button', { name: /^Ask about Overdue/ }))
+  expect(screen.getByLabelText('Element context')).toHaveTextContent('Next check-in Nov 5, 10:00 AM ET')
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('Why is this overdue?')
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Question' }), { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: 'next_check_in', field_value: '2026-11-05T15:00:00Z', element: { field_name: 'next_check_in', type: 'overdue', value: '2026-11-05T15:00:00Z' } })
+  expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Sent')
+  expect(records[0]!.context.anchor.page_id).toBe(fixtureId(1))
 })
