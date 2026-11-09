@@ -345,7 +345,7 @@ remains in the shared health projection for tests and consumers; it is not a
 second results inventory. Readiness is projected read-only from each configured home's existing snapshot:
 queued, unheld, non-captain-actionable backlog rows with an explicit empty
 `unresolved_blocker_ids` list are runnable. Accountable rows come from confirmed
-current explicit links or explicit card references; textual references never join.
+current explicit links; card references alone never join.
 Distinct named blockers can supply runnable paths, and fresh working blockers or
 explicit Origin continuations can supply active resolvers. Home/task identities
 are retained, with missing or ambiguous blocker IDs unknown. A complete fresh

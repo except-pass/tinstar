@@ -72,7 +72,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const activity = (worker: typeof workers[number]) => !readFailed && scene.coverage.homes.some(home => home.source.home === worker.home && freshObservation(home.observation, now)) ? currentActivity(worker, now) : 'unknown'
   const running = workers.filter(worker => activity(worker) === 'working').length
   const linksKnown = !readFailed && workerIds.size === workers.length && links.every(verifiedLink)
-  const readiness = workReadiness(scene, cardId, workers, linksKnown, now, context.readiness)
+  const readiness = workReadiness(scene, workers, linksKnown, now, context.readiness)
   const blockers = [...new Set([...readiness.blockers, ...workers.flatMap(worker => worker.source.backlog.blocked_by ? [String(worker.source.backlog.blocked_by)] : [])])]
   const runnable = readFailed ? null : readiness.runnable
   const activeResolverCount = readFailed ? null : readiness.activeResolverCount

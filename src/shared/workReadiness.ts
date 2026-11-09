@@ -19,14 +19,12 @@ export function currentActivity(worker: Execution, now: number): 'working' | 'wa
 }
 
 /** Index the existing home observations once per scene health query. All joins
- * retain home/task identity; unqualified blocker IDs must resolve unambiguously. */
+ * retain home/task identity. */
 export function readinessContext(scene: FloorScene, now: number) {
   const rows = new Map<string, Backlog>()
-  const byTask = new Map<string, Backlog[]>()
   const executions = new Map<string, Execution[]>()
   for (const row of scene.backlog) {
     rows.set(key(row.home, String(row.source.id)), row)
-    const entries = byTask.get(String(row.source.id)) ?? []; entries.push(row); byTask.set(String(row.source.id), entries)
   }
   for (const worker of scene.executions) {
     const id = key(worker.home, worker.identity.task_id)
@@ -34,23 +32,16 @@ export function readinessContext(scene: FloorScene, now: number) {
   }
   const homes = new Map(scene.coverage.homes.map(home => [home.source.home, home.observation]))
   return { rows, executions, homes, allHomesFresh: homes.size > 0 && [...homes.values()].every(home => fresh(home, now)),
-    blocker: (home: string, id: string) => rows.get(key(home, id)) ?? (byTask.get(id)?.length === 1 ? byTask.get(id)![0] : undefined) }
+    blocker: (home: string, id: string) => rows.get(key(home, id)) }
 }
 
 /** A projection, not a scheduler: queued unheld rows and explicitly named
  * blocker/Origin paths only. Null preserves every unobserved census or state. */
-export function workReadiness(scene: FloorScene, cardId: string, workers: Execution[], linksKnown: boolean, now: number,
+export function workReadiness(scene: FloorScene, workers: Execution[], linksKnown: boolean, now: number,
   context = readinessContext(scene, now)) {
   const reasons = new Set<string>()
   const accountable = new Map<string, { home: string; task: string }>()
   for (const worker of workers) if (worker.identity.task_id) accountable.set(key(worker.home, worker.identity.task_id), { home: worker.home, task: worker.identity.task_id })
-  for (const row of scene.backlog) {
-    const refs = row.source.cardReferences
-    if (row.source.id && refs.some(ref => ref.basis === 'explicit' && ref.pageId === cardId) &&
-      !refs.some(ref => ref.basis === 'explicit' && ref.pageId !== cardId)) {
-      accountable.set(key(row.home, String(row.source.id)), { home: row.home, task: String(row.source.id) })
-    }
-  }
   let runnableKnown = linksKnown && accountable.size > 0 && context.allHomesFresh
   let resolversKnown = runnableKnown
   const runnablePaths = new Set<string>(), resolverPaths = new Set<string>(), blockers = new Set<string>()
@@ -61,7 +52,7 @@ export function workReadiness(scene: FloorScene, cardId: string, workers: Execut
     reasons.add(`Active resolver coverage incomplete for ${home}`)
   }
   if (!context.homes.size) reasons.add('Home snapshot unavailable: no configured home')
-  if (!linksKnown || !accountable.size) reasons.add('Runnable and active resolver accountability unavailable: no complete verified task links or explicit card references')
+  if (!linksKnown || !accountable.size) reasons.add('Runnable and active resolver accountability unavailable: no complete verified task links')
 
   const inspectRunnable = (row: Backlog) => {
     if (!fresh(row.observation, now) || !context.homes.has(row.home) || !fresh(context.homes.get(row.home)!, now) || !Array.isArray(row.source.unresolved_blocker_ids) || !['queued', 'in_flight', 'done'].includes(String(row.source.state))) {
@@ -87,18 +78,19 @@ export function workReadiness(scene: FloorScene, cardId: string, workers: Execut
       if (!candidate) {
         runnableKnown = false; resolversKnown = false
         reasons.add(`Runnable and active resolver unknown for ${home}: blocker ${blocker} missing or ambiguous`)
-      } else { inspectRunnable(candidate); candidates.set(key(candidate.home, String(candidate.source.id)), candidate) }
+      } else candidates.set(key(candidate.home, String(candidate.source.id)), candidate)
     }
   }
   // Origin is an explicit continuation edge, never inferred from prose or names.
-  for (const row of scene.backlog) if (row.source.state === 'in_flight' && row.source.queue?.originTaskId && accountable.has(key(row.home, row.source.queue.originTaskId))) candidates.set(key(row.home, String(row.source.id)), row)
+  for (const row of scene.backlog) if (row.source.queue?.originTaskId && accountable.has(key(row.home, row.source.queue.originTaskId))) candidates.set(key(row.home, String(row.source.id)), row)
   for (const worker of scene.executions) if (worker.source.queue?.originTaskId && accountable.has(key(worker.home, worker.source.queue.originTaskId))) {
     const id = key(worker.home, worker.identity.task_id), row = context.rows.get(id)
     if (row) candidates.set(id, row)
-    else { resolversKnown = false; reasons.add(`Active resolver coverage incomplete for ${worker.home}: continuation backlog unavailable`) }
+    else { runnableKnown = false; resolversKnown = false; reasons.add(`Runnable and active resolver coverage incomplete for ${worker.home}: continuation backlog unavailable`) }
   }
   for (const [id, row] of candidates) {
     if (accountable.has(id)) continue // own running path is not an extra resolver
+    inspectRunnable(row)
     if (!fresh(row.observation, now) || !context.homes.has(row.home) || !fresh(context.homes.get(row.home)!, now)) {
       resolversKnown = false; reasons.add(`Active resolver coverage incomplete for ${row.home}`); continue
     }

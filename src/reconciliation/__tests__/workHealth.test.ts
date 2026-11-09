@@ -52,11 +52,11 @@ describe('read-only task readiness projection', () => {
     assigned(scene).source.current_state.state = 'working'
     expect(health(scene).patterns.active.outcome).toBe('unavailable')
   })
-  it('counts a directly referenced queued path without treating it as an assigned worker', () => {
+  it('rejects a directly referenced queued path without verified links', () => {
     const scene = sceneFor(), row = queued(scene)
     scene.executions = []; scene.claims = []
     row.source.cardReferences = [{ pageId: fixtureId(4), basis: 'explicit', source: 'backlog.work_item' }]
-    expect(health(scene)).toMatchObject({ workerCount: 0, runnable: 1, patterns: { active: { outcome: 'match' }, stalled: { outcome: 'no-match' } } })
+    expect(health(scene)).toMatchObject({ workerCount: 0, runnable: null, patterns: { active: { outcome: 'unavailable' }, stalled: { outcome: 'unavailable' } } })
     row.source.cardReferences[0]!.basis = 'textual'
     expect(health(scene).runnable).toBeNull()
     expect(health(scene).patterns.active.outcome).toBe('unavailable')
@@ -88,6 +88,17 @@ describe('read-only task readiness projection', () => {
     expect(health(scene).activeResolverCount).toBe(0)
     expect(health(scene).patterns.stalled.outcome).toBe('match')
   })
+  it.each(['backlog', 'execution'] as const)('counts a queued continuation discovered through %s', source => {
+    const scene = sceneFor(), row = queued(scene)
+    if (source === 'backlog') row.source.queue = { ...queue, originTaskId: 'blocked-worker' }
+    else {
+      const worker = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+      worker.identity.task_id = 'ready-blocker'
+      worker.source.queue = { ...queue, originTaskId: 'blocked-worker' }
+      worker.source.current_state.state = 'paused'
+    }
+    expect(health(scene)).toMatchObject({ runnable: 1, activeResolverCount: 0, patterns: { active: { outcome: 'match' }, stalled: { outcome: 'no-match' } } })
+  })
   it('does not count a task own worker again as its resolver', () => {
     const scene = sceneFor(); rowFor(scene).source.unresolved_blocker_ids = ['blocked-worker']
     expect(health(scene).activeResolverCount).toBe(0)
@@ -114,14 +125,16 @@ describe('read-only task readiness projection', () => {
     expect(health(scene).activeResolverCount).toBeNull()
     expect(health(scene).patterns.stalled.outcome).toBe('unavailable')
   })
-  it('resolves named blockers by canonical home and rejects ambiguous remote IDs', () => {
+  it('resolves named blockers only within their canonical home', () => {
     const scene = sceneFor(), local = queued(scene)
     rowFor(scene).source.unresolved_blocker_ids = ['ready-blocker']
     const remote = { ...local, id: 'remote-ready', home: '/fixture/bandit' }
     scene.backlog.push(remote)
     expect(health(scene).runnable).toBe(1) // the local identity is explicit
     scene.backlog = scene.backlog.filter(row => row !== local)
-    expect(health(scene).runnable).toBe(1) // one unambiguous configured-home identity
+    expect(health(scene).runnable).toBeNull()
+    expect(health(scene).patterns.active.outcome).toBe('unavailable')
+    expect(health(scene).patterns.stalled.outcome).toBe('unavailable')
     scene.backlog.push({ ...remote, id: 'another-ready', home: '/fixture/mac' })
     expect(health(scene).runnable).toBeNull()
     expect(health(scene).activeResolverCount).toBeNull()
