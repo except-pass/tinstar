@@ -58,11 +58,15 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const handledOrigin = useRef<AskReturn | null>(null)
   const restoringOverview = useViewSnapshot(views, 'overview', () => ({
     query: presentation.state.search?.query ?? '', sort: presentation.state.sort ?? 'priority',
-    filter: { search: presentation.state.search ?? emptySearch(), status: presentation.state.statusFilter, donut: presentation.state.donutFilter, exceptions: presentation.state.exceptionsOnly },
+    filter: { search: presentation.state.search ?? emptySearch(), searchFocus: presentation.state.searchFocus, searchReveal: presentation.state.searchReveal, status: presentation.state.statusFilter, donut: presentation.state.donutFilter, exceptions: presentation.state.exceptionsOnly },
     group: presentation.state.organizer,
   }), saved => {
     handledOrigin.current = null
-    presentation.send({ type: 'set-search', search: { ...saved.filter.search, query: saved.query } })
+    // Workspace Back may only be dismissing a reopened search palette. Restore
+    // its saved focus as well as the query; set-search intentionally clears it.
+    const { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = presentation.state
+    presentation.send({ type: 'restore-search-view', view: { selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort,
+      search: { ...saved.filter.search, query: saved.query }, searchFocus: saved.filter.searchFocus, searchReveal: saved.filter.searchReveal ?? null } })
     presentation.send({ type: 'set-sort', sort: saved.sort })
     if (saved.group) presentation.send({ type: 'set-organizer', organizer: saved.group })
     if (saved.filter.status) presentation.send({ type: 'set-status-filter', filter: saved.filter.status })

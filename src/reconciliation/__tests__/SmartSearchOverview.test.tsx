@@ -5,6 +5,7 @@ import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { preferencesKey } from '../presentationPreferences'
 import type { FloorScene, PresentationAction } from '../presentation'
 import * as health from '../../shared/workHealth'
+import { useWorkspaceHistory } from '../../ask/workspaceHistory'
 import { actionSchema } from '../../shared/reconciliationCommands'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, send: null as null | ((action: PresentationAction) => unknown) }))
@@ -189,6 +190,29 @@ describe('compact search palette and temporary graph focus', () => {
     expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
     expect(cardIds(container)).toEqual(before)
     expect(go.mock.calls).toEqual([[-1], [-1]])
+  })
+
+  it('keeps focus on Back from the reopened palette with production workspace history', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    window.history.replaceState(null, '', window.location.href)
+    function Workspace() {
+      const views = useWorkspaceHistory('overview')
+      return <Overview views={views} workers={[]} messages={[]} submit={vi.fn()} />
+    }
+    const { container } = render(<Workspace />)
+    const back = async () => {
+      const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
+      await act(async () => { window.history.back(); await popped })
+    }
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    search('Release'); fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(container.querySelectorAll('.ov-card.ov-search-match')).toHaveLength(1)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    await back()
+    expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
+    expect(container.querySelectorAll('.ov-card.ov-search-match')).toHaveLength(1)
+    await back()
+    expect(container.querySelectorAll('.ov-card.ov-search-match')).toHaveLength(0)
   })
 
   it('restores Detailed collapsed state and density, and handles mobile Back in two levels', async () => {
