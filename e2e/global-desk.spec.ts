@@ -288,27 +288,35 @@ test('inline neighbors survive real browser Back to Releases filters and groupin
   await page.screenshot({ path: testInfo.outputPath('inline-mobile.png') })
 })
 
-test('compact unread previews pulse only until opened and respect reduced motion', async ({ page }) => {
-  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [0,1,2].map(index => askItemSchema.parse({
+test('compact unread previews pulse only until opened and respect reduced motion', async ({ page }, testInfo) => {
+  let records = [0,1,2].map(index => askItemSchema.parse({
     request_id: `00000000-0000-4000-8000-00000000000${index}`, conversation_id: `10000000-0000-4000-8000-00000000000${index}`,
     question: 'Can the release proceed?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Release readiness', url: null, observed_at: null }, view: { scene: 'overview' } },
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'Review passed. Ready for the next decision.', detail: 'The complete evidence remains available.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null
-  })) } }))
+  }))
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
+  await page.route('**/api/ask/requests/*/read', route => {
+    records = records.map(record => route.request().url().includes(record.request_id) ? { ...record, read_at: new Date().toISOString() } : record)
+    return route.fulfill({ json: { ok: true, data: {} } })
+  })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(base)
   const cards = page.locator('.ask-desk article')
   await expect(cards).toHaveCount(3)
   const heights = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))
   for (const height of heights) expect(height).toBeLessThanOrEqual(110)
-  const accent = cards.first()
+  await testInfo.attach('Collapsed card heights', { body: JSON.stringify(heights), contentType: 'application/json' })
+  const accent = page.locator('.ask-desk article[data-ask-id="00000000-0000-4000-8000-000000000000"]')
   await expect(accent).toHaveAttribute('data-unread', 'true')
   expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationDuration)).toBe('2.5s')
+  await page.screenshot({ path: testInfo.outputPath('compact-desktop.png') })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationName)).toBe('none')
   await page.setViewportSize({ width: 390, height: 844 })
   const open = page.getByRole('button', { name: /Open Your desk/ })
   if (await open.isVisible()) await open.click()
   await expect(accent.getByRole('button', { name: 'Archive conversation' })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('compact-mobile-reduced-motion.png') })
   await accent.locator('.ask-preview').click()
   await expect(page.getByText('The complete evidence remains available.')).toBeVisible()
   await expect(accent).toHaveAttribute('data-unread', 'false')

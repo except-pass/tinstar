@@ -94,8 +94,11 @@ A delivered question waiting for an answer has no retry button. An open thread
 follows a reply/read transition between views without replacing its composer.
 The card's **Archive conversation** button immediately moves every turn into
 searchable History and offers **Undo**. In History, **Restore to inbox** restores
-the conversation. These visibility changes persist across reloads and devices;
-they do not cancel delivery, delete content, dismiss a source decision, change
+the conversation. The authenticated `POST /api/ask/requests/:request_id/dismiss`
+and `/restore` actions update every stored turn in that owner's conversation,
+including turns absent from the browser snapshot. The browser serializes these
+visibility actions and reconciles polling after pending mutations settle.
+These visibility changes persist across reloads and devices; they do not cancel delivery, delete content, dismiss a source decision, change
 Notion, send instructions, execute suggestions, approve work, merge or deploy.
 A genuine new reply clears that turn's archived state and resurfaces its
 conversation as **New answer**, leaving unrelated archived conversations alone.
