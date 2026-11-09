@@ -151,6 +151,12 @@ and groups without a manager or machine axis use all configured homes. Partial c
 unmatched worker relationship Unknown worker instead of asserting No linked
 worker; absence conclusions remain suppressed.
 
+Unknown workers and unverified links under incomplete coverage are explained
+once in Source health for the unique cards in the current view. They do not
+contribute to exception totals or add relationship warning badges to task rows.
+Positive conflicting worker evidence is counted separately and remains available
+in each card's Evidence & diagnostics. Confirmed worker facts remain on task rows.
+
 Expanded and Detailed worker cards show an identity avatar, title and a consistently placed worker status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a

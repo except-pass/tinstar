@@ -259,6 +259,36 @@ Notion pagination. Offline/stale/unconfigured homes, stale Notion and unreadable
 declarations stay unknown. Historical links are retained, not repair requests;
 invalid cached records are accompanied by source freshness in coverage.
 
+Missing/stale/partial observations and nonconflicting legacy link candidates are
+neutral source-health information, excluded from scene and group exception
+totals. Advisory findings retain their evidence and carry `sourceHealth: true`
+in the scene and worker-link report. Positive contradictions (duplicate primary
+cards, competing references, spawn evidence, invalid records and proven absent
+declarations) still require investigation, including during a partial outage.
+
+### Published home freshness and completeness
+
+File-backed homes expire **300 seconds after `generated`**, independent of the
+file's arrival or modification time. Publish and transport often enough that
+generation interval + transfer delay + the collector's 20-second cache remains
+below 300 seconds. Generation every 60–120 seconds with prompt transport is a
+practical target; merely copying an old snapshot does not renew it.
+
+Publish the complete `fm-fleet-snapshot.v1` JSON for the exact configured
+`fm_home`, a current parseable `generated` timestamp, and `tasks` as an array.
+Every task needs a unique nonempty `id` and its real nonempty `spawn_gen`;
+this completeness rule currently includes secondmate rows. Also publish
+`main_inventory.valid: true` and `backlog: { present: true, records: [...] }`,
+with unique nonempty backlog record IDs. Explicit empty arrays are valid only
+when they are the actual complete inventory. Preserve incomplete data as partial;
+never invent generations or omit registered managers to claim completeness.
+
+For automatic links, the exact coordinator-authored `card: <page-id>` line must
+also appear in the corresponding `body_lines` under `tasks[].backlog` and/or
+`backlog.records[]` (copies must agree). Runtime state, endpoints and observation
+freshness remain independent evidence; a complete metadata inventory alone does
+not prove liveness or absence across the whole farm.
+
 Saved identical inputs produce byte-identical reports. All rows and nested
 identity/source lists are sorted with ordinary string comparison. No current
 wall clock or in-memory relationship history participates. `evaluatedAt` and

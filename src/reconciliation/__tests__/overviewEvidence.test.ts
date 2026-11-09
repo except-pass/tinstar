@@ -1,10 +1,100 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
-import { cardWorkerFact, patternCheckSummary } from '../overviewEvidence'
+import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import type { PatternResult } from '../../shared/workHealth'
+import type { WorkerLinkDetector } from '../../server/reconciliation/scene'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
+describe('worker link source health', () => {
+  it('associates reconciled duplicate execution evidence through nonhistorical links', () => {
+    const sources = fixtureSources({ now })
+    const home = sources.fleet[1]!
+    sources.fleet[2]!.observation.data!.tasks = []
+    sources.intentions.data!.cards.find(card => card.id === fixtureId(1))!.properties['First Mate tasks']!.value = JSON.stringify({
+      schema: 'tinstar.fm-links.v1',
+      tasks: [{ fm_home: home.source.home, task_id: 'linked-worker', first_observed_spawn_gen: 'attempt-1' }],
+    })
+    home.observation.data!.tasks.push(structuredClone(home.observation.data!.tasks[0]!))
+    Object.assign(home.observation, { status: 'partial', coverage: 'partial' })
+    const scene = new SceneReconciler().reconcile(sources, now)
+    const finding = scene.findings.find(value => value.workerLinkDetectors?.includes('duplicate-execution'))!
+    const link = scene.claims.find(value => value.executionId === finding.executionIds[0])!
+    expect(finding.cardIds).toEqual([])
+    expect(link).toMatchObject({ cardId: fixtureId(1), verification: 'unverified', state: 'last-known' })
+    expect(workerLinkSourceHealth(scene, [fixtureId(1), fixtureId(1), fixtureId(2)], now))
+      .toEqual({ unknown: 1, unverified: 0, conflicting: 1 })
+    finding.sourceHealth = true
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now))
+      .toEqual({ unknown: 0, unverified: 1, conflicting: 0 })
+    finding.sourceHealth = undefined
+    link.state = 'historical'
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now))
+      .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+  })
+  it('keeps advisory candidates, hierarchy issues and unknown expectations neutral', () => {
+    const sources = fixtureSources({ now })
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+    card.properties.Status!.value = 'Unrecognized status'
+    card.properties['Parent item']!.value = [fixtureId(2)]
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(scene.cards.find(value => value.id === card.id)!.hierarchyIssues.length).toBeGreaterThan(0)
+    expect(scene.cards.find(value => value.id === card.id)!.expectation).toBe('unknown')
+    expect(scene.findings.some(finding => finding.sourceHealth && finding.cardIds.includes(fixtureId(3)))).toBe(true)
+    expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(3)], now))
+      .toEqual({ unknown: 1, unverified: 1, conflicting: 0 })
+  })
+  it.each<WorkerLinkDetector>(['invalid-record', 'declared-absent', 'duplicate-primary', 'spawn-evidence', 'duplicate-execution'])(
+    'counts substantive %s evidence once and excludes advisory findings', detector => {
+      const scene = fixtureScene({ now })
+      scene.findings.push({ id: 'detector', kind: 'unverified-conflicting', cardIds: [fixtureId(2)], executionIds: [],
+        homeIds: [], reason: 'Worker-link evidence', workerLinkDetectors: [detector] })
+      expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(2)], now))
+        .toEqual({ unknown: 0, unverified: 0, conflicting: 1 })
+      scene.findings.at(-1)!.sourceHealth = true
+      expect(workerLinkSourceHealth(scene, [fixtureId(2)], now))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+      scene.findings.at(-1)!.sourceHealth = undefined
+      scene.findings.at(-1)!.workerLinkDetectors = ['historical-link']
+      expect(workerLinkSourceHealth(scene, [fixtureId(2)], now))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+    })
+  it('counts unique visible unknown and unverified cards separately from positive conflicts', () => {
+    const scene = fixtureScene({ now })
+    const ids = [fixtureId(1), fixtureId(2), fixtureId(2), fixtureId(3)]
+    expect(workerLinkSourceHealth(scene, ids, now)).toEqual({ unknown: 1, unverified: 1, conflicting: 0 })
+    scene.claims.find(link => link.cardId === fixtureId(3))!.verification = 'conflicting'
+    expect(workerLinkSourceHealth(scene, ids, now)).toEqual({ unknown: 1, unverified: 0, conflicting: 1 })
+    expect(workerLinkSourceHealth(scene, [], now)).toEqual({ unknown: 0, unverified: 0, conflicting: 0 })
+  })
+  it('ages confirmed relationships and keeps healthy home links through an unrelated outage', () => {
+    const scene = fixtureScene({ now })
+    scene.coverage.homes[0]!.observation.status = 'stale'
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now).unverified).toBe(0)
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now, true).unverified).toBe(1)
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now + 3600_000).unverified).toBe(1)
+    scene.claims.forEach(link => { link.state = 'historical' })
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now).unknown).toBe(1)
+  })
+  it('keeps invalid records and proven absent declarations actionable during unrelated incomplete coverage', () => {
+    const sources = fixtureSources({ now, unavailable: true })
+    const cards = sources.intentions.data!.cards
+    cards.find(card => card.id === fixtureId(2))!.properties['First Mate tasks']!.value = '{'
+    cards.find(card => card.id === fixtureId(3))!.properties['First Mate tasks']!.value = JSON.stringify({
+      schema: 'tinstar.fm-links.v1',
+      tasks: [{ fm_home: sources.fleet[1]!.source.home, task_id: 'absent-worker', first_observed_spawn_gen: 'attempt-1' }],
+    })
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(scene.coverage.absenceConclusions).toBe('suppressed')
+    expect(scene.claims.some(link => link.cardId === fixtureId(2))).toBe(false)
+    expect(scene.claims.find(link => link.cardId === fixtureId(3))!.verification).toBe('unverified')
+    for (const readFailed of [false, true]) {
+      expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(3), fixtureId(3), fixtureId(5)], now, readFailed))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 2 })
+    }
+  })
+})
+
 function singleWorker() {
   const scene = fixtureScene({ now })
   const worker = scene.executions.find(worker => worker.identity.task_id === 'linked-worker')!

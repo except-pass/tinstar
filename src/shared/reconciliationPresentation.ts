@@ -11,7 +11,7 @@ export type Arrangement = keyof FloorScene['arrangements']
 export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 'you' | 'firstMate' | 'pull'
 export interface Target { kind: TargetKind; id: string }
 export const semanticId = (target: Target) => `${target.kind}:${target.id}`
-export const isException = (finding: Finding) => !['confirmed-link', 'legitimate-wait-planned', 'outside-coverage'].includes(finding.kind)
+export { isException } from './reconciliationFindings'
 export const isPlanned = (scene: FloorScene, card: SceneCard) => card.expectation === 'wait-planned' || scene.findings.some(f => f.kind === 'legitimate-wait-planned' && f.cardIds.includes(card.id))
 export const arrangements: Record<Arrangement, string> = { initiative: 'Initiative', secondMate: 'Manager', machine: 'Machine' }
 export const findingLabels: Record<Finding['kind'], string> = {

@@ -1,4 +1,5 @@
 import { homeLabel } from '../../shared/reconciliationLabels'
+import { isException as exception } from '../../shared/reconciliationFindings'
 import { retainedExecutionLiveness } from '../../shared/executionLiveness'
 import { countLiveness, type ExecutionLiveness, type LivenessCounts } from '../../domain/execution-liveness'
 import type { SourceSnapshot } from './index'
@@ -20,6 +21,8 @@ export interface Finding {
   homeIds: string[]
   reason: string
   workerLinkDetectors?: WorkerLinkDetector[]
+  /** Advisory relationship evidence, retained in diagnostics rather than exception totals. */
+  sourceHealth?: true
 }
 export interface Claim {
   id: string
@@ -91,7 +94,6 @@ const metadata = <T>(observation: Observation<T>) => {
 }
 const fresh = (value: Observation<unknown>) => (value.status === 'fresh' || value.status === 'partial') && !!value.data
 const sufficient = (value: Observation<unknown>) => value.status === 'fresh' && value.coverage === 'complete' && !!value.data
-const exception = (finding: Finding) => !['confirmed-link', 'legitimate-wait-planned', 'outside-coverage'].includes(finding.kind)
 
 function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectation' | 'expectationReason' | 'nextAction' | 'checkpoint'> {
   const owner = word(card, 'Owner')
@@ -123,9 +125,9 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   const intentions = ageObservation(input.intentions, now)
   const fleet = input.fleet.map(home => ({ ...home, observation: ageObservation(home.observation, now) }))
   const findings: Finding[] = []
-  const add = (kind: FindingKind, cardIds: string[], executionIds: string[], reason: string, homeIds: string[] = [], workerLinkDetectors: WorkerLinkDetector[] = []) => {
+  const add = (kind: FindingKind, cardIds: string[], executionIds: string[], reason: string, homeIds: string[] = [], workerLinkDetectors: WorkerLinkDetector[] = [], sourceHealth = false) => {
     findings.push({ id: key(kind, cardIds, executionIds, homeIds, reason), kind, cardIds, executionIds, homeIds, reason,
-      ...(workerLinkDetectors.length ? { workerLinkDetectors } : {}) })
+      ...(workerLinkDetectors.length ? { workerLinkDetectors } : {}), ...(sourceHealth ? { sourceHealth: true as const } : {}) })
   }
   const sourceCards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const cards: SceneCard[] = [...sourceCards.values()].map(card => {
@@ -219,7 +221,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
           state: fresh(observation) && fresh(intentions) ? 'current' : 'last-known', verification,
           accountability: { home: home.source.home, parentHome: home.source.parentHome ?? null, owner: card ? word(card.source, 'Owner') : null } }
         claims.push(claim)
-        add('unverified-conflicting', [cardId], [id], `Legacy candidate (${basis}); Notion declaration required; no automatic repair`)
+        add('unverified-conflicting', [cardId], [id], `Legacy candidate (${basis}); Notion declaration required; no automatic repair`, [], [], !conflict)
       }
       if (execution.activity === 'unknown') add('unknown-stale-source', referenced, [id], 'Runtime state or execution identity is unknown; a fresh metadata snapshot alone is insufficient')
     }
@@ -271,7 +273,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         accountability: { home: link.fm_home, parentHome: home?.source.parentHome ?? null, owner: word(card.source, 'Owner') } })
       add(conflict ? 'unverified-conflicting' : !available ? 'unknown-stale-source' : execution ? 'confirmed-link' : historical ? 'outside-coverage' : 'unverified-conflicting',
         [card.id], execution ? [id] : [], conflict
-          ? 'Competing Notion declarations or different spawn evidence; First Mate must investigate continuity or ID reuse; never auto-switch'
+          ? `${[duplicatePrimary && 'Same home/task declared on multiple primary cards', spawnEvidence && 'Observed spawn evidence differs from the declaration or contains multiple attempts'].filter(Boolean).join('; ')}; First Mate must investigate continuity or ID reuse; never auto-switch`
           : !available ? 'Declared relationship is last-known; Notion or worker home unavailable, stale or partial'
             : execution ? 'Notion First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery'
               : historical ? 'Historical Notion relationship retained; worker is not currently observed'
