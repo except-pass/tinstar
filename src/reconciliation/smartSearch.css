@@ -17,7 +17,7 @@
 .ov-search-icon { color:#80bbaa; font-size:16px; }
 .ov-search-panel footer { display:flex; gap:16px; padding:8px 10px; border-top:1px solid #314550; color:#829ca6; font-size:9px; }
 .ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:-2px; }
-.ov .ov-item.ov-search-context { opacity:.25; }
+.ov .ov-item.ov-search-context { opacity:.65; border-style:dashed; }
 .ov .ov-item.ov-search-match { border-color:#69a88f; box-shadow:inset 2px 0 #69a88f; }
 .ov-pattern-dial { display:grid; grid-template-columns:minmax(0,1fr) minmax(95px,1.3fr) minmax(0,1fr); align-items:center; flex:0 1 290px; min-width:200px; height:38px; border:1px solid #304851; border-radius:7px; background:linear-gradient(90deg,#101d25,#1c3338 50%,#101d25); touch-action:pan-y; }
 .ov-toolbar .ov-pattern-dial button { border:0; background:transparent; display:flex; align-items:center; justify-content:center; gap:4px; height:36px; min-width:0; padding:0 4px; white-space:nowrap; }
@@ -53,6 +53,5 @@
   .ov-search-panel { top:12px; padding-top:0; }
 }
 
-.ov .ov-item.ov-pattern-context { opacity:.65; border-style:dashed; }
 .ov .ov-item.ov-pattern-unknown { border-color:#d9b96c; box-shadow:inset 2px 0 #d9b96c; }
 .ov-pattern-unknown-marker { color:#edcf87; border:1px dashed #9b864e; border-radius:3px; padding:1px 4px; font-size:10px; flex-shrink:0; }

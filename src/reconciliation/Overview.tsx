@@ -8,7 +8,7 @@ import { semanticId, ancestorHomes, isPlanned, type FloorScene, type Presentatio
 import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
+import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
@@ -127,7 +127,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     event.stopPropagation()
     send({ type: 'focus', target: item })
   }
-  return <div ref={askRoot} className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? view.patternResults ? ' ov-pattern-context' : ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${cantTell ? ' ov-pattern-unknown' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
+  return <div ref={askRoot} className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${cantTell ? ' ov-pattern-unknown' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={cantTell ? `${title}. Can't tell: ${patternResult.reason}` : title}
     onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle() } }}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={toggle}>
@@ -320,15 +320,8 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
-  const searchMatches = useMemo(() => scene && state.searchFocus ? directNeighbors(scene, state.searchFocus) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
+  const searchMatches = useMemo(() => scene && state.searchFocus?.length ? new Set(state.searchFocus.map(targetKey)) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
   const patternResults = useMemo(() => scene && state.search?.patterns.length ? new Map(sceneWorkHealth(scene, now).map(health => [health.cardId, combinedPatternResult(health, state.search!.patterns)])) : undefined, [scene, state.search, now])
-  const searchEdgeStyle = useMemo(() => {
-    if (!scene || !state.searchFocus || !searchMatches) return ''
-    const quote = (value: string) => '"' + value.replace(/["\\\n\r\f]/g, character => '\\' + character.charCodeAt(0).toString(16) + ' ') + '"'
-    const selectors = scene.claims.filter(link => link.basis === 'explicit' && link.verification === 'confirmed' && link.state === 'current' && searchMatches.has(`execution:${link.executionId}`) && searchMatches.has(`card:${link.cardId}`))
-      .map(link => `.ov-search-focused .ov-compact-connections [data-worker-id=${quote(link.executionId)}][data-card-id=${quote(link.cardId)}]`)
-    return `.ov-search-focused .ov-compact-connections .ov-line{opacity:.12}${selectors.length ? `${selectors.join(',')}{opacity:1;stroke-width:2}` : ''}`
-  }, [scene, state.searchFocus, searchMatches])
   const displayGroups = useMemo(() => density === 'compact' ? canonicalOverviewGroups(groups) : groups, [groups, density])
   useEffect(() => {
     if (search.isRestoring()) return
@@ -387,7 +380,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
         }
       }} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${state.searchFocus ? ' ov-search-focused' : ''}`}>{searchEdgeStyle && <style>{searchEdgeStyle}</style>}<div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
+      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer

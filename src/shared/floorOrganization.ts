@@ -103,7 +103,9 @@ export interface FloorGroup {
 export function statusProjection(scene: FloorScene, state: PresentationState, now: number) {
   const selection = state.donutFilter ?? { cards: [], workers: [] }
   const searching = hasSearch(state.search)
-  const seeds = searching ? directNeighbors(scene, searchSeeds(scene, state.search!, now)) : null
+  const matched = searching ? directNeighbors(scene, searchSeeds(scene, state.search!, now)) : null
+  const focused = state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
+  const seeds = focused ? state.search?.patterns.length && matched ? new Set([...focused].filter(key => matched.has(key))) : focused : matched
   const reveal = state.search?.patterns.length ? new Set<string>() : state.searchReveal?.kind === 'card' && state.searchReveal.id === state.navigation?.cardId
     ? new Set([`card:${state.searchReveal.id}`])
     : directNeighbors(scene, state.searchFocus ?? (state.searchReveal ? [state.searchReveal] : []))

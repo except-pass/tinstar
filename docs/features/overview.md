@@ -153,8 +153,8 @@ Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
-Unknown, not Finished. Search focus dimming is described in
-[Smart Search](#smart-search-core); it never represents execution status.
+Unknown, not Finished. Secondary linked counterparts in
+[Smart Search](#smart-search-core) never represent execution status.
 
 Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
@@ -216,11 +216,11 @@ are named suggestions derived from the same authorized scene; PR matches keep
 their original card/worker target.
 
 Typing leaves Overview unchanged. Arrows/Enter or pointer/touch select a result,
-close the palette and spotlight the seed plus its direct verified neighbors in
-the existing Workers-left / Tasks-right graph. Unrelated rows stay visible and
-dimmed. The real SVG gutter and compact row density remain; no recursive fan-out
-or text-inferred connection is added. An outside-view result is temporarily
-revealed alongside the current rows, including planned work hidden by roadmap
+close the palette and filter to the seed plus its direct verified neighbors in
+the existing Workers-left / Tasks-right graph. Unrelated rows are hidden; linked
+counterparts have a secondary, dashed appearance. The real SVG gutter and compact
+row density remain; no recursive fan-out or text-inferred connection is added. An
+outside-view result can temporarily reveal planned work hidden by roadmap
 visibility. Clear search focus restores organizer, scope, donuts, density,
 expansions, scroll and selection. Escape first closes an open palette, then clears
 focus. Mobile Back dismisses the same transient layers. Focus and its restoration
@@ -234,9 +234,15 @@ Workers/Cards status donuts. Its circular order is All → Stalled → Blocked �
 Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
 scroll horizontally or use Left/Right on the dial to move one detent. Vertical
 scroll is unaffected and trackpad momentum cannot race through several patterns.
-All clears only the pattern; other search/facet, donut and base-scope conditions
-remain. Pattern selection uses the existing search-filter reducer and persists
-with the ordinary view preferences.
+Picking any detent, including All, clears temporary search focus and its restore
+session. All also clears the pattern; other search/facet, donut and base-scope
+conditions remain. Pattern selection uses the existing search-filter reducer and persists
+with the ordinary view preferences. Non-matches are hidden. Matches retain only
+their direct linked counterparts as secondary context; uncertain cards stay
+visible with a Can't tell marker and a tooltip explaining the missing evidence.
+An empty result names the selected pattern, for example No blocked work. Blocked
+requires Status Waiting For plus non-empty Waiting For text; worker freshness
+does not change that card-owned fact. Done/Archived never match Blocked or Stalled.
 
 Center and neighbor counts preview unique matching work under the other filters,
 ignoring the dial's current pattern. They are overlapping predicates, not pie
