@@ -14,23 +14,26 @@ function Harness({ open, itemAsk = vi.fn() }: { open: (seed: AskSeed) => void; i
 const hold = (node: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100, count = 1) => fireEvent[type](node, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: x, clientY: y })), changedTouches: [{ identifier: 0, clientX: x, clientY: y }] })
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.useRealTimers() })
 describe('shared element Ask gestures on the overdue badge', () => {
-  it('reveals a layout-independent affordance on hover and captures the exact badge on click', () => {
+  it('captures the exact badge on right-click and does not float a control on hover or focus', () => {
     const open = vi.fn(); render(<Harness open={open} />)
+    const field = screen.getByText('Overdue 3d')
+    fireEvent.mouseOver(field)
+    act(() => field.focus())
     expect(screen.queryByRole('button', { name: /^Ask about/ })).toBeNull()
-    fireEvent.mouseOver(screen.getByText('Overdue 3d'))
-    fireEvent.click(screen.getByRole('button', { name: /^Ask about Overdue 3d/ }))
+    fireEvent.contextMenu(field)
     expect(open).toHaveBeenCalledOnce()
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ ...subject, element: { field_name: 'next_check_in', label: 'Overdue 3d · Next check-in', value: 'Nov 6, 10:00 AM ET', type: 'overdue' }, question: 'Why is this overdue?' }))
   })
-  it('lets keyboard focus reach the affordance and preserves the ContextMenu shortcut', () => {
+  it('opens the semantic draft from Shift+F10 and ContextMenu without a floating control', () => {
     const open = vi.fn(); render(<Harness open={open} />)
     const field = screen.getByText('Overdue 3d')
     act(() => field.focus())
     fireEvent.keyDown(field, { key: 'Tab' })
-    expect(screen.getByRole('button', { name: /^Ask about Overdue 3d/ })).toHaveFocus()
-    fireEvent.click(document.activeElement!)
+    expect(screen.queryByRole('button', { name: /^Ask about/ })).toBeNull()
     fireEvent.keyDown(field, { key: 'F10', shiftKey: true })
+    fireEvent.keyDown(field, { key: 'ContextMenu' })
     expect(open).toHaveBeenCalledTimes(2)
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ field_name: 'next_check_in', value: 'Nov 6, 10:00 AM ET' }) }))
   })
   it('opens on a stationary long-press once and cancels the item swipe and synthetic click', () => {
     vi.useFakeTimers(); const open = vi.fn(), itemAsk = vi.fn(); render(<Harness open={open} itemAsk={itemAsk} />)
@@ -82,15 +85,13 @@ it('keeps unmarked action controls inside a marked block native', () => {
 })
 
 
-it('keeps field and selection affordances inside the owning open dialog', () => {
+it('keeps the selection affordance inside the owning open dialog and hides hover chrome', () => {
   const open = vi.fn()
   render(<dialog open aria-label="Release details"><Harness open={open} /></dialog>)
   const field = screen.getByText('Overdue 3d'), dialog = screen.getByRole('dialog')
   fireEvent.mouseOver(field)
-  expect(dialog).toContainElement(screen.getByRole('button', { name: /^Ask about Overdue/ }))
   act(() => field.focus())
-  fireEvent.keyDown(field, { key: 'Tab' })
-  expect(screen.getByRole('button', { name: /^Ask about Overdue/ })).toHaveFocus()
+  expect(screen.queryByRole('button', { name: /^Ask about/ })).toBeNull()
   const range = document.createRange(); range.selectNodeContents(field)
   window.getSelection()!.removeAllRanges()
   window.getSelection()!.addRange(range)
@@ -134,10 +135,10 @@ it('asks about a marked relationship link while keeping its normal click', () =>
   fireEvent.click(link)
   expect(navigate).toHaveBeenCalledOnce()
   fireEvent.mouseOver(link)
-  fireEvent.click(screen.getByRole('button', { name: 'Ask about Linked card: Card name' }))
-  expect(open).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ field_name: 'relationship', value: 'Card name' }) }))
+  expect(screen.queryByRole('button', { name: /^Ask about/ })).toBeNull()
   fireEvent.contextMenu(link)
-  expect(open).toHaveBeenCalledTimes(2)
+  expect(open).toHaveBeenCalledOnce()
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ field_name: 'relationship', value: 'Card name' }) }))
 })
 
 

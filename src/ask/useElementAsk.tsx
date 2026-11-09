@@ -5,8 +5,9 @@ import { buildElementSeed, readAskElement } from './element'
 import type { AskSeed, AskSubject } from './semantic'
 
 interface Hit { node: HTMLElement; element: AskElement; x: number; y: number; selection?: boolean }
-/** One interaction layer for cards, table rows and Desk items. The floating
- * control is outside native buttons/links and never changes card geometry. */
+/** One interaction layer for cards, table rows and Desk items. Right-click,
+ * long-press and a text selection ask about a field. Hover and focus do not
+ * float a control, and the selection control never changes card geometry. */
 export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject, open?: (seed: AskSeed) => void) {
   const latest = useRef({ subject, open }); latest.current = { subject, open }
   const [hit, setHit] = useState<Hit | null>(null)
@@ -34,10 +35,10 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
       return field && host.contains(field) && owns(field) ? field : null
     }
     const capture = (node: HTMLElement, element = readAskElement(node), selection = false): Hit => {
-      const rect = selection ? window.getSelection()?.getRangeAt(0).getBoundingClientRect?.() ?? node.getBoundingClientRect() : node.getBoundingClientRect()
-      return { node, element, x: Math.min(Math.max(8, selection ? rect.right - 116 : rect.right + 4), window.innerWidth - (selection ? 124 : 56)), y: Math.min(Math.max(8, rect.top - 8), window.innerHeight - 40), selection }
+      if (!selection) return { node, element, x: 0, y: 0 }
+      const rect = window.getSelection()?.getRangeAt(0).getBoundingClientRect?.() ?? node.getBoundingClientRect()
+      return { node, element, x: Math.min(Math.max(8, rect.right - 116), window.innerWidth - 124), y: Math.min(Math.max(8, rect.top - 8), window.innerHeight - 40), selection: true }
     }
-    const reveal = (event: Event) => { const field = fieldAt(event.target); if (field) { keep(); setHit(capture(field)) } }
     const cancelHold = () => { clearTimeout(hold); hold = undefined; start = null }
     const touchStart = (event: TouchEvent) => {
       cancelHold()
@@ -80,9 +81,7 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
       if (event.key === 'Escape') setHit(null)
     }
     const leave = (event: FocusEvent | MouseEvent) => { if (!(event.relatedTarget instanceof Node) || !host.contains(event.relatedTarget) && !button.current?.contains(event.relatedTarget)) hide() }
-    const scroll = () => { cancelHold(); const field = fieldAt(document.activeElement); setHit(field ? capture(field) : null) }
-    host.addEventListener('mouseover', reveal)
-    host.addEventListener('focusin', reveal)
+    const scroll = () => { cancelHold(); setHit(previous => previous?.selection ? capture(previous.node, previous.element, true) : null) }
     host.addEventListener('mouseout', leave)
     host.addEventListener('focusout', leave)
     host.addEventListener('keydown', key)
@@ -97,7 +96,6 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
     window.addEventListener('resize', scroll)
     return () => {
       cancelHold(); keep(); delete host.dataset.elementAskSurface
-      host.removeEventListener('mouseover', reveal); host.removeEventListener('focusin', reveal)
       host.removeEventListener('mouseout', leave); host.removeEventListener('focusout', leave)
       host.removeEventListener('keydown', key)
       host.removeEventListener('touchstart', touchStart); host.removeEventListener('touchmove', touchMove)
@@ -107,12 +105,11 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
       window.removeEventListener('scroll', scroll, true); window.removeEventListener('resize', scroll)
     }
   }, [root, !!open])
-  return hit && open ? createPortal(<button ref={button} type="button" className="ask-element-affordance" style={{ left: hit.x, top: hit.y }}
-    aria-label={hit.selection ? 'Ask about this' : `Ask about ${hit.element.label}: ${hit.element.value}`}
-    title={hit.selection ? 'Ask about this' : `Ask about ${hit.element.label}`}
+  return hit?.selection && open ? createPortal(<button ref={button} type="button" className="ask-element-affordance" style={{ left: hit.x, top: hit.y }}
+    aria-label="Ask about this" title="Ask about this"
     onMouseEnter={keep} onMouseLeave={hide} onFocus={keep} onBlur={hide}
     onMouseDown={event => event.preventDefault()} onClick={event => { event.stopPropagation(); launch(hit) }}
     onKeyDown={event => { if (event.key === 'Escape') { hit.node.focus(); setHit(null) } }}>
-    {hit.selection ? 'Ask about this' : <><span aria-hidden="true">?</span><span className="ask-element-word"> Ask</span></>}
+    Ask about this
   </button>, hit.node.closest('dialog[open]') ?? document.body) : null
 }

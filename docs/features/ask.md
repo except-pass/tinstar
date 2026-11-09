@@ -357,15 +357,15 @@ Overview cards (including expanded relationship hints and card/execution
 Inspector fields), PR rows/details, Releases rows/evidence, and Desk items
 including Card context text. Manager, group and First Mate Inspector selections
 do not expose element Ask. Existing `data-ask-field`
-markup works with the same hook. Hover or focus a field to reveal the floating
-Ask control without changing layout. Tab from a focused field reaches that
-control; Shift+F10 / Context Menu still opens the semantic draft directly.
-Inside an open modal, the floating control stays in that modal.
-Right-click and a stationary 550 ms touch hold use the same context builder and
-existing field templates. Moving more than 10 px, scrolling, cancellation or a
-second touch cancels the hold; a successful hold cancels the item swipe and its
-synthetic click. Selecting text inside one item offers **Ask about this**. A
-selection crossing item boundaries or outside an item does not.
+markup works with the same hook. Right-click, Shift+F10, the Context Menu key,
+and a stationary 550 ms touch hold open the semantic draft directly from the
+same context builder and existing field templates. Hovering or focusing a field
+does not reveal a floating control. Moving more than 10 px, scrolling,
+cancellation or a second touch cancels the hold; a successful hold cancels the
+item swipe and its synthetic click. Selecting text inside one item offers
+**Ask about this**, a selection-triggered control rather than a hover bubble.
+Inside an open modal that control stays in the modal. A selection crossing
+item boundaries or outside an item does not.
 
 The optional `element` metadata in the create/context schemas captures the
 displayed label (e.g. `Overdue 3d` plus the formatted check-in), value and
