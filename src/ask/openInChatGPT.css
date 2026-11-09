@@ -1,0 +1,18 @@
+.ov .chatgpt-action,.pr-page .chatgpt-action{display:inline-grid;place-items:center;width:24px;height:24px;flex:none;padding:4px;border:0;border-radius:3px;background:transparent;color:#a3c0ca;cursor:pointer;touch-action:manipulation;vertical-align:middle}
+.chatgpt-action svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.ov .chatgpt-action:hover,.pr-page .chatgpt-action:hover{background:#24414c;color:#e3f4fa}
+.chatgpt-action:focus-visible{outline:2px solid #6dd4e8;outline-offset:1px}
+.ov-item-frame:has(.chatgpt-action) .ov-record-top{padding-right:74px}
+.ov-item-frame:has(.chatgpt-action) .ov-item.ov-collapsed{padding-right:81px}
+.pr-table:has(.chatgpt-action) th:last-child{width:100px}
+.chatgpt-fallback{position:fixed;inset:0;width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px);box-sizing:border-box;overflow:auto;padding:18px;border:1px solid #40576a;border-radius:8px;background:#101c27;color:#d8e5ef;font:13px/1.5 system-ui}
+.chatgpt-fallback::backdrop{background:#0008}
+.chatgpt-fallback h2{font-size:17px;margin:0 0 8px}
+.chatgpt-fallback p{margin:8px 0}
+.chatgpt-note{color:#9eb1c2;font-size:12px}
+.chatgpt-fallback textarea{box-sizing:border-box;width:100%;padding:8px;background:#0b141e;color:inherit;border:1px solid #40576a;border-radius:4px;resize:vertical;font:12px/1.5 system-ui}
+.chatgpt-fallback-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.chatgpt-fallback button{padding:7px 12px;border:1px solid #40576a;border-radius:4px;background:#1b3040;color:inherit;cursor:pointer}
+.chatgpt-fallback a{color:#91d5e6}
+.chatgpt-fallback :focus-visible{outline:2px solid #6dd4e8;outline-offset:2px}
+@media(pointer:coarse){.ov .chatgpt-action,.pr-page .chatgpt-action{width:32px;height:32px}.ov-item-frame:has(.chatgpt-action) .ov-header-actions{top:0}.ov-item-frame:has(.chatgpt-action) .ov-item.ov-collapsed{min-height:34px;padding-right:89px}}

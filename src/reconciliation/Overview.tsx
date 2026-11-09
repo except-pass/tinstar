@@ -24,6 +24,7 @@ import { AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit, useAskCo
 import { combinedPatternResult, sceneWorkHealth, patternEmptyText, type PatternResult } from '../shared/workHealth'
 
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
+import { OpenInChatGPT } from '../ask/OpenInChatGPT'
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; patternResults?: ReadonlyMap<string, PatternResult>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
@@ -151,7 +152,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     {askGesture.hint && <span className="ask-gesture-hint" aria-hidden="true">← Ask in text · release to compose</span>}
     <span className="ov-port" aria-hidden="true" />
   </button>
-    {elementAffordance}<span className="ov-header-actions"><AskCardAction subject={subject} icon /><button type="button" className="ov-open-inspector ov-header-icon" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
+    {elementAffordance}<span className="ov-header-actions"><AskCardAction subject={subject} icon />{card && <OpenInChatGPT target={{ kind: 'work', card, scene, readFailed }} />}<button type="button" className="ov-open-inspector ov-header-icon" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
       <svg aria-hidden="true" viewBox="0 0 20 20"><rect x="2" y="3" width="16" height="14" rx="1" /><path d="M12 3v14" /></svg>
     </button></span>
   </div>
