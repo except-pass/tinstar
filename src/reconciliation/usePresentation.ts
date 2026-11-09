@@ -7,12 +7,14 @@ import type { CommandResult, ViewCommand } from '../shared/reconciliationCommand
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true, decisionsActive = false, queueReadFailed = false) {
   const [state, setState] = useState(loadPresentationPreferences)
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
   const readFailure = useRef(readFailed)
   readFailure.current = readFailed
+  const decisions = useRef(decisionsActive), queueFailure = useRef(queueReadFailed)
+  decisions.current = decisionsActive; queueFailure.current = queueReadFailed
   const current = useRef(state), latestScene = useRef(scene), latestQueue = useRef(queue)
   const pending = useRef<CommandResult[]>([]), ready = useRef<CommandResult[]>([])
   const seen = useRef(new Map<string, CommandResult>())
@@ -21,6 +23,13 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
   latestQueue.current = queue
   const send = useCallback((action: PresentationAction) => {
     if (!latestScene.current) return
+    // A Decisions acknowledgment must correspond to a row this view can reveal.
+    // The scene reducer still checks the card exists in the underlying source.
+    if (decisions.current && (action.type === 'focus' || action.type === 'flash')) {
+      const targets = action.type === 'focus' ? [action.target] : action.targets
+      if (readFailure.current || queueFailure.current || !latestQueue.current) return { state: current.current, outcome: 'queue-source-unavailable' as const }
+      if (targets.some(target => target.kind !== 'card' || !latestQueue.current!.items.some(item => item.cardIds.includes(target.id)))) return { state: current.current, outcome: 'unknown-id' as const }
+    }
     const applied = applyPresentationAction(current.current, action, latestScene.current, Date.now(), latestQueue.current)
     current.current = applied.state
     setState(applied.state)

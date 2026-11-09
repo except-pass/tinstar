@@ -118,7 +118,7 @@ describe('canonical relationship-aware status projection', () => {
     const restored = loadPresentationPreferences()
     expect(restored.donutFilter).toEqual(state.donutFilter)
     expect(restored.organizer).toEqual(state.organizer)
-    expect(restored.selection).toBeNull()
+    expect(restored.selection).toEqual({ kind: 'card', id: fixtureId(1) })
     expect(ids(statusProjection(scene, restored, now).cards)).toEqual([fixtureId(1), fixtureId(6)])
   })
 })

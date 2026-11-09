@@ -12,6 +12,7 @@ import { ComposerInput } from './components/PromptComposer/PromptComposer'
 import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
+import { Decisions } from './reconciliation/Decisions'
 import { DeskWorkspace } from './ask/DeskWorkspace'
 import { useWorkspaceHistory } from './ask/workspaceHistory'
 import { Pulls } from './pulls/Pulls'
@@ -301,16 +302,16 @@ export default function App() {
   const activeIndex = current ? order.indexOf(current.key) : -1
 
   return <div className="cockpit-shell">
-    <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
+    <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
 
       <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
-    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
+    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
+      {overviewLocation.page === 'decisions' ? <Decisions /> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {

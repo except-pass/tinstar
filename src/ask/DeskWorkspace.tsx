@@ -31,13 +31,13 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
   views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
-  overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
+  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
-  const floor = useFloorScene(overviewActive), { queue, error: queueError } = useDeskQueue()
-  const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive)
+  const floor = useFloorScene(overviewActive || decisionsActive), { queue, error: queueError } = useDeskQueue()
+  const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
   const openDesk = useCallback(() => setOpenRequest(value => value + 1), [])

@@ -1,4 +1,4 @@
-import { donutFilterSchema, organizerSchema, statusFilterSchema, searchFilterSchema } from '../shared/reconciliationCommands'
+import { targetSchema, donutFilterSchema, organizerSchema, statusFilterSchema, searchFilterSchema } from '../shared/reconciliationCommands'
 import { initialPresentation, type PresentationState } from './presentation'
 
 export const preferencesKey = 'tinstar.floor.preferences'
@@ -6,6 +6,8 @@ export function loadPresentationPreferences(): PresentationState {
   const state = initialPresentation()
   try {
     const saved = JSON.parse(localStorage.getItem(preferencesKey) ?? '{}')
+    const selection = targetSchema.safeParse(saved.selection)
+    if (selection.success) state.selection = selection.data
     const organizer = organizerSchema.safeParse(saved.organizer), statusFilter = statusFilterSchema.safeParse(saved.statusFilter)
     const donutFilter = donutFilterSchema.safeParse(saved.donutFilter)
     if (donutFilter.success) state.donutFilter = donutFilter.data
@@ -17,5 +19,5 @@ export function loadPresentationPreferences(): PresentationState {
   return state
 }
 export function savePresentationPreferences(state: PresentationState) {
-  try { localStorage.setItem(preferencesKey, JSON.stringify({ donutFilter: state.donutFilter, organizer: state.organizer, statusFilter: state.statusFilter, search: state.search })) } catch { /* The view still works when browser storage is unavailable. */ }
+  try { localStorage.setItem(preferencesKey, JSON.stringify({ selection: state.selection, donutFilter: state.donutFilter, organizer: state.organizer, statusFilter: state.statusFilter, search: state.search })) } catch { /* The view still works when browser storage is unavailable. */ }
 }

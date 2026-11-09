@@ -1,6 +1,7 @@
 import { QuotaBadges } from '../QuotaRail'
-export function ActivityBar({ overviewActive, onOverview, pullsActive = false, onPulls, releasesActive = false, releaseCount = null, onReleases }: {
+export function ActivityBar({ overviewActive, onOverview, decisionsActive = false, onDecisions, pullsActive = false, onPulls, releasesActive = false, releaseCount = null, onReleases }: {
   overviewActive: boolean; onOverview: () => void
+  decisionsActive?: boolean; onDecisions?: () => void
   pullsActive?: boolean; onPulls?: () => void
   releasesActive?: boolean; releaseCount?: number | null; onReleases?: () => void
 }) {
@@ -9,6 +10,9 @@ export function ActivityBar({ overviewActive, onOverview, pullsActive = false, o
     <button type="button" className={`cockpit-activity-button cockpit-overview-button${overviewActive ? ' active' : ''}`} aria-current={overviewActive ? 'page' : undefined} title="Overview" onClick={onOverview}>
       <span className="material-symbols-outlined" aria-hidden="true">dashboard</span><span className="cockpit-activity-label">Overview</span>
     </button>
+    {onDecisions && <button type="button" className={`cockpit-activity-button${decisionsActive ? ' active' : ''}`} aria-current={decisionsActive ? 'page' : undefined} title="Decisions" onClick={onDecisions}>
+      <span className="material-symbols-outlined" aria-hidden="true">rule</span><span className="cockpit-activity-label">Decisions</span>
+    </button>}
     {onPulls && <button type="button" className={`cockpit-activity-button${pullsActive ? ' active' : ''}`} aria-current={pullsActive ? 'page' : undefined} title="PRs" onClick={onPulls}>
       <span className="material-symbols-outlined" aria-hidden="true">account_tree</span><span className="cockpit-activity-label">PRs</span>
     </button>}

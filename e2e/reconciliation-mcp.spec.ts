@@ -17,6 +17,14 @@ let facadeServer: Server
 let server: Server, root: string, base: string, client: Client
 const scene = fixtureScene()
 const queue = fixtureQueue()
+// Explicit conditional acceptance fixture. Live proof uses the real source card.
+const dirtId = '40c50ce6d422810db781cb306164584f'
+const dirtTitle = 'Dirt Computing — Slice 2: game-like activity, queue explanations & Harvest Report'
+const dirtCard = structuredClone(scene.cards.find(card => card.id === fixtureId(5))!)
+dirtCard.id = dirtId; dirtCard.source.id = dirtId; dirtCard.source.url = `https://www.notion.so/${dirtId}`
+dirtCard.source.properties.Name!.value = dirtTitle
+scene.cards.push(dirtCard)
+queue.items.push({ ...structuredClone(queue.items.find(item => item.cardIds.includes(fixtureId(5)))!), id: `card:${dirtId}`, title: dirtTitle, cardIds: [dirtId] })
 const transcript: unknown[] = []
 async function call(name: string, args: Record<string, unknown>) {
   const raw = await client.callTool({ name, arguments: args })
@@ -24,7 +32,7 @@ async function call(name: string, args: Record<string, unknown>) {
   transcript.push({ name, arguments: args, response: value })
   return value
 }
-async function windowId(page: Page) { await expect(page.locator('.ov[data-scene-id]')).toBeVisible(); return (await page.locator('.ov').getAttribute('data-scene-id'))! }
+async function windowId(page: Page) { await expect(page.locator('[data-presentation-scene][data-scene-id], .ov[data-scene-id]')).toBeVisible(); return (await page.locator('[data-presentation-scene], .ov').getAttribute('data-scene-id'))! }
 async function present(page: Page, action: unknown, command_id: string) {
   const scene_id = await windowId(page)
   // Initial queue loading can advance the browser after it registers. Read the
@@ -32,7 +40,7 @@ async function present(page: Page, action: unknown, command_id: string) {
   let current = await call('get_scene', { scene_id })
   await expect.poll(async () => {
     current = await call('get_scene', { scene_id })
-    return current.state.revision === Number(await page.locator('.ov').getAttribute('data-revision'))
+    return current.state.revision === Number(await page.locator('[data-presentation-scene], .ov').getAttribute('data-revision'))
   }).toBe(true)
   const args = { scene_id, command_id, expected_revision: current.state.revision, action }
   let ack = await call('present_view', args)
@@ -243,4 +251,82 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
     const { writeFile } = await import('node:fs/promises')
     await writeFile(join(directory, 'controlled-mcp-transcript.json'), JSON.stringify(transcript, null, 2))
   }
+})
+
+test('Decisions shares conditional selection and visible MCP flashes on desktop and phone in the same scene', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  // Put the conditional target far below the fold without changing source identity.
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { ...queue, items: [
+    ...queue.items.filter(item => !item.cardIds.includes(dirtId)),
+    ...Array.from({ length: 35 }, (_, index) => ({ ...queue.items[0]!, id: `unlinked:${index}`, cardIds: [], title: `Additional request ${index}`, evidence: [] })),
+    queue.items.find(item => item.cardIds.includes(dirtId))!,
+  ] } } }))
+  await page.goto(`${base}/?view=decisions`)
+  let scene_id = await windowId(page)
+  const row = page.locator(`.decisions-row[data-card-id="${dirtId}"]`)
+  const search = page.getByRole('searchbox', { name: 'Search decisions' })
+  await search.fill('Dirt Computing')
+  await expect(row).toContainText('Future or conditional')
+  await row.click()
+  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: dirtId })
+  await expect(page.getByLabel('Selected decision')).toContainText(dirtTitle)
+  const revision = (await call('get_scene', { scene_id })).state.revision
+  const missing = await call('present_view', { scene_id, command_id: 'decisions-missing', expected_revision: revision, action: { type: 'flash', targets: [{ kind: 'card', id: 'missing' }] } })
+  expect(missing.outcome).toBe('unknown-id')
+  await page.getByRole('button', { name: 'Overview', exact: true }).click()
+  expect(await windowId(page)).toBe(scene_id)
+  await page.goBack()
+  await expect(search).toHaveValue('Dirt Computing')
+  expect(await windowId(page)).toBe(scene_id)
+  await page.goForward()
+  await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Decisions', exact: true }).click()
+  expect(await windowId(page)).toBe(scene_id)
+  await page.reload()
+  scene_id = await windowId(page)
+  await expect(row).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: dirtId })
+  const list = page.getByLabel('Decision requests')
+  await list.evaluate(node => { node.scrollTop = 0 })
+  await expect(row).not.toBeInViewport()
+  await present(page, { type: 'focus', target: { kind: 'card', id: fixtureId(1) } }, 'decisions-focus-other')
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'decisions-visible-flash')
+  await expect(row).toHaveClass(/flashed/)
+  await expect(row).toBeInViewport()
+  await expect(row).toHaveAttribute('aria-pressed', 'false')
+  await expect(page).toHaveURL(/view=decisions/)
+  const directory = process.env.TINSTAR_MCP_PROOF
+  if (directory) await page.screenshot({ path: join(directory, 'decisions-desktop-flash.png'), fullPage: true })
+  await expect(row).not.toHaveClass(/flashed/, { timeout: 6000 })
+  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBe(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await search.fill('no matching title')
+  await present(page, { type: 'focus', target: { kind: 'card', id: dirtId } }, 'decisions-phone-focus')
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'decisions-phone-flash')
+  await expect(row).toBeInViewport()
+  await expect(row).toHaveClass(/selected.*flashed/)
+  await expect(search).toHaveValue('no matching title')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  if (directory) {
+    await page.screenshot({ path: join(directory, 'decisions-phone-flash.png'), fullPage: true })
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(directory, 'decisions-mcp-transcript.json'), JSON.stringify(transcript, null, 2))
+  }
+  // A manual click advances the same revision and owns the shared focus.
+  await search.fill('Build live')
+  await page.locator(`.decisions-row[data-card-id="${fixtureId(1)}"]`).click()
+  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: fixtureId(1) })
+})
+
+test('Decisions reports unavailable sources and never acknowledges a flash without a visible source row', async ({ page }) => {
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ status: 503, json: { ok: false } }))
+  await page.goto(`${base}/?view=decisions`)
+  const scene_id = await windowId(page)
+  await expect(page.getByRole('status').filter({ hasText: 'Queue source unavailable' })).toBeVisible()
+  await expect(page.locator('.decisions-row')).toHaveCount(0)
+  const current = await call('get_scene', { scene_id })
+  let ack = await call('present_view', { scene_id, command_id: 'decisions-unavailable-flash', expected_revision: current.state.revision, action: { type: 'flash', targets: [{ kind: 'card', id: dirtId }] } })
+  if (ack.outcome === 'queued') await expect.poll(async () => { ack = await call('get_command', { scene_id, command_id: 'decisions-unavailable-flash' }); return ack.outcome }).toBe('queue-source-unavailable')
+  expect(ack.outcome).toBe('queue-source-unavailable')
+  await expect(page).toHaveURL(/view=decisions/)
 })

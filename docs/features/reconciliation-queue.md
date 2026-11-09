@@ -46,3 +46,19 @@ npm run build:all
 The controlled tests cover source deduplication, independent decisions, real source keys, resolved/answered/completed filtering, no-op repeated reads, future/conditional/multistep actions, release dependencies, missing/unknown/stale sources, PR closure/draft/check failures/truncation/head conflicts, read bounds/cache/coalescing, and the read-only origin/method/envelope boundary. Test data is explicit fixture data; it creates no production incidents.
 
 The live discovery proof is saved outside the repository at `/home/farm/fm-home/data/tinstar-recon-s4/live-proof.json`, with its rerunnable `live-proof.ts`. It reads this Hulk home through the documented snapshot interface and authenticates Notion GET/schema plus POST/query via the authorized discovery helper, which keeps its credential. It records the exact tested git head, source coverage, current queue and relevant real card/task observations. Production Notion credentials, other homes' publication routes, floor UI and conversational MCP are separate integration prerequisites/slices; this server/API proof does not claim their delivery.
+
+## Decisions tab
+
+`?view=decisions` lists the same queue across all three readiness categories,
+including future/conditional requests. Search by title, card ID or next action.
+Selecting a linked card uses the existing presentation focus, visible through
+`get_scene`; that selection is retained in browser presentation preferences.
+Unlinked requests expose their details and evidence without offering card focus.
+
+Overview and Decisions share one registered MCP scene while switching between
+them. `present_view` focus and flash remain in Decisions. Flash reveals a row
+outside the current search or scroll position, then restores the list scroll
+unless the user interacts. Steady selection and a brief flash use distinct
+styles. A card missing from either the queue or source scene cannot receive an
+applied visible flash; failed source reads report unavailable coverage. PRs and
+Releases continue to disconnect the presentation bridge while inactive.

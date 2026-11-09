@@ -27,6 +27,14 @@ describe('filterWorkers', () => {
 })
 
 describe('overview search params', () => {
+  it.each(['decisions', 'pulls', 'releases'] as const)('round-trips the %s tab and removes worker/card locators', page => {
+    const next = { worker: null, home: null, key: null, q: '', page }
+    const search = writeOverviewSearch('?worker=old&home=old&card=abc&extra=kept', next)
+    expect(readOverviewSearch(search)).toEqual(next)
+    expect(search).toContain('extra=kept')
+    expect(search).not.toContain('worker=')
+    expect(search).not.toContain('card=')
+  })
   it('reads a worker task id, home name and filter', () => {
     expect(readOverviewSearch('?worker=alpha&q=harbor')).toEqual({ worker: 'alpha', home: null, key: null, q: 'harbor' })
     expect(readOverviewSearch('?worker=alpha&home=b')).toEqual({ worker: 'alpha', home: 'b', key: null, q: '' })
