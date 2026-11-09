@@ -312,6 +312,14 @@ test('compact unread previews pulse only until opened and respect reduced motion
   for (const height of heights) expect(height).toBeLessThanOrEqual(110)
   await testInfo.attach('Collapsed card heights', { body: JSON.stringify(heights), contentType: 'application/json' })
   const accent = page.locator('.ask-desk article[data-ask-id="00000000-0000-4000-8000-000000000000"]')
+  const archiveBesideTitle = async () => {
+    const title = await accent.locator('.ask-preview strong').boundingBox()
+    const archive = await accent.getByRole('button', { name: 'Archive conversation', exact: true }).boundingBox()
+    const card = await accent.boundingBox()
+    expect(archive!.x).toBeGreaterThanOrEqual(title!.x + title!.width - 1)
+    expect(archive!.x + archive!.width).toBeLessThanOrEqual(card!.x + card!.width + 1)
+  }
+  await archiveBesideTitle()
   await expect(accent).toHaveAttribute('data-unread', 'true')
   expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationDuration)).toBe('2.5s')
   await page.screenshot({ path: testInfo.outputPath('compact-desktop.png') })
@@ -321,10 +329,12 @@ test('compact unread previews pulse only until opened and respect reduced motion
   const open = page.getByRole('button', { name: /Open Your desk/ })
   if (await open.isVisible()) await open.click()
   await expect(accent.getByRole('button', { name: 'Archive conversation', exact: true })).toBeVisible()
+  await archiveBesideTitle()
   await page.screenshot({ path: testInfo.outputPath('compact-mobile-reduced-motion.png') })
   await accent.locator('.ask-preview').click()
   await expect(page.getByText('The complete evidence remains available.')).toBeVisible()
   await expect(accent).toHaveAttribute('data-unread', 'false')
+  await archiveBesideTitle()
 })
 
 test('live Desk archive survives polling, immediate Undo, unseen follow-up, restart and a later unread answer', async ({ page, request, browser }, testInfo) => {

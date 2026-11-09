@@ -46,6 +46,8 @@
 .ask-desk .ask-preview small{font:11px/14px system-ui}
 .ask-desk .ask-archive{position:absolute;right:0;top:2px;min-width:44px;min-height:44px;padding:4px;font-size:12px;background:none;border:0;opacity:.65;display:grid;place-items:center}
 .ask-archive svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ask-desk article[data-expanded=false] .ask-archive{right:-44px}
+.ask-desk article[data-expanded=true] .ask-preview{box-sizing:border-box;padding-right:44px}
 .ask-desk article:hover .ask-archive,.ask-desk article:focus-within .ask-archive{opacity:1}
 @media(hover:none),(max-width:850px){.ask-desk .ask-archive{opacity:1}}
 .ask-desk article[data-unread=true]{border-left:0}
