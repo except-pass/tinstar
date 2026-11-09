@@ -22,7 +22,7 @@ export type SubmitResult = { saved: boolean; error: string | null; canReceive: b
 /** `null` is the collapsed context panel. It is not part of the page URL. */
 export type ContextPanelMode = 'needs' | 'workers' | null
 
-/** Overview owns the Desk; auxiliary panels start closed on every route. */
+/** DeskWorkspace owns the global Desk; auxiliary panels start closed on every route. */
 export function defaultPanelMode(_worker: string | null): ContextPanelMode {
   return null
 }

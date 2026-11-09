@@ -14,9 +14,9 @@ A task in First Mate's fleet snapshot. Its id is the stable identity used for th
 
 The main pane for one worker: identity, state, objective, project, worktree, branch, pull request and a live terminal view. The terminal uses a private `tsview-*` tmux session linked to the worker window; the view does not own that window. The mouse wheel on that view scrolls the pane's tmux history. A key or Escape returns to the live prompt, and so do closing the view and switching to another worker. A prompt composer docked under the terminal pastes a prompt into the worker's pane and presses Enter; pasted screenshots and dropped files are uploaded and inserted as `@path`. A worker link opens it by task id; the [README](README.md#worker-links) lists the URL shapes. See [terminal views](src/server/firstmate/views.ts), [prompt delivery](src/server/fleet/promptInput.ts), and [composer](src/components/PromptComposer/PromptComposer.tsx).
 
-## Your desk
+## Desk
 
-The contextual request queue replaces the Needs You destination. See the [queue reference](docs/features/reconciliation-queue.md) for readiness, identity and the read-only boundary, and [README](README.md) for navigation.
+The persistent question, answer and decision inbox. See the [Ask reference](docs/features/ask.md) for conversation views and state, the [queue reference](docs/features/reconciliation-queue.md) for source request readiness and identity, and [README](README.md) for navigation.
 
 ## Message
 

@@ -108,7 +108,9 @@ For source response receipt inspection and retry, see the
 Collapsed cards show status/time, question, source name and an available answer
 snippet; expand inline for the full thread. An unopened answer has a teal left
 accent with a gentle 2.5-second pulse and a **New answer** label. Opening the
-conversation removes the pulse; read answers stay quiet. History never pulses,
+conversation marks the answers present at that opening read and removes their
+pulse; a reply arriving later remains unread until intentionally opened, even
+if the conversation was already expanded. Read answers stay quiet. History never pulses,
 and `prefers-reduced-motion` keeps the accent static. The archive button remains
 available on touch and becomes more prominent on hover or keyboard focus;
 left/right swipes retain their Ask/Inspector meanings.
