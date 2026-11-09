@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
-type Section = 'overview' | 'pulls' | 'releases'
+type Section = 'overview' | 'pulls' | 'releases' | 'decisions'
 interface View { query?: string; sort?: string; filter?: unknown; group?: unknown }
 interface Snapshot extends View { section: Section }
 interface Adapter { capture: () => View }

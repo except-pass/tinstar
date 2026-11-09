@@ -215,7 +215,7 @@ describe('presets, reducer and persisted semantic preferences', () => {
     expect(organizedGroups(scene, custom, now).flatMap(g => g.cardIds)).toEqual([fixtureId(4)])
     expect(new Set(organizedGroups(scene, custom, now).flatMap(g => g.executionIds)).size).toBe(5)
   })
-  it('validates the same organizer/filter actions for MCP and persists only preferences', () => {
+  it('validates shared MCP actions and persists card selection without transient revision', () => {
     localStorage.removeItem(preferencesKey)
     const scene = fixtureScene({ now }), organizer = { ...defaultOrganizer(), outer: 'machine' as const, inner: 'status' as const, direction: 'desc' as const }
     const action = actionSchema.parse({ type: 'set-organizer', organizer })
@@ -223,7 +223,7 @@ describe('presets, reducer and persisted semantic preferences', () => {
     state = applyPresentationAction(state, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Queued'] } }, scene).state
     expect(stateSchema.safeParse(state).success).toBe(true)
     savePresentationPreferences({ ...state, selection: { kind: 'card', id: fixtureId(1) } })
-    expect(loadPresentationPreferences()).toMatchObject({ organizer, statusFilter: { preset: 'custom', statuses: ['Queued'] }, selection: null, revision: 0 })
+    expect(loadPresentationPreferences()).toMatchObject({ organizer, statusFilter: { preset: 'custom', statuses: ['Queued'] }, selection: { kind: 'card', id: fixtureId(1) }, revision: 0 })
     expect(applyPresentationAction(state, { type: 'set-organizer', organizer, expectedRevision: 0 }, scene).outcome).toBe('stale-revision')
     state = applyPresentationAction(state, { type: 'reset-floor' }, scene).state
     expect(state.organizer).toEqual(defaultOrganizer())

@@ -37,7 +37,7 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 function Shell({ page = 'overview' }: { page?: string }) {
-  return <DeskWorkspace overviewActive={page === 'overview'} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}><main key={page}>{page}<AskCardAction cardId={fixtureId(1)} /></main></DeskWorkspace>
+  return <DeskWorkspace overviewActive={page === 'overview'} decisionsActive={page === 'decisions'} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}><main key={page}>{page}<AskCardAction cardId={fixtureId(1)} /></main></DeskWorkspace>
 }
 const rail = (request = 0) => <DeskRail openRequest={request} unread={2} attention={1} onClose={() => {}}><button>Inbox item</button></DeskRail>
 // Overview and App navigation under a second full suite exceeds the 5s default.
@@ -48,7 +48,7 @@ it('keeps one inbox and a draft through all section switches and collapse/reopen
   const desk = screen.getByLabelText('Your desk')
   fireEvent.click(screen.getByRole('button', { name: 'Ask First Mate about this task' }))
   fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'Draft kept while browsing' } })
-  for (const page of ['releases', 'pulls', 'worker', 'overview']) {
+  for (const page of ['decisions', 'releases', 'pulls', 'worker', 'overview']) {
     view.rerender(<Shell page={page} />)
     expect(screen.getByLabelText('Your desk')).toBe(desk)
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('Draft kept while browsing')
@@ -79,6 +79,15 @@ it('disconnects the Overview UI bridge while away and re-registers without losin
   await waitFor(() => expect(read.mock.calls.some(([url, init]) => url === '/api/reconciliation/ui' && JSON.parse(String(init?.body)).type === 'disconnect')).toBe(true))
   view.rerender(<Shell />)
   await waitFor(() => expect(read.mock.calls.filter(([url, init]) => url === '/api/reconciliation/ui' && JSON.parse(String(init?.body)).type === 'register')).toHaveLength(2))
+})
+it('keeps the same MCP registration across Overview and Decisions', async () => {
+  const view = render(<Shell />)
+  const requests = (type: string) => read.mock.calls.filter(([url, init]) => url === '/api/reconciliation/ui' && JSON.parse(String(init?.body)).type === type)
+  await waitFor(() => expect(requests('register')).toHaveLength(1))
+  view.rerender(<Shell page="decisions" />)
+  view.rerender(<Shell />)
+  expect(requests('disconnect')).toHaveLength(0)
+  expect(requests('register')).toHaveLength(1)
 })
 it('shows retained questions before contextual sources become available', async () => {
   source.scene = null
@@ -144,7 +153,7 @@ it('handles invalid or unavailable browser preferences without preventing use', 
 
 function NavigationShell() {
   const [page, setPage] = useState('overview')
-  return <DeskWorkspace overviewActive={page === 'overview'} onOverview={() => setPage('overview')} workers={[]} messages={[]} submit={vi.fn()}>
+  return <DeskWorkspace overviewActive={page === 'overview'} decisionsActive={page === 'decisions'} onOverview={() => setPage('overview')} workers={[]} messages={[]} submit={vi.fn()}>
     <button onClick={() => setPage('releases')}>Visit Releases</button>
     <button onClick={() => setPage('pulls')}>Visit PRs</button>
     <button onClick={() => setPage('overview')}>Visit Overview</button>

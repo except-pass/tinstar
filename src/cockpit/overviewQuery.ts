@@ -8,7 +8,7 @@ export interface FilterableWorker {
 }
 
 export interface OverviewLocation {
-  page?: 'releases' | 'pulls'
+  page?: 'releases' | 'pulls' | 'decisions'
   origin?: AskReturn
   card?: string
   /** First Mate task id, or null when the overview is showing. */
@@ -75,7 +75,7 @@ export function readOverviewSearch(search: string): OverviewLocation {
   const home = params.get('home')
   return worker && worker.trim()
     ? { worker, home: home || null, key: null, q: params.get('q') ?? '' }
-    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(origin ? { origin } : {}), ...(['releases', 'pulls'].includes(params.get('view') ?? '') ? { page: params.get('view') as 'releases' | 'pulls' } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
+    : { worker: null, home: null, key: null, q: params.get('q') ?? '', ...(origin ? { origin } : {}), ...(['releases', 'pulls', 'decisions'].includes(params.get('view') ?? '') ? { page: params.get('view') as 'releases' | 'pulls' | 'decisions' } : {}), ...(params.get('card')?.match(/^[a-f0-9]{32}$/) ? { card: params.get('card')! } : {}) }
 }
 
 /** Merge the overview params into the current query string, preserving anything else. */

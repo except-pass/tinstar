@@ -1,3 +1,4 @@
+import { decodeRequestText } from './requestText'
 import { AskSurface } from '../ask/AskSurface'
 import { askElement } from '../ask/element'
 import { useEffect, useRef, useState } from 'react'
@@ -20,12 +21,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   const index = items.findIndex(item => item.id === selected?.id)
   const cardId = state.queueCardId
   const requestText = (value: string) => {
-    // First Mate stores hold text in a base64 envelope; show its human text while
-    // leaving the original source and response anchor intact for routing.
-    if (value.startsWith('fm-hold-v1:')) {
-      try { value = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(value.slice('fm-hold-v1:'.length)), char => char.charCodeAt(0))) }
-      catch { return 'Open the source request to read this decision.' }
-    }
+    value = decodeRequestText(value)
     return /ask-user\s+findings=|(?:^|\s)\/(?:home|tmp|srv)\/|\b(?:needs-readiness-verification|liveness-not-observed)\b/.test(value) ? 'First Mate request' : value.replace(/^[a-z-]+\s+(?:\[[^\]]+\]\s*)+:?\s*/i, '')
   }
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)

@@ -126,8 +126,8 @@ Waiting For, Waiting for Prod Release, Ready for Review, In review and
 Delegated to person. All cards includes every status (including blank/unknown),
 while source-archived/trashed pages remain excluded. Selecting checkboxes enters
 Custom. Status choices come from current source schema options and observed
-records. Organizer and status preferences persist in browser-local storage;
-selection, window credentials and transient cues do not. Separate open windows
+records. Organizer and status preferences and shared presentation selection persist in browser-local storage;
+window credentials and transient cues do not. Separate open windows
 retain their own state; reload restores the most recently saved preferences.
 
 Filters affect presentation only. Reconciliation sees the complete authorized
