@@ -1,6 +1,7 @@
 import { askElement } from '../ask/element'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AskCardAction } from '../ask/Ask'
+import { OpenInChatGPT } from '../ask/OpenInChatGPT'
 import { AskSurface } from '../ask/AskSurface'
 import { useOriginFocus } from '../ask/useOriginFocus'
 import { useViewSnapshot } from '../ask/workspaceHistory'
@@ -126,7 +127,7 @@ export function Pulls() {
           <td {...askElement('changes')}>{detail ? <><span className="pr-add">+{detail.additions}</span> <span className="pr-delete">−{detail.deletions}</span> · {detail.files}f</> : <span className="pr-unknown">Unknown</span>}</td><td {...askElement('ci')}>{detail?.checks ?? 'Unknown'}</td><td {...askElement('review')}>{detail?.review ?? 'Unknown'}</td>
           <td {...askElement('updated')} title={`Updated ${pull.updatedAt}; created ${pull.createdAt}`}>{ageLabel(Date.parse(pull.updatedAt), now)} / {ageLabel(Date.parse(pull.createdAt), now)}</td>
           <td {...askElement('relationship')} title={associationLabel}>{context.initiatives.join(', ') || 'Unknown'}</td><td {...askElement('relationship')} title={associationLabel}>{context.epics.join(', ') || 'Unknown'}</td><td {...askElement('worker')}>{context.managers.join(', ') || 'Unknown'}</td><td {...askElement('worker')} title="First Mate PR registration evidence">{context.workerNames.join(', ') || 'Unlinked / unknown'}</td>
-          <td className="pr-actions"><AskCardAction subject={subject} icon /><button type="button" className="pr-inspect" aria-label={`Inspect ${pull.id}`} aria-expanded={open} aria-controls={`detail-${pull.id}`} title="Inspect PR" onClick={() => inspect(pull)}><span className="material-symbols-outlined" aria-hidden="true">view_sidebar</span></button></td>
+          <td className="pr-actions"><AskCardAction subject={subject} icon /><OpenInChatGPT target={{ kind: 'pull', pull, detail, associationsComplete: data?.associationsComplete ?? false, readFailed: !!error, now }} /><button type="button" className="pr-inspect" aria-label={`Inspect ${pull.id}`} aria-expanded={open} aria-controls={`detail-${pull.id}`} title="Inspect PR" onClick={() => inspect(pull)}><span className="material-symbols-outlined" aria-hidden="true">view_sidebar</span></button></td>
         </AskSurface>{open && <tr><td colSpan={13}><AskSurface as="section" subject={subject} className="pr-detail" id={`detail-${pull.id}`} aria-label={`Details ${pull.id}`}>
           <header><strong {...askElement('title', 'PR title')}>{pull.title}</strong> <a href={pull.url} target="_blank" rel="noreferrer">Open in GitHub ↗</a><button type="button" onClick={() => { void load(pull); void loadFiles(pull) }} disabled={busy.has(pull.id) || fileBusy.has(pull.id)}>Read current detail</button></header>
           <p><span {...askElement('head', 'Head commit')}>{pull.head.slice(0, 12)}</span> → <span {...askElement('base', 'Base branch')}>{pull.base}</span> · <span {...askElement('last_edited', 'Observed')}>observed {ageLabel(Date.parse(pull.observedAt), now)}{stale ? ' · Last known / stale' : ''}</span></p>

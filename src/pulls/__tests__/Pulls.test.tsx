@@ -12,6 +12,23 @@ const pulls: PullSummary[] = Array.from({ length: 50 }, (_, index) => ({ id: `${
   url: `https://github.com/${index < 25 ? 'alpha/repo' : 'zeta/repo'}/pull/${index + 1}`, title: `Change ${index + 1}`, author: 'contributor', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-06T19:00:00Z', observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', links: [] }))
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); clock.now = Date.parse(fileData.observedAt); clock.scene = null; sessionStorage.clear(); history.replaceState(null, '') })
 clock.now = Date.parse(fileData.observedAt)
+it('launches the exact PR discussion without selecting, expanding, reading details or writing source state', async () => {
+  const read = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ok: true, data: { pulls: [pulls[0]], repositories: [], warnings: [], associationsComplete: false } }))))
+  vi.stubGlobal('fetch', read)
+  const opened = vi.fn()
+  vi.stubGlobal('open', opened)
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  render(<Pulls />)
+  const action = await screen.findByRole('button', { name: 'Open in ChatGPT' })
+  const callsBeforeLaunch = read.mock.calls.length
+  fireEvent.click(action)
+  expect(opened).toHaveBeenCalledTimes(1)
+  expect(new URL(opened.mock.calls[0]![0]).searchParams.get('prompt')).toContain('PR ID: alpha/repo#1')
+  expect(screen.getByRole('button', { name: 'Inspect alpha/repo#1' })).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.getByRole('checkbox', { name: 'Select alpha/repo#1' })).not.toBeChecked()
+  expect(read.mock.calls).toHaveLength(callsBeforeLaunch)
+  expect((screen.getByRole('textbox', { name: 'Prompt to copy' }) as HTMLTextAreaElement).value).toContain('CI: Unknown')
+})
 it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and expands genuine detail', async () => {
   const read = vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? { head: 'a'.repeat(40), state: 'open', body: 'Real PR body\nsecond paragraph', additions: 4, deletions: 2, files: 3, checks: 'failed', review: 'Changes requested', reviewsComplete: true, reviews: [], observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null } : { pulls, repositories: [], warnings: [], associationsComplete: true } }))))
   vi.stubGlobal('fetch', read)
@@ -128,5 +145,3 @@ it.each([
   }
   if (label !== 'Confirmed') expect(screen.queryByText(/^Confirmed work:/)).toBeNull()
 })
-
-
