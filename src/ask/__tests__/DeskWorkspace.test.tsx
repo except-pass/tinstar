@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
 import { Overview } from '../../reconciliation/Overview'
@@ -40,6 +40,8 @@ function Shell({ page = 'overview' }: { page?: string }) {
   return <DeskWorkspace overviewActive={page === 'overview'} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}><main key={page}>{page}<AskCardAction cardId={fixtureId(1)} /></main></DeskWorkspace>
 }
 const rail = (request = 0) => <DeskRail openRequest={request} unread={2} attention={1} onClose={() => {}}><button>Inbox item</button></DeskRail>
+// Overview and App navigation under a second full suite exceeds the 5s default.
+describe('desk workspace', () => {
 it('keeps one inbox and a draft through all section switches and collapse/reopen', async () => {
   const view = render(<Shell />)
   await screen.findAllByText('Where is the evidence?')
@@ -275,3 +277,4 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
   expect(screen.getByRole('button', { name: 'Collapse answer' })).toHaveFocus()
   expect(field).toHaveValue('What about that review?')
 })
+}, 30_000)

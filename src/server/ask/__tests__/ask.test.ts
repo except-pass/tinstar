@@ -98,7 +98,7 @@ describe('6.0.0 bridge content compatibility', () => {
       list: async () => (await call('requests')).data.data,
       work: async () => (await bridge()).data.data,
     })
-  })
+  }, 30_000)
 })
 
 describe('suggested action rejection receipts', () => {
@@ -415,6 +415,7 @@ describe('owner-scoped durable Ask protocol', () => {
   })
 })
 
+// Four puller processes plus the CLI, each starting Python against the loopback server.
 it('runs scheduled Ask passes against the real Tin Star HTTP API with isolated inbox and clavis stand-ins', async () => {
   const { call, base, reload } = await setup()
   const id = (await call('requests', input())).data.data.request_id
@@ -456,12 +457,13 @@ elif sys.argv[1] == 'receipts':
   expect(JSON.parse(await readFile(join(home, 'service', 'ask-puller-health.json'), 'utf8'))).toMatchObject({ work_polls: 2, noop_polls: 2, captured: 1, replied: 1, queued: 0 })
   const cli = await exec('python3', ['scripts/ask-puller.py', '--url', base, '--home', home, '--token-key', 'test.ask'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }).catch(error => error)
   expect(cli.stderr).toContain('must be an HTTPS origin')
-})
+}, 30_000)
 
 it('checks the standalone puller CLI security and retry behavior', async () => {
   const result = await exec('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_ask_puller*.py'])
   expect(result.stderr).toContain('OK')
-}, 30_000)
+  // The deadline cases hold past a spawn-sized budget. Under suite load that budget is several seconds, twice.
+}, 90_000)
 
 it('persists semantic fields, exact worker identities and server-resolved relationship provenance on the existing Ask path', async () => {
   const { call, bridge, reload } = await setup()

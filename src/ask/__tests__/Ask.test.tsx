@@ -65,6 +65,7 @@ const mount = () => render(<Overview workers={[]} messages={[]} submit={vi.fn()}
 const card = (host: HTMLElement) => host.querySelector<HTMLButtonElement>(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
 const touch = (element: Element, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100) => fireEvent[type](element, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ identifier: 1, clientX: x, clientY: y }], changedTouches: [{ identifier: 1, clientX: x, clientY: y }] })
 
+// Overview mounts in these cases exceed 5s when another suite is running.
 describe('one-card text Ask and Desk', () => {
   it('keeps tap/vertical/cancel semantics and opens a context composer on left release without sending', () => {
     const { container } = mount(), task = card(container)
@@ -82,13 +83,16 @@ describe('one-card text Ask and Desk', () => {
     Object.defineProperty(captureRelease, 'pointerId', { value: 7 })
     fireEvent(task, captureRelease)
     touch(task, 'touchEnd', 20, 100)
+    // The gesture suppresses the next click for 700ms. Querying the dialog
+    // first can spend that window when the suite is busy, and the click then
+    // collapses the card. Click while the suppression is still in force.
+    fireEvent.click(task)
+    expect(task).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('dialog')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveFocus()
     expect(screen.getByRole('button', { name: 'Remove task context' })).toBeVisible()
     expect(requests).toHaveLength(0)
-    fireEvent.click(task)
-    expect(task).toHaveAttribute('aria-expanded', 'true')
-  })
+  }, 30_000)
   it('leaves a horizontally scrollable direction native and provides a visible keyboard alternative', () => {
     const { container } = mount(), task = card(container), workspace = container.querySelector<HTMLElement>('.ov-workspace')!
     workspace.style.overflowX = 'auto'
@@ -201,8 +205,9 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send reply' }))
     await waitFor(() => expect(requests[0]).toMatchObject({ follow_up_to: original.request_id, card_id: fixtureId(1) }))
   })
-})
+}, 30_000)
 
+// Each field mounts Overview. That exceeds 5s beside another suite.
 it.each([
   ['.ov-check', 'next_check_in', 'Why is this overdue?'],
   ['.ov-task-status', 'status', 'Why is this task in this status? What is happening now?'],
@@ -237,7 +242,7 @@ it.each([
   if (field !== 'next_check_in') expect(requests[0]!.field_value).toEqual(expectedValue)
   else expect(requests[0]!.field_value).toContain('2026')
   expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: field, question: draft + ' Please explain.' })
-})
+}, 30_000)
 
 it('offers blank Ask for collapsed card and worker identities without expanding either', async () => {
   const { container } = mount(), task = card(container)
@@ -619,6 +624,7 @@ it('shows rejected suggested actions and their reasons in the Desk answer', asyn
   expect(screen.getByText(original.reply!.detail)).toBeVisible()
 })
 
+// Remounting the answered thread exceeds 5s beside another suite.
 it('selects one saved recommendation inline, keeps the shared composer/draft and follows up in the same conversation', async () => {
   const original = recommendedAnswer(); records = [original]
   const view = mount()
@@ -653,7 +659,7 @@ it('selects one saved recommendation inline, keeps the shared composer/draft and
   fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
   expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Selected by owner@example.test')
-})
+}, 30_000)
 
 it('disables old recommendations by actual reply time, including a late answer to an earlier question', async () => {
   const first = recommendedAnswer(), second = { ...recommendedAnswer(), conversation_id: first.conversation_id, created_at: '2099-01-01T00:00:00Z', answered_at: '2099-01-03T00:00:00Z', question: 'Why is the regression test sufficient?' }

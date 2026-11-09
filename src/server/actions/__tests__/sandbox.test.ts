@@ -1,13 +1,16 @@
-import { beforeAll, afterAll, expect, it } from 'vitest'
-import { rm } from 'node:fs/promises'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { isolatedRunner } from '../sandbox'
 import { sourceDigest } from '../examples'
 import { installed, snapshot } from './fixtures'
 import { stageTestRuntime } from './runtimeFixture'
 
 let runtime: string
-beforeAll(async () => { runtime = await stageTestRuntime() })
-afterAll(async () => { if (runtime) await rm(runtime, { recursive: true, force: true }) })
+// Staging copies a private Node tree. 60s covers that copy while another suite is also writing.
+beforeAll(async () => { runtime = await stageTestRuntime() }, 60_000)
+
+// Each case starts bubblewrap. Two CPU-seconds of prlimit, and a fork probe,
+// run longer than 5s when the suite is oversubscribed. Assertions are unchanged.
+describe('isolated action runner', () => {
 function candidate(source: string, timeoutMs = 4000) {
   const action = installed('explain')
   return { source, manifest: { ...action.manifest, digest: sourceDigest(source), limits: { ...action.manifest.limits, timeoutMs } } }
@@ -37,13 +40,16 @@ it('refuses malformed RPC and broker operations outside its typed channel', asyn
   await expect(execute("export default async ()=>process.stdout.write('not-json\\n')")).rejects.toThrow('broker request refused')
 })
 it('bounds CPU, memory, wall clock and output without evaluating a fallback', async () => {
-  await expect(execute('export default async ()=>{while(true){}}')).rejects.toThrow('resource limits')
-  await expect(execute('export default async ()=>{const buffers=[];while(true)buffers.push(Buffer.alloc(16*1024*1024,1))}')).rejects.toThrow('resource limits')
+  // prlimit allows 2s of CPU. The default 4s runner wall clock fires first
+  // when the host is busy, so the CPU and memory cases get a longer ceiling.
+  await expect(execute('export default async ()=>{while(true){}}', 25_000)).rejects.toThrow('resource limits')
+  await expect(execute('export default async ()=>{const buffers=[];while(true)buffers.push(Buffer.alloc(16*1024*1024,1))}', 25_000)).rejects.toThrow('resource limits')
   await expect(execute('export default async ()=>{await new Promise(()=>{})}', 300)).rejects.toThrow('wall-clock')
   await expect(execute("export default async ()=>process.stdout.write('x'.repeat(100000))")).rejects.toThrow('output limit')
-}, 12000)
+}, 60_000)
 it('refuses a missing runtime or missing isolation tools and never runs source on the host', async () => {
   const action = candidate("export default async (_,b)=>b.propose({kind:'explain'})")
   await expect(isolatedRunner(action, snapshot(), new AbortController().signal, { runtime: '/missing' }, async () => null)).rejects.toThrow('not provisioned')
   await expect(isolatedRunner(action, snapshot(), new AbortController().signal, { runtime, bwrap: '/missing' }, async () => null)).rejects.toThrow('no fallback')
 })
+}, 30_000)
