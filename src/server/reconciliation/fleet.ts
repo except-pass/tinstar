@@ -28,7 +28,7 @@ const readinessFields = (value: unknown): {
 
 // Persistent second mates are not spawned tasks and have no spawn generation.
 // Kind, role, or a secondmate_current record id identifies the row.
-const secondMateIds = (snapshot: { secondmate_current?: unknown }) => {
+const secondMateIds = (snapshot: Record<string, unknown>) => {
   const records = record(snapshot.secondmate_current).records
   const ids = new Set<string>()
   if (!Array.isArray(records)) return ids
