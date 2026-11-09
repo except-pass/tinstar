@@ -1,7 +1,8 @@
 import { freshObservation, verifiedLink, type PatternResult } from '../shared/workHealth'
 import type { FloorScene } from './presentation'
 import { ageLabel } from './recordFields'
-import { observedAt } from './overviewModel'
+import { reportTimestamp } from '../shared/workerTimestamps'
+import { currentActivity } from '../shared/workReadiness'
 
 /** Unique visible cards, with positive conflicts separate from missing evidence. */
 export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<string>, now: number, readFailed = false) {
@@ -37,17 +38,18 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
   for (const worker of workers) {
     const state = worker.source.current_state
     const home = scene.coverage.homes.find(home => home.source.home === worker.home)
+    const activity = currentActivity(worker, now)
     let fact: string
-    if (readFailed || !home || !freshObservation(home.observation, now) || !freshObservation(worker.observation, now) || state.freshness !== 'fresh') {
+    if (readFailed || !home || !freshObservation(home.observation, now) || !freshObservation(worker.observation, now)) {
       const age = ageLabel(Date.parse(worker.observation.observedAt ?? ''), now)
       fact = `state unknown${age === 'Unknown' ? '' : ` · last seen ${age}`}`
-    } else if (['run-step', 'pane'].includes(String(state.source)) && state.state === 'working') fact = 'running'
-    else if (['run-step', 'pane'].includes(String(state.source)) && ['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'].includes(String(state.state))) {
+    } else if (activity === 'working') fact = 'running'
+    else if (activity === 'waiting') {
       // Only a matching state report supplies an age; snapshot time is not the
       // start of a wait, and an old working report cannot date a newer pause.
-      const age = worker.source.last_event.state === state.state ? ageLabel(observedAt(worker), now) : 'Unknown'
+      const age = ['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'].includes(String(state.state)) && worker.source.last_event.state === state.state ? ageLabel(reportTimestamp(worker), now) : 'Unknown'
       fact = `waiting${age === 'Unknown' ? '' : ` · reported ${age}`}`
-    } else if (['run-step', 'pane'].includes(String(state.source)) && ['done', 'failed'].includes(String(state.state))) fact = String(state.state)
+    } else if (activity === 'terminal') fact = String(state.state)
     else fact = `state unknown${state.source === 'pane' ? ` (${worker.source.harness ? `${worker.source.harness} ` : ''}pane)` : ''}`
     facts.set(fact, (facts.get(fact) ?? 0) + 1)
   }

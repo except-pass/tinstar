@@ -1,3 +1,4 @@
+import { activityTimestamp } from './workerTimestamps'
 import { codexTurn } from './codexActivity'
 import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
@@ -79,8 +80,8 @@ export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField):
     case 'machine': raw = w?.placement.machine; break
     case 'workerStatus': raw = w ? floorWorkerStatus(w) : null; break
     case 'activity': {
-      const observed = Date.parse(w?.observation.observedAt ?? ''), age = w?.source.last_event.age_seconds
-      raw = w && Number.isFinite(observed) && typeof age === 'number' && Number.isFinite(age) ? new Date(observed - age * 1000).toISOString() : null; break
+      const activity = w ? activityTimestamp(w) : NaN
+      raw = Number.isFinite(activity) ? new Date(activity).toISOString() : null; break
     }
     case 'initiative': case 'epic': {
       const property = c?.source.properties[id === 'initiative' ? 'Initiative' : 'Epic']

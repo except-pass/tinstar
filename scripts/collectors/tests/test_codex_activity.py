@@ -41,7 +41,7 @@ class CollectorTests(unittest.TestCase):
         ]}
 
     def read(self):
-        return collector.augment(self.snapshot(), collector.session_index(self.sessions), NOW)
+        return collector.augment(self.snapshot(), collector.session_candidates(self.sessions, NOW), NOW)
 
     def test_open_closed_and_reopened_turns(self):
         for events, expected in [(['task_started'], True), (['task_started', 'task_complete'], False),
@@ -66,7 +66,25 @@ class CollectorTests(unittest.TestCase):
         self.log('different', cwd='/other', events=['task_started'])
         result = self.read()['tasks'][0]
         self.assertIsNone(result['codex'])
-        self.assertEqual(result['codex_reason'], 'no_matching_session')
+        self.assertEqual(result['codex_reason'], 'no_matching_session_modified_within_7_days')
+
+    def test_mtime_cutoff_ignores_old_files_in_recent_directories(self):
+        self.log('expired', events=['task_started'], age=7 * 86400 + 1)
+        self.assertEqual(self.read()['tasks'][0]['codex_reason'],
+                         'no_matching_session_modified_within_7_days')
+        self.log('boundary', events=['task_started'], days=100, age=7 * 86400)
+        self.assertIs(self.read()['tasks'][0]['codex']['turn_open'], True)
+
+    def test_matching_stops_at_newest_folder_match(self):
+        newest = self.log('newest', events=['task_started'])
+        older = self.log('older', events=['task_complete'], age=10)
+        candidates = collector.session_candidates(self.sessions, NOW)
+        original = Path.open
+        def open_candidate(path, *args, **kwargs):
+            self.assertNotEqual(path, older)
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'open', open_candidate):
+            self.assertEqual(collector.matching_session(candidates, '/worker')[0], newest)
 
     def test_no_hung_worker_timeout(self):
         self.log('quiet', events=['task_started'], days=20, age=30 * 3600)
@@ -85,10 +103,10 @@ class CollectorTests(unittest.TestCase):
         path.write_text('{bad header\n')
         self.assertIsNone(self.read()['tasks'][0]['codex'])
         path = self.log('deleted', events=['task_started'])
-        index = collector.session_index(self.sessions)
+        index = collector.session_candidates(self.sessions, NOW)
         path.unlink()
         result = collector.augment(self.snapshot(), index, NOW)['tasks'][0]
-        self.assertEqual(result['codex_reason'], 'session_unreadable')
+        self.assertEqual(result['codex_reason'], 'no_matching_session_modified_within_7_days')
 
     def test_atomic_publication_and_failed_replace_keep_previous_snapshot(self):
         output = self.root / 'published.json'

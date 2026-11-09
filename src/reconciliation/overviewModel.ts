@@ -64,13 +64,7 @@ export function unreadableWorkerHomes<T extends { observation: { status: string;
 export { historyRecord } from '../shared/floorOrganization'
 export { floorWorkerStatus as workerState } from '../shared/floorStatus'
 
-export const observedAt = (worker: Execution) => {
-  const activity = Date.parse(worker.source.codex?.last_activity_at ?? '')
-  if (Number.isFinite(activity)) return activity
-  const time = Date.parse(worker.observation.observedAt ?? '')
-  const age = worker.source.last_event.age_seconds
-  return typeof age === 'number' && Number.isFinite(time) ? time - age * 1000 : 0
-}
+export { activityTimestamp, reportTimestamp } from '../shared/workerTimestamps'
 export const workerActivity = (worker: Execution) => {
   const note = String(worker.source.last_event.note ?? '').replace(/^[a-z-]+\s+(?:\[[^\]]+\]\s*)+:?\s*/i, '').trim()
   return !note || /ask-user\s+findings=|(?:^|\s)\/(?:home|tmp|srv)\/|\b[a-f0-9]{32}\b/.test(note) ? '' : note

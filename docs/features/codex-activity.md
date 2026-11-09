@@ -8,12 +8,14 @@ Python 3 (standard library only) and each home's existing
 
 For every Codex task, `paths.worktree.path` is matched exactly against the first
 `session_meta.payload.cwd` in session logs. The scan covers all dated session directories below `$CODEX_HOME/sessions` (default
-`~/.codex/sessions`), newest file mtime first. Only the matching session's
+`~/.codex/sessions`). Only files modified within the last seven days are
+candidates, newest mtime first; each folder lookup stops at its first match. Only the matching session's
 `event_msg.payload.type` values `task_started` / `task_complete` establish an open
 or closed turn. Other payloads, prompts and outputs are never accessed or copied
 into the publication. A partial final JSON line is ignored until the next run.
-An older-directory session is outside this bounded scan, even if it was recently
-modified; the result remains unknown. No inference is made from a quiet log.
+Directory age does not exclude a recently modified session. Files whose mtime
+is older than seven days are excluded from collection; no inference is made
+from a quiet log within that window.
 
 Each Codex task receives:
 
@@ -30,7 +32,7 @@ Each Codex task receives:
 ```
 
 No matching log produces `codex: null` and a `codex_reason` such as
-`no_matching_session` or `worker_folder_missing`. A log without
+`no_matching_session_modified_within_7_days` or `worker_folder_missing`. A log without
 turn events retains its activity timestamp with `turn_open: null` and
 `codex_reason: "no_turn_events"`. An unreadable log leaves the signal unknown.
 Known crew state takes precedence. Unknown crew state uses a known turn only

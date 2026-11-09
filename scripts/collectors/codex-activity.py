@@ -15,30 +15,37 @@ def iso(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
-def session_index(root):
+def session_candidates(root, now):
     files = []
+    cutoff = now.timestamp() - 7 * 86400
     for path in root.glob('*/*/*/rollout-*.jsonl'):
         try:
-            files.append((path.stat().st_mtime, path))
+            modified = path.stat().st_mtime
+            if modified >= cutoff:
+                files.append((path, modified))
         except OSError:
             continue
-    index = {}
-    for modified, path in sorted(files, key=lambda item: item[0], reverse=True):
+    files.sort(key=lambda item: item[1], reverse=True)
+    return files
+
+
+def matching_session(files, folder):
+    for path, modified in files:
         try:
             with path.open() as stream:
                 header = json.loads(stream.readline())
             cwd = header.get('payload', {}).get('cwd') if header.get('type') == 'session_meta' else None
-            if isinstance(cwd, str):
-                index.setdefault(cwd, (path, modified))
+            if cwd == folder:
+                return path, modified
         except (OSError, ValueError, AttributeError):
             continue
-    return index
+    return None
 
 
 def session_turn(path):
     turn = None
     with path.open() as stream:
-        # Header already inspected by the index. Message bodies are never accessed
+        # Header already inspected during matching. Message bodies are never accessed
         # or emitted: only the envelope type and event payload type are used.
         next(stream, None)
         for line in stream:
@@ -57,7 +64,7 @@ def session_turn(path):
     return turn
 
 
-def augment(snapshot, index, now):
+def augment(snapshot, candidates, now):
     observed = iso(now.timestamp())
     cache = {}
     for task in snapshot['tasks']:
@@ -69,9 +76,9 @@ def augment(snapshot, index, now):
         if not folder:
             task['codex_reason'] = 'worker_folder_missing'
             continue
-        match = index.get(folder)
+        match = matching_session(candidates, folder)
         if not match:
-            task['codex_reason'] = 'no_matching_session'
+            task['codex_reason'] = 'no_matching_session_modified_within_7_days'
             continue
         path, modified = match
         try:
@@ -104,14 +111,14 @@ def atomic_write(output, snapshot):
             os.unlink(temporary)
 
 
-def collect(home, index, now):
+def collect(home, candidates, now):
     result = subprocess.run([str(Path(home) / 'bin/fm-fleet-snapshot.sh'), '--json'],
                             env={**os.environ, 'FM_HOME': home}, check=True,
                             capture_output=True, text=True, timeout=45)
     snapshot = json.loads(result.stdout)
     if snapshot.get('schema') != 'fm-fleet-snapshot.v1' or snapshot.get('fm_home') != home or not isinstance(snapshot.get('tasks'), list):
         raise ValueError('unexpected snapshot schema or home')
-    return augment(snapshot, index, now)
+    return augment(snapshot, candidates, now)
 
 
 def main():
@@ -138,11 +145,11 @@ def run(args):
     config = json.loads(Path(args.config).read_text()) if args.config else {'homes': [{'home': args.home, 'output': args.output}]}
     root = args.sessions_root or config.get('sessions_root') or str(Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser() / 'sessions')
     now = datetime.now(timezone.utc)
-    index = session_index(Path(root).expanduser())
+    candidates = session_candidates(Path(root).expanduser(), now)
     failed = False
     for entry in config['homes']:
         try:
-            snapshot = collect(entry['home'], index, now)
+            snapshot = collect(entry['home'], candidates, now)
             if entry.get('output'):
                 atomic_write(entry['output'], snapshot)
             else:

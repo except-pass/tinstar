@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { notionObservation } from '../../server/reconciliation/notion'
-import { resolveFloorGroup } from '../../shared/floorOrganization'
+import { floorFieldValues, resolveFloorGroup } from '../../shared/floorOrganization'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import { dateBucket, dateTimestamp, defaultOrganizer, organizedGroups, type Organizer } from '../../shared/floorOrganization'
 import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
@@ -13,6 +13,24 @@ import { loadPresentationPreferences, preferencesKey, savePresentationPreference
 const now = Date.parse('2026-11-04T17:00:00Z')
 const stateFor = (organizer: Partial<Organizer> = {}): ReturnType<typeof initialPresentation> => ({ ...initialPresentation(), organizer: { ...defaultOrganizer(), inner: 'none', ...organizer } })
 describe('shared organization of independent endpoints', () => {
+  it('uses log activity for date values, grouping, and ordering in both directions', () => {
+    const scene = fixtureScene({ now })
+    const workers = scene.executions.filter(worker => worker.kind !== 'secondmate').slice(0, 2)
+    scene.executions = workers
+    const recent = workers[0]!, older = workers[1]!
+    recent.source.last_event.age_seconds = 2 * 86400
+    recent.source.codex = { turn_open: true, observed_at: new Date(now).toISOString(),
+      last_activity_at: new Date(now - 1000).toISOString(), session_file: 'rollout-test.jsonl' }
+    older.source.last_event.age_seconds = 3600
+    expect(floorFieldValues(scene, { worker: recent }, 'activity')).toEqual([new Date(now - 1000).toISOString()])
+    const grouped = organizedGroups(scene, stateFor({ outer: 'activity' }), now)
+    expect(grouped.find(group => group.executionIds.includes(recent.id))!.outerLabel).toBe('Today')
+    for (const direction of ['asc', 'desc'] as const) {
+      const groups = organizedGroups(scene, stateFor({ outer: 'none', order: 'activity', direction }), now)
+      expect(groups.flatMap(group => group.workers).map(worker => worker.id)).toEqual(
+        direction === 'asc' ? [older.id, recent.id] : [recent.id, older.id])
+    }
+  })
   it.each(['initiative', 'epic'] as const)('uses only explicit %s properties from Notion', async field => {
     const name = field === 'initiative' ? 'Initiative' : 'Epic'
     for (const property of [undefined,

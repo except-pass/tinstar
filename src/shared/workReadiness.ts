@@ -17,7 +17,7 @@ export function currentActivity(worker: Execution, now: number): 'working' | 'wa
   if (turn !== null) return turn ? 'working' : 'waiting'
   if (state.freshness !== 'fresh' || !['run-step', 'pane'].includes(String(state.source))) return 'unknown'
   if (state.state === 'working') return 'working'
-  if (['parked', 'paused', 'blocked'].includes(String(state.state))) return 'waiting'
+  if (['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'].includes(String(state.state))) return 'waiting'
   if (['done', 'failed'].includes(String(state.state))) return 'terminal'
   return 'unknown'
 }
