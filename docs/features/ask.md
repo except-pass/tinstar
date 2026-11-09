@@ -64,28 +64,38 @@ unchanged. UI-command bridge availability follows the
 [MCP session contract](reconciliation-mcp.md#start-and-connect).
 
 Desktop Desk opens by default. Drag the visible divider to resize, or focus it
-and use Left/Right (16px) and Home/End (bounds). **Desk size → Reset Desk size**
-restores the default. Width and collapsed state persist per browser/device in
+and use Left/Right (16px) and Home/End (bounds). Double-click the divider to
+restore the default width. Width and collapsed state persist per browser/device in
 `tinstar.desk.preferences`; unavailable storage uses usable defaults. Effective
 width clamps to the available workspace without erasing the preferred width.
 At 850px and below, a single global Desk button opens the same inbox in a sheet;
 mobile open/close does not change the remembered desktop preference. Unread
 answers and actionable/failed items remain counted on the collapsed entry.
-Find worker and Message receipts remain accessible from the Desk header; on
-mobile they close the sheet before opening the existing panel. PRs' Desk button
-opens this workspace directly. Source health remains an on-demand Overview view.
+The header contains only **Desk** and collapse/close. PRs' Desk button opens this
+workspace directly. Source health remains an on-demand Overview view; worker
+switching stays available in worker detail.
 
-Your Desk starts with readable question/answer records, followed by supported
-actionable decision/request records. Operational queue introductions and counts
-are omitted; decision controls and routing remain intact. The Ask states are **Sent** (Tin Star retained it), **Delivered** (First Mate
-captured its note), **Answered** (correlated primary reply), and **Failed** (known
-capture failure). No readiness/announcement/acknowledgement is misrepresented as
-investigation progress. A missing puller or slow answer leaves a visible delay
-message; retry uses the same logical request ID. Wake failure is shown even when
-the note is delivered. New answers are unread; viewing marks them read. Dismiss
-under the secondary Actions menu moves only the Ask into searchable history.
-It does not dismiss a decision,
-change Notion, approve work, merge or deploy.
+**Needs you**, **Waiting** and **History** provide one compact text control with
+conversation counts. Needs you shows verified actionable queue requests first,
+then unread answers, failed deliveries and retained answered conversations.
+Waiting contains questions whose latest turn has no answer, unless an unread
+answer or known failure still needs attention. History contains dismissed
+conversations and supports search across their questions, source names and answers.
+Follow-up turns count as one conversation and retain their own request identities.
+Expired source evidence or failed queue reads never contribute ready decisions.
+
+Ordinary Ask copy is **Waiting for answer**, **New answer**, **Answered** or
+**Delivery failed**. Listing or counting an answer does not read it; intentionally
+opening its conversation uses the existing persisted read path. Opening an
+unanswered question shows the thread and delivery diagnostics. **Sent** and
+**Delivered** remain available in expanded **Delivery details**; only a true
+failed delivery offers **Retry delivery**, using the same request ID.
+A delivered question waiting for an answer has no retry button. An open thread
+follows a reply/read transition between views without replacing its composer.
+Dismiss under the secondary Actions menu moves only the conversation into
+searchable History. It does not dismiss a decision, change Notion, approve work,
+merge or deploy. Source response receipts remain available in the request
+inspector's **Response delivery details**; the retired receipt panel is removed.
 
 Opening an item reveals its originating context, switching sections when
 necessary, while retaining the conversation in Desk. Work items use existing

@@ -16,7 +16,6 @@
 .ask-desk article[data-unread=true] small{color:#8aebcd}
 .ask-desk .ask-item-actions{margin:6px 0 0}
 .ask-desk .ask-item-actions summary{font:12px/1.5 system-ui;margin:0;color:#8aa8b5}
-.ask-desk .ask-history{margin-top:12px;background:none;border:0;padding:5px 0;font:12px/1.5 system-ui}
 .ask-desk .ask-preview .ask-open{color:#8ce5eb;margin-top:6px;font-size:12px}
 .ov-relationship-hit:focus-visible{outline:none;stroke:#00f0ff55}
 .ask-origin{outline:2px solid #63cfb0;outline-offset:-2px;background:#12302b!important}
@@ -38,3 +37,6 @@
 .ask-thread .ask-composer footer{justify-content:flex-end}.ask-thread .ask-composer button{min-height:44px;padding:8px 14px}
 .ask-thread .ask-composer textarea{max-height:35dvh}.ask-thread .ask-composer label{font-weight:600}
 .ask-composer button:disabled{opacity:.5;cursor:default}
+
+.ask-delivery-diagnostics{font:12px/1.5 system-ui;color:#9fb0bd;margin:8px 0}
+.ask-delivery-diagnostics summary{cursor:pointer}

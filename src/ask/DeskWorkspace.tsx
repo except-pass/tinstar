@@ -6,7 +6,8 @@ import { usePresentation } from '../reconciliation/usePresentation'
 import { QueuePanel } from '../reconciliation/QueuePanel'
 import { decisionItems } from '../shared/reconciliationQueue'
 import type { PresentationAction } from '../shared/reconciliationPresentation'
-import { AskCardAction, AskDesk, AskProvider, useAskControls } from './Ask'
+import { AskDesk, AskProvider, useAskControls } from './Ask'
+import { deskConversations, type DeskView } from './deskInbox'
 import { DeskRail } from './DeskRail'
 import { useSearchSession } from '../reconciliation/useSearchSession'
 import { loadOverviewDensity, type OverviewDensity } from '../reconciliation/overviewDensity'
@@ -31,9 +32,9 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, onWorkers, onReceipts, workers, messages, submit, children }: {
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, workers, messages, submit, children }: {
   views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
-  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void; onWorkers?: () => void; onReceipts?: () => void
+  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
   const floor = useFloorScene(overviewActive || decisionsActive), { queue, error: queueError } = useDeskQueue()
@@ -94,24 +95,36 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
         if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
-      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} onWorkers={onWorkers} onReceipts={onReceipts} workers={workers} messages={messages} submit={submit} /></div>
+      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} workers={workers} messages={messages} submit={submit} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>
 }
-function WorkspaceRail({ closeRequest, openRequest, onClose, onWorkers, onReceipts, workers, messages, submit }: {
-  closeRequest: number; openRequest: number; onClose: () => void; onWorkers?: () => void; onReceipts?: () => void
+function WorkspaceRail({ closeRequest, openRequest, onClose, workers, messages, submit }: {
+  closeRequest: number; openRequest: number; onClose: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>
 }) {
   const { scene, state, send, queue, queueError, now } = useDeskWorkspace()
   const controls = useAskControls()
-  const unread = controls?.items.filter(item => !item.dismissed_at && item.reply && !item.read_at).length ?? 0
-  const failed = controls?.items.filter(item => !item.dismissed_at && item.status === 'failed').length ?? 0
-  const attention = failed + (queue && !queueError ? decisionItems(queue, now).length : 0)
-  return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention} onClose={onClose} tools={closeMobile => <>
-    <AskCardAction icon />
-    {onWorkers && <button type="button" aria-label="Find worker" title="Find worker" onClick={() => { closeMobile(); onWorkers() }}><span className="material-symbols-outlined" aria-hidden="true">person_search</span></button>}
-    {onReceipts && <button type="button" aria-label="Message receipts" title={`Message receipts · ${messages.length}`} onClick={() => { closeMobile(); onReceipts() }}><span className="material-symbols-outlined" aria-hidden="true">receipt_long</span></button>}
-  </>}>
-    <AskDesk now={now} /><QueuePanel scene={scene ?? undefined} messages={messages} submit={submit} workers={workers} state={state} send={send} queue={queue} error={queueError} now={now} />
+  const groups = deskConversations(controls?.items ?? [])
+  const unread = groups.filter(group => group.unread).length
+  const decisions = queue && !queueError ? decisionItems(queue, now).length : 0
+  const counts = { 'needs-you': decisions + groups.filter(group => group.view === 'needs-you').length, waiting: groups.filter(group => group.view === 'waiting').length, history: groups.filter(group => group.view === 'history').length }
+  const [selectedView, setSelectedView] = useState<DeskView | null>(null)
+  const expandedGroup = groups.find(group => group.id === controls?.expanded)
+  const previousExpanded = useRef<{ id: string; view: DeskView } | null>(null)
+  // Follow an intentionally opened thread when a reply/read changes its view.
+  // Resolve during render so its inline composer never unmounts between views.
+  const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && expandedGroup.view !== 'history')
+  const view = followExpanded ? expandedGroup.view : selectedView ?? (counts['needs-you'] || !counts.waiting ? 'needs-you' : 'waiting')
+  useEffect(() => {
+    if (followExpanded) setSelectedView(expandedGroup.view)
+    previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
+  }, [expandedGroup, followExpanded])
+  useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
+  const attention = decisions + groups.filter(group => group.failed && !group.unread && group.view !== 'history').length
+  return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention} onClose={onClose}>
+    <nav className="desk-tabs" aria-label="Desk views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
+    <div hidden={view !== 'needs-you' || !(decisions || queueError || state.queueItemId || state.queueCardId)}><QueuePanel scene={scene ?? undefined} messages={messages} submit={submit} workers={workers} state={state} send={send} queue={queue} error={queueError} now={now} /></div>
+    <AskDesk now={now} view={view} showEmpty={view !== 'needs-you' || !decisions} />
   </DeskRail>
 }

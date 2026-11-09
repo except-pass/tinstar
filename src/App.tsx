@@ -4,7 +4,6 @@ import { findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOver
 import { directLabel } from './cockpit/groupWorkers'
 import { ActivityBar } from './cockpit/shell/ActivityBar'
 import { ContextPanel } from './cockpit/shell/ContextPanel'
-import { MessagesPanel } from './cockpit/shell/MessagesPanel'
 import { Composer, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
 import { DRAWER_MEDIA, isDrawerLayout, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
@@ -55,7 +54,7 @@ export default function App() {
   const [terminals, setTerminals] = useState<Record<string, Terminal>>({})
   const [opening, setOpening] = useState<Record<string, boolean>>({})
   const [messages, setMessages] = useState<OutboxMessage[]>([])
-  const [messageError, setMessageError] = useState<string | null>(null)
+  const [directError, setDirectError] = useState<string | null>(null)
   const [directBusy, setDirectBusy] = useState<Record<string, boolean>>({})
   const pendingDirect = useRef(new Map<string, { direct: boolean; after: number | null }>())
   const fleetRequests = useRef(0)
@@ -97,8 +96,8 @@ export default function App() {
       const response = await apiFetch('/api/fleet/messages')
       const body = await response.json() as { ok: boolean; data?: OutboxMessage[] }
       if (!body.ok || !body.data) throw new Error('Messages unavailable')
-      setMessages(body.data); setMessageError(null)
-    } catch (error) { setMessageError((error as Error).message) } finally { messagesInFlight.current = false }
+      setMessages(body.data)
+    } catch { /* Retain the last receipts for source response deduplication. */ } finally { messagesInFlight.current = false }
   }, [])
 
   const submit = useCallback(async (draft: Draft) => {
@@ -109,15 +108,11 @@ export default function App() {
     return body.data
   }, [refreshMessages])
 
-  const retry = useCallback((message: OutboxMessage) => {
-    void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
-      .catch(error => setMessageError((error as Error).message))
-  }, [submit])
-
   const directLocks = useRef(new Set<string>())
   const setDirect = useCallback(async (worker: Worker, direct: boolean) => {
     if (directLocks.current.has(worker.key)) return
     directLocks.current.add(worker.key)
+    setDirectError(null)
     setDirectBusy(previous => ({ ...previous, [worker.key]: true }))
     pendingDirect.current.set(worker.key, { direct, after: null })
     setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct } : item) }))
@@ -130,11 +125,11 @@ export default function App() {
       if (!response.ok || !body.ok || !applied) throw new Error(body.error?.message ?? 'Could not update the mark')
       pendingDirect.current.set(worker.key, { direct: applied.direct, after: fleetRequests.current })
       setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: applied.direct } : item) }))
-      if (applied.note && !applied.note.saved) setMessageError(`The mark was saved. First Mate did not get the note${applied.note.error ? `: ${applied.note.error}` : '.'}`)
+      if (applied.note && !applied.note.saved) setDirectError(`The mark was saved. First Mate did not get the note${applied.note.error ? `: ${applied.note.error}` : '.'}`)
     } catch (error) {
       pendingDirect.current.delete(worker.key)
       setFleet(previous => ({ ...previous, workers: previous.workers.map(item => item.key === worker.key ? { ...item, direct: worker.direct } : item) }))
-      setMessageError((error as Error).message)
+      setDirectError((error as Error).message)
     } finally {
       directLocks.current.delete(worker.key)
       setDirectBusy(previous => ({ ...previous, [worker.key]: false }))
@@ -304,12 +299,11 @@ export default function App() {
   return <div className="cockpit-shell">
     <ActivityBar overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
-    <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : panelMode === 'messages' ? messages.length : workers.length} onCollapse={() => setPanelMode(null)}>
+    <ContextPanel mode={panelMode} count={panelMode === 'needs' ? attention.length : workers.length} onCollapse={() => setPanelMode(null)}>
 
-      <div hidden={panelMode !== 'messages'}><MessagesPanel messages={messages} error={messageError} retry={retry} /></div>
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
-    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} onWorkers={() => setPanelMode('workers')} onReceipts={() => setPanelMode('messages')} workers={workers} messages={messages} submit={submit}>
+    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {overviewLocation.page === 'decisions' ? <Decisions /> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">
@@ -337,6 +331,7 @@ export default function App() {
               <div className="cockpit-switch"><button type="button" onClick={() => selectPanel('workers')}>Switch worker</button><button aria-label="Previous worker" title="Previous worker (Ctrl+[)" onClick={() => cycle(-1)} disabled={workers.length < 2}>← <span>Previous</span></button><span>{activeIndex + 1} / {workers.length}</span><button aria-label="Next worker" title="Next worker (Ctrl+])" onClick={() => cycle(1)} disabled={workers.length < 2}><span>Next</span> →</button></div>
             </header>
             <div className="cockpit-worker-content">
+              {directError && <p role="alert">{directError}</p>}
               <div className="cockpit-status-detail"><StateChip state={current.state} /><MateBadge kind={current.kind} /><span className="cockpit-status-text" title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
               <section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
               <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>

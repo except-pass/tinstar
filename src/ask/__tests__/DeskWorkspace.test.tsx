@@ -9,16 +9,17 @@ import { DeskRail } from '../DeskRail'
 import { clampDeskWidth, deskPreferencesKey, loadDeskPreferences } from '../deskPreferences'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema } from '../../shared/ask'
-const source = vi.hoisted(() => ({ scene: null as unknown, queue: null as ReturnType<typeof fixtureQueue> | null }))
+import { decisionItems } from '../../shared/reconciliationQueue'
+const source = vi.hoisted(() => ({ scene: null as unknown, queue: null as ReturnType<typeof fixtureQueue> | null, queueError: null as string | null }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: source.scene, error: null, now: Date.now() }) }))
-vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: null }) }))
+vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: source.queueError }) }))
 const read = vi.fn()
 const record = () => askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'Where is the evidence?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null })
 let items: ReturnType<typeof record>[]
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null
+  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null; source.queueError = null
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
   vi.stubGlobal('matchMedia', () => ({ matches: window.innerWidth <= 850, addEventListener() {}, removeEventListener() {} }))
@@ -42,6 +43,61 @@ function Shell({ page = 'overview' }: { page?: string }) {
 const rail = (request = 0) => <DeskRail openRequest={request} unread={2} attention={1} onClose={() => {}}><button>Inbox item</button></DeskRail>
 // Overview and App navigation under a second full suite exceeds the 5s default.
 describe('desk workspace', () => {
+it('has one compact header and one History control while retaining resize and collapse', async () => {
+  render(<App />)
+  const desk = screen.getByLabelText('Your desk')
+  expect(within(desk).getByRole('heading', { name: 'Desk' })).toBeVisible()
+  expect(within(desk).getByRole('button', { name: 'Collapse Your desk' })).toBeVisible()
+  expect(within(desk).getAllByRole('button', { name: /^History/ })).toHaveLength(1)
+  for (const label of ['Find worker', 'Message receipts', 'Ask First Mate', 'Reset Desk size']) expect(within(desk).queryByRole('button', { name: label })).toBeNull()
+  expect(within(desk).queryByText('YOU / ONE INBOX')).toBeNull()
+  expect(within(desk).queryByText('Desk size')).toBeNull()
+  expect(screen.getByRole('separator', { name: 'Resize Your desk' })).toBeVisible()
+  await act(async () => {})
+})
+
+it('counts threads once, keeps verified decisions ahead of a long Waiting inbox and never reads listed answers', async () => {
+  const answer = { ...record(), status: 'answered' as const, reply: { summary: 'Ready to review', detail: 'Evidence', references: [], suggested_actions: [] } }
+  const followUp = { ...record(), conversation_id: answer.conversation_id, question: 'A follow-up', created_at: '2099-01-01T00:00:00Z' }
+  const archived = { ...record(), dismissed_at: new Date().toISOString() }
+  items = [answer, followUp, archived, ...Array.from({ length: 45 }, (_, i) => ({ ...record(), question: `Pending question ${i}` }))]
+  source.queue = fixtureQueue()
+  const decisions = decisionItems(source.queue).length
+  render(<Shell />)
+  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
+  await waitFor(() => expect(within(tabs).getByRole('button', { name: `Needs you ${decisions + 1}` })).toHaveAttribute('aria-pressed', 'true'))
+  const queue = screen.getByRole('region', { name: 'Desk queue' })
+  expect(queue.compareDocumentPosition(screen.getByLabelText('Questions for First Mate')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(1)
+  expect(within(tabs).getByRole('button', { name: 'History 1' })).toBeVisible()
+  fireEvent.click(within(tabs).getByRole('button', { name: 'Waiting 45' }))
+  expect(queue).not.toBeVisible()
+  expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(45)
+  fireEvent.click(within(tabs).getByRole('button', { name: `Needs you ${decisions + 1}` }))
+  expect(screen.getByRole('region', { name: 'Desk queue' })).toBe(queue)
+  expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(1)
+  expect(read.mock.calls.some(([url]) => /\/read$/.test(String(url)))).toBe(false)
+  expect(items.map(item => item.read_at)).toEqual(items.map(() => null))
+})
+
+it('retains queue diagnostics without counting failed reads or expired evidence as ready decisions', async () => {
+  source.queue = fixtureQueue()
+  const view = render(<Shell />)
+  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
+  await act(async () => {})
+  source.queueError = 'Queue source unavailable'
+  view.rerender(<Shell />)
+  expect(within(tabs).getByRole('button', { name: 'Needs you 0' })).toBeVisible()
+  fireEvent.click(within(tabs).getByRole('button', { name: 'Needs you 0' }))
+  expect(screen.getByText('Requests could not refresh.')).toBeVisible()
+  expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
+  source.queueError = null
+  source.queue = { ...source.queue, items: source.queue.items.map(item => ({ ...item, sources: item.sources.map(s => ({ ...s, expiresAt: '2020-01-01T00:00:00Z' })) })) }
+  view.rerender(<Shell />)
+  expect(within(tabs).getByRole('button', { name: 'Needs you 0' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
+})
+
 it('keeps one inbox and a draft through all section switches and collapse/reopen', async () => {
   const view = render(<Shell />)
   await screen.findAllByText('Where is the evidence?')
@@ -105,8 +161,7 @@ it('restores desktop width/collapse across reload and allows accessible reset', 
   expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '472')
   view.unmount(); render(rail())
   expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '472')
-  fireEvent.click(screen.getByText('Desk size'))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset Desk size' }))
+  fireEvent.doubleClick(screen.getByRole('separator'))
   expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '320')
 })
 it('clamps resizing on available width and recovers the preferred desktop width after a temporary shrink', () => {
@@ -188,10 +243,11 @@ it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask a
     items[0]!.context.target = { kind: origin, id: origin === 'execution' ? scene.executions[0]!.id : scene.claims[0]!.id }
   }
   render(<NavigationShell />)
-  await screen.findAllByText('Where is the evidence?')
+  await waitFor(() => expect(read.mock.calls.some(([url]) => url === '/api/ask/requests')).toBe(true))
   fireEvent.click(screen.getByRole('button', { name: 'Visit Releases' }))
   fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   const desk = screen.getByRole('dialog', { name: 'Your desk' })
+  if (origin !== 'queue') fireEvent.click(within(desk).getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
   if (origin === 'queue') fireEvent.click(desk.querySelector<HTMLButtonElement>(`[data-desk-card-id="${fixtureId(1)}"]`)!)
   else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0]!)
   if (origin === 'queue') expect(desk).not.toBeVisible()
@@ -200,6 +256,7 @@ it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask a
   expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
   if (origin === 'queue') fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
   expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(desk)
+  if (origin === 'queue') fireEvent.click(within(desk).getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
   expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2)
 })
 
@@ -256,9 +313,9 @@ it.each(['same time', 'newest first', 'oldest first'])('updates an expanded inli
   vi.useFakeTimers()
   render(<Shell page="releases" />)
   await act(async () => {})
-  fireEvent.click(screen.getByRole('button', { name: /Sent.*Where is the evidence for request 0/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Waiting for answer.*Where is the evidence for request 0/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
-  expect(thread).toHaveTextContent('Waiting for First Mate')
+  expect(thread).toHaveTextContent('Waiting for answer')
   items = items.map((item, index) => ({ ...item, status: 'answered', reply: { summary: `Independent answer ${index}`, detail: `Complete evidence ${index}`, references: [], suggested_actions: [] } }))
   await act(async () => { vi.advanceTimersByTime(5000) })
   expect(screen.getByRole('region', { name: /Answer thread/ })).toBe(thread)
@@ -271,10 +328,17 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
   const first = items[0]!
   items = [first, ...['Can it proceed?', 'Who reviews it?'].map((question, index) => ({ ...record(), conversation_id: first.conversation_id, question, created_at: `2099-01-0${index + 1}T00:00:00Z` }))]
   const view = render(<Shell />)
-  fireEvent.click(await screen.findByRole('button', { name: /^Sent.*Where is the evidence/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Waiting for answer.*Where is the evidence/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
   fireEvent.change(field, { target: { value: 'What about that review?' } })
+  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
+  for (const tab of ['History', 'Needs you', 'Waiting']) {
+    fireEvent.click(within(tabs).getByRole('button', { name: new RegExp(`^${tab} `) }))
+    expect(screen.getByLabelText('Reply to First Mate', { selector: 'textarea' })).toBe(field)
+    expect(field).toHaveValue('What about that review?')
+  }
+  expect(field).toBeVisible()
   for (const page of ['pulls', 'releases', 'overview']) {
     view.rerender(<Shell page={page} />)
     expect(screen.getByRole('region', { name: /Answer thread/ })).toBe(thread)

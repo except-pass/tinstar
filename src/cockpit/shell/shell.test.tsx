@@ -76,13 +76,13 @@ describe('Overview shell and retained terminal navigation', () => {
       return Promise.resolve(json({ ok: false }, 404))
     })
     const { container } = render(<App />)
-    await screen.findByRole('button', { name: 'Find worker' })
+    expect(screen.queryByRole('button', { name: 'Find worker' })).toBeNull()
     await screen.findByLabelText('Request inspector')
     expect(container.querySelector('.cockpit-attention-card')).toBeNull()
     expect(screen.queryByText('Respond through First Mate')).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
   })
-  it('retains worker cycling, receipts and a closed panel on return to Overview', async () => {
+  it('retains worker cycling and a closed panel on return to Overview without retired receipt navigation', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
     fleetStub()
     render(<App />)
@@ -96,9 +96,8 @@ describe('Overview shell and retained terminal navigation', () => {
     expect(panelOpen()).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
     expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
-    fireEvent.click(await screen.findByRole('button', { name: 'Message receipts' }))
-    expect(screen.getByText('Noted')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }))
+    expect(screen.queryByRole('button', { name: 'Message receipts' })).toBeNull()
+    expect(screen.queryByText('Noted')).toBeNull()
     expect(panelOpen()).toBe(false)
   })
   it('closes a narrow worker drawer after selection and Escape', async () => {

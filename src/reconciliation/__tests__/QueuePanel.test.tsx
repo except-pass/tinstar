@@ -84,7 +84,7 @@ it('answers only the explicitly ready source, retaining its terminal and receipt
   expect(screen.getByRole('link', { name: /Open source terminal/ }).getAttribute('href')).toBe('?worker=worker&home=hulk')
   fireEvent.change(screen.getByLabelText('Answer this decision'), { target: { value: 'Choose A' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send to First Mate' }))
-  expect(await screen.findByText('Answer saved. See Receipts for delivery.')).toBeTruthy()
+  expect(await screen.findByText('Answer saved.')).toBeTruthy()
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({ anchorKey: anchor, kind: 'answer', text: 'Choose A' }))
 })
 
@@ -119,8 +119,11 @@ it('retains a saved answer after returning to its source without hiding another 
   const { unmount } = render(<QueuePanel messages={messages} submit={vi.fn()} workers={[]} state={state} send={vi.fn()} queue={queue} error={null} now={now} />)
   unmount()
   render(<QueuePanel messages={messages} submit={vi.fn()} workers={[]} state={state} send={vi.fn()} queue={queue} error={null} now={now} />)
-  expect(screen.getByText('Answer saved. See Receipts for delivery.')).toBeTruthy()
+  expect(screen.getByText('Answer saved.')).toBeTruthy()
   expect(screen.getByText('Answer', { selector: 'summary' })).toBeTruthy()
+  expect(screen.getByText('Response delivery details')).toBeTruthy()
+  const diagnostics = screen.getByText('Response delivery details').parentElement!
+  expect(JSON.parse(diagnostics.querySelector('pre')!.textContent!)).toMatchObject({ sourceAnchor: requestAnchor(requests[0]!), state: 'saved' })
   expect(screen.getByLabelText('Request inspector').querySelectorAll('textarea')).toHaveLength(1)
 })
 

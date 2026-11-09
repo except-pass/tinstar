@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { clampDeskWidth, defaultDeskWidth, deskWidthLimit, loadDeskPreferences, minimumDeskWidth, saveDeskPreferences } from './deskPreferences'
 import './desk.css'
 
-export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, tools, children }: {
-  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose: () => void; tools?: ReactNode | ((closeMobile: () => void) => ReactNode); children: ReactNode
+export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, children }: {
+  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose: () => void; children: ReactNode
 }) {
   const [preferences, setPreferences] = useState(loadDeskPreferences)
   const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width:850px)').matches ?? false)
@@ -66,10 +66,7 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
       }
     }}>
-      <header><small className="ov-eyebrow">YOU / ONE INBOX</small><div className="ov-desk-title"><h2>Your desk</h2><span className="ov-desk-tools">{typeof tools === 'function' ? tools(() => { if (narrow) close() }) : tools}<button ref={closeButton} type="button" aria-label={narrow ? 'Close Your desk' : 'Collapse Your desk'} onClick={close}>{narrow ? 'Close' : '−'}</button></span></div>
-        {(unread + attention > 0) && <small className="desk-counts">{countLabel}</small>}
-        <details className="desk-options"><summary>Desk size</summary><button type="button" onClick={() => setPreferences({ width: defaultDeskWidth, collapsed: false })}>Reset Desk size</button><span>Drag the divider or use its arrow keys.</span></details>
-      </header>{children}
+      <header><h2>Desk</h2><button ref={closeButton} type="button" className="desk-collapse" aria-label={narrow ? 'Close Your desk' : 'Collapse Your desk'} onClick={close}>{narrow ? 'Close' : '−'}</button></header>{children}
     </aside>
   </div>
 }

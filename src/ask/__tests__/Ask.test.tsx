@@ -103,7 +103,7 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
   })
-  it('submits the canonical card ID only after review, shows Sent, then survives a second mount', async () => {
+  it('submits the canonical card ID only after review, shows waiting copy, then survives a second mount', async () => {
     const first = mount()
     const task = card(first.container)
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchEnd')
@@ -112,8 +112,9 @@ describe('one-card text Ask and Desk', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(requests).toMatchObject([{ card_id: fixtureId(1), question: 'What is the blocker?', view: { scene: 'overview' } }])
     expect(requests[0]).not.toHaveProperty('owner')
-    expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Sent')
+    expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Waiting for answer')
     first.unmount(); mount()
+    fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('What is the blocker?'))
   })
   it('returns an unread answer to a hidden card, flashes it, keeps details and dismisses only to searchable history', async () => {
@@ -133,7 +134,7 @@ describe('one-card text Ask and Desk', () => {
     fireEvent.click(screen.getByText('Actions', { selector: 'summary' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss to history' }))
     await waitFor(() => expect(within(screen.getByLabelText('Questions for First Mate')).queryByText('Why is this waiting?')).toBeNull())
-    fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
+    fireEvent.click(screen.getByRole('button', { name: /^History/ }))
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search question history' }), { target: { value: 'dependency' } })
     expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Why is this waiting?')
     expect(requests).toHaveLength(0)
@@ -144,11 +145,11 @@ describe('one-card text Ask and Desk', () => {
     mount()
     const desk = screen.getByLabelText('Questions for First Mate')
     await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
-    fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
+    fireEvent.click(screen.getByRole('button', { name: /^History/ }))
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search question history' }), { target: { value: 'deployment' } })
     expect(desk).toHaveTextContent('Archived deployment')
     expect(desk).not.toHaveTextContent('Why is this waiting?')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to questions' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
     expect(screen.queryByRole('searchbox')).toBeNull()
     expect(desk).toHaveTextContent('Why is this waiting?')
     expect(desk).toHaveTextContent('New answer')
@@ -171,8 +172,8 @@ describe('one-card text Ask and Desk', () => {
     }
     expect(card(container)).toBeNull()
     const before = JSON.parse(localStorage.getItem(preferencesKey)!)
-    if (history) fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
-    const answer = await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })
+    if (history) fireEvent.click(screen.getByRole('button', { name: /^History/ }))
+    const answer = await screen.findByRole('button', { name: /(?:New answer|Answered).*Why is this waiting/ })
     vi.mocked(Element.prototype.scrollIntoView).mockClear()
     fireEvent.click(answer)
     expect(card(container)).toBeVisible()
@@ -266,7 +267,7 @@ it('offers blank Ask for collapsed card and worker identities without expanding 
 it('right-click background stays blank and outside/link context menus stay native', () => {
   const { container } = mount(), task = card(container)
   const outside = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
-  fireEvent(screen.getByRole('heading', { name: 'Your desk' }), outside)
+  fireEvent(screen.getByRole('heading', { name: 'Desk' }), outside)
   expect(outside.defaultPrevented).toBe(false)
   expect(screen.queryByRole('dialog')).toBeNull()
   fireEvent.contextMenu(task)
@@ -432,7 +433,7 @@ it('groups correlated follow-ups into one inline thread and switches independent
 })
 
 
-it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn visible and independently retryable after a follow-up answers', async status => {
+it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn inspectable and retries only a true failure', async status => {
   const first = { ...seed(), status, reply: null, error: status === 'failed' ? 'Delivery failed' : null, created_at: '2020-01-01T00:00:00Z' }
   const followUp = { ...seed(), conversation_id: first.conversation_id, question: 'Answered follow-up', created_at: '2020-01-02T00:00:00Z' }
   const neighbor = { ...seed(), question: 'Neighbor question' }
@@ -440,38 +441,39 @@ it.each(['failed', 'sent', 'delivered'] as const)('keeps an earlier %s turn visi
   mount()
   const desk = screen.getByLabelText('Questions for First Mate')
   const preview = await within(desk).findByRole('button', { name: /New answer.*Why is this waiting/ })
-  expect(preview).toHaveTextContent(status === 'failed' ? '1 failed' : '1 pending')
   const retryName = `Retry delivery: ${first.question}`
-  expect(within(desk).getAllByRole('button', { name: retryName })).toHaveLength(1)
+  expect(within(desk).queryByRole('button', { name: retryName })).toBeNull()
+  expect(preview.querySelector('small')).not.toHaveTextContent(/pending|failed/)
   fireEvent.click(preview)
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   const earlier = within(thread).getByRole('region', { name: `Question: ${first.question}` })
+  expect(within(earlier).getByRole('status')).toHaveTextContent(status === 'failed' ? 'Delivery failed' : 'Waiting for answer')
+  const details = within(earlier).getByText('Delivery details')
+  fireEvent.click(details)
   expect(earlier).toHaveTextContent(status === 'failed' ? 'Delivery failed' : status === 'sent' ? 'Sent' : 'Delivered')
-  expect(earlier).toHaveTextContent('taking longer')
-  expect(within(desk).getAllByRole('button', { name: retryName })).toHaveLength(1)
+  if (status === 'failed') {
+    fireEvent.click(within(earlier).getByRole('button', { name: retryName }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${first.request_id}/retry`, expect.anything()))
+  } else expect(within(earlier).queryByRole('button', { name: retryName })).toBeNull()
   expect(within(thread).queryByRole('button', { name: 'Retry delivery: Answered follow-up' })).toBeNull()
-  fireEvent.click(within(earlier).getByRole('button', { name: retryName }))
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${first.request_id}/retry`, expect.anything()))
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === `/api/ask/requests/${followUp.request_id}/retry`)).toBe(false)
-  expect(first.conversation_id).toBe(followUp.conversation_id)
   expect(within(desk).getByRole('button', { name: /Neighbor question/ })).toBeVisible()
 })
 
-
-it('keeps independently pending turns recoverable in one conversation', async () => {
+it('keeps independently pending turns inspectable in one Waiting conversation without retries', async () => {
   const first = { ...seed(), status: 'sent' as const, reply: null, question: 'First pending question', created_at: '2020-01-01T00:00:00Z' }
   const second = { ...seed(), conversation_id: first.conversation_id, status: 'delivered' as const, reply: null, question: 'Second pending question', created_at: '2020-01-02T00:00:00Z' }
   records = [first, second]
   mount()
-  const preview = await screen.findByRole('button', { name: /2 pending.*First pending question/ })
+  fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
+  const preview = await screen.findByRole('button', { name: /Waiting for answer.*First pending question/ })
   fireEvent.click(preview)
-  for (const turn of [first, second]) {
-    const retry = screen.getByRole('button', { name: `Retry delivery: ${turn.question}` })
-    fireEvent.click(retry)
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/ask/requests/${turn.request_id}/retry`, expect.anything()))
-  }
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  for (const turn of [first, second]) expect(within(thread).getByRole('region', { name: `Question: ${turn.question}` })).toBeVisible()
+  expect(screen.queryByRole('button', { name: /Retry delivery:/ })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
-  expect(screen.getAllByRole('button', { name: /Retry delivery:/ })).toHaveLength(2)
+  expect(preview).toBeVisible()
+  expect(screen.queryByRole('button', { name: /Retry delivery:/ })).toBeNull()
 })
 
 it.each(['swipe', 'right-click', 'icon', 'Desk follow-up'])('supports Enter, Shift+Enter, IME and Escape in the %s composer', async entry => {
@@ -513,7 +515,7 @@ it('sends an unedited overdue suggestion with the displayed element and original
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Question' }), { key: 'Enter' })
   await waitFor(() => expect(requests).toHaveLength(1))
   expect(requests[0]).toMatchObject({ card_id: fixtureId(1), field_key: 'next_check_in', field_value: '2026-11-05T15:00:00Z', element: { field_name: 'next_check_in', type: 'overdue', value: '2026-11-05T15:00:00Z' } })
-  expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Sent')
+  expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('Waiting for answer')
   expect(records[0]!.context.anchor.page_id).toBe(fixtureId(1))
 })
 
@@ -534,6 +536,7 @@ it('keeps the reply inline across three turns, reloads and an independent thread
   expect(requests[0]!.client_key).not.toBe(requests[1]!.client_key)
   expect(records.filter(row => row.conversation_id === first.conversation_id)).toHaveLength(3)
   view.unmount(); mount()
+  fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   for (const question of [first.question, 'Can it proceed?', 'Who can review it?']) expect(thread).toHaveTextContent(question)
@@ -656,6 +659,7 @@ it('selects one saved recommendation inline, keeps the shared composer/draft and
   expect(requests[0]).toMatchObject({ element: { value: original.reply!.summary } })
   expect(records[2]!.conversation_id).toBe(original.conversation_id)
   view.unmount(); mount()
+  fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
   expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Selected by owner@example.test')

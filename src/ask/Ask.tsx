@@ -11,6 +11,7 @@ import { AskActions, AskSelectionRejected } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
+import { answerStatus, deskConversations, type DeskView } from './deskInbox'
 import './ask.css'
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -185,9 +186,12 @@ function sourceAvailable(item: AskItem, scene: FloorScene | null) {
 }
 function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskControls; now: number }) {
   return <div>
-    <p role="status">{item.status === 'failed' ? 'Failed' : item.status === 'delivered' ? 'Delivered' : 'Sent'} · {item.error ?? 'Waiting for First Mate’s answer.'}</p>
-    {Date.parse(item.created_at) < now - 120_000 && <p>Delivery or an answer is taking longer. First Mate may be offline.</p>}
-    <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>
+    <p role="status">{answerStatus(item)}{item.status === 'failed' && item.error ? ` · ${item.error}` : ''}</p>
+    <details className="ask-delivery-diagnostics"><summary>Delivery details</summary>
+      <p>{item.status === 'delivered' ? 'Delivered' : item.status === 'failed' ? 'Delivery failed' : 'Sent'}{item.error ? ` · ${item.error}` : ''}</p>
+      {Date.parse(item.created_at) < now - 120_000 && <p>Waiting for First Mate’s answer. First Mate may be offline.</p>}
+    </details>
+    {item.status === 'failed' && <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>}
   </div>
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
@@ -220,34 +224,26 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
       }} />
   </section>
 }
-export function AskDesk({ now }: { now: number }) {
+export function AskDesk({ now, view, showEmpty = true }: { now: number; view: DeskView; showEmpty?: boolean }) {
   const controls = useContext(Controls)
-  const [history, setHistory] = useState(false), [search, setSearch] = useState('')
+  const [search, setSearch] = useState('')
   if (!controls) return null
-  const rank = (item: AskItem) => item.reply && !item.read_at ? 0 : item.status === 'sent' || item.status === 'delivered' ? 1 : item.status === 'failed' ? 2 : 3
-  const visible = controls.items.filter(item => !!item.dismissed_at === history && (!history || !search || `${item.question} ${item.context.anchor.label} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase())))
-  const conversations = new Map<string, AskItem[]>()
-  for (const item of visible) conversations.set(item.conversation_id, [...conversations.get(item.conversation_id) ?? [], item])
-  const groups = [...conversations.values()].map(turns => turns.sort((a,b) => a.created_at.localeCompare(b.created_at))).sort((a,b) => Math.min(...a.map(rank)) - Math.min(...b.map(rank)) || b.at(-1)!.created_at.localeCompare(a.at(-1)!.created_at))
+  const history = view === 'history'
+  const groups = deskConversations(controls.items).map(group => ({ ...group, visible: group.view === view && (!history || !search || group.turns.some(item => `${item.question} ${item.context.anchor.label} ${item.reply?.summary ?? ''} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))) })).filter(group => group.visible || group.id === controls.expanded)
   return <section className="ask-desk" aria-label="Questions for First Mate">
     {controls.error && <p role="status">{controls.error}. Questions will refresh automatically.</p>}
-    {!groups.length && <p>{history ? 'No matching questions in history.' : 'Your questions and First Mate’s answers appear here.'}</p>}
+    {history && <input aria-label="Search question history" type="search" value={search} onChange={event => setSearch(event.target.value)} />}
+    {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers and decisions appear here.'}</p>}
     {groups.map(group => {
-      const item = group.at(-1)!, expanded = controls.expanded === item.conversation_id, unread = group.some(turn => turn.reply && !turn.read_at)
-      const turns = controls.items.filter(turn => turn.conversation_id === item.conversation_id).sort((a,b) => a.created_at.localeCompare(b.created_at))
-      const failed = turns.filter(turn => !turn.reply && turn.status === 'failed').length
-      const pending = turns.filter(turn => !turn.reply && turn.status !== 'failed').length
-      return <AskSurface as="article" subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
+      const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
+      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
-          <small {...askElement('status', 'Question delivery')}>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])}{failed > 0 && ` · ${failed} failed`}{pending > 0 && ` · ${pending} pending`} · {ageLabel(Date.parse(item.updated_at), now)}</small>
+          <small {...askElement('status', 'Question status')}>{unread ? 'New answer' : group.failed ? 'Delivery failed' : item.reply ? 'Answered' : answerStatus(item)} · {ageLabel(Date.parse(group.updatedAt), now)}</small>
           <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
-        {!expanded && turns.filter(turn => !turn.reply).map(turn => <AskDelivery key={turn.request_id} item={turn} controls={controls} now={now} />)}
-        {!item.dismissed_at && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of group) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
+        {group.view !== 'history' && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of turns) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
       </AskSurface>
     })}
-    <button type="button" className="ask-history" aria-pressed={history} onClick={() => setHistory(!history)}>{history ? 'Back to questions' : 'Question history'}</button>
-    {history && <input aria-label="Search question history" type="search" value={search} onChange={event => setSearch(event.target.value)} />}
   </section>
 }
