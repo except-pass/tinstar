@@ -53,7 +53,7 @@ export function workReadiness(scene: FloorScene, cardId: string, workers: Execut
   }
   let runnableKnown = linksKnown && accountable.size > 0 && context.allHomesFresh
   let resolversKnown = runnableKnown
-  const runnablePaths = new Set<string>(), resolverPaths = new Set<string>()
+  const runnablePaths = new Set<string>(), resolverPaths = new Set<string>(), blockers = new Set<string>()
   const candidates = new Map<string, Backlog>()
   for (const [home, observation] of context.homes) if (!fresh(observation, now)) {
     reasons.add(`Home snapshot stale or unreadable: ${home}`)
@@ -80,7 +80,9 @@ export function workReadiness(scene: FloorScene, cardId: string, workers: Execut
       continue
     }
     inspectRunnable(row)
+    if (row.source.blocked_by) blockers.add(String(row.source.blocked_by))
     for (const blocker of row.source.unresolved_blocker_ids) {
+      blockers.add(blocker)
       const candidate = context.blocker(home, blocker)
       if (!candidate) {
         runnableKnown = false; resolversKnown = false
@@ -107,7 +109,7 @@ export function workReadiness(scene: FloorScene, cardId: string, workers: Execut
     } else if (currentActivity(executions[0]!, now) === 'working') resolverPaths.add(id)
   }
   return { runnable: runnableKnown ? runnablePaths.size : null, activeResolverCount: resolversKnown ? resolverPaths.size : null,
-    hasRunnable: runnablePaths.size > 0, hasResolver: resolverPaths.size > 0, reasons: [...reasons],
+    hasRunnable: runnablePaths.size > 0, hasResolver: resolverPaths.size > 0, blockers: [...blockers], reasons: [...reasons],
     evidence: [...accountable.values()].map(({ home, task }) => {
       const observation = context.homes.get(home)
       return `Readiness ${home}/${task}: observed ${observation?.observedAt ?? 'unknown'} (${observation?.status ?? 'unknown'}/${observation?.coverage ?? 'unknown'}); source backlog and current_state`

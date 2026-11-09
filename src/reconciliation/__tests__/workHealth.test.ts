@@ -98,6 +98,34 @@ describe('read-only task readiness projection', () => {
     expect(health(scene).patterns.blocked.outcome).toBe('match')
     expect(health(scene).patterns.stalled.outcome).toBe('no-match')
   })
+  it('retains a backlog-only dependency as Blocked even without a waiting worker', () => {
+    const scene = sceneFor()
+    scene.cards.find(card => card.id === fixtureId(4))!.source.properties['Waiting For']!.value = 'Named dependency'
+    assigned(scene).source.current_state.state = 'unknown'
+    rowFor(scene).source.unresolved_blocker_ids = ['named-dependency']
+    expect(health(scene).blockers).toEqual(['named-dependency'])
+    expect(health(scene).patterns.blocked.outcome).toBe('match')
+    expect(health(scene).patterns.stalled.outcome).toBe('no-match')
+  })
+  it('does not use a candidate whose current-state freshness is stale', () => {
+    const scene = sceneFor(), candidate = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+    rowFor(scene).source.unresolved_blocker_ids = ['untracked-worker']
+    candidate.source.current_state.freshness = 'stale'
+    expect(health(scene).activeResolverCount).toBeNull()
+    expect(health(scene).patterns.stalled.outcome).toBe('unavailable')
+  })
+  it('resolves named blockers by canonical home and rejects ambiguous remote IDs', () => {
+    const scene = sceneFor(), local = queued(scene)
+    rowFor(scene).source.unresolved_blocker_ids = ['ready-blocker']
+    const remote = { ...local, id: 'remote-ready', home: '/fixture/bandit' }
+    scene.backlog.push(remote)
+    expect(health(scene).runnable).toBe(1) // the local identity is explicit
+    scene.backlog = scene.backlog.filter(row => row !== local)
+    expect(health(scene).runnable).toBe(1) // one unambiguous configured-home identity
+    scene.backlog.push({ ...remote, id: 'another-ready', home: '/fixture/mac' })
+    expect(health(scene).runnable).toBeNull()
+    expect(health(scene).activeResolverCount).toBeNull()
+  })
   it.each(['missing-list', 'missing-blocker', 'partial', 'stale', 'expired', 'read-failed', 'unverified'] as const)('keeps %s evidence unknown', failure => {
     const scene = sceneFor()
     if (failure === 'missing-list') delete rowFor(scene).source.unresolved_blocker_ids

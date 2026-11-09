@@ -14,7 +14,7 @@ export type Pattern = keyof typeof patternNames
 export const patterns = Object.keys(patternNames) as Pattern[]
 export const patternDefinitions: Record<Pattern, { rule: string; unavailable?: string }> = {
   stalled: { rule: 'In Progress, assigned verified workers, no running/runnable path and no active resolver; requires complete fresh evidence.', unavailable: 'Runnable paths or active resolver coverage are incomplete.' },
-  blocked: { rule: 'Work Status is Waiting For with non-empty Waiting For text, independently of worker freshness. A legitimate wait is not a deadlock.' },
+  blocked: { rule: 'Explicit Waiting For text with Work Status Waiting For, a verified waiting worker or a published blocker. A legitimate wait is not a deadlock.' },
   unstaffed: { rule: 'In Progress with no verified assigned worker under complete configured source and explicit accountability coverage.' },
   idle: { rule: 'Waiting/idle worker with no runnable assigned work, excluding intentional wait and terminal history.', unavailable: 'Runnable assignment availability is not published.' },
   decision: { rule: 'Explicit Notion Will action or a structured human approval/input request from a verified worker.' },
@@ -69,11 +69,11 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
     workerIds.size === workers.length && links.every(verifiedLink) && workers.every(worker => freshObservation(worker.observation, now) && worker.liveness !== 'liveness-not-observed')
   const status = String(card.source.properties.Status?.value ?? '')
   const wait = String(card.source.properties['Waiting For']?.value ?? '').trim()
-  const blockers = [...new Set(workers.flatMap(worker => worker.source.backlog.blocked_by ? [String(worker.source.backlog.blocked_by)] : []))]
   const activity = (worker: typeof workers[number]) => !readFailed && scene.coverage.homes.some(home => home.source.home === worker.home && freshObservation(home.observation, now)) ? currentActivity(worker, now) : 'unknown'
   const running = workers.filter(worker => activity(worker) === 'working').length
   const linksKnown = !readFailed && workerIds.size === workers.length && links.every(verifiedLink)
   const readiness = workReadiness(scene, cardId, workers, linksKnown, now, context.readiness)
+  const blockers = [...new Set([...readiness.blockers, ...workers.flatMap(worker => worker.source.backlog.blocked_by ? [String(worker.source.backlog.blocked_by)] : [])])]
   const runnable = readFailed ? null : readiness.runnable
   const activeResolverCount = readFailed ? null : readiness.activeResolverCount
   const runningKnown = linksKnown && workers.length > 0 && workers.every(worker => activity(worker) !== 'unknown')
@@ -119,7 +119,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
         : activePath ? boolean(true, 'At least one verified running or runnable path')
           : runningKnown && runnable === 0 ? boolean(false, 'Verified zero running and runnable paths') : uncertain(readinessReasons.join('; ') || 'Running/runnable accountability is incomplete'),
       blocked: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason)
-        : boolean(!!wait && (status.trim().toLowerCase() === 'waiting for' || waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; worker freshness is not required`),
+        : boolean(!!wait && (status.trim().toLowerCase() === 'waiting for' || waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; ${status.trim().toLowerCase() === 'waiting for' ? 'worker freshness is not required' : 'verified waiting worker or published blocker'}`),
       unstaffed: sourceReason ? uncertain(sourceReason) : !inProgress || workers.length > 0 ? boolean(false, workers.length ? 'A verified assigned worker exists' : 'Work is outside In Progress')
         : complete && absenceKnown ? boolean(true, 'Complete configured source and explicit accountability coverage; no verified assigned worker') : uncertain('Incomplete source, link or accountability coverage; no absence conclusion'),
       decision: !sourceFresh ? uncertain(sourceReason!) : decision || request ? boolean(true, decision ? `Explicit Notion Will action: ${String(will)}` : 'Published needs-decision request on a verified worker')
