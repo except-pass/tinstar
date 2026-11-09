@@ -590,7 +590,7 @@ it('routes a semantic Ask on retained Desk advice into the same inline conversat
   await waitFor(() => expect(field).toHaveValue(''))
   expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(field)
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
-  fireEvent.click(screen.getByRole('button', { name: /Conversation open|Open question|New answer/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Waiting for answer.*Why is this waiting/ }))
   const reopened = screen.getByRole('textbox', { name: 'Reply to First Mate' })
   expect(reopened).toHaveValue('')
   expect(screen.queryByLabelText('Element context')).toBeNull()
