@@ -25,7 +25,8 @@ function expectedStamp() {
 }
 
 async function staged() {
-  // Check the script, tool inputs and directory: otherwise a later checkout can pass sandbox tests against a stale tree.
+  // Check the script, tool inputs and directory so a later checkout cannot pass sandbox tests against a stale tree.
+  // Invalidate before rebuilding and publish after success so another worker cannot accept a partial copy.
   try { return statSync(runtimeRoot).isDirectory() && (await readFile(stampPath, 'utf8')) === expectedStamp() } catch { return false }
 }
 
@@ -61,6 +62,7 @@ export async function stageTestRuntime() {
     try {
       await handle.writeFile(String(process.pid))
       if (!(await staged())) {
+        await rm(stampPath, { force: true })
         await rm(runtimeRoot, { recursive: true, force: true })
         execFileSync(process.execPath, [join(process.cwd(), 'bin/tinstar-stage-action-runtime.js'), runtimeRoot], { env: {} })
         await writeFile(stampPath, expectedStamp())

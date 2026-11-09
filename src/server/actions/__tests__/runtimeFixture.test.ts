@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
   script: 'staging script',
   directory: false,
   stages: 0,
+  failStage: false,
+  stampsDuringStaging: [] as boolean[],
 }))
 
 vi.mock('node:fs', () => ({
@@ -27,7 +29,10 @@ vi.mock('node:fs/promises', () => ({
     return state.files.get(path)
   },
   writeFile: async (path: string, data: string) => { state.files.set(path, data) },
-  rm: async () => { state.directory = false },
+  rm: async (path: string) => {
+    if (path.endsWith('.stamp')) state.files.delete(path)
+    else state.directory = false
+  },
   unlink: async (path: string) => { state.files.delete(path) },
   open: async (path: string) => {
     if (state.files.has(path)) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' })
@@ -44,6 +49,8 @@ vi.mock('node:child_process', () => ({
     if (command === '/usr/bin/ldd') return 'libc => /lib/libc.so (0x123)\n/lib/ld-linux.so (0x456)'
     state.stages++
     state.directory = true
+    state.stampsDuringStaging.push([...state.files.keys()].some(path => path.endsWith('.stamp')))
+    if (state.failStage) throw new Error('Copy failed')
     return ''
   },
 }))
@@ -56,6 +63,8 @@ beforeEach(() => {
   state.script = 'staging script'
   state.directory = false
   state.stages = 0
+  state.failStage = false
+  state.stampsDuringStaging = []
 })
 
 it('shares an unchanged runtime across repeated callers', async () => {
@@ -69,6 +78,21 @@ it('restages when the staging script changes', async () => {
   state.script = 'updated staging script'
   await stageTestRuntime()
   expect(state.stages).toBe(2)
+  expect(state.stampsDuringStaging).toEqual([false, false])
+})
+
+it('leaves a failed partial copy unstamped and retries staging on the next call', async () => {
+  await stageTestRuntime()
+  state.directory = false
+  state.failStage = true
+  await expect(stageTestRuntime()).rejects.toThrow('Copy failed')
+  expect(state.directory).toBe(true)
+  expect(state.files.has(join(tmpdir(), 'tinstar-shared-action-runtime.stamp'))).toBe(false)
+  state.failStage = false
+  await stageTestRuntime()
+  expect(state.stages).toBe(3)
+  expect(state.stampsDuringStaging).toEqual([false, false, false])
+  expect(state.files.has(join(tmpdir(), 'tinstar-shared-action-runtime.stamp'))).toBe(true)
 })
 
 it.each([process.execPath, '/usr/bin/prlimit', '/lib/libc.so', '/lib/ld-linux.so'])(
@@ -87,4 +111,5 @@ it('recreates a missing runtime even when its stamp remains', async () => {
   await stageTestRuntime()
   expect(state.directory).toBe(true)
   expect(state.stages).toBe(2)
+  expect(state.stampsDuringStaging).toEqual([false, false])
 })
