@@ -5,6 +5,8 @@ import { askItemsSchema, askReturn, isArtifactTarget, type AskItem, type AskRetu
 import type { FloorScene, PresentationAction, PresentationState } from '../shared/reconciliationPresentation'
 import { ageLabel } from '../reconciliation/recordFields'
 import { useAskGesture } from './useAskGesture'
+import { askElement } from './element'
+import { AskSurface } from './AskSurface'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
@@ -107,20 +109,24 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close }: {
   const linkedCard = claim && scene?.cards.find(card => card.id === claim.cardId)
   const label = parent?.context.anchor.label ?? seed.label ?? (isArtifactTarget(seed.target) ? seed.target.id : worker ? workerTitle(worker) : linkedCard ? `Relationship · ${cardTitle(linkedCard)}` : card ? cardTitle(card) : chosen)
   const bound = !!seed.target || !!chosen
+  const element = parent?.context.element ?? (seed.target || chosen === seed.cardId ? seed.element : undefined)
   // Keep the retry envelope unchanged after an uncertain response; editing begins
   // a fresh idempotency key so a lost response cannot bind two different texts.
   const key = useRef(clientKey), attempted = useRef(false)
-  return <dialog ref={ref} className="ask-dialog" aria-labelledby="ask-title" onCancel={event => { event.preventDefault(); if (!busy) close() }}>
+  return <dialog ref={ref} className="ask-dialog" aria-labelledby="ask-title" onKeyDown={event => {
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); if (!busy) close() }
+  }} onCancel={event => { event.preventDefault(); if (!busy) close() }}>
     <form onSubmit={event => {
       event.preventDefault()
       if (locked.current || !bound || !question.trim()) return
       locked.current = true; setBusy(true); setError(null); attempted.current = true
-      void submit({ client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...(seed.field_key && (seed.target || chosen === seed.cardId) ? { field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) })
+      void submit({ client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) })
         .catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
     }}>
       <header><h2 id="ask-title">Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
-      <p>Swipe left on an item to ask. Review your question, then send.</p>
+      <p>{seed.element ? 'Ask about this element. Send the suggested question or edit it.' : 'Swipe left on an item to ask; right-click or long-press a field to ask about it.'}</p>
       {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); if (attempted.current) key.current = crypto.randomUUID() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); if (attempted.current) key.current = crypto.randomUUID() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
+      {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
       <label>Question<textarea autoFocus required maxLength={4000} value={question} disabled={busy} onChange={event => { setQuestion(event.target.value); if (attempted.current) key.current = crypto.randomUUID() }} placeholder="What would you like to know?" enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
       {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
       <footer><button type="button" disabled={busy} onClick={close}>Cancel</button><button type="submit" disabled={busy || !bound || !question.trim()}>{busy ? 'Sending…' : 'Send question'}</button></footer>
@@ -149,7 +155,7 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
     {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Open originating source ↗</a>}
     {turns.map(turn => <section className="ask-turn" key={turn.request_id} aria-label={`Question: ${turn.question}`}>
       <p className="ask-thread-question">{turn.question}</p>
-      {turn.reply ? <><h3>{turn.reply.summary}</h3><p className="ask-detail">{turn.reply.detail}</p>
+      {turn.reply ? <><h3 {...askElement('answer', 'First Mate answer')}>{turn.reply.summary}</h3><p {...askElement('answer', 'Answer detail')} className="ask-detail">{turn.reply.detail}</p>
         {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
         {!!turn.reply.suggested_actions.length && <><h4>Suggested next actions</h4><ul>{turn.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}
       </> : <AskDelivery item={turn} controls={controls} now={now} />}
@@ -174,15 +180,15 @@ export function AskDesk({ now }: { now: number }) {
       const turns = controls.items.filter(turn => turn.conversation_id === item.conversation_id).sort((a,b) => a.created_at.localeCompare(b.created_at))
       const failed = turns.filter(turn => !turn.reply && turn.status === 'failed').length
       const pending = turns.filter(turn => !turn.reply && turn.status !== 'failed').length
-      return <article key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
+      return <AskSurface as="article" subject={item.context.target ? { target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
-          <small>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])}{failed > 0 && ` · ${failed} failed`}{pending > 0 && ` · ${pending} pending`} · {ageLabel(Date.parse(item.updated_at), now)}</small>
-          <strong>{turns[0]!.question}</strong><span>{item.context.anchor.label}</span>{!expanded && item.reply && <p>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>
+          <small {...askElement('status', 'Question delivery')}>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])}{failed > 0 && ` · ${failed} failed`}{pending > 0 && ` · ${pending} pending`} · {ageLabel(Date.parse(item.updated_at), now)}</small>
+          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
         {!expanded && turns.filter(turn => !turn.reply).map(turn => <AskDelivery key={turn.request_id} item={turn} controls={controls} now={now} />)}
         {!item.dismissed_at && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of group) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
-      </article>
+      </AskSurface>
     })}
     <button type="button" className="ask-history" aria-pressed={history} onClick={() => setHistory(!history)}>{history ? 'Back to questions' : 'Question history'}</button>
     {history && <input aria-label="Search question history" type="search" value={search} onChange={event => setSearch(event.target.value)} />}

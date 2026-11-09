@@ -30,7 +30,14 @@ export function pullSource(id: string) {
 }
 export const askFieldSchema = z.enum(['next_check_in', 'status', 'waiting_for', 'owner', 'priority', 'last_edited', 'relationship', 'title', 'ci', 'review', 'changes', 'description', 'deployment', 'receipt', 'worker'])
 export type AskField = z.infer<typeof askFieldSchema>
+export const askElementTypeSchema = z.enum(['overdue', 'check-in', 'status', 'waiting-for', 'ci', 'release', 'generic'])
+export type AskElementType = z.infer<typeof askElementTypeSchema>
+export const askElementSchema = z.object({
+  field_name: z.string().min(1).max(128), label: z.string().max(512), value: z.string().max(4000), type: askElementTypeSchema,
+}).strict()
+export type AskElement = z.infer<typeof askElementSchema>
 const semanticContext = {
+  element: askElementSchema.optional(),
   field_key: askFieldSchema.optional(), field_value: z.string().max(4000).optional(),
 }
 export const askContextSchema = z.object({

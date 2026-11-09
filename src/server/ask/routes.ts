@@ -78,7 +78,7 @@ export class AskApi {
         if (existing || parent) context = (existing ?? parent)!.context
         else if (isArtifactTarget(input.target)) {
           if (!this.artifacts) throw new AskNotFound('Artifact sources unavailable')
-          context = await artifactContext(input.target, input.view, { ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
+          context = await artifactContext(input.target, input.view, { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
         } else {
           const scene = await this.sources.scene()
           const claim = input.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === input.target!.id) : undefined
@@ -90,11 +90,12 @@ export class AskApi {
           const observation = worker?.observation ?? scene.coverage.intentions
           context = { schema_version: 2, return_to: { section: 'overview', target: input.target ?? { kind: 'card', id: card!.id }, view: input.view }, anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : `https://www.notion.so/${card!.id}`, observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
             ...(input.target ? { target: input.target } : {}),
+            ...(input.element ? { element: input.element } : {}),
             ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}),
             ...(claim ? { relationship: { claim_id: claim.id, card_id: claim.cardId, execution_id: claim.executionId, sources: claim.sources, basis: claim.basis, verification: claim.verification } } : {}),
           }
         }
-        if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value)) throw new AskConflict('Question field differs from the original')
+        if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value || JSON.stringify(input.element) !== JSON.stringify(context.element))) throw new AskConflict('Question field differs from the original')
         if (input.target ? JSON.stringify(input.target) !== JSON.stringify(context.target) : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
         return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
       }
