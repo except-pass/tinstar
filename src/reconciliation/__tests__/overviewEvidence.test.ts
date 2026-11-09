@@ -3,9 +3,37 @@ import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import type { PatternResult } from '../../shared/workHealth'
+import type { WorkerLinkDetector } from '../../server/reconciliation/scene'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
 describe('worker link source health', () => {
+  it('keeps advisory candidates, hierarchy issues and unknown expectations neutral', () => {
+    const sources = fixtureSources({ now })
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+    card.properties.Status!.value = 'Unrecognized status'
+    card.properties['Parent item']!.value = [fixtureId(2)]
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(scene.cards.find(value => value.id === card.id)!.hierarchyIssues.length).toBeGreaterThan(0)
+    expect(scene.cards.find(value => value.id === card.id)!.expectation).toBe('unknown')
+    expect(scene.findings.some(finding => finding.sourceHealth && finding.cardIds.includes(fixtureId(3)))).toBe(true)
+    expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(3)], now))
+      .toEqual({ unknown: 1, unverified: 1, conflicting: 0 })
+  })
+  it.each<WorkerLinkDetector>(['invalid-record', 'declared-absent', 'duplicate-primary', 'spawn-evidence', 'duplicate-execution'])(
+    'counts substantive %s evidence once and excludes advisory findings', detector => {
+      const scene = fixtureScene({ now })
+      scene.findings.push({ id: 'detector', kind: 'unverified-conflicting', cardIds: [fixtureId(2)], executionIds: [],
+        homeIds: [], reason: 'Worker-link evidence', workerLinkDetectors: [detector] })
+      expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(2)], now))
+        .toEqual({ unknown: 0, unverified: 0, conflicting: 1 })
+      scene.findings.at(-1)!.sourceHealth = true
+      expect(workerLinkSourceHealth(scene, [fixtureId(2)], now))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+      scene.findings.at(-1)!.sourceHealth = undefined
+      scene.findings.at(-1)!.workerLinkDetectors = ['historical-link']
+      expect(workerLinkSourceHealth(scene, [fixtureId(2)], now))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+    })
   it('counts unique visible unknown and unverified cards separately from positive conflicts', () => {
     const scene = fixtureScene({ now })
     const ids = [fixtureId(1), fixtureId(2), fixtureId(2), fixtureId(3)]
