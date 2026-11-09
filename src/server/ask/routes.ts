@@ -63,7 +63,10 @@ export class AskApi {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
           return ok(res, conversation ? await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId) : await this.store.bridgeWork(syntheticId), { headers })
         }
-        if (req.method === 'POST') { await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req)), syntheticId); return ok(res, { accepted: true }, { headers }) }
+        if (req.method === 'POST') {
+          const row = await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req)), syntheticId)
+          return ok(res, { accepted: true, ...(row.reply?.rejected_actions?.length ? { reply_warnings: row.reply.rejected_actions } : {}) }, { headers })
+        }
         return fail(res, 'BAD_REQUEST', 'Use GET or POST', { headers, status: 405 })
       } catch (error) { return this.error(res, error, headers) }
     }

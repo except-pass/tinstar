@@ -606,6 +606,19 @@ function recommendedAnswer(): AskItem {
   return { ...original, question: 'Why is this overdue?', reply: { ...original.reply!, suggested_actions: recommendationChoices } }
 }
 
+it('shows rejected suggested actions and their reasons in the Desk answer', async () => {
+  const original = seed()
+  original.reply!.rejected_actions = [
+    { index: 0, id: 'bad-link', reason: 'instruction: URLs and link syntax are not allowed; put URLs in references' },
+    { index: 1, reason: 'id: Required' },
+  ]
+  records = [original]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer/ }))
+  expect(screen.getByRole('note')).toHaveTextContent('2 suggested actions were rejected: bad-link: instruction: URLs and link syntax are not allowed; put URLs in references; #2: id: Required')
+  expect(screen.getByText(original.reply!.detail)).toBeVisible()
+})
+
 it('selects one saved recommendation inline, keeps the shared composer/draft and follows up in the same conversation', async () => {
   const original = recommendedAnswer(); records = [original]
   const view = mount()

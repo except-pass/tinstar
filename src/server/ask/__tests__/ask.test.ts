@@ -55,7 +55,7 @@ describe('6.0.0 bridge content compatibility', () => {
   const content = { summary: 'An answer', detail: 'The evidence is retained.', references: [reference], suggested_actions: [] }
   it.each([
     { suggested_actions: [{ ...action, instruction: 'Open https://example.test' }] },
-    { suggested_actions: [{ ...action, instruction: 'eval(source)' }] },
+    { suggested_actions: [{ ...action, instruction: '`eval(source)`' }] },
     { suggested_actions: [{ ...action, instruction: 'First\nSecond' }] },
     { suggested_actions: [{ ...action, id: 'invalid id' }] },
     { suggested_actions: [{ ...action, label: 'x'.repeat(65) }] },
@@ -75,7 +75,7 @@ describe('6.0.0 bridge content compatibility', () => {
     await bridge({ request_id: id, note: note(id) })
     const reply = { id: 'note-1', at: new Date().toISOString(), cursor: '000000000001',
       body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: id, ...content, ...invalid }) }
-    expect(await bridge({ request_id: id, reply })).toEqual({ status: 200, data: { ok: true, data: { accepted: true } } })
+    expect(await bridge({ request_id: id, reply })).toMatchObject({ status: 200, data: { ok: true, data: { accepted: true } } })
     reload()
     const saved = (await call('requests')).data.data[0]
     expect(saved).toMatchObject({ status: 'answered', error: null, reply: { degraded: true } })
@@ -98,6 +98,41 @@ describe('6.0.0 bridge content compatibility', () => {
       list: async () => (await call('requests')).data.data,
       work: async () => (await bridge()).data.data,
     })
+  })
+})
+
+describe('suggested action rejection receipts', () => {
+  it('persists every omitted action with a reason, returns warnings on retries and sends them in the next turn', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    await bridge({ request_id: first.request_id, note: note(first.request_id) })
+    const actions = [
+      { id: 'link', label: 'Read more', instruction: 'Open https://example.test' },
+      { label: 'Missing ID', instruction: 'Recheck the card' },
+      { id: 'valid', label: 'Recheck', instruction: 'Recheck (CI); keep v1.24.0' },
+    ]
+    const update = { request_id: first.request_id, reply: { id: 'note-1', at: new Date().toISOString(), cursor: '1',
+      body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: first.request_id,
+        summary: 'Retained answer', detail: 'Retained evidence', references: [], suggested_actions: actions }) } }
+    const receipt = await bridge(update)
+    expect(receipt.status).toBe(200)
+    const warnings = receipt.data.data.reply_warnings
+    expect(warnings).toEqual([
+      { index: 0, id: 'link', reason: expect.stringContaining('instruction: URLs and link syntax are not allowed') },
+      { index: 1, reason: expect.stringContaining('id: Required') },
+      { index: 2, id: 'valid', reason: expect.stringContaining('another entry is invalid') },
+    ])
+    reload()
+    const saved = (await call('requests')).data.data[0]
+    expect(saved.reply).toMatchObject({ summary: 'Retained answer', detail: 'Retained evidence', degraded: true, suggested_actions: [], rejected_actions: warnings })
+    expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))[0].reply.rejected_actions).toEqual(warnings)
+    expect((await bridge(update)).data.data.reply_warnings).toEqual(warnings)
+    const conversation = (await call(`conversations/${first.conversation_id}`)).data.data
+    expect(conversation.turns[1].reply.rejected_actions).toEqual(warnings)
+    const next = (await call('requests', { ...input(), follow_up_to: first.request_id, question: 'Please revise these choices' })).data.data
+    const pending = (await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === next.request_id)
+    expect(JSON.parse(pending.body.split('\n')[1]).conversation.turns[1].reply.rejected_actions).toEqual(warnings)
+    expect((await bridge({ ...update, reply: { ...update.reply, cursor: '2' } })).status).toBe(409)
   })
 })
 
@@ -134,6 +169,12 @@ describe('authenticated recommendation selections over the existing Ask bridge',
     expect(envelope).toMatchObject({ schema: 'tinstar.ask.v1', request_id: selected.request_id, question: close.instruction, requesting_principal: owner, context: first.context, action_selection: selected.action_selection,
       conversation: { turns: [{ role: 'user', text: first.question }, { role: 'assistant', reply }] } })
     expect(dispatched[0].body).toContain('suggested_actions=[{id,label,instruction}]')
+    for (const rule of ['at most 10', 'unique per-answer IDs of 1–64 ASCII letters/digits/underscore/hyphen starting with a letter/digit',
+      'labels (1–64 characters)', 'instructions (1–2000 characters)', 'same text rules for both',
+      `Normal punctuation is allowed: ( ) ' " = , : ; & + / # % ! ? and version numbers`, 'Instructions are never executed',
+      'control characters', 'Unicode line/paragraph separators', 'backticks/code fences', 'HTML tags', 'URLs and link syntax', 'Put URLs only in references']) {
+      expect(dispatched[0].body).toContain(rule)
+    }
     expect(dispatched[0].body).toContain('recheck authoritative source state')
     expect(dispatched[0].body).toContain('Reconcile uncertain prior effects')
     expect(dispatched[0].inbox_request_id).toBe(inboxRequestId(selected.request_id))
@@ -237,7 +278,7 @@ describe('authenticated recommendation selections over the existing Ask bridge',
   })
 
   it.each([
-    { ...close, instruction: 'Open https://evil.test' }, { ...close, instruction: 'eval(source)' },
+    { ...close, instruction: 'Open https://evil.test' }, { ...close, instruction: '`eval(source)`' },
     { ...close, execute: true }, { label: 'Missing ID', instruction: 'Close the card' },
   ])('degrades malformed recommendations without creating selectable actions: %j', async invalid => {
     const { call, bridge, reload } = await setup()
