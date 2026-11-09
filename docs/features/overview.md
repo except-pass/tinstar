@@ -95,7 +95,7 @@ preferences. Source refreshes recompute candidates from the current graph. The c
 refresh icon beside Search runs the existing scene read without changing the view.
 Its hover/focus label reports refreshing/failure state and the last complete
 successful sync; incomplete or failed attempts retain the previous timestamp.
-Overview polls about every 30 seconds and refreshes older data on browser focus.
+Automatic polling and browser-focus refresh follow the [shared refresh contract](reconciliation-floor.md#floor-ui-s3).
 
 Available Worker fields are Manager, Machine, Worker status and Last activity.
 Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-in,
