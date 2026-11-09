@@ -258,6 +258,10 @@ focus dismissal, while an open search palette closes first. At narrow widths the
 single toolbar scrolls horizontally; the centered pattern stays legible and its
 neighbors retain touch targets.
 
+An unrelated stale home does not make conclusive visible predicates unknown.
+Home coverage still matters when worker filters, text search or machine/manager/entity
+facets can hide cards. The reminder names unavailable evidence classes and home paths.
+
 Search and patterns are read-only and never send Ask requests or change Notion,
 assignment or execution state.
 
@@ -319,20 +323,21 @@ until the next source observation expiry or new scene, with bounded query caches
 `src/shared/workHealth.ts` is a pure view projection for Tin Star and a future
 First Mate liveness reconciler. It returns canonical verified worker IDs/count,
 running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
-`null` for unpublished runnable/resolver/progress evidence, and per-pattern
+`null` for unavailable runnable/resolver evidence and unpublished progress time, and per-pattern
 `match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
-The existing liveness precedence and authoritative source/link coverage remain
-unchanged. This feature implements no recovery, watchdog or scheduling behavior.
+Health reads authoritative fresh crew-state (`run-step` or `pane`); historical
+status verbs and endpoint existence do not prove current activity. Floor badge
+liveness precedence remains unchanged. This feature implements no recovery, watchdog or scheduling behavior.
 
 The inspectable builtin definitions live in `patternDefinitions`:
 
 | Pattern | Required evidence / current behavior |
 |---|---|
-| Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
-| Blocked | Fresh, complete Notion evidence with status Waiting For and a nonempty Waiting For field; worker freshness is not required. Done/Archived never match. Legitimate waiting is not called deadlock. |
+| Active | In Progress plus a fresh verified running or runnable path. Missing evidence stays unknown. |
+| Blocked | Fresh, complete Notion evidence with status Waiting For and a nonempty Waiting For field; worker freshness is not required for that Notion state. An In Progress card with Waiting For and a verified waiting worker or published blocker also matches. Done/Archived never match. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
-| Stalled | Requires no running/runnable path and no active resolver. Done/Archived never match. Otherwise unavailable when runnable/resolver coverage is needed but unpublished; a running neighbor explicitly rules it out. |
+| Stalled | In Progress with assigned verified workers and complete fresh running, runnable and resolver zeros; unknown coverage stays unavailable. Done/Archived, explicit Waiting For or a positive running/runnable/resolver path rules it out. |
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
@@ -341,6 +346,15 @@ The dial exposes missing evidence through unknown counts and the reminder,
 without disabled buttons or an additional patterns menu. Multiple blocked workers
 retain one Work cluster and deduplicated blocker identifiers. Detailed evidence
 remains in the shared health projection for tests and consumers; it is not a
-second results inventory. The pure stalled aggregate predicate accepts known
-runnable/resolver counts for contract tests; the current scene adapter passes
-null for both, so waiting workers alone never become a confident Stalled match.
+second results inventory. Readiness is projected read-only from each configured home's existing snapshot:
+queued, unheld, non-captain-actionable backlog rows with an explicit empty
+`unresolved_blocker_ids` list are runnable only when no observed execution is
+working or has unknown activity. Accountable rows come from confirmed
+current explicit links; card references alone never join.
+Distinct named blockers and explicit Origin continuations can supply runnable
+paths; their fresh working executions instead supply active resolvers.
+Blockers and continuations join only within the same home/task identity.
+Missing blocker rows, candidates with unresolved dependencies, and continuation
+paths beyond the directly inspected candidates leave coverage unknown. A complete fresh
+backlog census and known candidate crew-state are required to prove zero;
+missing lists, incomplete inventories and stale/failed home reads remain null.

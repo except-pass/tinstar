@@ -193,13 +193,13 @@ describe('health and graph predicates', () => {
   it('never calls one waiting plus one running worker stalled; unsupported evidence stays null', () => {
     const scene = fixtureScene({ now })
     const helper = scene.executions.find(worker => worker.identity.task_id === 'helper-worker')!
-    helper.liveness = 'waiting'
+    helper.liveness = 'waiting'; helper.source.current_state.state = 'paused'
     const health = workHealth(scene, fixtureId(1), now)
     expect(health).toMatchObject({ workerCount: 2, running: 1, waiting: 1, runnable: null, activeResolverCount: null, lastProgressAt: null })
     expect(health.patterns.active.outcome).toBe('match')
     expect(health.patterns.stalled.outcome).toBe('no-match')
     expect(health.patterns.stale.outcome).toBe('unavailable')
-    for (const worker of scene.executions) worker.liveness = 'waiting'
+    for (const worker of scene.executions) { worker.liveness = 'waiting'; worker.source.current_state.state = 'paused' }
     expect(workHealth(scene, fixtureId(1), now).patterns.stalled.outcome).toBe('unavailable')
   })
   it('coalesces verified blocked workers and retains tracked blocker evidence without resolver guesses', () => {

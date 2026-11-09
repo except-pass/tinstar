@@ -113,10 +113,12 @@ describe('one floor refresh owner', () => {
 
 
 it('publishes status/worker transitions atomically to rows, dial and status counts while preserving the view', async () => {
-  let status = 'Waiting For', workerState = 'blocked'
+  let status = 'Waiting For', workerState = 'blocked', waitingFor = 'Input from reviewer'
   vi.mocked(apiFetch).mockImplementation(async () => {
     const sources = fixtureSources({ now: Date.now() })
-    sources.intentions.data!.cards.find(card => card.id === fixtureId(4))!.properties.Status!.value = status
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(4))!
+    card.properties.Status!.value = status
+    card.properties['Waiting For']!.value = waitingFor
     const task = sources.fleet.flatMap(home => home.observation.data!.tasks).find(task => task.id === 'blocked-worker')!
     task.current_state.state = workerState
     task.last_event.state = workerState
@@ -156,11 +158,15 @@ it('publishes status/worker transitions atomically to rows, dial and status coun
   expect(cardIds()).toEqual([fixtureId(4)])
   expect(previews().blocked.count).toBe(1)
   expect(result.current.state).toEqual(saved)
-  status = 'In Progress'; workerState = 'waiting'
+  status = 'In Progress'; workerState = 'paused'
   await act(async () => { await result.current.refresh() })
   act(() => { result.current.send({ type: 'set-pattern', pattern: 'stalled' }) })
-  // Current adapters do not publish runnable/resolver coverage. Preserve that
-  // truthful unknown; the separate runnable-count lane supplies confirmed stalls.
+  expect(cardIds()).not.toContain(fixtureId(4))
+  expect(workHealth(result.current.scene!, fixtureId(4), result.current.now).patterns.stalled.outcome).toBe('no-match')
+  waitingFor = ''
+  await act(async () => { await result.current.refresh() })
+  // This fixture omits the task's backlog/blocker census, so readiness remains
+  // unknown after the explicit wait clears.
   expect(cardIds()).toContain(fixtureId(4))
   expect(workHealth(result.current.scene!, fixtureId(4), result.current.now).patterns.stalled.outcome).toBe('unavailable')
   workerState = 'working'

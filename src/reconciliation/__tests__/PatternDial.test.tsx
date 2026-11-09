@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureReadinessScene, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { PatternDial, patternPreviews } from '../PatternDial'
 import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
 import { emptySearch } from '../../shared/smartSearch'
@@ -88,21 +88,45 @@ describe('source-truthful aggregate previews', () => {
     for (const card of scene.cards) card.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['one', 'two'], hasMore: false }
     const view = { ...initialPresentation(), search: { ...emptySearch(), patterns: ['blocked' as const] } }
     const previews = patternPreviews(scene, view, now)
-    expect(previews.active).toEqual({ count: 1, unknown: true })
-    expect(previews.blocked).toEqual({ count: 1, unknown: false })
+    expect(previews.active).toMatchObject({ count: 1, unknown: true })
+    expect(previews.blocked).toMatchObject({ count: 1, unknown: false })
     expect(previews.all.count).toBe(5)
     expect(patternPreviews(scene, { ...view, donutFilter: { cards: ['Waiting For'], workers: [] } }, now).active.count).toBe(0)
     expect(patternPreviews(scene, { ...view, donutFilter: { cards: [], workers: ['Running'] } }, now).blocked.count).toBe(0)
     expect(patternPreviews(scene, { ...view, search: { ...view.search, facets: [{ field: 'machine', value: 'Bandit' }] } }, now).all.count).toBe(1)
   })
+  it('renders complete counts and names the unavailable evidence class/home in partial tooltips', () => {
+    const scene = fixtureReadinessScene({ now }), view = initialPresentation()
+    expect(patternPreviews(scene, view, now).active).toMatchObject({ count: 1, unknown: false })
+    expect(patternPreviews(scene, view, now).stalled).toMatchObject({ count: 1, unknown: false })
+    const partial = fixtureReadinessScene({ now, stale: true })
+    expect(patternPreviews(partial, view, now).active).toMatchObject({ count: 1, unknown: true })
+    expect(patternPreviews(partial, view, now).stalled).toMatchObject({ count: 0, unknown: true })
+    render(<PatternDial scene={partial} state={{ ...view, search: { ...emptySearch(), patterns: ['stalled'] } }} now={now} send={() => {}} />)
+    expect(selected()).toHaveAccessibleName(/Stalled, \? matching tasks/)
+    fireEvent.click(selected())
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Home snapshot stale or unreadable: /fixture/hulk')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Runnable coverage incomplete for /fixture/hulk')
+  })
+  it('keeps conclusive visible counts complete despite an unrelated stale home', () => {
+    const scene = fixtureReadinessScene({ now, stale: true })
+    for (const card of scene.cards) card.source.properties.Status!.value = 'Done'
+    const view = initialPresentation(), previews = patternPreviews(scene, view, now)
+    for (const pattern of ['active', 'stalled'] as const) {
+      expect(previews[pattern]).toEqual({ count: 0, unknown: false, reasons: [] })
+      const filtered = patternPreviews(scene, { ...view, donutFilter: { cards: [], workers: ['Running'] } }, now)
+      expect(filtered[pattern].unknown).toBe(true)
+      expect(filtered[pattern].reasons.join(' ')).toContain('Home snapshot stale or unreadable: /fixture/hulk')
+    }
+  })
   it('marks absent/partial inputs unknown instead of presenting an invented zero', () => {
     const scene = fixtureScene({ now, unavailable: true })
-    expect(patternPreviews(scene, initialPresentation(), now).unstaffed).toEqual({ count: 0, unknown: true })
-    expect(patternPreviews(scene, initialPresentation(), now).stalled).toEqual({ count: 0, unknown: true })
+    expect(patternPreviews(scene, initialPresentation(), now).unstaffed).toMatchObject({ count: 0, unknown: true })
+    expect(patternPreviews(scene, initialPresentation(), now).stalled).toMatchObject({ count: 0, unknown: true })
     scene.coverage.intentions.coverage = 'partial'
     expect(patternPreviews(scene, initialPresentation(), now).all.unknown).toBe(true)
     scene.cards = []; scene.executions = []; scene.claims = []
-    expect(patternPreviews(scene, initialPresentation(), now).blocked).toEqual({ count: 0, unknown: true })
+    expect(patternPreviews(scene, initialPresentation(), now).blocked).toMatchObject({ count: 0, unknown: true })
     const missing = fixtureScene({ now }); missing.executions = []
     expect(workHealth(missing, fixtureId(1), now).patterns.unstaffed.outcome).toBe('unavailable')
   })

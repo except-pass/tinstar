@@ -52,6 +52,7 @@ describe('coordinator backlog dispatch line', () => {
     try {
       const file = join(dir, 'snapshot.json')
       await writeFile(file, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: '/fixture/home', generated: new Date().toISOString(),
+        main_inventory: { valid: true },
         tasks: [{ id: 'worker', spawn_gen: 'g', backlog: { id: 'worker', body_lines: ['secret prose', `card: ${a}`] } }],
         backlog: { present: true, records: [{ id: 'worker', body_lines: ['secret prose', `card: ${a}`] }] } }))
       const result = await fleetObservation({ home: '/fixture/home', snapshotFile: file }).get()
