@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+import { useRef } from 'react'
+import { useElementAsk } from '../../ask/useElementAsk'
 import { Footprint } from '../Footprint'
 import type { PullFootprint } from '../../shared/pullFootprint'
 afterEach(cleanup)
@@ -23,4 +25,26 @@ it('filters actual files by category, retains zero-line renames, and offers a no
   expect(screen.getByRole('button', { name: /Code: 100.0%/ })).toBeTruthy()
   expect(screen.queryByRole('link', { name: 'package-lock.json' })).toBeNull()
   expect(screen.getByRole('link', { name: 'new.bin' })).toBeTruthy()
+})
+
+
+it('captures category and filename context without blocking category filtering', () => {
+  const open = vi.fn()
+  const data: PullFootprint = { head: 'a'.repeat(40), baseHead: 'b'.repeat(40), complete: true, freshness: 'fresh', observedAt: '2026-11-08T00:00:00Z', expectedFiles: 1, error: null, files: [
+    { filename: 'src/code.ts', previousFilename: null, status: 'modified', additions: 2, deletions: 1, changes: 3, category: 'Code', url: 'https://github.com/owner/repo/pull/1/files#diff-2' },
+  ] }
+  function Harness() {
+    const root = useRef<HTMLDivElement>(null)
+    const affordance = useElementAsk(root, { target: { kind: 'pull', id: 'owner/repo#1' } }, open)
+    return <><div ref={root}><Footprint data={data} /></div>{affordance}</>
+  }
+  render(<Harness />)
+  const category = screen.getByRole('button', { name: /Code: 100.0%/ })
+  fireEvent.contextMenu(category)
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ element: expect.objectContaining({ label: 'File category', value: category.textContent }) }))
+  fireEvent.click(category)
+  expect(category).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.mouseOver(screen.getByRole('link', { name: 'src/code.ts' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Ask about Filename: src/code.ts' }))
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ element: expect.objectContaining({ label: 'Filename', value: 'src/code.ts' }) }))
 })

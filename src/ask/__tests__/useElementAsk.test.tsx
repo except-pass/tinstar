@@ -138,3 +138,30 @@ it('asks about a marked relationship link while keeping its normal click', () =>
   fireEvent.contextMenu(link)
   expect(open).toHaveBeenCalledTimes(2)
 })
+
+
+it.each(['touch', 'mouse'])('assigns a nested %s swipe only to its nearest surface', kind => {
+  const parentOpen = vi.fn(), childOpen = vi.fn()
+  function Nested() {
+    const parent = useAskGesture<HTMLDivElement>(parentOpen), child = useAskGesture<HTMLDivElement>(childOpen)
+    return <div ref={parent.ref}><span>Parent space</span><div ref={child.ref}><span>Child space</span></div></div>
+  }
+  render(<Nested />)
+  const swipe = (node: HTMLElement) => {
+    if (kind === 'touch') {
+      hold(node, 'touchStart'); hold(node, 'touchMove', 30); hold(node, 'touchEnd', 30)
+    } else {
+      for (const [type, x] of [['pointerdown', 100], ['pointermove', 30], ['pointerup', 30]] as const) {
+        const event = new Event(type, { bubbles: true, cancelable: true })
+        Object.assign(event, { pointerType: 'mouse', pointerId: 1, button: 0, clientX: x, clientY: 100 })
+        fireEvent(node, event)
+      }
+    }
+  }
+  swipe(screen.getByText('Child space'))
+  expect(childOpen).toHaveBeenCalledOnce()
+  expect(parentOpen).not.toHaveBeenCalled()
+  swipe(screen.getByText('Parent space'))
+  expect(parentOpen).toHaveBeenCalledOnce()
+  expect(childOpen).toHaveBeenCalledOnce()
+})

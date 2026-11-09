@@ -14,6 +14,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
   useEffect(() => {
     const element = ref.current
     if (!element || !openRef.current) return
+    element.dataset.askGestureSurface = ''
     let gesture: Gesture | null = null, pointerId: number | null = null, suppressUntil = 0
     const start = (x: number, y: number) => { gesture = startAskGesture(x, y, canScrollLeftSwipe(element)); setHint(false) }
     const move = (x: number, y: number, event: Event) => {
@@ -36,7 +37,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
     }
     const cancel = () => { if (gesture?.lock === 'text') suppressUntil = Date.now() + 700; gesture = null; pointerId = null; setHint(false) }
     const elementAsk = () => { cancel(); suppressUntil = Date.now() + 1000 }
-    const ignored = (event: Event) => ignoreControls && event.target instanceof Element && event.target !== element && !!event.target.closest('a,button,input,select,textarea')
+    const ignored = (event: Event) => event.target instanceof Element && (event.target.closest('[data-ask-gesture-surface]') !== element || ignoreControls && event.target !== element && !!event.target.closest('a,button,input,select,textarea'))
     const touchStart = (e: TouchEvent) => { if (ignored(e)) return; const t = e.touches[0]; if (e.touches.length === 1 && t) start(t.clientX, t.clientY); else cancel() }
     const touchMove = (e: TouchEvent) => { const t = e.touches[0]; if (e.touches.length === 1 && t) move(t.clientX, t.clientY, e); else cancel() }
     const pointerStart = (e: PointerEvent) => {
@@ -59,6 +60,7 @@ export function useAskGesture<T extends HTMLElement = HTMLButtonElement>(open: (
     window.addEventListener('pointercancel', pointerCancel)
     element.addEventListener('click', click, true)
     return () => {
+      delete element.dataset.askGestureSurface
       element.removeEventListener('tinstar:element-ask', elementAsk)
       element.removeEventListener('touchstart', touchStart); element.removeEventListener('touchmove', touchMove)
       element.removeEventListener('touchend', end); element.removeEventListener('touchcancel', cancel)
