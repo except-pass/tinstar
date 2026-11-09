@@ -164,8 +164,7 @@ divided footer. Last activity uses the [Codex log timestamp](codex-activity.md)
 when available, otherwise the status-report timestamp, for display, grouping
 and sorting. Status-report ages remain independent of log activity. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
-[liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
-Unknown, not Finished. Secondary linked counterparts in
+[liveness](reconciliation-floor.md#floor-ui-s3). Secondary linked counterparts in
 [Smart Search](#smart-search-core) never represent execution status.
 
 Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic

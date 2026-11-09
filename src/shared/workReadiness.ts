@@ -8,8 +8,9 @@ const key = (home: string, task: string | null) => JSON.stringify([home, task])
 const fresh = (observation: Observation, now: number) => observation.status === 'fresh' && observation.coverage === 'complete' &&
   (!observation.expiresAt || Date.parse(observation.expiresAt) > now)
 
-/** Crew-state is current authority. Endpoint existence and historical status verbs
- * cannot establish either working or its absence. */
+/** Crew-state is current authority, with fresh Codex turns filling unknown state.
+ * Endpoint existence and historical status verbs cannot establish either working
+ * or its absence. */
 export function currentActivity(worker: Execution, now: number): 'working' | 'waiting' | 'terminal' | 'unknown' {
   const state = worker.source.current_state
   if (!fresh(worker.observation, now)) return 'unknown'
