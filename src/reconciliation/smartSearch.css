@@ -61,4 +61,5 @@
 
 .ov-pattern-summary { margin:0; padding:6px 12px; color:#c8b98e; font-size:11px; border-bottom:1px solid #343d47; }
 
-.ov-worker-fact { max-width:180px; }
+.ov-worker-fact { max-width:min(180px, 35%); flex-shrink:1; min-width:0; }
+.ov-density-compact .ov-card.ov-collapsed:has(.ov-worker-fact) strong { min-width:70px; }

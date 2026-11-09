@@ -31,7 +31,6 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
     else fact = `state unknown${state.source === 'pane' ? ` (${worker.source.harness ? `${worker.source.harness} ` : ''}pane)` : ''}`
     facts.set(fact, (facts.get(fact) ?? 0) + 1)
   }
-  if (workers.length !== ids.size || links.some(link => !verifiedLink(link))) facts.set('link unverified', 1)
   return [...facts].map(([fact, count]) => `${count > 1 ? `${count} workers` : 'Worker'} ${fact}`).join(' · ')
 }
 
