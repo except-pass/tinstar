@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { open, readFile, rm, unlink, writeFile } from 'node:fs/promises'
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,12 +10,23 @@ const stampPath = join(tmpdir(), 'tinstar-shared-action-runtime.stamp')
 const lockPath = join(tmpdir(), 'tinstar-shared-action-runtime.lock')
 
 function expectedStamp() {
-  const info = statSync(process.execPath)
-  return `${process.execPath}\n${info.size}\n${Math.trunc(info.mtimeMs)}\n`
+  const script = readFileSync(join(process.cwd(), 'bin/tinstar-stage-action-runtime.js'))
+  const binaries = [process.execPath, '/usr/bin/prlimit']
+  const linked = execFileSync('/usr/bin/ldd', binaries, { encoding: 'utf8', env: {} })
+  if (linked.includes('not found')) throw new Error('Runtime has unresolved libraries')
+  const inputs = [...new Set([...binaries, ...(linked.match(/\/[^\s():]+/g) ?? [])])]
+  return JSON.stringify([
+    createHash('sha256').update(script).digest('hex'),
+    ...inputs.map(path => {
+      const info = statSync(path, { bigint: true })
+      return [path, String(info.size), String(info.mtimeNs), String(info.ctimeNs), String(info.ino)]
+    }),
+  ])
 }
 
 async function staged() {
-  try { return (await readFile(stampPath, 'utf8')) === expectedStamp() } catch { return false }
+  // Check the script, tool inputs and directory: otherwise a later checkout can pass sandbox tests against a stale tree.
+  try { return statSync(runtimeRoot).isDirectory() && (await readFile(stampPath, 'utf8')) === expectedStamp() } catch { return false }
 }
 
 async function releaseStaleLock() {
