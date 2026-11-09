@@ -47,6 +47,7 @@ const secondMateRow = (task: unknown, mates: ReadonlySet<string>) => {
 }
 
 const codexFields = (task: Record<string, unknown>): { codex?: CodexActivity | null; codex_reason?: string | null } => {
+  if (!('codex' in task)) return {}
   const value = record(task.codex)
   return { codex: task.codex ? {
     last_activity_at: text(value.last_activity_at), observed_at: text(value.observed_at),
