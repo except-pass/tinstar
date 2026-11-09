@@ -66,6 +66,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Chromium for browser regression tests
+        run: npx playwright install --with-deps chromium
+
       # Catches case-only filename collisions that build on this Linux runner but
       # break module resolution on the macOS/Windows release runners — the silent
       # failure mode that blocked the v5.2.0 release. See docs/releasing.md.
