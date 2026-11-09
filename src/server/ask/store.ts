@@ -78,8 +78,14 @@ export class AskStore {
       const row = rows.find(row => row.request_id === requestId && row.owner === owner && !row.synthetic_id)
       if (!row) throw new AskNotFound('Question unavailable')
       if (action === 'read' && row.reply) row.read_at ??= this.now()
-      if (action === 'restore') row.dismissed_at = null
-      if (action === 'dismiss') row.dismissed_at ??= this.now()
+      if (action === 'restore' || action === 'dismiss') {
+        const at = this.now()
+        for (const turn of rows) {
+          if (turn.owner !== owner || turn.synthetic_id || turn.conversation_id !== row.conversation_id) continue
+          turn.dismissed_at = action === 'restore' ? null : turn.dismissed_at ?? at
+          turn.updated_at = at
+        }
+      }
       if (action === 'retry' && !row.reply) { row.status = row.note_id ? 'delivered' : 'sent'; row.error = null }
       row.updated_at = this.now()
       return row

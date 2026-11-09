@@ -63,7 +63,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
             {href ? <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a> : <p>Source terminal unavailable</p>}
             <p>{request?.taskId ?? 'First Mate backlog'} · {request?.home ? homeName(request.home) : 'Unknown home'}</p>
             {source.action && <p>{requestText(source.action)}</p>}
-            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre></details></> : ready(selected) && source.readiness === 'ready-now' && request && source.responseAnchor === requestAnchor(request) && <SourceActions key={source.responseAnchor} source={source} submit={submit} />}
+            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{(pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready(selected) && source.readiness === 'ready-now' && request && source.responseAnchor === requestAnchor(request) && <SourceActions key={source.responseAnchor} source={source} submit={submit} />}
             <details><summary>Source evidence</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>
           </details>
         })}</section>
@@ -108,4 +108,15 @@ function SourceActions({ source, submit }: { source: QueueSource; submit: (draft
     {state === 'busy' && <p role="status">Sending response…</p>}
     {error && <p role="alert">{error}</p>}
   </fieldset>
+}
+
+function ResponseRetry({ message, submit }: { message: OutboxMessage; submit: (draft: Draft) => Promise<SubmitResult> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return <><button type="button" disabled={busy} onClick={() => {
+    setBusy(true); setError(null)
+    void submit({ requestId: message.requestId, kind: message.kind, text: message.text })
+      .then(result => setError(result.error ?? (!result.saved ? 'Answer could not be saved.' : null)))
+      .catch(reason => setError((reason as Error).message)).finally(() => setBusy(false))
+  }}>Retry delivery</button>{error && <p role="alert">{error}</p>}</>
 }

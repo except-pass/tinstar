@@ -1032,3 +1032,32 @@ it('archives directly with Undo and restores searchable History without reading 
   await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
   expect(records[0]!.read_at).toBeNull()
 })
+
+it('shows an earlier answer snippet while the latest question is pending', async () => {
+  const answer = seed()
+  records = [answer, { ...seed(), conversation_id: answer.conversation_id, created_at: new Date(Date.now() + 1000).toISOString(), reply: null, status: 'sent', question: 'What next?' }]
+  mount()
+  expect(await screen.findByText('Review is pending', { selector: '.ask-preview p' })).toBeTruthy()
+})
+
+it('serializes immediate Undo behind a pending archive', async () => {
+  records = [seed()]
+  const original = globalThis.fetch
+  let finish!: () => void
+  const actions: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (/\/(dismiss|restore)$/.test(url)) {
+      actions.push(url.split('/').at(-1)!)
+      if (url.endsWith('/dismiss')) await new Promise<void>(resolve => { finish = resolve })
+    }
+    return original(url, init)
+  }))
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }))
+  await waitFor(() => expect(actions).toEqual(['dismiss']))
+  fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
+  expect(actions).toEqual(['dismiss'])
+  await act(async () => { finish() })
+  await waitFor(() => expect(actions).toEqual(['dismiss', 'restore']))
+  await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
+})

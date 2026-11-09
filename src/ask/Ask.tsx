@@ -58,6 +58,7 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
   const [replySeed, setReplySeed] = useState<AskControls['replySeed']>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const localRevision = useRef(0), refreshRevision = useRef(0)
+  const visibilityActions = useRef<Promise<unknown>>(Promise.resolve())
   const refresh = useCallback(async () => {
     const before = localRevision.current, revision = ++refreshRevision.current
     try {
@@ -80,15 +81,21 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     setComposer({ seed, key: crypto.randomUUID() })
   }
   const action = (item: AskItem, value: 'retry' | 'dismiss' | 'restore') => {
-    const affected = value === 'retry' ? [item] : items.filter(turn => turn.conversation_id === item.conversation_id)
-    const previous = items
     localRevision.current++
     if (value !== 'retry') {
-      setItems(rows => rows.map(row => affected.some(turn => turn.request_id === row.request_id) ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null } : row))
+      setItems(rows => rows.map(row => row.conversation_id === item.conversation_id ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null } : row))
       setExpanded(null)
     }
-    void Promise.all(affected.map(turn => request(`requests/${turn.request_id}/${value}`, {}))).then(refresh).catch(reason => { setItems(previous); setError((reason as Error).message); void refresh() })
+    const revision = localRevision.current
+    const perform = () => request(`requests/${item.request_id}/${value}`, {})
+    const task = value === 'retry' ? perform() : visibilityActions.current.then(perform)
+    if (value !== 'retry') visibilityActions.current = task.catch(() => undefined)
+    void task.then(() => { if (revision === localRevision.current) void refresh() }).catch(reason => {
+      setError((reason as Error).message)
+      if (revision === localRevision.current) void refresh()
+    })
   }
+
   const returnTo = (item: AskItem) => {
     setExpanded(item.conversation_id)
     onReturn(askReturn(item.context))
@@ -245,10 +252,11 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
     {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers and decisions appear here.'}</p>}
     {groups.map(group => {
       const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
+      const answer = turns.filter(turn => turn.reply).sort((a, b) => Number(!a.read_at) - Number(!b.read_at) || (a.answered_at ?? a.created_at).localeCompare(b.answered_at ?? b.created_at)).at(-1)
       return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread && !expanded} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
           <small {...askElement('status', 'Question status')}>{unread ? 'New answer' : group.failed ? 'Delivery failed' : item.reply ? 'Answered' : answerStatus(item)} · {ageLabel(Date.parse(group.updatedAt), now)}</small>
-          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}
+          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && answer?.reply && <p {...askElement('answer', 'First Mate answer')}>{answer.reply.summary}</p>}
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
         <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : '⌑'}</button>

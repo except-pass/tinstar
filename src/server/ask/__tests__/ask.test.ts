@@ -894,3 +894,19 @@ it('restores owned archives persistently and resurfaces only a newly answered tu
   reload()
   expect((await call('requests')).data.data[0]).toMatchObject({ dismissed_at: null, read_at: null, reply: { detail: 'A new answer' } })
 })
+
+it('archives and restores all owned conversation turns from one request', async () => {
+  const { call, reload } = await setup()
+  const first = (await call('requests', input())).data.data
+  await call('requests', { ...input(), follow_up_to: first.request_id, question: 'A turn from another device' })
+  const unrelated = (await call('requests', input())).data.data
+  await call(`requests/${first.request_id}/dismiss`, {})
+  reload()
+  let rows = (await call('requests')).data.data
+  expect(rows.filter((row: { conversation_id: string }) => row.conversation_id === first.conversation_id).every((row: { dismissed_at: string | null }) => !!row.dismissed_at)).toBe(true)
+  expect(rows.find((row: { request_id: string }) => row.request_id === unrelated.request_id).dismissed_at).toBeNull()
+  await call(`requests/${first.request_id}/restore`, {})
+  reload()
+  rows = (await call('requests')).data.data
+  expect(rows.every((row: { dismissed_at: string | null }) => row.dismissed_at === null)).toBe(true)
+})

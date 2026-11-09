@@ -156,3 +156,21 @@ it('shows human hold text and every ready request as inbox records without expos
   expect(container.querySelector('.ov-selected-request > summary')).not.toHaveTextContent('fm-hold-v1:')
   expect(screen.queryByText(/Later & needs verification/)).toBeNull()
 })
+
+it.each([
+  ['sending', null, true], ['saved', false, true], ['saved', true, false], ['acknowledged', false, false],
+] as const)('offers targeted recovery for %s announced=%s', async (state, announced, retryable) => {
+  const queue = fixtureQueue(), selected = queue.items[0]!
+  selected.sources = [{ kind: 'firstmate', id: 'source', field: 'hold', responseAnchor: 'anchor', request: { home: '/farm/hulk', taskId: 'worker', id: 'worker', kind: 'hold' }, status: 'fresh', coverage: 'complete', observedAt: null, expiresAt: null }]
+  const message = { requestId: 'original-request', sourceAnchor: 'anchor', home: '/farm/hulk', taskId: 'worker', decisionKey: null, kind: 'answer' as const, text: 'Choose A', state, announced, reply: null, canReceive: true }
+  const submit = vi.fn().mockResolvedValue({ saved: true, error: null, canReceive: true })
+  render(<QueuePanel messages={[message]} submit={submit} workers={[]} state={{ ...initialPresentation(), queueItemId: selected.id }} send={vi.fn()} queue={queue} error={null} now={Date.now()} />)
+  fireEvent.click(screen.getByText('First Mate hold · 1'))
+  fireEvent.click(screen.getByText('Response delivery details'))
+  const retry = screen.queryByRole('button', { name: 'Retry delivery' })
+  expect(!!retry).toBe(retryable)
+  if (retry) {
+    await act(async () => { fireEvent.click(retry) })
+    expect(submit).toHaveBeenCalledWith({ requestId: 'original-request', kind: 'answer', text: 'Choose A' })
+  }
+})
