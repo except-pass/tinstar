@@ -11,7 +11,7 @@ function Harness({ open, itemAsk = vi.fn() }: { open: (seed: AskSeed) => void; i
   const root = useRef<HTMLDivElement>(null), affordance = useElementAsk(root, subject, open), swipe = useAskGesture(itemAsk)
   return <><div ref={root}><button ref={swipe.ref} type="button"><span {...askElement('next_check_in', 'Overdue 3d · Next check-in', 'Nov 6, 10:00 AM ET', 'overdue')}>Overdue 3d</span><span {...askElement('status')}>In progress</span></button></div>{affordance}<p>Outside card</p></>
 }
-const hold = (node: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100, count = 1) => fireEvent[type](node, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : Array.from({ length: count }, () => ({ clientX: x, clientY: y })) })
+const hold = (node: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100, count = 1) => fireEvent[type](node, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: x, clientY: y })), changedTouches: [{ identifier: 0, clientX: x, clientY: y }] })
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.useRealTimers() })
 describe('shared element Ask gestures on the overdue badge', () => {
   it('reveals a layout-independent affordance on hover and captures the exact badge on click', () => {

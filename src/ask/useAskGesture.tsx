@@ -26,12 +26,14 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     if (!element || !openRef.current && !inspectRef.current) return
     element.dataset.askGestureSurface = ''
     let gesture: Gesture | null = null, pointerId: number | null = null, suppressUntil = 0, pointer: GesturePointer = 'mouse', ignoreLoss = false, alive = true
+    let touchId: number | null = null
     let returnTimer: ReturnType<typeof setTimeout> | undefined
     const shown = (value: Rail | null) => { if (alive) setRail(value) }
     const dismiss = () => {
       const current = gesture
       gesture = null
       pointerId = null
+      touchId = null
       clearTimeout(returnTimer)
       if (!current || current.phase === 'tracking' || current.phase === 'native' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
         shown(null)
@@ -68,6 +70,7 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     }
     const end = () => {
       if (!gesture) return
+      touchId = null
       const action = hasSelection() || blockingModal(element) ? null : releaseAskGesture(gesture)
       if (gesture.phase !== 'tracking' && gesture.phase !== 'native') suppressUntil = Date.now() + 700
       if (action) { gesture = null; shown(null) }
@@ -84,14 +87,28 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     const touchStart = (event: TouchEvent) => {
       if (ignored(event)) return
       const touch = event.touches[0]
-      if (event.touches.length === 1 && touch) start(touch.clientX, touch.clientY, 'touch')
+      if (event.touches.length === 1 && touch) {
+        start(touch.clientX, touch.clientY, 'touch')
+        if (gesture) touchId = touch.identifier
+      }
       else cancel()
+    }
+    const additionalTouch = (event: TouchEvent) => {
+      if (touchId !== null && (event.touches.length !== 1 || event.touches[0]?.identifier !== touchId)) cancel()
     }
     const touchMove = (event: TouchEvent) => {
+      if (touchId === null) return
       const touch = event.touches[0]
-      if (event.touches.length === 1 && touch) move(touch.clientX, touch.clientY, event)
+      if (event.touches.length === 1 && touch?.identifier === touchId) move(touch.clientX, touch.clientY, event)
       else cancel()
     }
+    const touchEnd = (event: TouchEvent) => {
+      if (touchId === null) return
+      if (event.touches.length) { cancel(); return }
+      if (Array.from(event.changedTouches).some(touch => touch.identifier === touchId)) end()
+      else cancel()
+    }
+    const touchCancel = () => { if (touchId !== null) cancel() }
     const pointerStart = (event: PointerEvent) => {
       if (ignored(event)) return
       if (event.pointerType === 'touch' || event.button !== 0 || event.target instanceof Element && event.target.closest('[data-ask-field]')) return
@@ -134,9 +151,10 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     const unbind = [
       bind(element, 'tinstar:element-ask', elementAsk),
       bind(element, 'touchstart', touchStart, { passive: true }),
+      bind(window, 'touchstart', additionalTouch, { passive: true, capture: true }),
       bind(window, 'touchmove', touchMove, { passive: false }),
-      bind(window, 'touchend', end),
-      bind(window, 'touchcancel', cancel),
+      bind(window, 'touchend', touchEnd),
+      bind(window, 'touchcancel', touchCancel),
       bind(element, 'pointerdown', pointerStart),
       bind(window, 'pointermove', pointerMove),
       bind(window, 'pointerup', pointerEnd),

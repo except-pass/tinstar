@@ -63,7 +63,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const mount = () => render(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
 const card = (host: HTMLElement) => host.querySelector<HTMLButtonElement>(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
-const touch = (element: Element, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100) => fireEvent[type](element, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ clientX: x, clientY: y }], changedTouches: [{ clientX: x, clientY: y }] })
+const touch = (element: Element, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100) => fireEvent[type](element, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ identifier: 1, clientX: x, clientY: y }], changedTouches: [{ identifier: 1, clientX: x, clientY: y }] })
 
 describe('one-card text Ask and Desk', () => {
   it('keeps tap/vertical/cancel semantics and opens a context composer on left release without sending', () => {
@@ -699,6 +699,33 @@ describe('spring-loaded Ask and Inspector rail', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(screen.queryByLabelText('Inspector')).toBeNull()
     expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+  })
+
+  it.each([20, 180])('cancels an armed swipe at %s when a second finger lands outside', x => {
+    const { container } = mount(), task = card(container)
+    const first = { identifier: 1, clientX: x, clientY: 100 }
+    const second = { identifier: 2, clientX: 300, clientY: 300 }
+    touch(task, 'touchStart'); touch(task, 'touchMove', x)
+    expect(screen.getByText(x < 100 ? 'Release to compose' : 'Release to open Inspector')).toBeTruthy()
+    fireEvent.touchStart(document.body, { touches: [first, second], changedTouches: [second] })
+    expect(screen.queryByText('Release to compose')).toBeNull()
+    expect(screen.queryByText('Release to open Inspector')).toBeNull()
+    fireEvent.touchEnd(document.body, { touches: [first], changedTouches: [second] })
+    touch(task, 'touchMove', x); touch(task, 'touchEnd', x)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    drag(task, [x, 100])
+    expect(x < 100 ? screen.getByRole('dialog') : screen.getByLabelText('Inspector')).toBeTruthy()
+  })
+
+  it('does not move or dispatch from a different touch identifier', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20)
+    fireEvent.touchMove(window, { touches: [{ identifier: 2, clientX: 180, clientY: 100 }] })
+    fireEvent.touchEnd(window, { touches: [], changedTouches: [{ identifier: 2, clientX: 180, clientY: 100 }] })
+    touch(task, 'touchEnd', 20)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
   })
 
   it('opens one composer from a left release and does not send', () => {
