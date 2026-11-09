@@ -74,6 +74,20 @@ describe('Pattern Dial', () => {
     expect(fireEvent.wheel(outside, { deltaX: 0, deltaY: 100, deltaMode: 0 })).toBe(true)
     expect(selected()).toHaveTextContent('All')
   })
+  it.each(['deltaX', 'deltaY'] as const)('preserves rapid notches on %s in both directions and every delta mode', axis => {
+    vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    for (const [deltaMode, magnitude] of [[0, 100], [0, 120], [1, 3], [2, 1]] as const) {
+      for (const direction of [1, -1]) {
+        for (let step = 1; step <= 3; step++) {
+          expect(fireEvent.wheel(dial, { [axis]: direction * magnitude, deltaMode })).toBe(false)
+          const index = direction === 1 ? step : 3 - step
+          expect(state().search?.patterns ?? []).toEqual(index === 0 ? [] : [dialPatterns[index]])
+          time += 50
+        }
+      }
+    }
+  })
   it('takes one step from a trackpad momentum burst, then another from a settled or deliberate scroll', () => {
     vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
     const dial = screen.getByRole('group', { name: 'Operational pattern dial' })

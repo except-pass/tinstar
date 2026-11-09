@@ -73,7 +73,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
       wheelAt.current = at
       const delta = Math.abs(dy) >= Math.abs(dx) ? dy : dx
       if (delta === 0) return
-      const notch = event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL
+      const notch = event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || Math.abs(delta) % 100 === 0 || Math.abs(delta) % 120 === 0
       const deliberate = notch || (Math.abs(delta) >= WHEEL_NOTCH_PX && gap >= WHEEL_DELIBERATE_GAP_MS)
       let direction = delta > 0 ? 1 : -1
       if (wheelHeld.current) {
