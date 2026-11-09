@@ -80,7 +80,7 @@ describe('Pattern Dial', () => {
     for (const [deltaMode, magnitude] of [[0, 100], [0, 120], [1, 3], [2, 1]] as const) {
       for (const direction of [1, -1]) {
         for (let step = 1; step <= 3; step++) {
-          expect(fireEvent.wheel(dial, { [axis]: direction * magnitude, deltaMode })).toBe(false)
+          expect(fireEvent.wheel(dial, { [axis]: direction * magnitude * (deltaMode === 0 ? 1 : 4 - step), deltaMode })).toBe(false)
           const index = direction === 1 ? step : 3 - step
           expect(state().search?.patterns ?? []).toEqual(index === 0 ? [] : [dialPatterns[index]])
           time += 50
@@ -88,25 +88,33 @@ describe('Pattern Dial', () => {
       }
     }
   })
-  it('takes one step from a trackpad momentum burst, then another from a settled or deliberate scroll', () => {
-    vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
-    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
-    const burst = (deltaX: number, deltaY: number, count: number) => {
-      for (let i = 0; i < count; i++) { time += 16; expect(fireEvent.wheel(dial, { deltaX, deltaY, deltaMode: 0 })).toBe(false) }
+  it.each(['deltaX', 'deltaY'] as const)('suppresses decaying momentum on %s and resets on silence or reversal', axis => {
+    for (const direction of [1, -1]) {
+      vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+      const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+      const expected = direction === 1 ? 'stalled' : 'active'
+      for (const magnitude of [120, 100, 80, 60]) {
+        expect(fireEvent.wheel(dial, { [axis]: direction * magnitude, deltaMode: 0 })).toBe(false)
+        expect(state().search?.patterns).toEqual([expected])
+        time += 16
+      }
+      time += 200
+      expect(fireEvent.wheel(dial, { [axis]: direction * 40, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns).toEqual([direction === 1 ? 'blocked' : 'stale'])
+      time += 16
+      expect(fireEvent.wheel(dial, { [axis]: -direction * 40, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns).toEqual([expected])
+      cleanup(); vi.restoreAllMocks()
     }
-    burst(0, 20, 8)
-    expect(selected()).toHaveTextContent('Stalled')
-    burst(0, 80, 6)
-    expect(selected()).toHaveTextContent('Stalled')
-    time += 100
-    fireEvent.wheel(dial, { deltaX: 0, deltaY: 100, deltaMode: 0 })
-    expect(selected()).toHaveTextContent('Blocked')
-    time += 250
-    fireEvent.wheel(dial, { deltaX: 50, deltaY: 4, deltaMode: 0 })
-    expect(selected()).toHaveTextContent('Needs me')
-    time += 250
-    fireEvent.wheel(dial, { deltaX: -50, deltaY: 0, deltaMode: 0 })
-    expect(selected()).toHaveTextContent('Blocked')
+  })
+  it('accumulates small pixel deltas before the first step', () => {
+    let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    for (const magnitude of [12, 28, 20, 10]) {
+      expect(fireEvent.wheel(dial, { deltaY: magnitude, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns ?? []).toEqual(magnitude === 12 ? [] : ['stalled'])
+      time += 16
+    }
   })
   it('handles horizontal touch swipes once and does not turn vertical gestures into filters', () => {
     mount()

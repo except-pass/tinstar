@@ -11,9 +11,7 @@ const HOLD_SLOP = 8
 /** Pixel distance that counts as one detent. Smaller trackpad deltas add up to it. */
 const WHEEL_NOTCH_PX = 40
 /** Quiet gap that ends a flick. Without it, momentum events would spin every pattern. */
-const WHEEL_SETTLE_MS = 220
-/** A full pixel notch after this gap is a new wheel click, not the same flick. */
-const WHEEL_DELIBERATE_GAP_MS = 80
+const WHEEL_SETTLE_MS = 200
 
 /** Counts share the normal scene projection, ignoring only the current detent. */
 export function patternPreviews(scene: FloorScene, state: PresentationState, now: number) {
@@ -44,7 +42,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
   const counts = useMemo(() => patternPreviews(scene, state, now), [scene, state, now])
   const index = dialPatterns.indexOf(selected), previous = dialPatterns[(index + dialPatterns.length - 1) % dialPatterns.length]!, next = dialPatterns[(index + 1) % dialPatterns.length]!
   const host = useRef<HTMLDivElement>(null), center = useRef<HTMLButtonElement>(null), tip = useRef<HTMLDivElement>(null), menuEl = useRef<HTMLDivElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>(), holdTimer = useRef<ReturnType<typeof setTimeout>>(), wheelAt = useRef(-Infinity), wheelAcc = useRef(0), wheelHeld = useRef(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(), holdTimer = useRef<ReturnType<typeof setTimeout>>(), wheelAt = useRef(-Infinity), wheelAcc = useRef(0), wheelHeld = useRef(false), wheelDelta = useRef(0)
   const touch = useRef<{ x: number; y: number } | null>(null), holdOrigin = useRef<{ x: number; y: number } | null>(null)
   const swiped = useRef(false), held = useRef(false), restoring = useRef(false), menuRef = useRef(false)
   const [shown, setShown] = useState(false), [pinned, setPinned] = useState(false), [menu, setMenu] = useState(false), [active, setActive] = useState(index), [position, setPosition] = useState({ left: 8, top: 56 }), [menuPos, setMenuPos] = useState({ left: 8, top: 56 })
@@ -69,19 +67,21 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
       if (dx === 0 && dy === 0) return
       event.preventDefault()
       const at = performance.now(), gap = at - wheelAt.current
-      if (gap > WHEEL_SETTLE_MS) { wheelAcc.current = 0; wheelHeld.current = false }
-      wheelAt.current = at
       const delta = Math.abs(dy) >= Math.abs(dx) ? dy : dx
-      if (delta === 0) return
-      const notch = event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || Math.abs(delta) % 100 === 0 || Math.abs(delta) % 120 === 0
-      const deliberate = notch || (Math.abs(delta) >= WHEEL_NOTCH_PX && gap >= WHEEL_DELIBERATE_GAP_MS)
-      let direction = delta > 0 ? 1 : -1
-      if (wheelHeld.current) {
-        if (!deliberate) return
-      } else if (!deliberate) {
-        wheelAcc.current += delta
-        if (Math.abs(wheelAcc.current) < WHEEL_NOTCH_PX) return
-        direction = wheelAcc.current > 0 ? 1 : -1
+      const previousDelta = wheelDelta.current
+      if (gap >= WHEEL_SETTLE_MS || Math.sign(delta) !== Math.sign(previousDelta)) {
+        wheelAcc.current = 0; wheelHeld.current = false
+      }
+      wheelAt.current = at
+      wheelDelta.current = delta
+      const direction = delta > 0 ? 1 : -1
+      if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
+        if (wheelHeld.current) {
+          if (Math.abs(delta) < Math.abs(previousDelta)) return
+        } else {
+          wheelAcc.current += delta
+          if (Math.abs(wheelAcc.current) < WHEEL_NOTCH_PX) return
+        }
       }
       wheelAcc.current = 0
       wheelHeld.current = true
