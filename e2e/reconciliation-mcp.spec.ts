@@ -7,10 +7,13 @@ import { tmpdir } from 'node:os'
 import { join, extname } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createTunnelFacade } from '../src/server/reconciliation/tunnel'
+import { randomBytes } from 'node:crypto'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
 import { fixtureScene, fixtureQueue, fixtureId, fixtureSources } from '../test-fixtures/reconciliation/scenes'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
 
+let facadeServer: Server
 let server: Server, root: string, base: string, client: Client
 const scene = fixtureScene()
 const queue = fixtureQueue()
@@ -81,11 +84,17 @@ test.beforeAll(async () => {
   const port = (server.address() as { port: number }).port
   seedOriginAllowlist(port)
   base = `http://127.0.0.1:${port}`
+  const callerToken = randomBytes(32).toString('hex')
+  const facade = createTunnelFacade({ upstreamPort: port, installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'controlled-browser-proof', token: callerToken, allowView: true } })
+  facadeServer = facade.server
+  await facade.listen(0)
+  const facadePort = (facadeServer.address() as { port: number }).port
   client = new Client({ name: 'tinstar-playwright-proof', version: '1' })
-  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${facadePort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${callerToken}` } } }))
 })
 test.afterAll(async () => {
   await client?.close()
+  await new Promise<void>(resolve => facadeServer?.close(() => resolve()))
   await new Promise<void>(resolve => server?.close(() => resolve()))
   await rm(root, { recursive: true, force: true })
 })

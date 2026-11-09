@@ -29,7 +29,51 @@ Use a conversational client with **Streamable HTTP and custom Authorization head
 
 This is the transport configuration, not a universal client configuration-file format. Some clients support OAuth only; those cannot use this initial private-token interface directly. The official MCP Inspector accepts a Streamable HTTP URL and custom request headers; SDK clients can use `StreamableHTTPClientTransport` with `requestInit.headers` (example below). Use the client’s secret settings, rather than putting the literal credential in a repository.
 
-Localhost is the default. For a remote client, the operator must explicitly bind the existing backend to its Tailscale address and permit the intended tailnet client under the tailnet ACLs; set the URL to that private address. Both MCP and its UI bridge reject peers outside loopback/Tailscale IPv4/IPv6 ranges, ignore forwarded headers, and enforce the application origin policy for browser requests. Do not publish, forward or reverse-proxy this route publicly: a proxy running on localhost would itself be a trusted network peer. Do not use an Internet tunnel to bridge the private interface. Remote web/desktop UI origins must also be in the existing application origin allowlist. No network configuration is silently changed.
+Localhost is the default. For a remote client, the operator must explicitly bind the existing backend to its Tailscale address and permit the intended tailnet client under the tailnet ACLs; set the URL to that private address. Both MCP and its UI bridge reject peers outside loopback/Tailscale IPv4/IPv6 ranges, ignore forwarded headers, and enforce the application origin policy for browser requests. Do not publish, forward or reverse-proxy this route publicly: a proxy running on localhost would itself be a trusted network peer. For an outbound ChatGPT tunnel, use the separately authenticated scoped facade below; never target this private route directly. Remote web/desktop UI origins must also be in the existing application origin allowlist. No network configuration is silently changed.
+
+## Scoped outbound tunnel facade
+
+`tinstar-mcp-tunnel` is a separate loopback-only MCP facade for an existing backend.
+It forwards only the approved tools below using that backend's canonical projection and command receipts; it has no source collector or UI bridge of its own.
+The private `/api/reconciliation/mcp` endpoint remains private.
+Build with `npm run build:all`, then run:
+
+```sh
+TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel.js \
+  --upstream-port 5281 --port 5297 \
+  --caller-id owner-chatgpt --caller-token-file /absolute/private/chatgpt-caller-token
+```
+
+The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools.
+Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
+Generate a separate random caller bearer with at least 32 characters and supply it through the calling client's private Authorization configuration.
+Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
+The facade reads the existing install token from `TINSTAR_CONFIG_HOME/mcp-token` without creating or rotating it.
+Never use the install token as the caller token.
+Missing/invalid caller configuration prevents startup; wrong, missing or duplicate Authorization and browser origins are rejected.
+Forwarded identity headers grant no authority.
+
+The tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
+
+```sh
+tunnel-client run \
+  --control-plane.tunnel-id tunnel_YOUR_EXISTING_ID \
+  --control-plane.api-key env:CONTROL_PLANE_API_KEY \
+  --mcp.server-url 'url=http://127.0.0.1:5297/mcp,channel=main' \
+  --health.listen-addr 127.0.0.1:0
+```
+
+Supply the runtime key through the operator's secret mechanism, never a literal argument or source-controlled file.
+Do not enable embedded stub mode, payload capture, raw HTTP logging, public health listeners, or `--mcp.extra-headers` injecting the caller credential.
+Injecting a static caller credential in the tunnel runtime would authenticate every tunnel caller and defeat caller authorization.
+The caller must supply its own bearer on every request; the facade sends only the separate install token to the fixed localhost backend and refuses redirects.
+This facade does not implement OAuth/DCR or advertise an OAuth issuer.
+A ChatGPT connector that cannot supply the configured bearer requires an owner-approved caller authentication integration before live acceptance; do not bypass this by granting the tunnel ambient authority.
+Local SDK/browser proof alone does not prove ChatGPT caller compatibility.
+
+Restart the facade after rotating either credential; update the calling client's private secret for caller-token rotation.
+The facade never installs a service or changes tunnel configuration automatically.
+Operational startup/restart and any runtime-key storage require an operator decision.
 
 ## Tools and authority
 
