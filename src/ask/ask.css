@@ -14,10 +14,6 @@
 .ask-desk .ask-preview small{font:12px/1.5 system-ui}
 .ask-desk article[data-unread=true]{border-left:2px solid #63cfb0;padding-left:10px}
 .ask-desk article[data-unread=true] small{color:#8aebcd}
-.ask-desk .ask-item-actions{margin:6px 0 0}
-.ask-desk .ask-item-actions summary{font:12px/1.5 system-ui;margin:0;color:#8aa8b5}
-.ask-desk .ask-history{margin-top:12px;background:none;border:0;padding:5px 0;font:12px/1.5 system-ui}
-.ask-desk .ask-preview .ask-open{color:#8ce5eb;margin-top:6px;font-size:12px}
 .ov-relationship-hit:focus-visible{outline:none;stroke:#00f0ff55}
 .ask-origin{outline:2px solid #63cfb0;outline-offset:-2px;background:#12302b!important}
 [data-ask-hint=true]{outline:2px solid #8ce5eb;outline-offset:-2px}
@@ -38,3 +34,23 @@
 .ask-thread .ask-composer footer{justify-content:flex-end}.ask-thread .ask-composer button{min-height:44px;padding:8px 14px}
 .ask-thread .ask-composer textarea{max-height:35dvh}.ask-thread .ask-composer label{font-weight:600}
 .ask-composer button:disabled{opacity:.5;cursor:default}
+
+.ask-delivery-diagnostics{font:12px/1.5 system-ui;color:#9fb0bd;margin:8px 0}
+.ask-delivery-diagnostics summary{cursor:pointer}
+
+/* Compact previews keep the complete conversation available inline. */
+.ask-desk article{position:relative;padding:6px 44px 6px 8px}
+.ask-desk .ask-preview strong,.ask-desk .ask-preview p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font:12px/15px system-ui;margin:2px 0}
+.ask-desk .ask-preview strong{font-weight:650}
+.ask-desk .ask-preview span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:11px/14px system-ui}
+.ask-desk .ask-preview small{font:11px/14px system-ui}
+.ask-desk .ask-archive{position:absolute;right:0;top:2px;min-width:44px;min-height:44px;padding:4px;font-size:12px;background:none;border:0;opacity:.65;display:grid;place-items:center}
+.ask-archive svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ask-desk article[data-expanded=false] .ask-archive{right:-44px}
+.ask-desk article[data-expanded=true] .ask-preview{box-sizing:border-box;padding-right:44px}
+.ask-desk article:hover .ask-archive,.ask-desk article:focus-within .ask-archive{opacity:1}
+@media(hover:none),(max-width:850px){.ask-desk .ask-archive{opacity:1}}
+.ask-desk article[data-unread=true]{border-left:0}
+.ask-desk article[data-unread=true]::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:2px;background:#63cfb0;animation:ask-answer-pulse 2.5s ease-in-out infinite}
+@keyframes ask-answer-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@media(prefers-reduced-motion:reduce){.ask-desk article[data-unread=true]::before{animation:none}}

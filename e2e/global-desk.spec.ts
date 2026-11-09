@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { AskApi } from '../src/server/ask/routes'
 import { askItemSchema } from '../src/shared/ask'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
@@ -45,6 +45,7 @@ test('one persistent Desk across sections with pointer/keyboard sizing and reloa
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(base)
   const desk = page.getByRole('complementary', { name: 'Your desk' }), separator = page.getByRole('separator', { name: 'Resize Your desk' })
+  await desk.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
   await expect(desk.getByText('Independent question 0')).toBeVisible()
   await desk.evaluate(element => { (element as HTMLElement).dataset.mountWitness = 'same-desk' })
   const divider = (await separator.boundingBox())!
@@ -82,9 +83,10 @@ test('one accessible mobile sheet retains its inbox on close and section navigat
   await expect(trigger).toHaveCount(1)
   await trigger.click()
   const sheet = page.getByRole('dialog', { name: 'Your desk' })
-  await expect(sheet.getByText('Independent question 0')).toBeVisible()
   await sheet.evaluate(element => { (element as HTMLElement).dataset.mountWitness = 'mobile-desk' })
   await expect(sheet.getByRole('button', { name: 'Close Your desk' })).toBeFocused()
+  await sheet.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await expect(sheet.getByText('Independent question 0')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(sheet).toBeHidden(); await expect(trigger).toBeFocused()
   await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
@@ -93,9 +95,7 @@ test('one accessible mobile sheet retains its inbox on close and section navigat
   await expect(sheet.getByText('Independent question 1')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('mobile.png'), fullPage: true })
-  await sheet.getByRole('button', { name: 'Find worker' }).click()
-  await expect(sheet).toBeHidden()
-  await expect(page.getByRole('complementary', { name: 'Workers' })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: 'Find worker' })).toHaveCount(0)
 })
 
 test('typed CI Ask returns from Releases to its exact PR after an independent answer arrives', async ({ page }) => {
@@ -123,12 +123,12 @@ test('typed CI Ask returns from Releases to its exact PR after an independent an
   expect(requests).toHaveLength(0)
   await page.getByRole('textbox', { name: 'Question' }).fill('Isolated fixture CI question')
   await page.getByRole('button', { name: 'Send question' }).click()
-  await expect(page.getByText('Isolated fixture CI question', { exact: true })).toBeVisible()
+  await expect(page.locator('.ask-preview').getByText('Isolated fixture CI question', { exact: true })).toBeVisible()
   expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: 'ci', view: { scene: 'pulls' } })
   expect(requests[0]).not.toHaveProperty('card_id')
   await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
   records = records.map(row => ({ ...row, status: 'answered', reply: { summary: 'Isolated correlated answer', detail: 'Fixture evidence detail', references: [], suggested_actions: [] } }))
-  await expect(page.getByText('Isolated correlated answer', { exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.ask-desk').getByText('Isolated correlated answer', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
   await page.getByRole('button', { name: /New answer.*Isolated fixture CI question/ }).click()
   await expect(page.locator('.pr-row')).toHaveCount(1)
   await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', pull.id)
@@ -193,16 +193,19 @@ test('real Ask HTTP service persists independent typed questions and enforces so
     await page.setExtraHTTPHeaders(headers)
     await page.route('**/api/ask/**', route => route.continue())
     await page.goto(base)
+    await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
     await expect(page.getByText(body.question, { exact: true })).toBeVisible()
     await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
     liveAsk = createApi()
     await page.reload()
+    await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
     await expect(page.getByText('Live verified relationship question', { exact: true })).toBeVisible()
     for (const [index, row] of [first.body.data, second.body.data].entries()) {
       const bridgeHeaders = { Authorization: `Bearer ${token}` }
       expect((await call('bridge', { request_id: row.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: `note-${index}`, request_id: `tinstar-ask-${row.request_id}`, saved: true, announced: true, acknowledged: false } }, bridgeHeaders)).status).toBe(200)
       expect((await call('bridge', { request_id: row.request_id, reply: { id: `note-${index}`, at: new Date().toISOString(), body: `Disposable bridge answer ${index}`, cursor: '1' } }, bridgeHeaders)).status).toBe(200)
     }
+    await page.getByRole('button', { name: /^Needs you/ }).click()
     await expect(page.getByText('Disposable bridge answer 0', { exact: true })).toBeVisible({ timeout: 10000 })
     await expect(page.getByText('Disposable bridge answer 1', { exact: true })).toBeVisible()
     expect((await call('requests')).body.data).toHaveLength(2)
@@ -288,4 +291,215 @@ test('inline neighbors survive real browser Back to Releases filters and groupin
   const bounds = await sheet.boundingBox()
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
   await page.screenshot({ path: testInfo.outputPath('inline-mobile.png') })
+})
+
+test('compact unread previews pulse only until opened and respect reduced motion', async ({ page }, testInfo) => {
+  let records = [0,1,2].map(index => askItemSchema.parse({
+    request_id: `00000000-0000-4000-8000-00000000000${index}`, conversation_id: `10000000-0000-4000-8000-00000000000${index}`,
+    question: 'Can the release proceed?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Release readiness', url: null, observed_at: null }, view: { scene: 'overview' } },
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'Review passed. Ready for the next decision.', detail: 'The complete evidence remains available.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null
+  }))
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
+  await page.route('**/api/ask/requests/*/read', route => {
+    records = records.map(record => route.request().url().includes(record.request_id) ? { ...record, read_at: new Date().toISOString() } : record)
+    return route.fulfill({ json: { ok: true, data: {} } })
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(base)
+  const cards = page.locator('.ask-desk article')
+  await expect(cards).toHaveCount(3)
+  const heights = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))
+  for (const height of heights) expect(height).toBeLessThanOrEqual(110)
+  await testInfo.attach('Collapsed card heights', { body: JSON.stringify(heights), contentType: 'application/json' })
+  const accent = page.locator('.ask-desk article[data-ask-id="00000000-0000-4000-8000-000000000000"]')
+  const archiveBesideTitle = async () => {
+    const title = await accent.locator('.ask-preview strong').boundingBox()
+    const archive = await accent.getByRole('button', { name: 'Archive conversation', exact: true }).boundingBox()
+    const card = await accent.boundingBox()
+    expect(archive!.x).toBeGreaterThanOrEqual(title!.x + title!.width - 1)
+    expect(archive!.x + archive!.width).toBeLessThanOrEqual(card!.x + card!.width + 1)
+  }
+  await archiveBesideTitle()
+  await expect(accent).toHaveAttribute('data-unread', 'true')
+  expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationDuration)).toBe('2.5s')
+  await page.screenshot({ path: testInfo.outputPath('compact-desktop.png') })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationName)).toBe('none')
+  await page.setViewportSize({ width: 390, height: 844 })
+  const open = page.getByRole('button', { name: /Open Your desk/ })
+  if (await open.isVisible()) await open.click()
+  await expect(accent.getByRole('button', { name: 'Archive conversation', exact: true })).toBeVisible()
+  await archiveBesideTitle()
+  await page.screenshot({ path: testInfo.outputPath('compact-mobile-reduced-motion.png') })
+  await accent.locator('.ask-preview').click()
+  await expect(page.getByText('The complete evidence remains available.')).toBeVisible()
+  await expect(accent).toHaveAttribute('data-unread', 'false')
+  await archiveBesideTitle()
+})
+
+test('live Desk archive survives polling, immediate Undo, unseen follow-up, restart and a later unread answer', async ({ page, request, browser }, testInfo) => {
+  page.setDefaultTimeout(8000)
+  const root = mkdtempSync(resolve('.ask-live-'))
+  const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }, token = 'disposable-bridge-token-0000000000000000'
+  const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
+  liveAsk = createApi(); seedOriginAllowlist(Number(new URL(base).port))
+  const headers = { 'Tailscale-User-Login': 'owner@example.test', 'X-Tinstar-UI': '1' }
+  const transcript: unknown[] = []
+  const call = async (path: string, data?: unknown, auth: Record<string, string> = headers) => {
+    const response = data === undefined ? await request.get(base + '/api/ask/' + path, { headers: auth }) : await request.post(base + '/api/ask/' + path, { headers: auth, data })
+    const body = await response.json(); transcript.push({ path, status: response.status(), body }); expect(response.ok()).toBe(true); return body.data
+  }
+  const create = (question: string, follow_up_to?: string) => call('requests', { client_key: crypto.randomUUID(), card_id: fixtureId(1), question, view: { scene: 'overview' }, ...(follow_up_to ? { follow_up_to } : {}) })
+  const bridge = async (id: string, summary: string) => {
+    const auth = { Authorization: `Bearer ${token}` }
+    await call('bridge', { request_id: id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: `note-${id}`, request_id: `tinstar-ask-${id}`, saved: true, announced: true, acknowledged: false } }, auth)
+    await call('bridge', { request_id: id, reply: { id: `note-${id}`, at: new Date().toISOString(), body: summary, cursor: '1' } }, auth)
+  }
+  try {
+    const first = await create('Live archive conversation')
+    await bridge(first.request_id, 'Available first answer')
+    await page.setExtraHTTPHeaders(headers)
+    await page.route('**/api/ask/**', route => route.continue())
+    await page.goto(base)
+    const card = page.locator('.ask-desk article')
+    await expect(card).toHaveAttribute('data-unread', 'true')
+    expect((await call('requests'))[0].read_at).toBeNull()
+    const follow = await create('Follow-up from another device', first.request_id)
+    // Delay the actual server mutation beyond the five-second polling interval.
+    await page.route('**/api/ask/requests/*/dismiss', async route => { await new Promise(resolve => setTimeout(resolve, 6200)); await route.continue() })
+    await card.getByRole('button', { name: 'Archive conversation', exact: true }).click()
+    await expect(card).toHaveCount(0)
+    await page.waitForTimeout(5400)
+    await expect(card).toHaveCount(0)
+    await page.getByRole('button', { name: 'Undo archive' }).click()
+    await expect(card).toHaveCount(1)
+    await page.waitForTimeout(1800)
+    expect((await call('requests')).every((row: { dismissed_at: string | null }) => row.dismissed_at === null)).toBe(true)
+    await page.unroute('**/api/ask/requests/*/dismiss')
+    await card.getByRole('button', { name: 'Archive conversation', exact: true }).click()
+    await page.getByRole('button', { name: /^History/ }).click()
+    await page.getByRole('searchbox', { name: 'Search question history' }).fill('Available first answer')
+    await expect(card).toHaveCount(1)
+    await expect(card).toHaveAttribute('data-unread', 'false')
+    expect((await call('requests')).every((row: { dismissed_at: string | null }) => !!row.dismissed_at)).toBe(true)
+    liveAsk = createApi(); await page.reload()
+    await page.getByRole('button', { name: /^History/ }).click()
+    await expect(card).toHaveCount(1)
+    await card.getByRole('button', { name: 'Restore to inbox' }).click()
+    await page.getByRole('button', { name: /^Needs you/ }).click()
+    await expect(card).toContainText('Available first answer')
+    await card.locator('.ask-preview').click()
+    await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Follow-up from another device')
+    await expect.poll(async () => (await call('requests'))[0].read_at).toBeTruthy()
+    await page.getByRole('button', { name: 'Collapse answer' }).click()
+    await card.getByRole('button', { name: 'Archive conversation', exact: true }).click()
+    await expect.poll(async () => (await call('requests')).every((row: { dismissed_at: string | null }) => !!row.dismissed_at)).toBe(true)
+    await bridge(follow.request_id, 'Genuine later answer resurfaces')
+    await page.getByRole('button', { name: /^Needs you/ }).click()
+    await expect(card).toContainText('Genuine later answer resurfaces', { timeout: 10000 })
+    await expect(card).toHaveAttribute('data-unread', 'true')
+    await page.screenshot({ path: testInfo.outputPath('resurfaced-answer.png') })
+    await card.locator('.ask-preview').click()
+    await expect(card).toHaveAttribute('data-unread', 'false')
+    await expect.poll(async () => (await call('requests')).find((row: { request_id: string }) => row.request_id === follow.request_id).read_at).toBeTruthy()
+    const other = await browser.newPage({ extraHTTPHeaders: headers })
+    other.setDefaultTimeout(8000)
+    other.on('pageerror', error => transcript.push({ secondDeviceError: error.message }))
+    await other.route('**/api/**', async route => {
+      if (new URL(route.request().url()).pathname.startsWith('/api/ask/')) return route.continue()
+      const path = new URL(route.request().url()).pathname
+      const data = path === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] } : path === '/api/fleet/messages' ? [] : path === '/api/reconciliation/scene' ? scene : path === '/api/reconciliation/queue' ? { items: [] } : path === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } : path === '/api/pulls' ? { pulls: [], repositories: [], warnings: [], associationsComplete: true } : path === '/api/quota' ? { providers: [], checkedAt: null, fetchedAt: null, commandError: null } : {}
+      await route.fulfill({ json: path === '/api/quota' ? data : { ok: true, data } })
+    })
+    await other.goto(base)
+    const otherTrigger = other.getByRole('button', { name: /Open Your desk/ })
+    if (await otherTrigger.isVisible()) await otherTrigger.click()
+    await other.getByRole('button', { name: /^Needs you/ }).click()
+    await expect(other.locator('.ask-desk article')).toHaveAttribute('data-unread', 'false')
+    await other.screenshot({ path: testInfo.outputPath('second-device.png') })
+    await other.close()
+    await page.getByRole('textbox', { name: 'Reply to First Mate', exact: true }).fill('Live inline follow-up')
+    await page.getByRole('button', { name: 'Send reply', exact: true }).click()
+    await expect.poll(async () => (await call('requests')).length).toBe(3)
+    expect((await call('requests')).every((row: { conversation_id: string }) => row.conversation_id === first.conversation_id)).toBe(true)
+    writeFileSync(testInfo.outputPath('archive-read-http.json'), JSON.stringify(transcript, null, 2))
+    await testInfo.attach('Archive and read HTTP transcript', { path: testInfo.outputPath('archive-read-http.json'), contentType: 'application/json' })
+  } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true }) }
+})
+
+test('retained worker note exposes targeted retry and reply after its worker leaves the fleet', async ({ page }, testInfo) => {
+  let note = { requestId: 'tinstar-retained-live', home: '/disposable/firstmate', taskId: 'departed-worker', decisionKey: null, kind: 'message', text: 'Retained worker investigation', state: 'saved', announced: false, reply: null as string | null, canReceive: false }
+  const submissions: unknown[] = []
+  await page.route('**/api/fleet/messages', async route => {
+    if (route.request().method() === 'POST') { submissions.push(route.request().postDataJSON()); note = { ...note, announced: true, reply: 'Retained response from First Mate' }; await route.fulfill({ json: { ok: true, data: { saved: true, error: null, canReceive: false } } }) }
+    else await route.fulfill({ json: { ok: true, data: [note] } })
+  })
+  await page.goto(base)
+  await page.getByText('Retained worker notes · 1').click()
+  const retained = page.locator('.cockpit-messages')
+  await expect(retained).toContainText('Delivery failed')
+  await retained.getByText('Delivery details').click()
+  await retained.getByRole('button', { name: 'Retry delivery' }).click()
+  expect(submissions).toEqual([{ requestId: note.requestId, kind: 'message', text: note.text }])
+  await expect(retained).toContainText('Retained response from First Mate')
+  await expect(retained.getByRole('button', { name: 'Retry delivery' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Message receipts' })).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('retained-worker-note.png') })
+})
+
+test('verified decisions stay ahead of waiting conversations and expired evidence is not actionable', async ({ page }, testInfo) => {
+  let queue = fixtureQueue()
+  const ready = queue.items.filter(item => item.readiness === 'ready-now' && item.sources.every(source => ['fresh', 'partial'].includes(source.status)))
+  expect(ready.length).toBeGreaterThan(0)
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: queue } }))
+  await page.goto(base)
+  const tabs = page.getByRole('navigation', { name: 'Desk views' })
+  await expect(tabs.getByRole('button', { name: `Needs you ${ready.length}`, exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tabs.getByRole('button', { name: 'Waiting 2', exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Desk queue' })).toBeVisible()
+  await expect(page.locator('.ask-desk article')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('verified-queue.png') })
+  queue = { ...queue, items: queue.items.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, expiresAt: '2020-01-01T00:00:00Z' })) })) }
+  await page.reload()
+  await expect(tabs.getByRole('button', { name: 'Needs you 0', exact: true })).toBeVisible()
+  await tabs.getByRole('button', { name: 'Needs you 0', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
+})
+
+test('delivered questions offer waiting copy while genuine failures alone expose retry', async ({ page }, testInfo) => {
+  const records = ['delivered', 'failed'].map((status, index) => askItemSchema.parse({ request_id: `00000000-0000-4000-8000-00000000000${index}`, conversation_id: `10000000-0000-4000-8000-00000000000${index}`, question: `${status} delivery check`, input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Delivery check', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status, reply: null, error: status === 'failed' ? 'Disposable save failure' : null, read_at: null, dismissed_at: null }))
+  const retries: string[] = []
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
+  await page.route('**/api/ask/requests/*/retry', route => { retries.push(route.request().url()); return route.fulfill({ json: { ok: true, data: records[1] } }) })
+  await page.goto(base)
+  await page.locator('.ask-preview').click()
+  await expect(page.getByRole('button', { name: 'Retry delivery: failed delivery check', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Retry delivery: failed delivery check', exact: true }).click()
+  expect(retries).toHaveLength(1)
+  await page.getByRole('button', { name: 'Collapse answer' }).click()
+  await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await expect(page.locator('.ask-preview')).toContainText('Waiting for answer')
+  await page.locator('.ask-preview').click()
+  await expect(page.getByRole('button', { name: /Retry delivery/ })).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('delivered-waiting.png') })
+})
+
+test('answer arriving while an expanded waiting thread is collapsed stays unread until intentionally opened', async ({ page }, testInfo) => {
+  let record = askItemSchema.parse({ request_id: '00000000-0000-4000-8000-000000000001', conversation_id: '10000000-0000-4000-8000-000000000001', question: 'Waiting while Desk is closed', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Delayed answer', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null })
+  let reads = 0
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
+  await page.route('**/api/ask/requests/*/read', route => { reads++; record = { ...record, read_at: new Date().toISOString() }; return route.fulfill({ json: { ok: true, data: record } }) })
+  await page.goto(base)
+  await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await page.locator('.ask-preview').click()
+  await page.getByRole('button', { name: 'Collapse Your desk' }).click()
+  record = { ...record, status: 'answered', reply: { summary: 'Answer arrived while closed', detail: 'New evidence', references: [], suggested_actions: [] } }
+  await page.waitForTimeout(5500)
+  await page.getByRole('button', { name: /Open Your desk/ }).click()
+  await expect(page.locator('.ask-desk article')).toHaveAttribute('data-unread', 'true')
+  expect(reads).toBe(0)
+  await page.screenshot({ path: testInfo.outputPath('unopened-arrival.png') })
+  await page.locator('.ask-preview').click()
+  await expect(page.locator('.ask-desk article')).toHaveAttribute('data-unread', 'false')
+  expect(reads).toBe(1)
 })

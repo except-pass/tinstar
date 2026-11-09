@@ -1,8 +1,7 @@
 # Ask First Mate
 
-Slice 1 is one work card, text, **Sent / Delivered / Answered**, approved by
-First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
-The compact Ask/Inspect refinement reuses this request store and bridge.
+Ask/Inspect and the persistent Desk share the existing owner-scoped request
+store and First Mate bridge.
 
 A left drag on a task, worker, or relationship opens a text composer for that
 item. A right drag opens the same Inspector as the Inspect icon. The Ask speech-bubble icon in the existing Work/Worker header opens a blank,
@@ -56,7 +55,7 @@ text selection native; an active selection prevents an
 item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
 
-Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
+Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
 Overview, Decisions, PRs, Releases and worker navigation. Section changes, rail collapse and
 mobile close keep the inbox, history, composer draft and answer selection mounted.
 The existing owner-scoped store, 5-second Ask refresh and First Mate bridge are
@@ -64,28 +63,56 @@ unchanged. UI-command bridge availability follows the
 [MCP session contract](reconciliation-mcp.md#start-and-connect).
 
 Desktop Desk opens by default. Drag the visible divider to resize, or focus it
-and use Left/Right (16px) and Home/End (bounds). **Desk size → Reset Desk size**
-restores the default. Width and collapsed state persist per browser/device in
+and use Left/Right (16px) and Home/End (bounds). Double-click the divider to
+restore the default width. Width and collapsed state persist per browser/device in
 `tinstar.desk.preferences`; unavailable storage uses usable defaults. Effective
 width clamps to the available workspace without erasing the preferred width.
 At 850px and below, a single global Desk button opens the same inbox in a sheet;
 mobile open/close does not change the remembered desktop preference. Unread
 answers and actionable/failed items remain counted on the collapsed entry.
-Find worker and Message receipts remain accessible from the Desk header; on
-mobile they close the sheet before opening the existing panel. PRs' Desk button
-opens this workspace directly. Source health remains an on-demand Overview view.
+The header contains only **Desk** and collapse/close. PRs' Desk button opens this
+workspace directly. Source health remains an on-demand Overview view; worker
+switching stays available in worker detail.
 
-Your Desk starts with readable question/answer records, followed by supported
-actionable decision/request records. Operational queue introductions and counts
-are omitted; decision controls and routing remain intact. The Ask states are **Sent** (Tin Star retained it), **Delivered** (First Mate
-captured its note), **Answered** (correlated primary reply), and **Failed** (known
-capture failure). No readiness/announcement/acknowledgement is misrepresented as
-investigation progress. A missing puller or slow answer leaves a visible delay
-message; retry uses the same logical request ID. Wake failure is shown even when
-the note is delivered. New answers are unread; viewing marks them read. Dismiss
-under the secondary Actions menu moves only the Ask into searchable history.
-It does not dismiss a decision,
-change Notion, approve work, merge or deploy.
+**Needs you**, **Waiting** and **History** provide one compact text control with
+conversation counts. Needs you shows verified actionable queue requests first,
+then unread answers, failed deliveries and retained answered conversations.
+Waiting contains questions whose latest turn has no answer, unless an unread
+answer or known failure still needs attention. History contains dismissed
+conversations and supports search across their questions, source names and answers.
+Follow-up turns count as one conversation and retain their own request identities.
+Expired source evidence or failed queue reads never contribute ready decisions.
+
+Ordinary Ask copy is **Waiting for answer**, **New answer**, **Answered** or
+**Delivery failed**. Listing or counting an answer does not read it; intentionally
+opening its conversation uses the existing persisted read path. Opening an
+unanswered question shows the thread and delivery diagnostics. **Sent** and
+**Delivered** remain available in expanded **Delivery details**; only a true
+failed delivery offers **Retry delivery**, using the same request ID.
+A delivered question waiting for an answer has no retry button. An open thread
+follows a reply/read transition between views without replacing its composer.
+The card's **Archive conversation** button immediately moves every turn into
+searchable History and offers **Undo**. In History, **Restore to inbox** restores
+the conversation. The authenticated `POST /api/ask/requests/:request_id/dismiss`
+and `/restore` actions update every stored turn in that owner's conversation,
+including turns absent from the browser snapshot. The browser serializes these
+visibility actions and reconciles polling after pending mutations settle.
+These visibility changes persist across reloads and devices; they do not cancel delivery, delete content, dismiss a source decision, change
+Notion, send instructions, execute suggestions, approve work, merge or deploy.
+A genuine new reply clears that turn's archived state and resurfaces its
+conversation as **New answer**, leaving unrelated archived conversations alone.
+For source response receipt inspection and retry, see the
+[queue contract](reconciliation-queue.md).
+
+Collapsed cards show status/time, question, source name and an available answer
+snippet; expand inline for the full thread. An unopened answer has a teal left
+accent with a gentle 2.5-second pulse and a **New answer** label. Opening the
+conversation marks the answers present at that opening read and removes their
+pulse; a reply arriving later remains unread until intentionally opened, even
+if the conversation was already expanded. Read answers stay quiet. History never pulses,
+and `prefers-reduced-motion` keeps the accent static. The archive button remains
+available on touch and becomes more prominent on hover or keyboard focus;
+left/right swipes retain their Ask/Inspector meanings.
 
 Opening an item reveals its originating context, switching sections when
 necessary, while retaining the conversation in Desk. Work items use existing
@@ -357,8 +384,8 @@ The remaining parent-card items are follow-up slices:
   a separate slice on the composer microphone. Right drag is the Inspector rail
   above, not a second voice gesture.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
-  revision-aware delivery; unified priority for decisions, unread answers,
-  investigations and failures.
+  revision-aware delivery and priority for investigations beyond the current
+  Desk views described above.
 - Richer reassignment, stale and inaccessible context handling beyond the
   current scene availability check and captured source-link fallback.
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;

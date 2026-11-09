@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
 import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
@@ -76,13 +76,13 @@ describe('Overview shell and retained terminal navigation', () => {
       return Promise.resolve(json({ ok: false }, 404))
     })
     const { container } = render(<App />)
-    await screen.findByRole('button', { name: 'Find worker' })
+    expect(screen.queryByRole('button', { name: 'Find worker' })).toBeNull()
     await screen.findByLabelText('Request inspector')
     expect(container.querySelector('.cockpit-attention-card')).toBeNull()
     expect(screen.queryByText('Respond through First Mate')).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
   })
-  it('retains worker cycling, receipts and a closed panel on return to Overview', async () => {
+  it('retains worker cycling and a closed panel on return to Overview without retired receipt navigation', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
     fleetStub()
     render(<App />)
@@ -96,10 +96,78 @@ describe('Overview shell and retained terminal navigation', () => {
     expect(panelOpen()).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
     expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
-    fireEvent.click(await screen.findByRole('button', { name: 'Message receipts' }))
-    expect(screen.getByText('Noted')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }))
+    expect(screen.queryByRole('button', { name: 'Message receipts' })).toBeNull()
+    expect(screen.queryByText('Noted')).toBeNull()
     expect(panelOpen()).toBe(false)
+  })
+  it('recovers worker notes with the original request and shows their replies', async () => {
+    window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
+    const note = { requestId: 'note-id', home: worker.home, taskId: worker.id, decisionKey: null, kind: 'message', text: 'Check deployment', state: 'saved', announced: false, reply: null as string | null, canReceive: true }
+    const posts: unknown[] = []
+    vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/fleet/messages')) {
+        if (init?.method === 'POST') {
+          posts.push(JSON.parse(String(init.body)))
+          note.state = 'acknowledged'; note.announced = true; note.reply = 'Deployment checked'
+          return Promise.resolve(json({ ok: true, data: { saved: true, error: null, canReceive: true } }))
+        }
+        return Promise.resolve(json({ ok: true, data: [note, { ...note, requestId: 'other', home: '/other', text: 'Other home note' }] }))
+      }
+      if (url.endsWith('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers: [worker], attention: [], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'alpha' })
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
+    fireEvent.click(screen.getByText('Tell First Mate about this', { selector: 'summary' }))
+    expect(await screen.findByText('Check deployment', { selector: 'p' })).toBeTruthy()
+    expect(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).queryByText('Other home note', { selector: 'p' })).toBeNull()
+    fireEvent.click(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).getByText('Delivery details', { selector: 'summary' }))
+    await act(async () => { fireEvent.click(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).getByRole('button', { name: 'Retry delivery' })) })
+    expect(posts).toEqual([{ requestId: 'note-id', kind: 'message', text: 'Check deployment' }])
+    expect(await within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).findByText('Deployment checked', { selector: 'p' })).toBeTruthy()
+    expect(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).queryByRole('button', { name: 'Retry delivery' })).toBeNull()
+  })
+  it('keeps retained notes recoverable after their worker disappears and navigation', async () => {
+    window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')
+    let workers = [worker]
+    const note = { requestId: 'retained-id', home: worker.home, taskId: worker.id, decisionKey: null, kind: 'message', text: 'Retained deployment note', state: 'saved', announced: false, reply: null as string | null, canReceive: true }
+    const posts: unknown[] = []
+    const polls: (() => void)[] = []
+    const timer = vi.spyOn(window, 'setInterval').mockImplementation(handler => {
+      if (typeof handler === 'function') polls.push(handler as () => void)
+      return 1 as unknown as ReturnType<typeof window.setInterval>
+    })
+    vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/fleet/messages')) {
+        if (init?.method === 'POST') {
+          posts.push(JSON.parse(String(init.body)))
+          note.state = 'acknowledged'; note.announced = true; note.reply = 'Retained reply'
+          return Promise.resolve(json({ ok: true, data: { saved: true, error: null, canReceive: true } }))
+        }
+        return Promise.resolve(json({ ok: true, data: [note] }))
+      }
+      if (url.endsWith('/api/fleet')) return Promise.resolve(json({ ok: true, data: { ready: true, workers, attention: [], errors: [] } }))
+      return Promise.resolve(json({ ok: false }, 404))
+    })
+    try {
+      render(<App />)
+      await screen.findByRole('heading', { name: 'alpha' })
+      workers = []
+      await act(async () => { polls.forEach(poll => poll()) })
+      expect(await screen.findByRole('heading', { name: 'No such worker' })).toBeTruthy()
+      fireEvent.click(screen.getByText('Retained worker notes · 1'))
+      expect(screen.getAllByText('Retained deployment note', { selector: 'p' })).toHaveLength(1)
+      fireEvent.click(screen.getByText('Delivery details', { selector: 'summary' }))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })) })
+      expect(posts).toEqual([{ requestId: 'retained-id', kind: 'message', text: 'Retained deployment note' }])
+      expect(await screen.findByText('Retained reply', { selector: 'p' })).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
+      expect(await screen.findByText('Retained reply', { selector: 'p' })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Message receipts' })).toBeNull()
+    } finally { timer.mockRestore() }
   })
   it('closes a narrow worker drawer after selection and Escape', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')

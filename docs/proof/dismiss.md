@@ -1,5 +1,9 @@
 # Decision dismiss
 
+Historical proof of the former decision rail and Messages UI. For current Desk
+response controls and delivery inspection, see the [queue contract](../features/reconciliation-queue.md)
+and [Desk reference](../features/ask.md).
+
 An isolated home shows one open decision, Choose the rollout order, on worker alpha. The card has a horizontal slide control.
 
 ![Decision card with slide to dismiss](dismiss-ready-private.png)

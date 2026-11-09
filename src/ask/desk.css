@@ -7,23 +7,18 @@
 .desk-host .global-desk{width:var(--desk-width);min-width:0;display:block;position:static;border-left:0;overflow:auto;background:#0a1015;color:#eaf1f5;font-family:system-ui,sans-serif;scrollbar-width:thin}
 .desk-host [hidden]{display:none!important}
 .global-desk *{box-sizing:border-box}
-.global-desk>header{padding:14px 12px 10px;border-bottom:1px solid #253840}
-.global-desk h2{font-size:19px;margin:6px 0}
+.global-desk>header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 10px;border-bottom:1px solid #253840}
+.global-desk h2{font-size:15px;line-height:1.4;margin:0}
 .global-desk h3{font-size:18px;line-height:1.35;margin:10px 0;overflow-wrap:anywhere}
 .global-desk p{font-size:12px;line-height:1.65;color:#9fb0bd;overflow-wrap:anywhere}
 .global-desk a{font-size:12px;color:#8ce5eb}
 .global-desk button,.desk-trigger{border:1px solid #2a5862;background:#10242b;color:#9cd5dd;padding:7px 9px;font:11px var(--ov-mono);cursor:pointer}
 .global-desk :focus-visible,.desk-trigger:focus-visible{outline:2px solid #00f0ff;outline-offset:2px}
-.global-desk .ov-eyebrow{display:block;font:9px var(--ov-mono);letter-spacing:.12em;color:#75909f}
-.global-desk .ov-desk-title{display:flex;justify-content:space-between;align-items:center;gap:6px}
-.global-desk .ov-desk-tools{display:flex;gap:5px;align-items:center}
-.global-desk .ov-desk-tools button{padding:4px;min-width:25px;min-height:28px}
-.global-desk .ov-desk-tools svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4}
-.global-desk .ov-desk-tools .material-symbols-outlined{font-size:16px}
-.global-desk .desk-options{margin:5px 0 0;font-size:10px;color:#8aa8b5}
-.global-desk .desk-options summary{font:10px var(--ov-mono);cursor:pointer;margin:0}
-.desk-options button{margin:6px 0}.desk-options span{display:block}
-.desk-counts{font-size:10px;color:#8aebcd}
+.global-desk .desk-collapse{border:0;background:none;min-width:32px;min-height:32px;font-size:16px;padding:4px}
+.desk-tabs{display:flex;gap:2px;padding:4px 6px;border-bottom:1px solid #253840}
+.global-desk .desk-tabs button{flex:1;display:flex;justify-content:center;align-items:center;gap:5px;min-height:36px;padding:5px 3px;border:0;background:none;color:#9fb0bd;white-space:nowrap;font:12px/1.3 system-ui}
+.global-desk .desk-tabs button[aria-pressed=true]{color:#bdf5ee;box-shadow:inset 0 -2px #63cfb0}
+.desk-tabs span{font-size:10px;color:#9bb8c3;font-variant-numeric:tabular-nums}
 .desk-trigger{display:none}
 .desk-host.is-closed .desk-trigger{display:block;writing-mode:vertical-rl;position:absolute;inset:8px 5px auto;padding:10px 6px;white-space:nowrap}
 .desk-trigger span{display:inline-block;margin:5px;color:#8aebcd}
@@ -37,5 +32,6 @@
   .desk-host.is-narrow.is-open .desk-trigger{visibility:hidden}
   .desk-host.is-narrow .global-desk{position:fixed;right:0;top:0;bottom:0;width:min(380px,calc(100vw - 62px));max-width:100vw;z-index:51;box-shadow:-12px 0 35px #0009}
   .desk-backdrop{display:block;position:fixed;inset:0;background:#0005;border:0;z-index:50}
-  .global-desk .ov-desk-tools button{min-height:32px;min-width:28px}
+  .global-desk .desk-collapse{min-height:44px;min-width:44px}
+  .global-desk .desk-tabs button{min-height:44px}
 }

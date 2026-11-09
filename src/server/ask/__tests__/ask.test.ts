@@ -878,3 +878,35 @@ describe('deploy smoke partition', () => {
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8')).map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
   })
 })
+
+it('restores owned archives persistently and resurfaces only a newly answered turn', async () => {
+  const { call, bridge, reload } = await setup()
+  const id = (await call('requests', input())).data.data.request_id
+  await call(`requests/${id}/dismiss`, {})
+  expect((await bridge()).data.data.pending).toMatchObject([{ request_id: id }])
+  expect((await call(`requests/${id}/restore`, {}, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+  expect((await call(`requests/${id}/restore`, {})).status).toBe(200)
+  reload()
+  expect((await call('requests')).data.data[0].dismissed_at).toBeNull()
+  await call(`requests/${id}/dismiss`, {})
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'A new answer', cursor: '1' } })
+  reload()
+  expect((await call('requests')).data.data[0]).toMatchObject({ dismissed_at: null, read_at: null, reply: { detail: 'A new answer' } })
+})
+
+it('archives and restores all owned conversation turns from one request', async () => {
+  const { call, reload } = await setup()
+  const first = (await call('requests', input())).data.data
+  await call('requests', { ...input(), follow_up_to: first.request_id, question: 'A turn from another device' })
+  const unrelated = (await call('requests', input())).data.data
+  await call(`requests/${first.request_id}/dismiss`, {})
+  reload()
+  let rows = (await call('requests')).data.data
+  expect(rows.filter((row: { conversation_id: string }) => row.conversation_id === first.conversation_id).every((row: { dismissed_at: string | null }) => !!row.dismissed_at)).toBe(true)
+  expect(rows.find((row: { request_id: string }) => row.request_id === unrelated.request_id).dismissed_at).toBeNull()
+  await call(`requests/${first.request_id}/restore`, {})
+  reload()
+  rows = (await call('requests')).data.data
+  expect(rows.every((row: { dismissed_at: string | null }) => row.dismissed_at === null)).toBe(true)
+})

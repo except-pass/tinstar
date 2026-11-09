@@ -16,7 +16,7 @@ afterEach(() => {
 
 // Each submit and list spawns the home inbox script. Polling list() to see an
 // async prune would spawn that script again on every retry.
-it('keeps one request across retry and reload until done, replied, or a day old, and reports unreadable homes', async () => {
+it('keeps one request across retry and reload until done or a day old and retains worker replies, and reports unreadable homes', async () => {
   root = mkdtempSync(join(tmpdir(), 'tinstar-outbox-'))
   process.env.TINSTAR_CONFIG_HOME = join(root, 'config')
   const home = join(root, 'firstmate')
@@ -96,10 +96,9 @@ elif command == 'ready':
   writeFileSync(join(home, 'state', 'reply'), 'Deploy log checked.')
   expect(await reloaded.list([home], () => false))
     .toMatchObject([{ requestId: context.requestId, state: 'acknowledged', reply: 'Deploy log checked.' }])
-  await expect.poll(() => JSON.parse(readFileSync(outboxFile, 'utf8')), { timeout: 5_000 }).toEqual([])
-  expect(await reloaded.list([home], () => false)).toEqual([])
-  expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
-  expect(await new FleetOutbox().list([home], () => false)).toEqual([])
+  expect(await reloaded.list([home], () => false)).toMatchObject([{ requestId: context.requestId, reply: 'Deploy log checked.' }])
+  expect(await new FleetOutbox().list([home], () => false)).toMatchObject([{ requestId: context.requestId, reply: 'Deploy log checked.' }])
+  expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toMatchObject([context])
   const stale = { ...context, requestId: 'tinstar-00000000-0000-4000-8000-000000000004', sentAt: Date.now() - 86_400_001 }
   writeFileSync(outboxFile, JSON.stringify([stale]))
   const aged = new FleetOutbox()
@@ -109,6 +108,6 @@ elif command == 'ready':
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
   writeFileSync(join(home, 'state', 'broken'), '')
   const unread = { ...message, requestId: 'tinstar-00000000-0000-4000-8000-000000000003' }
-  expect(await reloaded.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
-  expect(await reloaded.list([home], () => true)).toMatchObject([{ requestId: unread.requestId, state: 'unknown', canReceive: 'unknown' }])
+  expect(await aged.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
+  expect(await aged.list([home], () => true)).toMatchObject([{ requestId: unread.requestId, state: 'unknown', canReceive: 'unknown' }])
 }, 30_000)

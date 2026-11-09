@@ -16,18 +16,13 @@ export interface OutboxMessage {
   announced: boolean | null; reply: string | null; canReceive: boolean | 'unknown'
 }
 
-/** A receipt needs the operator when sending failed or First Mate was not woken. */
-export function messageNeedsAttention(message: OutboxMessage): boolean {
-  return message.state === 'sending' || (message.state === 'saved' && message.announced === false)
-}
-
 export type Draft = { requestId: string; anchorKey?: string; kind: 'answer' | 'message'; text: string }
 export type SubmitResult = { saved: boolean; error: string | null; canReceive: boolean | 'unknown' }
 
 /** `null` is the collapsed context panel. It is not part of the page URL. */
-export type ContextPanelMode = 'needs' | 'messages' | 'workers' | null
+export type ContextPanelMode = 'needs' | 'workers' | null
 
-/** Overview owns the Desk; auxiliary panels start closed on every route. */
+/** DeskWorkspace owns the global Desk; auxiliary panels start closed on every route. */
 export function defaultPanelMode(_worker: string | null): ContextPanelMode {
   return null
 }

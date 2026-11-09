@@ -84,7 +84,7 @@ it('answers only the explicitly ready source, retaining its terminal and receipt
   expect(screen.getByRole('link', { name: /Open source terminal/ }).getAttribute('href')).toBe('?worker=worker&home=hulk')
   fireEvent.change(screen.getByLabelText('Answer this decision'), { target: { value: 'Choose A' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send to First Mate' }))
-  expect(await screen.findByText('Answer saved. See Receipts for delivery.')).toBeTruthy()
+  expect(await screen.findByText('Answer saved.')).toBeTruthy()
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({ anchorKey: anchor, kind: 'answer', text: 'Choose A' }))
 })
 
@@ -119,8 +119,11 @@ it('retains a saved answer after returning to its source without hiding another 
   const { unmount } = render(<QueuePanel messages={messages} submit={vi.fn()} workers={[]} state={state} send={vi.fn()} queue={queue} error={null} now={now} />)
   unmount()
   render(<QueuePanel messages={messages} submit={vi.fn()} workers={[]} state={state} send={vi.fn()} queue={queue} error={null} now={now} />)
-  expect(screen.getByText('Answer saved. See Receipts for delivery.')).toBeTruthy()
+  expect(screen.getByText('Answer saved.')).toBeTruthy()
   expect(screen.getByText('Answer', { selector: 'summary' })).toBeTruthy()
+  expect(screen.getByText('Response delivery details')).toBeTruthy()
+  const diagnostics = screen.getByText('Response delivery details').parentElement!
+  expect(JSON.parse(diagnostics.querySelector('pre')!.textContent!)).toMatchObject({ sourceAnchor: requestAnchor(requests[0]!), state: 'saved' })
   expect(screen.getByLabelText('Request inspector').querySelectorAll('textarea')).toHaveLength(1)
 })
 
@@ -152,4 +155,22 @@ it('shows human hold text and every ready request as inbox records without expos
   expect(container.querySelector('.ov-selected-request > summary')).toHaveTextContent('Choose the next review pass')
   expect(container.querySelector('.ov-selected-request > summary')).not.toHaveTextContent('fm-hold-v1:')
   expect(screen.queryByText(/Later & needs verification/)).toBeNull()
+})
+
+it.each([
+  ['sending', null, true], ['saved', false, true], ['saved', true, false], ['acknowledged', false, false],
+] as const)('offers targeted recovery for %s announced=%s', async (state, announced, retryable) => {
+  const queue = fixtureQueue(), selected = queue.items[0]!
+  selected.sources = [{ kind: 'firstmate', id: 'source', field: 'hold', responseAnchor: 'anchor', request: { home: '/farm/hulk', taskId: 'worker', id: 'worker', kind: 'hold' }, status: 'fresh', coverage: 'complete', observedAt: null, expiresAt: null }]
+  const message = { requestId: 'original-request', sourceAnchor: 'anchor', home: '/farm/hulk', taskId: 'worker', decisionKey: null, kind: 'answer' as const, text: 'Choose A', state, announced, reply: null, canReceive: true }
+  const submit = vi.fn().mockResolvedValue({ saved: true, error: null, canReceive: true })
+  render(<QueuePanel messages={[message]} submit={submit} workers={[]} state={{ ...initialPresentation(), queueItemId: selected.id }} send={vi.fn()} queue={queue} error={null} now={Date.now()} />)
+  fireEvent.click(screen.getByText('First Mate hold · 1'))
+  fireEvent.click(screen.getByText('Response delivery details'))
+  const retry = screen.queryByRole('button', { name: 'Retry delivery' })
+  expect(!!retry).toBe(retryable)
+  if (retry) {
+    await act(async () => { fireEvent.click(retry) })
+    expect(submit).toHaveBeenCalledWith({ requestId: 'original-request', kind: 'answer', text: 'Choose A' })
+  }
 })

@@ -4,7 +4,6 @@ import type { ContextPanelMode } from './types'
 
 const copy: Record<Exclude<ContextPanelMode, null>, { title: string; lede: string }> = {
   needs: { title: 'Needs You', lede: 'Action required before workers can proceed.' },
-  messages: { title: 'Messages', lede: 'Receipts from notes sent to First Mate.' },
   workers: { title: 'Workers', lede: 'Switch the worker on screen.' },
 }
 

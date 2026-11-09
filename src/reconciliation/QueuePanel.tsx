@@ -6,7 +6,7 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
 import { apiFetch } from '../apiClient'
 import { decisionItems, type DeskQueue } from '../shared/reconciliationQueue'
-import { Composer } from '../cockpit/shell/present'
+import { Composer, ResponseRetry } from '../cockpit/shell/present'
 import { SlideToDismiss } from '../cockpit/shell/NeedsYouPanel'
 import { cardTitle, cardStatus } from './overviewModel'
 import { requestAnchor } from '../shared/deskSource'
@@ -63,7 +63,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
             {href ? <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a> : <p>Source terminal unavailable</p>}
             <p>{request?.taskId ?? 'First Mate backlog'} · {request?.home ? homeName(request.home) : 'Unknown home'}</p>
             {source.action && <p>{requestText(source.action)}</p>}
-            {pending ? <p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved. See Receipts for delivery.' : 'Response pending. Check Receipts before sending again.'}</p> : ready(selected) && source.readiness === 'ready-now' && request && source.responseAnchor === requestAnchor(request) && <SourceActions key={source.responseAnchor} source={source} submit={submit} />}
+            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{(pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready(selected) && source.readiness === 'ready-now' && request && source.responseAnchor === requestAnchor(request) && <SourceActions key={source.responseAnchor} source={source} submit={submit} />}
             <details><summary>Source evidence</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>
           </details>
         })}</section>
@@ -83,14 +83,14 @@ function SourceActions({ source, submit }: { source: QueueSource; submit: (draft
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<string | null>(null)
   const inFlight = useRef(false)
-  if (state === 'answered' || state === 'dismissed') return <p role="status">{state === 'answered' ? receipt ?? 'Answer saved. See Receipts for delivery.' : 'Request dismissed.'}</p>
+  if (state === 'answered' || state === 'dismissed') return <p role="status">{state === 'answered' ? receipt ?? 'Answer saved.' : 'Request dismissed.'}</p>
   return <fieldset className="ov-source-actions" disabled={state === 'busy'} aria-busy={state === 'busy'}>
     <details><summary>Answer</summary><Composer anchorKey={anchor} kind="answer" submit={async draft => {
       if (inFlight.current) return { saved: false, error: 'A response is already being sent.', canReceive: 'unknown' }
       inFlight.current = true; setState('busy')
       try {
         const result = await submit(draft)
-        if (result.saved) { setReceipt(result.error ?? (result.canReceive === false ? 'Answer saved, not yet read. See Receipts for delivery.' : null)); setState('answered') }
+        if (result.saved) { setReceipt(result.error ?? (result.canReceive === false ? 'Answer saved, not yet read.' : null)); setState('answered') }
         else setState('idle')
         return result
       } catch (reason) { setState('idle'); throw reason }
@@ -109,3 +109,4 @@ function SourceActions({ source, submit }: { source: QueueSource; submit: (draft
     {error && <p role="alert">{error}</p>}
   </fieldset>
 }
+
