@@ -8,9 +8,9 @@ import './smartSearch.css'
 
 const HOLD_MS = 500
 const HOLD_SLOP = 8
-/** Pixel distance that counts as one detent. Smaller trackpad deltas add up to it. */
+/** Accumulate small pixel deltas before the first detent of a burst. */
 const WHEEL_NOTCH_PX = 40
-/** Quiet gap that ends a flick. Without it, momentum events would spin every pattern. */
+/** A quiet gap lets a new gesture start independently of the previous delta trend. */
 const WHEEL_SETTLE_MS = 200
 
 /** Counts share the normal scene projection, ignoring only the current detent. */
