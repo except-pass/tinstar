@@ -9,7 +9,8 @@ export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<stri
   for (const cardId of new Set(cardIds)) {
     const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
     if (links.some(link => link.verification === 'conflicting') ||
-      scene.findings.some(finding => !finding.sourceHealth && finding.cardIds.includes(cardId) &&
+      scene.findings.some(finding => !finding.sourceHealth &&
+        (finding.cardIds.includes(cardId) || links.some(link => finding.executionIds.includes(link.executionId))) &&
         finding.workerLinkDetectors?.some(detector => ['invalid-record', 'declared-absent', 'duplicate-primary', 'spawn-evidence', 'duplicate-execution'].includes(detector)))) { conflicting++; continue }
     const current = links.some(link => verifiedLink(link) && !readFailed && freshObservation(scene.coverage.intentions, now) &&
       scene.executions.some(worker => worker.id === link.executionId && freshObservation(worker.observation, now) &&

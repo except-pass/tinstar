@@ -7,6 +7,31 @@ import type { WorkerLinkDetector } from '../../server/reconciliation/scene'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
 describe('worker link source health', () => {
+  it('associates reconciled duplicate execution evidence through nonhistorical links', () => {
+    const sources = fixtureSources({ now })
+    const home = sources.fleet[1]!
+    sources.fleet[2]!.observation.data!.tasks = []
+    sources.intentions.data!.cards.find(card => card.id === fixtureId(1))!.properties['First Mate tasks']!.value = JSON.stringify({
+      schema: 'tinstar.fm-links.v1',
+      tasks: [{ fm_home: home.source.home, task_id: 'linked-worker', first_observed_spawn_gen: 'attempt-1' }],
+    })
+    home.observation.data!.tasks.push(structuredClone(home.observation.data!.tasks[0]!))
+    Object.assign(home.observation, { status: 'partial', coverage: 'partial' })
+    const scene = new SceneReconciler().reconcile(sources, now)
+    const finding = scene.findings.find(value => value.workerLinkDetectors?.includes('duplicate-execution'))!
+    const link = scene.claims.find(value => value.executionId === finding.executionIds[0])!
+    expect(finding.cardIds).toEqual([])
+    expect(link).toMatchObject({ cardId: fixtureId(1), verification: 'unverified', state: 'last-known' })
+    expect(workerLinkSourceHealth(scene, [fixtureId(1), fixtureId(1), fixtureId(2)], now))
+      .toEqual({ unknown: 1, unverified: 0, conflicting: 1 })
+    finding.sourceHealth = true
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now))
+      .toEqual({ unknown: 0, unverified: 1, conflicting: 0 })
+    finding.sourceHealth = undefined
+    link.state = 'historical'
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now))
+      .toEqual({ unknown: 1, unverified: 0, conflicting: 0 })
+  })
   it('keeps advisory candidates, hierarchy issues and unknown expectations neutral', () => {
     const sources = fixtureSources({ now })
     const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
