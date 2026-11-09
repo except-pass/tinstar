@@ -166,3 +166,32 @@ it.each(['touch', 'mouse'])('assigns a nested %s swipe only to its nearest surfa
   expect(parentOpen).toHaveBeenCalledOnce()
   expect(childOpen).toHaveBeenCalledOnce()
 })
+
+
+it.each([false, true])('portals both swipe directions into the owning layer (dialog: %s)', modal => {
+  const ask = vi.fn(), inspect = vi.fn()
+  function Surface() {
+    const swipe = useAskGesture(ask, false, inspect)
+    const content = <><button ref={swipe.ref}>Swipe target</button>{swipe.overlay}</>
+    return modal ? <dialog open>{content}</dialog> : content
+  }
+  const { unmount } = render(<Surface />)
+  const target = screen.getByRole('button', { name: 'Swipe target' })
+  const owner = modal ? screen.getByRole('dialog') : document.body
+  for (const [x, label, action] of [[20, 'Release to compose', ask], [180, 'Release to open Inspector', inspect]] as const) {
+    hold(target, 'touchStart'); hold(target, 'touchMove', x)
+    const prompt = screen.getByText(label)
+    expect(prompt.closest('.swipe-rail')?.parentElement).toBe(owner)
+    hold(target, 'touchEnd', x)
+    expect(action).toHaveBeenCalledOnce()
+    expect(screen.queryByText(label)).toBeNull()
+  }
+  hold(target, 'touchStart'); hold(target, 'touchMove', 20); hold(target, 'touchCancel')
+  expect(screen.queryByText('Release to compose')).toBeNull()
+  const returning = document.querySelector('.swipe-rail')
+  if (returning) expect(returning.parentElement).toBe(owner)
+  expect(ask).toHaveBeenCalledOnce()
+  expect(inspect).toHaveBeenCalledOnce()
+  unmount()
+  expect(document.querySelector('.swipe-rail')).toBeNull()
+})

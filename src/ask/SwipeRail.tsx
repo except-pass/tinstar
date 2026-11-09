@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { placeSwipeRail, type GesturePointer } from './gesture'
 import './swipeRail.css'
 
-export function SwipeRail({ x, y, pointer, dx, phase }: { x: number; y: number; pointer: GesturePointer; dx: number; phase: 'neutral' | 'ask' | 'inspect' | 'returning' }) {
+export function SwipeRail({ container, x, y, pointer, dx, phase }: { container: Element; x: number; y: number; pointer: GesturePointer; dx: number; phase: 'neutral' | 'ask' | 'inspect' | 'returning' }) {
   const bounds = () => {
     const viewport = window.visualViewport
     return { width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight, left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0 }
@@ -29,5 +29,5 @@ export function SwipeRail({ x, y, pointer, dx, phase }: { x: number; y: number; 
     <div className="swipe-rail-thumb" style={{ transform: `translateX(${travel}px)`, ...(phase === 'returning' ? { animation: 'swipe-rail-return 220ms cubic-bezier(.2,.8,.3,1.15) forwards' } : {}) }} />
     {phase === 'ask' && <p>Release to compose</p>}
     {phase === 'inspect' && <p>Release to open Inspector</p>}
-  </div>, document.body)
+  </div>, container)
 }

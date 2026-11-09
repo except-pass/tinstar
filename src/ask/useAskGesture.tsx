@@ -173,6 +173,6 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       unbind.forEach(remove => remove())
     }
   }, [!!open, !!inspect, ignoreControls])
-  const overlay = rail ? <SwipeRail x={rail.x} y={rail.y} pointer={rail.pointer} dx={rail.dx} phase={rail.phase} /> : null
+  const overlay = rail ? <SwipeRail container={ref.current?.closest('dialog[open]') ?? document.body} x={rail.x} y={rail.y} pointer={rail.pointer} dx={rail.dx} phase={rail.phase} /> : null
   return { ref, overlay }
 }
