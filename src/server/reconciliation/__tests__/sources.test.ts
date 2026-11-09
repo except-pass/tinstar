@@ -516,7 +516,7 @@ it('retains workers omitted by a partial home publication and accepts a complete
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date(timestamp))
   const dir = await temp(), file = join(dir, 'fleet.json')
-  const initial = { ...snapshot(), backlog: { records: [{ id: 'retained-wait', state: 'waiting' }] } }
+  const initial = { ...snapshot(), backlog: { present: true, records: [{ id: 'retained-wait', state: 'waiting' }] } }
   initial.tasks[0]!.current_state.state = 'running'
   initial.generated = new Date().toISOString()
   initial.tasks.push({ ...initial.tasks[0]!, id: 'other-task' })
@@ -525,7 +525,7 @@ it('retains workers omitted by a partial home publication and accepts a complete
   const first = await cache.get()
   expect(first.data!.tasks).toHaveLength(2)
   vi.setSystemTime(Date.parse(timestamp) + 30_000)
-  const next = { ...initial, generated: new Date().toISOString(), tasks: [], backlog: { records: [] }, main_inventory: { valid: false } }
+  const next = { ...initial, generated: new Date().toISOString(), tasks: [], backlog: { present: true, records: [] }, main_inventory: { valid: false } }
   await writeFile(file, JSON.stringify(next))
   const partial = await cache.get(true)
   expect(partial).toMatchObject({ status: 'stale', coverage: 'partial', observedAt: first.observedAt, expiresAt: first.expiresAt })
