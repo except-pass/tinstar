@@ -181,7 +181,7 @@ it.each([
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
   await screen.findByText('PR description')
-  const field = key === 'changes' ? screen.getByRole('region', { name: label }).parentElement! : key === 'worker' ? within(screen.getByRole('button', { name: 'Inspect owner/repo#17' }).closest('tr')!).getByText(label) : screen.getByText(label)
+  const field = key === 'changes' ? within(screen.getByRole('region', { name: label })).getByRole('heading', { name: /^Change footprint/ }) : key === 'worker' ? within(screen.getByRole('button', { name: 'Inspect owner/repo#17' }).closest('tr')!).getByText(label) : screen.getByText(label)
   fireEvent.keyDown(field, { key: 'F10', shiftKey: true })
   expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue(draft)
   expect(requests).toHaveLength(0)
