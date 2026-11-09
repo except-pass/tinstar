@@ -47,7 +47,7 @@ describe('Ultra Compact Overview', () => {
     expect(screen.getByRole('button', { name: 'Ultra Compact' })).toHaveAttribute('aria-pressed', 'true')
     expect(container.querySelectorAll('.ov-collapsed')).toHaveLength(10)
     expect(container.textContent).not.toContain('No activity published')
-    expect(task(container, 2).textContent).toContain('No linked worker')
+    expect(task(container, 2)).toHaveTextContent('No worker')
     const w = worker(container, 'linked-worker')
     expect(w.getAttribute('title')).toBeTruthy()
     expect(w.getAttribute('aria-label')).toContain(w.getAttribute('title'))
@@ -174,7 +174,8 @@ describe('Ultra Compact Overview', () => {
   it('keeps partial coverage honest on compact rows', () => {
     scene.coverage.homes[0]!.observation.coverage = 'partial'
     const { container } = mount()
-    expect(task(container, 2).textContent).toContain('Unknown worker')
+    expect(task(container, 2).querySelector('.ov-worker-fact')).toBeNull()
+    expect(task(container, 2)).not.toHaveTextContent('No worker')
     expect(screen.getByRole('button', { name: 'Coverage incomplete · Details' })).toBeTruthy()
     expect(container.textContent).not.toContain('No linked worker')
   })
