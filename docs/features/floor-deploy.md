@@ -25,7 +25,7 @@ by deliberately deploying with an override. These checks make no HTTP writes.
 `--check-only` skips source/unit/restart-permission checks; it checks its smoke
 prerequisites. Preflight failures leave services untouched and create no marker.
 
-After acquiring the lock and rechecking the existing block, any failure exits
+After acquiring the lock and rechecking the existing block, an unhandled failure exits
 nonzero, prints an `ALERT Tin Star deploy:` line to stderr, and attempts to write
 `deploy.blocked`. Failure to persist the marker is reported in the alert and
 requires operator intervention. Earlier failures, including lock contention,
@@ -87,9 +87,10 @@ so timezone rendering does not change freshness.
 Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
 
 `--check-only` runs the same post-deploy checks and failure latch without checkout,
-build or restart. It still creates/removes a synthetic Ask record, acquires the
-deploy lock and refuses an existing block. It is useful for a preview or an
-operator verifying recovery, not a way around the block.
+build or restart. It still creates/removes a synthetic Ask record and acquires the
+deploy lock. Block handling and audited exceptions follow the
+[failure recovery rules](#failure-recovery). It is useful for a preview or an
+operator verifying recovery.
 
 ## Synthetic Ask isolation
 
@@ -158,8 +159,8 @@ telemetry changes should update the smoke and its executable tests together.
 
 Read the failed phase from the block marker and the deployment log. Investigate
 and repair the underlying problem (including credential permissions or service
-configuration). The script deliberately does not roll back or keep deploying over
-a failed floor. The old process may still be running after a failed build; after
+configuration). The script does not roll back; by default it stops at a failed
+gate. The old process may still be running after a failed build; after
 a failed restart or smoke, some units may already run the new code.
 
 After diagnosis, use either supported recovery command; never hand-edit the latch:
