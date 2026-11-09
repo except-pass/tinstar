@@ -44,7 +44,7 @@ TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel
   --caller-id owner-chatgpt --caller-token-file /absolute/private/facade-caller-header
 ```
 
-The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools.
+The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
 Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
 The approved caller boundary is the private org tunnel. Generate a separate opaque random token of at least 32 non-whitespace characters. Store the full Authorization header value in a single owner-only file shared by the facade and tunnel-client: `Bearer <opaque-random-token>` on one line, with an optional trailing newline. Raw tokens, extra lines and double prefixes are rejected by the CLI. Normal ChatGPT needs no extra authentication; tunnel-client injects the header from this file.
 Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
@@ -53,7 +53,7 @@ Never use the install token as the caller token.
 Missing/invalid caller configuration prevents startup; wrong, missing or duplicate Authorization and browser origins are rejected.
 Forwarded identity headers grant no authority.
 
-The tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
+For the facade command above, the tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
 
 ```sh
 tunnel-client run \
@@ -77,7 +77,7 @@ Environment=TINSTAR_CONFIG_HOME=/home/farm/srv/tinstar-config
 ExecStart=/usr/bin/env node bin/tinstar-mcp-tunnel.js --port 5297 --upstream-port 5281 --caller-id owner-chatgpt --caller-token-file /home/farm/.config/tinstar-tunnel/facade-caller-header --allow-view
 ```
 
-Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. The caller file contains exactly `Bearer <opaque-random-token>` (optional trailing newline), is owned by the service user, and has mode 0600. The backend's `mcp-token` remains a separate raw install token.
+Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. Use the caller-file format and ownership requirements above. The backend's `mcp-token` remains a separate raw install token.
 Restart the facade after rotating either credential; restart tunnel-client after caller-file rotation so both use the same value. The facade never installs a service or changes tunnel configuration automatically. These are operator handoff instructions, not validation commands against the live floor.
 
 ## Tools and authority
