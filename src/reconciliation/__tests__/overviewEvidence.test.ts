@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { cardWorkerFact, patternCheckSummary } from '../overviewEvidence'
+import { SceneReconciler } from '../../server/reconciliation/scene'
 import type { PatternResult } from '../../shared/workHealth'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
@@ -20,6 +21,16 @@ describe('card worker facts', () => {
     const { scene: linked, worker, fact } = singleWorker()
     linked.claims.find(link => link.executionId === worker.id)!.verification = 'unverified'
     expect(fact()).toBeNull()
+  })
+  it('omits absence for In Progress work without home accountability despite fresh configured sources', () => {
+    const sources = fixtureSources({ now })
+    for (const home of sources.fleet) home.observation.data!.backlog = []
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(scene.cards.find(card => card.id === fixtureId(2))!.source.properties.Status!.value).toBe('In Progress')
+    expect(scene.coverage.absenceConclusions).toBe('sufficient-configured-sources')
+    expect(scene.claims.filter(link => link.cardId === fixtureId(2))).toEqual([])
+    expect(cardWorkerFact(scene, fixtureId(2), now)).toBeNull()
+    expect(cardWorkerFact(scene, fixtureId(1), now)).toBe('2 workers running')
   })
   it('uses fresh current state for running and counts multiple workers', () => {
     const { worker, fact } = singleWorker()

@@ -9,7 +9,8 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
   const ids = new Set(links.filter(verifiedLink).map(link => link.executionId))
   const workers = scene.executions.filter(worker => ids.has(worker.id))
   if (!workers.length) {
-    return !links.length && !readFailed && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
+    return !links.length && scene.findings.some(finding => finding.kind === 'task-execution-gap' && finding.cardIds.includes(cardId)) &&
+      !readFailed && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
       freshObservation(scene.coverage.intentions, now) && scene.coverage.homes.length > 0 &&
       scene.coverage.homes.every(home => freshObservation(home.observation, now)) ? 'No worker' : null
   }
