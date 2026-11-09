@@ -91,6 +91,8 @@ ExecStart=/usr/bin/env node bin/tinstar-mcp-tunnel.js --port 5297 --upstream-por
 Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. Use the caller-file format and ownership requirements above. The backend's `mcp-token` remains a separate raw install token.
 Restart the facade after rotating either credential; restart tunnel-client after caller-file rotation so both use the same value. The facade never installs a service or changes tunnel configuration automatically. These are operator handoff instructions, not validation commands against the live floor.
 
+Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
+
 ## Tools and authority
 
 | Tool | Result |

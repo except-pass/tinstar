@@ -66,6 +66,8 @@ can either break ChatGPT's expected tools or expose a tool outside approved scop
 Descriptions, annotations, schemas and other tool fields must also match between
 the facade and target (JSON object key order and tool ordering are ignored).
 
+Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
+
 `--check-only` runs the same post-deploy checks and failure latch without checkout,
 build or restart. It still creates/removes a synthetic Ask record, acquires the
 deploy lock and refuses an existing block. It is useful for a preview or an
