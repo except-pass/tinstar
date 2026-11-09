@@ -172,9 +172,8 @@ invalid checkpoints using the calendar rules above.
 
 Task and worker headers carry an Inspect panel icon in both densities, including
 collapsed rows. It opens the separate Inspector while Your desk remains available.
-A rightward swipe on a task, worker, or relationship opens this same Inspector.
-A leftward swipe still opens Ask, and the swipe prompt shows only the action
-release would take. Clicking
+For swipe entry, see the shared [Ask/Inspector gesture contract](ask.md).
+Clicking
 the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection
 and activity history, evidence and safe source links. Next to Open Notion card, Copy link
 copies that card's URL. Task prose loads on demand;

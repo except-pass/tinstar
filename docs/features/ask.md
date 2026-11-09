@@ -34,13 +34,20 @@ not a draft or captured field value, remains First Mate's evidence.
 Movement under 12 CSS pixels stays a tap. At 12 pixels, horizontal movement
 must be at least 1.4 times vertical movement to lock. Vertical and diagonal
 movement stay native and scroll. A horizontal drag that can still scroll an
-overflow ancestor in that direction stays native. Once locked, one rail tracks
-the finger from the pointer-down point: Ask arms at 72 pixels left and disarms
+overflow ancestor in that direction stays native. Once locked, a floating rail
+stays anchored near the pointer-down point while its thumb tracks displacement:
+Ask arms at 72 pixels left and disarms
 at 58, Inspector arms at 72 pixels right and disarms at 58. Release uses the
 current arm, not the farthest point, and reversing through a disarm threshold
 clears that prompt immediately. Ask release opens the composer and does not
-send. Inspector release opens the Inspector. Pointer cancellation, lost
-capture, scroll, and Escape clear the rail without an action. Desktop drags on
+send. Inspector release opens the Inspector where that surface provides an
+Inspector action; elsewhere, rightward drags stay native and show no Inspector
+release prompt. Pointer cancellation, lost capture, scroll, Escape, window blur,
+visibility loss and additional touches cancel without an action. Neutral release
+and cancellation return the rail thumb to center before dismissal; reduced
+motion dismisses it immediately. The rail sits above touch/pen contact or beside
+the mouse origin, repositions within the visual viewport, and stays inside the
+owning open dialog when present. Desktop drags on
 semantic fields leave text selection native; an active selection prevents an
 item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
