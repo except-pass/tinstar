@@ -37,8 +37,11 @@ movement stay native and scroll. A horizontal drag that can still scroll an
 overflow ancestor in that direction stays native. Work cards, worker cards and
 relationship detail rows share an in-place reveal: the card body follows the
 drag inside a clipping box, exposing teal Ask on a left swipe or blue Inspector
-on a right swipe. Travel resists past the arm point and stays within 80% of the
-card width. Only an armed action shows its label and release prompt. Ask arms at 72 pixels left and disarms
+on a right swipe. The rail is clipped to the exposed strip during dragging and
+spring return, preserving transparent content on cards, blocks and table cells.
+Travel resists past the arm point and stays within 80% of the
+card width. Only an armed action shows its label and release prompt.
+Ask arms at 72 pixels left and disarms
 at 58, Inspector arms at 72 pixels right and disarms at 58. Release uses the
 current arm, not the farthest point, and reversing through a disarm threshold
 clears that prompt immediately. Ask release opens the composer and does not

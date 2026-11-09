@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { chromium, type Browser } from '@playwright/test'
+import { chromium, expect as browserExpect, type Browser } from '@playwright/test'
 import { createServer, type ViteDevServer } from 'vite'
 
 let server: ViteDevServer, browser: Browser, origin: string
@@ -70,7 +70,7 @@ it.each(['relationship', 'table', 'block'])('clips both reveals to the exposed s
             covered: element.contains(document.elementFromPoint(covered, box.top + 40)),
           }
         })
-        expect(result).toEqual({ background: 'rgba(0, 0, 0, 0)', exposed: true, covered: false })
+        expect(result, `${kind} at ${dx}px`).toEqual({ background: 'rgba(0, 0, 0, 0)', exposed: true, covered: false })
       }
       await surface.dispatchEvent('pointercancel', { pointerType: 'mouse', pointerId: 1 })
       for (const rail of await rails.all()) {
@@ -78,16 +78,19 @@ it.each(['relationship', 'table', 'block'])('clips both reveals to the exposed s
           const body = element.parentElement!.querySelector('.swipe-body')!
           const railAnimation = element.getAnimations()[0]!, bodyAnimation = body.getAnimations()[0]!
           railAnimation.pause(); bodyAnimation.pause()
-          return [0, 55, 110, 220].map(time => {
+          const samples = [0, 55, 110, 220].map(time => {
             railAnimation.currentTime = time; bodyAnimation.currentTime = time
             const box = element.getBoundingClientRect(), moved = body.getBoundingClientRect()
             const x = (Math.max(box.left, moved.left) + Math.min(box.right, moved.right)) / 2
             return element.contains(document.elementFromPoint(x, box.top + 40))
           })
+          // Release the manually paused effects before the next drag.
+          railAnimation.cancel(); bodyAnimation.cancel()
+          return samples
         })
         expect(samples).toEqual([false, false, false, false])
       }
-      await expect(rails).toHaveCount(0)
+      await browserExpect(rails).toHaveCount(0)
     }
   } finally { await page.close() }
 }, 30_000)
