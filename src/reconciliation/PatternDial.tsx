@@ -15,7 +15,7 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
   const workersUnknown = !scene.coverage.homes.length || scene.coverage.homes.some(home => !freshObservation(home.observation, now))
   return Object.fromEntries(dialPatterns.map(pattern => [pattern, {
     count: pattern === 'all' ? ids.size : health.filter(item => item.patterns[pattern].outcome === 'match').length,
-    unknown: sourceUnknown || (pattern === 'all' ? !!state.donutFilter?.workers.length && workersUnknown : workersUnknown || health.some(item => item.patterns[pattern].outcome === 'unavailable')),
+    unknown: sourceUnknown || (pattern === 'all' ? !!state.donutFilter?.workers.length && workersUnknown : health.some(item => item.patterns[pattern].outcome === 'unavailable')),
   }])) as Record<DialPattern, { count: number; unknown: boolean }>
 }
 

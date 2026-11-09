@@ -52,3 +52,7 @@
   .ov-toolbar .ov-donut-key { display:none; }
   .ov-search-panel { top:12px; padding-top:0; }
 }
+
+.ov .ov-item.ov-pattern-context { opacity:.65; border-style:dashed; }
+.ov .ov-item.ov-pattern-unknown { border-color:#d9b96c; box-shadow:inset 2px 0 #d9b96c; }
+.ov-pattern-unknown-marker { color:#edcf87; border:1px dashed #9b864e; border-radius:3px; padding:1px 4px; font-size:10px; flex-shrink:0; }

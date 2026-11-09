@@ -4,6 +4,7 @@ import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/re
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { preferencesKey } from '../presentationPreferences'
 import type { FloorScene, PresentationAction } from '../presentation'
+import * as health from '../../shared/workHealth'
 import { actionSchema } from '../../shared/reconciliationCommands'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, send: null as null | ((action: PresentationAction) => unknown) }))
@@ -211,5 +212,54 @@ describe('compact search palette and temporary graph focus', () => {
     await back()
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'false')
     expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'detailed')
+  })
+})
+
+
+describe('shared dial filtering contract', () => {
+  const patterns = health.dialPatterns.filter(pattern => pattern !== 'all')
+  // Exercise the consumer with all three evaluator outcomes, including future
+  // evidence-backed matches for patterns whose current adapters report unknown.
+  function outcomes(pattern: health.Pattern, matched: boolean) {
+    const records = health.sceneWorkHealth(scene, Date.now()).map(record => ({ ...record, patterns: { ...record.patterns,
+      [pattern]: { outcome: matched && record.cardId === fixtureId(1) ? 'match' : matched && record.cardId === fixtureId(2) ? 'unavailable' : 'no-match',
+        reason: 'Worker last reported 3d ago', evidence: ['Worker last reported 3d ago'] } as health.PatternResult,
+    } }))
+    vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
+  }
+  it.each(patterns)('%s hides non-matches, retains one-hop counterparts as secondary, and labels unknown evidence', pattern => {
+    const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
+    scene.claims.push({ ...claim, id: 'second-hop', cardId: fixtureId(6) })
+    outcomes(pattern, true)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-pattern', pattern }) })
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveClass('ov-search-match')
+    const counterpart = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(element => element.dataset.entityId === claim.executionId)!
+    expect(counterpart).toHaveClass('ov-pattern-context')
+    expect(counterpart).not.toHaveClass('ov-search-match')
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
+    const untracked = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+    expect([...container.querySelectorAll<HTMLElement>('[data-entity-id]')].find(element => element.dataset.entityId === untracked.id) ?? null).toBeNull()
+    const unknown = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
+    expect(unknown).toHaveClass('ov-pattern-unknown')
+    expect(within(unknown as HTMLElement).getByLabelText("Can't tell: Worker last reported 3d ago")).toHaveAttribute('title', 'Worker last reported 3d ago')
+    fireEvent.click(counterpart)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
+  })
+  it.each(patterns)('%s shows its explicit empty state when every result is no-match', pattern => {
+    outcomes(pattern, false)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-pattern', pattern }) })
+    expect(container.querySelectorAll('.ov-item')).toHaveLength(0)
+    expect(screen.getByText(health.patternEmptyText[pattern])).toBeVisible()
+  })
+  it('replaces an earlier search focus when choosing a dial pattern', () => {
+    scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'reveal-search', target: { kind: 'card', id: fixtureId(1) } }) })
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'blocked' }) })
+    expect(cardIds(container)).toEqual([fixtureId(4)])
+    expect(container.querySelectorAll('.ov-pattern-context')).toHaveLength(1)
+    expect(container.querySelectorAll('.ov-search-context')).toHaveLength(0)
   })
 })

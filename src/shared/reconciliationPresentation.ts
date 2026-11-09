@@ -123,7 +123,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   if (targets.some(target => !targetExists(scene, target, state, now))) return { state, outcome: 'unknown-id' }
   let next = { ...state, queueItemId: state.queueItemId ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null }
   switch (action.type) {
-    case 'set-pattern': next.search = { ...(state.search ?? emptySearch()), patterns: action.pattern ? [action.pattern] : [] }; break
+    case 'set-pattern': next.search = { ...(state.search ?? emptySearch()), patterns: action.pattern ? [action.pattern] : [] }; next.searchReveal = null; next.searchFocus = undefined; break
     case 'set-search': next.search = action.search; next.searchReveal = null; next.searchFocus = undefined; break
     case 'clear-search': next.search = emptySearch(); next.searchReveal = null; next.searchFocus = undefined; break
     case 'restore-search-view': next = { ...next, searchReveal: null, searchFocus: undefined, ...action.view }; if (next.selection && !targetExists(scene, next.selection, next, now)) next.selection = null; break

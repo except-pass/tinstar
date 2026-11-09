@@ -1,7 +1,7 @@
 import Fuse from 'fuse.js'
 import type { FloorScene, Target } from './reconciliationPresentation'
 import { sceneSearchDocuments, searchEntityDocuments, type SearchDocument, type SearchField } from './searchDocuments'
-import { verifiedLink, sceneWorkHealth, type Pattern } from './workHealth'
+import { verifiedLink, sceneWorkHealth, combinedPatternResult, type Pattern } from './workHealth'
 import { homeLabel as homeLabelForSearch } from './reconciliationLabels'
 
 export interface SearchFilter {
@@ -208,7 +208,7 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
   for (const worker of scene.executions) pairs.push({ workerId: worker.id })
   for (const pair of pairs) {
     const card = pair.cardId ? cards.get(pair.cardId) : undefined, worker = pair.workerId ? workers.get(pair.workerId) : undefined
-    if (search.patterns.length && (!card || !search.patterns.every(pattern => health.get(card.id)?.patterns[pattern].outcome === 'match'))) continue
+    if (search.patterns.length && (!card || combinedPatternResult(health.get(card.id)!, search.patterns).outcome === 'no-match')) continue
     const matches = search.facets.every(facet => {
       switch (facet.field) {
         case 'machine': return worker?.placement.machine === facet.value
@@ -224,7 +224,7 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
     if (!matches) continue
     const cardHit = !!card && hitKeys.has(`card:${card.id}`), workerHit = !!worker && hitKeys.has(`execution:${worker.id}`)
     if (!cardHit && !workerHit) continue
-    if (search.patterns.length && card) add({ kind: 'card', id: card.id })
+    if (search.patterns.length && card && cardHit) add({ kind: 'card', id: card.id })
     else {
       if (cardHit && card) add({ kind: 'card', id: card.id })
       if (workerHit && worker) add({ kind: 'execution', id: worker.id })
@@ -233,7 +233,7 @@ export function searchSeeds(scene: FloorScene, search: SearchFilter, now: number
   const result = [...seeds.values()]
   // Classifications change only when a new scene arrives, a read fails, or an
   // observation expires. Do not rerun the same predicates for every donut/clock.
-  const deadlines = [scene.coverage.intentions, ...scene.coverage.homes.map(home => home.observation)].map(observation => Date.parse(observation.expiresAt ?? '')).filter(at => at > now)
+  const deadlines = [scene.coverage.intentions, ...scene.coverage.homes.map(home => home.observation), ...scene.executions.map(worker => worker.observation)].map(observation => Date.parse(observation.expiresAt ?? '')).filter(at => at > now)
   cache.set(key, { until: Math.min(Infinity, ...deadlines), seeds: result })
   if (cache.size > 32) cache.delete(cache.keys().next().value!)
   seedCache.set(scene, cache)
