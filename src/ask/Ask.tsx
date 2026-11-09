@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useId, type MouseEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { apiFetch } from '../apiClient'
-import { askItemsSchema, askReturn, isArtifactTarget, type AskItem, type AskReturn } from '../shared/ask'
+import { askItemSchema, askItemsSchema, askReturn, isArtifactTarget, type AskItem, type AskReturn, type AskSelectionInput } from '../shared/ask'
 import type { FloorScene, PresentationAction, PresentationState } from '../shared/reconciliationPresentation'
 import { ageLabel } from '../reconciliation/recordFields'
 import { useAskGesture } from './useAskGesture'
 import { askElement } from './element'
 import { AskSurface } from './AskSurface'
+import { AskActions, AskSelectionRejected } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
@@ -15,12 +16,17 @@ import './ask.css'
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await apiFetch(`/api/ask/${path}`, { headers: { 'X-Tinstar-UI': '1', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) })
   const result = await response.json()
-  if (!response.ok || !result.ok) throw new Error(result.error?.message ?? 'Ask unavailable')
+  if (!response.ok || !result.ok) {
+    const message = result.error?.message ?? 'Ask unavailable'
+    if (path === 'selections' && response.status >= 400 && response.status < 500) throw new AskSelectionRejected(message)
+    throw new Error(message)
+  }
   return result.data as T
 }
 interface AskControls {
   scene: FloorScene | null; expanded: string | null; collapse: () => void; state: PresentationState; submit: (body: unknown) => Promise<void>; canBack?: boolean; onBack?: () => void
   replySeed: { conversationId: string; seed: AskSeed; key: string } | null;
+  selectAction: (input: AskSelectionInput) => Promise<AskItem>
   items: AskItem[]; error: string | null; open: (subject?: AskSeed, parent?: AskItem) => void
   returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss') => void
 }
@@ -81,14 +87,29 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     const unread = items.filter(turn => turn.conversation_id === item.conversation_id && turn.reply && !turn.read_at)
     if (unread.length) void Promise.all(unread.map(turn => request(`requests/${turn.request_id}/read`, {}))).then(refresh).catch(reason => setError((reason as Error).message))
   }
-  const submit = async (body: unknown) => {
-    const item = await request<AskItem>('requests', body)
+  const retain = (item: AskItem) => {
     localRevision.current++
     setItems(previous => previous.some(old => old.request_id === item.request_id) ? previous.map(old => old.request_id === item.request_id ? item : old) : [...previous, item])
     setExpanded(item.conversation_id)
+  }
+  const submit = async (body: unknown) => {
+    const item = await request<AskItem>('requests', body)
+    retain(item)
     setReplySeed(previous => previous && previous.key === replySeed?.key && previous.conversationId === item.conversation_id ? { ...previous, seed: {} } : previous)
   }
-  return <Controls.Provider value={{ scene, state, submit, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, action }}>{children}
+  const selectAction = async (input: AskSelectionInput) => {
+    try {
+      const item = askItemSchema.parse(await request<AskItem>('selections', input))
+      retain(item)
+      return item
+    } catch (reason) {
+      // Reconcile other-device selections or superseding replies using the same
+      // refresh path; an uncertain retry still uses its original request key.
+      void refresh()
+      throw reason
+    }
+  }
+  return <Controls.Provider value={{ scene, state, submit, selectAction, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, action }}>{children}
     {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
       await submit(body)
       setComposer(null)
@@ -169,19 +190,24 @@ function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskCont
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
   const latest = turns.at(-1)!
+  const latestAnswer = turns.filter(turn => turn.reply).sort((a, b) => Date.parse(a.answered_at ?? a.created_at) - Date.parse(b.answered_at ?? b.created_at)).at(-1)
   const seed = controls.replySeed?.conversationId === latest.conversation_id ? controls.replySeed : null
   return <section className="ask-thread" id={`ask-thread-${latest.conversation_id}`} aria-label={`Answer thread: ${turns[0]!.question}`}>
     <header><strong>Conversation</strong><button type="button" onClick={event => { controls.collapse(); event.currentTarget.closest('[data-ask-id]')?.querySelector<HTMLElement>('.ask-preview')?.focus({ preventScroll: true }) }}>Collapse answer</button></header>
     {!sourceAvailable(latest, controls.scene) && <p role="status">The original task is no longer on the floor.</p>}
     {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Open originating source ↗</a>}
-    {turns.map(turn => <section className="ask-turn" key={turn.request_id} aria-label={`Question: ${turn.question}`}>
+    {turns.map(turn => {
+      const selected = turns.find(item => item.action_selection?.answer_id === turn.request_id)
+      return <section className="ask-turn" key={turn.request_id} aria-label={`Question: ${turn.question}`}>
+      {turn.action_selection && <p className="ask-action-explanation">Selected by {turn.action_selection.actor} · <time dateTime={turn.action_selection.selected_at}>{new Date(turn.action_selection.selected_at).toLocaleString()}</time></p>}
       <p className="ask-thread-question">{turn.question}</p>
       {turn.captured_selection && <blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote>}
       {turn.reply ? <><h3 {...askElement('answer', 'First Mate answer')}>{turn.reply.summary}</h3><p {...askElement('answer', 'Answer detail')} className="ask-detail">{turn.reply.detail}</p>
         {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
-        {!!turn.reply.suggested_actions.length && <><h4>Suggested next actions</h4><ul>{turn.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}
+        <AskActions answerId={turn.request_id} suggestions={turn.reply.suggested_actions} superseded={latestAnswer?.request_id !== turn.request_id}
+          selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, error: selected.error } : null} onSelect={controls.selectAction} />
       </> : <AskDelivery item={turn} controls={controls} now={now} />}
-    </section>)}
+    </section>})}
     <footer><button type="button" onClick={() => controls.returnTo(latest)}>Return to source</button>{controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}</footer>
     <AskComposer key={seed?.key ?? latest.conversation_id} inline scene={controls.scene} state={controls.state} parent={latest}
       seed={{ ...(latest.context.target ? { target: latest.context.target, view: latest.context.view } : { cardId: latest.context.anchor.page_id }), ...seed?.seed }}

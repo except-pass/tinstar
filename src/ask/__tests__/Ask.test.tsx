@@ -42,6 +42,14 @@ beforeEach(() => {
         records.push(row); data = row
       } else data = records
     }
+    if (url === '/api/ask/selections') {
+      const answer = records.find(record => record.request_id === body.answer_id)!
+      const recommendation = answer.reply!.suggested_actions.find(action => typeof action !== 'string' && action.id === body.action_id)
+      if (!recommendation || typeof recommendation === 'string') throw new Error('Missing saved recommendation')
+      const row: AskItem = { ...seed(), conversation_id: answer.conversation_id, follow_up_to: answer.request_id, question: recommendation.instruction, context: answer.context, status: 'sent', reply: null,
+        action_selection: { selection_id: crypto.randomUUID(), answer_id: answer.request_id, action_id: recommendation.id, label: recommendation.label, instruction: recommendation.instruction, actor: 'owner@example.test', selected_at: new Date().toISOString() } }
+      records.push(row); data = row
+    }
     const match = /\/api\/ask\/requests\/([^/]+)\/(read|dismiss|retry)$/.exec(url)
     if (match) {
       const row = records.find(record => record.request_id === match[1])!
@@ -584,4 +592,84 @@ it('routes a semantic Ask on retained Desk advice into the same inline conversat
   expect(requests[1]).not.toHaveProperty('element')
   expect(requests[1]).not.toHaveProperty('field_key')
   expect(requests[1]).not.toHaveProperty('field_value')
+})
+
+const recommendationChoices = [
+  { id: 'close-done', label: 'Close as Done', instruction: 'Post the #3194 Feed verdict and set the linked Notion card Done' },
+  { id: 'keep-open', label: 'Keep open', instruction: 'Retain card until a real DEV stall exhibits Feed recovery.' },
+]
+const choiceName = `${recommendationChoices[0]!.label}: ${recommendationChoices[0]!.instruction}`
+function recommendedAnswer(): AskItem {
+  const original = seed()
+  return { ...original, question: 'Why is this overdue?', reply: { ...original.reply!, suggested_actions: recommendationChoices } }
+}
+
+it('selects one saved recommendation inline, keeps the shared composer/draft and follows up in the same conversation', async () => {
+  const original = recommendedAnswer(); records = [original]
+  const view = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this overdue/ }))
+  fireEvent.contextMenu(within(screen.getByRole('region', { name: /Answer thread/ })).getByRole('heading', { name: original.reply!.summary }))
+  // The operator reads/edits the captured context before making a later choice;
+  // this is separate from the gesture's synthesized-click suppression window.
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
+  const composer = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  fireEvent.change(composer, { target: { value: 'Why is the regression test sufficient?' } })
+  fireEvent.click(screen.getByRole('button', { name: choiceName }))
+  await waitFor(() => expect(records).toHaveLength(2))
+  const calls = vi.mocked(fetch).mock.calls.filter(([url]) => url === '/api/ask/selections')
+  expect(calls).toHaveLength(1)
+  expect(JSON.parse(String(calls[0]![1]!.body))).toEqual({ answer_id: original.request_id, action_id: 'close-done', client_key: expect.any(String) })
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  expect(thread).toHaveTextContent('Requested')
+  expect(thread).toHaveTextContent('Selected by owner@example.test')
+  expect(thread).toHaveTextContent(original.reply!.detail)
+  expect(within(thread).getByRole('link', { name: /Evidence/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(composer)
+  expect(composer).toHaveValue('Why is the regression test sufficient?')
+  expect(screen.getByLabelText('Element context')).toHaveTextContent(original.reply!.summary)
+  fireEvent.keyDown(composer, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ follow_up_to: records[1]!.request_id, question: 'Why is the regression test sufficient?' })
+  expect(requests[0]).toMatchObject({ element: { value: original.reply!.summary } })
+  expect(records[2]!.conversation_id).toBe(original.conversation_id)
+  view.unmount(); mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Selected by owner@example.test')
+})
+
+it('disables old recommendations by actual reply time, including a late answer to an earlier question', async () => {
+  const first = recommendedAnswer(), second = { ...recommendedAnswer(), conversation_id: first.conversation_id, created_at: '2099-01-01T00:00:00Z', answered_at: '2099-01-03T00:00:00Z', question: 'Why is the regression test sufficient?' }
+  first.answered_at = '2099-01-02T00:00:00Z'
+  records = [first, second]
+  const view = mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  let choices = screen.getAllByRole('button', { name: choiceName })
+  expect(choices[0]).toBeDisabled()
+  expect(choices[1]).toBeEnabled()
+  expect(screen.getByText(/These recommendations are outdated/)).toBeVisible()
+  view.unmount()
+  first.answered_at = '2099-01-04T00:00:00Z'
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  choices = screen.getAllByRole('button', { name: choiceName })
+  expect(choices[0]).toBeEnabled()
+  expect(choices[1]).toBeDisabled()
+})
+
+it('shows a conflicting two-device selection clearly and reconciles through the existing refresh', async () => {
+  const original = recommendedAnswer(); records = [original]
+  const real = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (...args) => args[0] === '/api/ask/selections'
+    ? new Response(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: 'Another action was already selected for this answer' } }), { status: 409 })
+    : real(...args))
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  fireEvent.click(screen.getByRole('button', { name: choiceName }))
+  await screen.findByText('Selection not requested: Another action was already selected for this answer')
+  expect(screen.queryByText('Requested')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
+  expect(records).toHaveLength(1)
 })
