@@ -137,7 +137,7 @@ describe('Overview shell and retained terminal navigation', () => {
     const polls: (() => void)[] = []
     const timer = vi.spyOn(window, 'setInterval').mockImplementation(handler => {
       if (typeof handler === 'function') polls.push(handler as () => void)
-      return 1
+      return 1 as unknown as ReturnType<typeof window.setInterval>
     })
     vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
       const url = String(input)

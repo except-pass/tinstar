@@ -325,20 +325,20 @@ test('compact unread previews pulse only until opened and respect reduced motion
 test('live Desk archive survives polling, immediate Undo, unseen follow-up, restart and a later unread answer', async ({ page, request, browser }, testInfo) => {
   page.setDefaultTimeout(8000)
   const root = mkdtempSync(resolve('.ask-live-'))
-  const scene = fixtureScene(), token = 'disposable-bridge-token-0000000000000000'
+  const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }, token = 'disposable-bridge-token-0000000000000000'
   const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   liveAsk = createApi(); seedOriginAllowlist(Number(new URL(base).port))
   const headers = { 'Tailscale-User-Login': 'owner@example.test', 'X-Tinstar-UI': '1' }
   const transcript: unknown[] = []
-  const call = async (path: string, data?: unknown, auth = headers) => {
+  const call = async (path: string, data?: unknown, auth: Record<string, string> = headers) => {
     const response = data === undefined ? await request.get(base + '/api/ask/' + path, { headers: auth }) : await request.post(base + '/api/ask/' + path, { headers: auth, data })
     const body = await response.json(); transcript.push({ path, status: response.status(), body }); expect(response.ok()).toBe(true); return body.data
   }
   const create = (question: string, follow_up_to?: string) => call('requests', { client_key: crypto.randomUUID(), card_id: fixtureId(1), question, view: { scene: 'overview' }, ...(follow_up_to ? { follow_up_to } : {}) })
   const bridge = async (id: string, summary: string) => {
     const auth = { Authorization: `Bearer ${token}` }
-    await call('bridge', { request_id: id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: `note-${id}`, request_id: `tinstar-ask-${id}`, saved: true, announced: true, acknowledged: false } }, auth as typeof headers)
-    await call('bridge', { request_id: id, reply: { id: `note-${id}`, at: new Date().toISOString(), body: summary, cursor: '1' } }, auth as typeof headers)
+    await call('bridge', { request_id: id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: `note-${id}`, request_id: `tinstar-ask-${id}`, saved: true, announced: true, acknowledged: false } }, auth)
+    await call('bridge', { request_id: id, reply: { id: `note-${id}`, at: new Date().toISOString(), body: summary, cursor: '1' } }, auth)
   }
   try {
     const first = await create('Live archive conversation')
