@@ -274,7 +274,7 @@ can publish this JSON as its reply body (fill IDs/content, no credentials):
 }
 ```
 
-Only credential-free HTTPS reference links are accepted. Plain text is displayed
+Only credential-free HTTPS reference links are retained. Plain text is displayed
 as text, never executable HTML. Limits include a 4,000-character question,
 32,000-character answer, 20 references and 10 suggested actions. API JSON bodies
 are bounded to 256 KiB; the puller has process/network timeouts and bounded reads.
@@ -283,6 +283,8 @@ Structured recommendations use the strict bounded prose schema in
 [`ask-actions.ts`](../../src/shared/ask-actions.ts): per-answer unique IDs,
 short labels and instructions without links or source-code containers.
 Historical string suggestions still display as inert text.
+Malformed structured reply content is accepted with `reply.degraded: true`, preserving valid text and reference links within those limits.
+An invalid suggested-action collection is dropped, so it creates no buttons and cannot delay other answers in the installed puller.
 The first three structured choices appear as compact buttons immediately after
 the answer; remaining choices use a “More choices” disclosure.
 The shared inline composer remains available for free-form clarification.

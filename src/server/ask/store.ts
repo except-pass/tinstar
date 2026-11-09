@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askRecordSchema, askReplySchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import { askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import { normalizeAskReply } from './reply'
 
 export class AskConflict extends Error {}
 export class AskNotFound extends Error {}
@@ -161,7 +162,7 @@ export class AskStore {
         try { parsed = JSON.parse(update.reply.body) } catch { /* ordinary primary text reply */ }
         if (parsed && typeof parsed === 'object' && 'schema' in parsed && parsed.schema === 'tinstar.ask-reply.v1') {
           if (!('request_id' in parsed) || parsed.request_id !== row.request_id) throw new AskConflict('Structured reply request does not match')
-          row.reply = askReplySchema.parse(parsed)
+          row.reply = normalizeAskReply(parsed as Record<string, unknown>, update.reply.body)
         } else {
           row.reply = { summary: update.reply.body.slice(0, 240), detail: update.reply.body, references: [], suggested_actions: [] }
         }

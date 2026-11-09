@@ -77,6 +77,7 @@ export const askReplySchema = z.object({
     return url.protocol === 'https:' && !url.username && !url.password
   }) })).max(20),
   suggested_actions: askSuggestionsSchema,
+  degraded: z.literal(true).optional(),
 })
 /** An authenticated operator request delivered to First Mate. Tin Star records
  * delivery only; First Mate's ordinary immutable reply supplies the outcome. */
