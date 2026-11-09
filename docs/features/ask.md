@@ -282,10 +282,9 @@ as text, never executable HTML. Limits include a 4,000-character question,
 are bounded to 256 KiB; the puller has process/network timeouts and bounded reads.
 
 Structured recommendations use the strict bounded prose schema in
-[`ask-actions.ts`](../../src/shared/ask-actions.ts): per-answer unique IDs
-of 1–64 ASCII letters/digits/underscore/hyphen starting with a letter/digit,
-nonblank labels of 1–64 characters and single-line instructions of 1–2000
-characters. Both text fields allow ordinary punctuation, parentheses, quotes,
+[`ask-actions.ts`](../../src/shared/ask-actions.ts), which owns identifier syntax,
+per-answer uniqueness and text length limits. Labels and instructions must be
+nonblank single-line text. Both fields allow ordinary punctuation, parentheses, quotes,
 semicolons and version numbers. They reject control/line-separator characters,
 backticks/code fences, HTML tags and URLs/link syntax; URLs belong in references.
 Instructions are inert text and are never executed by Tin Star.
@@ -296,8 +295,9 @@ invalid summary falls back to the first 240 characters of the reply body, and a
 non-string detail falls back to the full bounded reply body. Only the first 20
 valid references are retained. An invalid suggested-action collection is dropped
 as a whole, so it creates no buttons and cannot delay other answers in the
-installed puller. Each omitted entry has an index, an ID when present and a
-reason in `reply.rejected_actions`; Desk displays a small rejection note, and
+installed puller. `reply.rejected_actions` records a reason for each omitted entry,
+with its index and string ID when available, or a collection-level reason when
+the field is not an array. Desk displays a small rejection note, and
 subsequent conversation history retains the details. Bridge POST receipts return
 the same details in `data.reply_warnings` (including on delivery retries), so
 pullers can surface them. The published 6.0.0 puller ignores this extra field.
