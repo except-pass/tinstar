@@ -12,6 +12,7 @@ import type { PullsRead } from '../../../shared/pulls'
 import { AskApi } from '../routes'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
+import type { AskAction } from '../../../shared/ask-actions'
 import { fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
@@ -46,6 +47,178 @@ async function setup(artifacts?: AskArtifactSources) {
   return { call, bridge, reload, base }
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
+
+describe('authenticated recommendation selections over the existing Ask bridge', () => {
+  const close: AskAction = { id: 'close-done', label: 'Close as Done', instruction: 'Post the #3194 Feed verdict and set the linked Notion card Done' }
+  const keep: AskAction = { id: 'keep-open', label: 'Keep open', instruction: 'Retain card until a real DEV stall exhibits Feed recovery.' }
+  const reply = { summary: 'Why this is overdue', detail: 'The Feed verdict still needs confirmation.', references: [{ label: 'Evidence', url: 'https://example.test/evidence' }], suggested_actions: [close, keep, 'Legacy advice stays inert'] }
+  const answer = async (bridge: Awaited<ReturnType<typeof setup>>['bridge'], requestId: string, noteId: string, value = reply) => {
+    expect((await bridge({ request_id: requestId, note: note(requestId, noteId) })).status).toBe(200)
+    expect((await bridge({ request_id: requestId, reply: { id: noteId, at: new Date().toISOString(), cursor: '1', body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: requestId, ...value }) } })).status).toBe(200)
+  }
+  const payload = (body: string) => JSON.parse(body.split('\n')[1]!)
+
+  it('retains typed v1 recommendations and dispatches only the authenticated saved selection with canonical context', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', { ...input(), question: 'Why is this overdue?', field_key: 'next_check_in', field_value: '2026-11-06T15:00:00Z' })).data.data
+    await answer(bridge, first.request_id, 'overdue-note')
+    reload()
+    expect((await call('requests')).data.data[0].reply).toEqual(reply)
+    const selectedInput = { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() }
+    const beforeClick = Date.now()
+    const result = await call('selections', selectedInput)
+    expect(result.status).toBe(200)
+    const selected = result.data.data
+    expect(selected).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: first.request_id, status: 'sent', question: close.instruction, context: first.context,
+      action_selection: { answer_id: first.request_id, action_id: close.id, label: close.label, instruction: close.instruction, actor: owner, selected_at: expect.any(String), selection_id: expect.any(String) } })
+    expect(Date.parse(selected.action_selection.selected_at)).toBeGreaterThanOrEqual(beforeClick)
+    expect(Date.parse(selected.action_selection.selected_at)).toBeLessThanOrEqual(Date.now())
+    expect(selected.reply).toBeNull()
+    for (const key of ['owner', 'client_key', 'client_key_aliases', 'dispatch_body', 'note_id']) expect(selected).not.toHaveProperty(key)
+    const dispatched = (await bridge()).data.data.pending
+    expect(dispatched).toHaveLength(1)
+    const envelope = payload(dispatched[0].body)
+    expect(envelope).toMatchObject({ schema: 'tinstar.ask.v1', request_id: selected.request_id, question: close.instruction, requesting_principal: owner, context: first.context, action_selection: selected.action_selection,
+      conversation: { turns: [{ role: 'user', text: first.question }, { role: 'assistant', reply }] } })
+    expect(dispatched[0].body).toContain('suggested_actions=[{id,label,instruction}]')
+    expect(dispatched[0].body).toContain('recheck authoritative source state')
+    expect(dispatched[0].body).toContain('Reconcile uncertain prior effects')
+    expect(dispatched[0].inbox_request_id).toBe(inboxRequestId(selected.request_id))
+  })
+
+  it('rejects unauthenticated, foreign, invented and browser-authored selection content before any dispatch', async () => {
+    const { call, bridge } = await setup()
+    const first = (await call('requests', input())).data.data
+    const click = { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() }
+    expect((await call('selections', click)).status).toBe(404) // unanswered
+    await answer(bridge, first.request_id, 'auth-note')
+    expect((await call('selections', click, {})).status).toBe(403)
+    expect((await call('selections', click, { Authorization: `Bearer ${token}` })).status).toBe(403)
+    expect((await call('selections', click, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+    expect((await call('selections', click, { 'Tailscale-User-Login': owner, 'X-Tinstar-UI': '1', Origin: 'https://evil.test' })).status).toBe(403)
+    for (const extra of [{ instruction: 'Forged instruction' }, { label: 'Forged label' }, { actor: other }, { selected_at: new Date().toISOString() }, { context: first.context }]) {
+      expect((await call('selections', { ...click, ...extra })).status).toBe(400)
+    }
+    for (const change of [{ action_id: 'absent' }, { action_id: 'Legacy advice stays inert' }, { answer_id: randomUUID() }]) expect((await call('selections', { ...click, ...change })).status).toBe(404)
+    expect((await call('selections', { ...click, client_key: 'invalid' })).status).toBe(400)
+    expect((await call('selections')).status).toBe(404)
+    expect((await bridge()).data.data.pending).toEqual([])
+    expect((await call('requests')).data.data).toHaveLength(1)
+  })
+
+  it('converges retries and two devices on one frozen request, including after reply, reload and lost acknowledgement', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    await answer(bridge, first.request_id, 'race-note')
+    const click = { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() }
+    const secondDevice = { ...click, client_key: randomUUID() }
+    const clicks = await Promise.all([call('selections', click), call('selections', click), call('selections', secondDevice)])
+    expect(clicks.map(result => result.status)).toEqual([200, 200, 200])
+    const selected = clicks[0]!.data.data
+    expect(new Set(clicks.map(result => result.data.data.request_id)).size).toBe(1)
+    const before = (await bridge()).data.data.pending[0]
+    expect((await call('selections', { ...click, action_id: keep.id, client_key: randomUUID() })).status).toBe(409)
+    reload()
+    expect((await call('selections', secondDevice)).data.data.request_id).toBe(selected.request_id)
+    await call(`requests/${selected.request_id}/retry`, {})
+    expect((await bridge()).data.data.pending).toEqual([before])
+    await answer(bridge, selected.request_id, 'selection-result', { ...reply, summary: 'Blocked', detail: 'Blocked: the linked card cannot be updated with current access.', suggested_actions: [] })
+    reload()
+    for (const retry of [click, secondDevice, { ...click, client_key: randomUUID() }]) {
+      expect((await call('selections', retry)).data.data).toMatchObject({ request_id: selected.request_id, status: 'answered', reply: { summary: 'Blocked' } })
+    }
+    expect((await call('selections', { ...secondDevice, answer_id: selected.request_id })).status).toBe(409)
+    expect((await call('selections', { ...click, action_id: keep.id, client_key: randomUUID() })).status).toBe(409)
+    const next = (await call('requests', { ...input(), question: 'Why is the regression test sufficient?', follow_up_to: selected.request_id })).data.data
+    const history = payload((await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === next.request_id).body).conversation.turns
+    expect(history.map((turn: { role: string }) => turn.role)).toEqual(['user', 'assistant', 'action_selection', 'assistant'])
+    expect(history[2]).toMatchObject({ selection: selected.action_selection, provenance: { source: 'operator_selection' } })
+    expect(history[3].reply.summary).toBe('Blocked')
+    expect((await call('requests')).data.data.filter((row: { action_selection?: unknown }) => row.action_selection)).toHaveLength(1)
+  })
+
+  it('accepts at most one of two competing device choices and sends only the winner', async () => {
+    const { call, bridge } = await setup()
+    const first = (await call('requests', input())).data.data
+    await answer(bridge, first.request_id, 'conflict-note')
+    const results = await Promise.all([close, keep].map(action => call('selections', { answer_id: first.request_id, action_id: action.id, client_key: randomUUID() })))
+    expect(results.map(result => result.status).sort()).toEqual([200, 409])
+    const winner = results.find(result => result.status === 200)!.data.data
+    expect((await bridge()).data.data.pending.map((row: { request_id: string }) => row.request_id)).toEqual([winner.request_id])
+  })
+
+  it('retains the captured PR head and linked-card context when authoritative sources change before the click', async () => {
+    const identity = { id: 'owner/repo#3194', repository: 'owner/repo', number: 3194, url: 'https://github.com/owner/repo/pull/3194' }
+    const head = 'a'.repeat(40)
+    const pulls: PullsRead = { pulls: [{ ...identity, head, title: 'Feed recovery', author: 'owner', draft: false, base: 'main', createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-08T12:00:00.000Z', observedAt: '2026-11-08T12:00:00.000Z', freshness: 'fresh', links: [] }], repositories: [], warnings: [], associationsComplete: true }
+    const read = vi.fn(async () => pulls)
+    const relationships = { complete: true, cards: [{ card_id: fixtureId(1), sources: ['Notion GitHub property'] }], workers: [] }
+    const { call, bridge } = await setup({ pulls: read, releases: async () => releaseAssociations(fixtureScene()), pullRelationships: async () => relationships })
+    const first = (await call('requests', { client_key: randomUUID(), target: { kind: 'pull', id: identity.id, head }, question: 'Why is this overdue?', view: { scene: 'pulls' } })).data.data
+    expect(first.context).toMatchObject({ source: { repository: identity.repository, number: 3194, head }, relationships })
+    await answer(bridge, first.request_id, 'pr-context-note')
+    pulls.pulls[0]!.head = 'b'.repeat(40)
+    const selected = (await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).data.data
+    expect(selected.context).toEqual(first.context)
+    expect(read).toHaveBeenCalledTimes(1)
+    const envelope = payload((await bridge()).data.data.pending[0].body)
+    expect(envelope.context.source.head).toBe(head)
+    expect(envelope.context.relationships.cards[0].card_id).toBe(fixtureId(1))
+    // First Mate receives the original snapshot and must recheck the new head;
+    // this request records no repair, merge, card write or successful outcome.
+    expect(selected.status).toBe('sent')
+    expect(selected.reply).toBeNull()
+  })
+
+  it('rejects superseded recommendations and accepts the latest answer choices', async () => {
+    const { call, bridge } = await setup()
+    const first = (await call('requests', input())).data.data
+    await answer(bridge, first.request_id, 'old-note')
+    const next = (await call('requests', { ...input(), follow_up_to: first.request_id, question: 'Why is the regression test sufficient?' })).data.data
+    await answer(bridge, next.request_id, 'new-note')
+    const stale = await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })
+    expect(stale.status).toBe(409)
+    expect(stale.data.error.message).toContain('superseded')
+    expect((await bridge()).data.data.pending).toEqual([])
+    expect((await call('selections', { answer_id: next.request_id, action_id: keep.id, client_key: randomUUID() })).status).toBe(200)
+  })
+
+  it.each([
+    { ...close, instruction: 'Open https://evil.test' }, { ...close, instruction: 'eval(source)' },
+    { ...close, execute: true }, { label: 'Missing ID', instruction: 'Close the card' },
+  ])('rejects malformed structured recommendations without breaking previously stored string history: %j', async invalid => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    await bridge({ request_id: first.request_id, note: note(first.request_id) })
+    const update = (suggested_actions: unknown[]) => bridge({ request_id: first.request_id, reply: { id: 'note-1', at: new Date().toISOString(), cursor: '1', body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: first.request_id, ...reply, suggested_actions }) } })
+    expect((await update([invalid])).status).toBe(400)
+    expect((await update([close, close])).status).toBe(400)
+    expect((await update(['Legacy https://example.test', '<script>alert(1)</script>'])).status).toBe(200)
+    reload()
+    expect((await call('requests')).data.data[0].reply.suggested_actions).toEqual(['Legacy https://example.test', '<script>alert(1)</script>'])
+    expect((await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).status).toBe(404)
+  })
+
+  it.each([
+    'Blocked: Admin Merge is disabled.', 'Blocked: the captured PR head changed. Recheck current CI.',
+    'Blocked: Notion access is missing.', 'Blocked: the original source entity is missing.',
+    'Unknown remote outcome. Reconcile the prior effect before retrying.',
+  ])('retains First Mate permission/reconciliation reports as ordinary replies: %s', async detail => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    await answer(bridge, first.request_id, 'gated-note')
+    const selected = (await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).data.data
+    expect(selected.status).toBe('sent')
+    expect(selected.reply).toBeNull()
+    await bridge({ request_id: selected.request_id, note: note(selected.request_id, 'gated-result') })
+    expect((await call('requests')).data.data.at(-1).status).toBe('delivered')
+    await bridge({ request_id: selected.request_id, reply: { id: 'gated-result', at: new Date().toISOString(), cursor: '1', body: detail } })
+    reload()
+    const result = (await call('requests')).data.data.at(-1)
+    expect(result).toMatchObject({ request_id: selected.request_id, status: 'answered', reply: { detail }, action_selection: { actor: owner, instruction: close.instruction } })
+    expect(result).not.toHaveProperty('action_outcome')
+  })
+})
 
 describe('owner-scoped durable Ask protocol', () => {
   it('fails closed on owner/header/token mistakes and never accepts a browser principal', async () => {

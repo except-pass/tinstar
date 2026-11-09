@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askCreateSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
+import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
+import { findSuggestedAction } from '../../shared/ask-actions'
 import { getConfigRoot } from '../configRoot'
 import { ok, fail } from '../api/envelope'
 import { currentOriginAllowlist } from '../api/originAllowlist'
@@ -71,6 +72,12 @@ export class AskApi {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     try {
       if (path === '/api/ask/requests' && req.method === 'GET') return ok(res, (await this.store.list(login)).map(publicAsk), { headers })
+      if (path === '/api/ask/selections' && req.method === 'POST') {
+        const input = askSelectionInputSchema.parse(await readBody(req))
+        const selected = await this.store.createActionSelection(login, input, (answer, actionId) =>
+          findSuggestedAction(answer.reply!.suggested_actions, actionId))
+        return ok(res, publicAsk(selected), { headers })
+      }
       if (path === '/api/ask/requests' && req.method === 'POST') {
         const input = askCreateSchema.parse(await readBody(req))
         // A retry remains valid if its card was removed since capture.

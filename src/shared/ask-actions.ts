@@ -22,6 +22,8 @@ export type AskAction = z.infer<typeof askActionSchema>
 // Keep historical text exactly as stored. It is inert text, never a button.
 export const askSuggestionSchema = z.union([z.string().max(2000), askActionSchema])
 export type AskSuggestion = z.infer<typeof askSuggestionSchema>
+export const findSuggestedAction = (suggestions: AskSuggestion[], actionId: string): AskAction | undefined =>
+  suggestions.find((suggestion): suggestion is AskAction => typeof suggestion !== 'string' && suggestion.id === actionId)
 export const askSuggestionsSchema = z.array(askSuggestionSchema).max(10).superRefine((suggestions, ctx) => {
   const ids = new Set<string>()
   suggestions.forEach((suggestion, index) => {

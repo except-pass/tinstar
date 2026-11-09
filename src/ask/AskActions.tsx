@@ -1,29 +1,28 @@
 import { useRef, useState } from 'react'
 import type { AskAction, AskSuggestion } from '../shared/ask-actions'
+import type { AskSelectionInput } from '../shared/ask'
 import './ask-actions.css'
 
-/** Adapter boundary for Chunk 1's selected conversation turn. No browser prose
+/** Adapter for the selected conversation turn. No browser prose
  * enters the selection request; the store must resolve the retained instruction.
  */
-export interface AskActionSelectionInput {
-  answer_id: string
-  action_id: string
-  client_key: string
-}
+/** Only a definitive HTTP rejection may use this error. A transport error has
+ * unknown acceptance and must retain the original idempotency key. */
+export class AskSelectionRejected extends Error {}
 export interface AskActionDelivery {
   status: 'sent' | 'delivered' | 'answered' | 'failed'
   error?: string | null
 }
-export interface AskActionSelection extends AskActionDelivery { action_id: string }
+export interface AskActionSelectionState extends AskActionDelivery { action_id: string }
 export interface AskActionsProps {
   answerId: string
   suggestions: AskSuggestion[]
   superseded: boolean
-  selection?: AskActionSelection | null
-  onSelect: (input: AskActionSelectionInput) => Promise<AskActionDelivery>
+  selection?: AskActionSelectionState | null
+  onSelect: (input: AskSelectionInput) => Promise<AskActionDelivery>
 }
 const statusLabel = { sent: 'Requested', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' } as const
-interface Attempt { input: AskActionSelectionInput; delivery?: AskActionDelivery; uncertain?: boolean }
+interface Attempt { input: AskSelectionInput; delivery?: AskActionDelivery; uncertain?: boolean; rejection?: string }
 
 export function AskActions(props: AskActionsProps) {
   // Changing the answer resets only local presentation, never a retained turn.
@@ -55,9 +54,9 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
       const next = { ...current, delivery: await onSelect(current.input) }
       attemptRef.current = next
       setAttempt(next)
-    } catch {
+    } catch (reason) {
       // A lost response does not prove that the server rejected the selection.
-      const next = { ...current, uncertain: true }
+      const next = reason instanceof AskSelectionRejected ? { ...current, rejection: reason.message } : { ...current, uncertain: true }
       attemptRef.current = next
       setAttempt(next)
     } finally { locked.current = false }
@@ -79,7 +78,7 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
     {superseded && !!actions.length && <p className="ask-action-explanation">These recommendations are outdated. Use the latest answer’s choices.</p>}
     {selected && <div className="ask-action-selection">
       <p>Selected: {selected.instruction}</p>
-      <p role="status">{delivery ? statusLabel[delivery.status] : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}{delivery?.error ? ` — ${delivery.error}` : ''}</p>
+      <p role="status">{delivery ? statusLabel[delivery.status] : attempt?.rejection ? `Selection not requested: ${attempt.rejection}` : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}{delivery?.error ? ` — ${delivery.error}` : ''}</p>
       {delivery?.status === 'answered' && <p className="ask-action-explanation">First Mate replied in this conversation. Read the reply for the outcome.</p>}
       {uncertain && !superseded && <button type="button" className="ask-action-choice" onClick={() => { void select(selected) }}>Retry same selection</button>}
     </div>}

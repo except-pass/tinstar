@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { AskActions, type AskActionsProps, type AskActionDelivery } from '../AskActions'
+import { AskActions, AskSelectionRejected, type AskActionsProps, type AskActionDelivery } from '../AskActions'
 import type { AskAction } from '../../shared/ask-actions'
 
 afterEach(cleanup)
@@ -83,6 +83,14 @@ describe('Ask recommendation buttons', () => {
     expect(onSelect).toHaveBeenCalledTimes(2)
     expect(onSelect.mock.calls[1]![0]).toEqual(onSelect.mock.calls[0]![0])
     expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
+  })
+
+  it('shows definitive stale/conflict rejections without claiming a request or retrying it', async () => {
+    render(<AskActions {...props({ onSelect: vi.fn().mockRejectedValue(new AskSelectionRejected('Answer has been superseded')) })} />)
+    fireEvent.click(screen.getByRole('button', { name: closeName }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Selection not requested: Answer has been superseded'))
+    expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
+    expect(screen.getByRole('button', { name: closeName })).toBeDisabled()
   })
 
   it.each(['sent', 'delivered', 'answered', 'failed'] as const)('maps persisted %s evidence truthfully after reload', status => {

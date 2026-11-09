@@ -256,7 +256,10 @@ can publish this JSON as its reply body (fill IDs/content, no credentials):
   "summary": "Short answer",
   "detail": "Full explanation grounded in current evidence",
   "references": [{"label": "Source", "url": "https://example.com/evidence"}],
-  "suggested_actions": ["Suggested next step requiring its usual approval"]
+  "suggested_actions": [
+    {"id": "close-done", "label": "Close as Done", "instruction": "Post the Feed verdict and set the linked Notion card Done"},
+    {"id": "keep-open", "label": "Keep open", "instruction": "Retain the card until Feed recovery is verified"}
+  ]
 }
 ```
 
@@ -264,6 +267,14 @@ Only credential-free HTTPS reference links are accepted. Plain text is displayed
 as text, never executable HTML. Limits include a 4,000-character question,
 32,000-character answer, 20 references and 10 suggested actions. API JSON bodies
 are bounded to 256 KiB; the puller has process/network timeouts and bounded reads.
+
+Structured recommendations use the strict bounded prose schema in
+[`ask-actions.ts`](../../src/shared/ask-actions.ts): per-answer unique IDs,
+short labels and instructions without links or source-code containers.
+Historical string suggestions still display as inert text.
+The first three structured choices appear as compact buttons immediately after
+the answer; remaining choices use a “More choices” disclosure.
+The shared inline composer remains available for free-form clarification.
 
 ## Persistence and verification
 
@@ -406,5 +417,20 @@ action, label, authenticated actor and selection time. History labels it
 `role: action_selection`, provenance `operator_selection`, distinct from model
 recommendation and free text. Tin Star executes nothing. Its statuses describe
 sent/delivered/answered/failed delivery; First Mate's ordinary immutable answer
-supplies the outcome. The selections HTTP route, typed recommendations and action
-buttons belong to the companion feature.
+supplies the outcome.
+
+The owner-authenticated `POST /api/ask/selections` accepts only
+`{answer_id, action_id, client_key}`; the server resolves the canonical instruction
+from the saved typed recommendation under the store lock.
+The browser supplies neither actor nor instruction text.
+Clicking once creates that request without a dialog or another Send click.
+The UI maps persisted Sent to Requested, then shows Delivered or Answered only
+when the corresponding bridge evidence exists.
+Answered means First Mate replied; read that reply for completion, a permission
+block or an uncertain effect requiring reconciliation.
+No execution outcome is inferred by Tin Star.
+Historical buttons remain visible and disabled after a later assistant reply,
+with an explanation that those recommendations are outdated.
+An unknown network acknowledgement offers a retry of the same selection/key;
+a definitive stale or conflicting selection reports the server's rejection.
+Existing delivery retry controls retain the selected request's note identity.
