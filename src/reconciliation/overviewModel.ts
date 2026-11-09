@@ -1,4 +1,3 @@
-import { codexTurn } from '../shared/codexActivity'
 import { homeLabel } from '../shared/reconciliationLabels'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import { activeWorker, organizedGroups, type FloorGroup } from '../shared/floorOrganization'
@@ -62,11 +61,7 @@ export function workerCoverageNotice(coverage: WorkerSourceCoverage) {
 export function unreadableWorkerHomes<T extends { observation: { status: string; coverage: string; expiresAt: string | null } }>(homes: readonly T[], now: number) {
   return homes.filter(home => !homeAuthoritative(home.observation, now))
 }
-/** A stale feed cannot make a recorded final report into a current worker.
- * This preserves history placement only; it does not certify present liveness. */
-export const historyRecord = (worker: Execution) => codexTurn(worker.source, Date.now()) === null && (['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
-  /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
-  ['done', 'landed'].includes(String(worker.source.last_event.state)))
+export { historyRecord } from '../shared/floorOrganization'
 export { floorWorkerStatus as workerState } from '../shared/floorStatus'
 
 export const observedAt = (worker: Execution) => {

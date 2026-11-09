@@ -276,13 +276,14 @@ it('starts with Ask inbox records before operational requests in the shared Desk
   expect(questions.compareDocumentPosition(operational) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
-it('shows Codex turn state and log activity on the worker card and Inspector', () => {
+it.each(['done', 'landed'])('shows resumed Codex activity after a historical %s report', (report) => {
   const sources = fixtureSources(), task = sources.fleet[1]!.observation.data!.tasks[0]!
   const now = Date.now()
   // Keep the home fresh independently of the quiet log's mtime.
   Object.assign(sources.fleet[1]!.observation, { observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 300_000).toISOString() })
   task.harness = 'codex'; task.current_state.state = 'unknown'
-  task.lastEventText = 'paused [at=1]: old wait'
+  task.lastEventText = `${report}: historical report`
+  task.last_event.state = report
   task.codex = { turn_open: true, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - 12 * 60_000).toISOString(), session_file: 'rollout-test.jsonl' }
   const scene = new SceneReconciler().reconcile(sources)
   observed.scene = scene

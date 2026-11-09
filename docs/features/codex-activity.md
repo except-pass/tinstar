@@ -7,8 +7,7 @@ Python 3 (standard library only) and each home's existing
 `bin/fm-fleet-snapshot.sh --json` are the only requirements.
 
 For every Codex task, `paths.worktree.path` is matched exactly against the first
-`session_meta.payload.cwd` in session logs. The scan covers today's and
-yesterday's UTC directories below `$CODEX_HOME/sessions` (default
+`session_meta.payload.cwd` in session logs. The scan covers all dated session directories below `$CODEX_HOME/sessions` (default
 `~/.codex/sessions`), newest file mtime first. Only the matching session's
 `event_msg.payload.type` values `task_started` / `task_complete` establish an open
 or closed turn. Other payloads, prompts and outputs are never accessed or copied
@@ -31,7 +30,7 @@ Each Codex task receives:
 ```
 
 No matching log produces `codex: null` and a `codex_reason` such as
-`no_matching_session_today_or_yesterday` or `worker_folder_missing`. A log without
+`no_matching_session` or `worker_folder_missing`. A log without
 turn events retains its activity timestamp with `turn_open: null` and
 `codex_reason: "no_turn_events"`. An unreadable log leaves the signal unknown.
 Known crew state takes precedence. Unknown crew state uses a known turn only
@@ -242,3 +241,8 @@ without fresh Codex observations the turn fallback expires normally.
 Tests: `npm run test:codex-collector`, the fleet source tests, work-health tests
 and worker-card rendering tests. Collector fixtures are synthetic and private
 message content is never saved from real Codex logs.
+
+The collector takes a nonblocking kernel `flock` in
+`~/.local/state/tinstar/codex-activity.lock` before reading sessions or running
+snapshots. Concurrent invocations exit successfully without work. Both service
+paths use this lock; `--state-dir` overrides its directory for isolated runs.

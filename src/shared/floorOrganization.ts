@@ -1,3 +1,4 @@
+import { codexTurn } from './codexActivity'
 import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene, PresentationState } from './reconciliationPresentation'
@@ -39,8 +40,11 @@ export const statusName = (card: SceneCard) => String(card.source.properties.Sta
 export const cardStatusName = (card: SceneCard) => statusName(card) || unknownStatus
 export const matchesStatus = (card: SceneCard, filter: StatusFilter) => filter.preset === 'all' || (filter.preset === 'operational' ? operationalStatuses : filter.statuses).includes(statusName(card))
 export const currentStatusOptions = (scene: FloorScene) => [...new Set([...(scene.statusOptions ?? []), ...scene.cards.map(statusName)].filter(Boolean))].sort((a, b) => a.localeCompare(b))
-export const activeWorker = (worker: Execution) => worker.kind !== 'secondmate' && !['finished', 'absent'].includes(worker.liveness) && worker.source.endpoint.exists !== false &&
-  !/^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) && !['done', 'landed'].includes(String(worker.source.last_event.state))
+export const historyRecord = (worker: Execution) => codexTurn(worker.source, Date.now()) === null && (['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
+  /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
+  ['done', 'landed'].includes(String(worker.source.last_event.state)))
+export const activeWorker = (worker: Execution) => worker.kind !== 'secondmate' && !historyRecord(worker)
+
 const field = (id: FloorField) => floorFields.find(f => f.id === id)!
 const ny = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric' })
 function calendarDay(time: number) {

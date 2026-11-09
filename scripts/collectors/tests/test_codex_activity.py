@@ -1,3 +1,4 @@
+import fcntl
 import importlib.util
 import json
 import os
@@ -40,7 +41,7 @@ class CollectorTests(unittest.TestCase):
         ]}
 
     def read(self):
-        return collector.augment(self.snapshot(), collector.session_index(self.sessions, NOW), NOW)
+        return collector.augment(self.snapshot(), collector.session_index(self.sessions), NOW)
 
     def test_open_closed_and_reopened_turns(self):
         for events, expected in [(['task_started'], True), (['task_started', 'task_complete'], False),
@@ -51,9 +52,9 @@ class CollectorTests(unittest.TestCase):
             self.assertNotIn('codex', result['tasks'][1])
             self.assertNotIn('PRIVATE', json.dumps(result))
 
-    def test_newest_matching_cwd_by_mtime_across_both_days(self):
+    def test_newest_matching_cwd_by_mtime_across_all_dates(self):
         self.log('old', events=['task_started'], age=300)
-        newest = self.log('new', events=['task_started', 'task_complete'], days=1, age=10)
+        newest = self.log('new', events=['task_started', 'task_complete'], days=20, age=10)
         self.log('wrong-cwd', cwd='/worker-other', events=['task_started'])
         result = self.read()['tasks'][0]['codex']
         self.assertIs(result['turn_open'], False)
@@ -61,15 +62,14 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result['last_activity_at'], collector.iso(NOW.timestamp() - 10))
         self.assertEqual(result['observed_at'], collector.iso(NOW.timestamp()))
 
-    def test_missing_old_logs_and_cwd_mismatch_stay_unknown(self):
-        self.log('old', events=['task_started'], days=2)
+    def test_missing_logs_and_cwd_mismatch_stay_unknown(self):
         self.log('different', cwd='/other', events=['task_started'])
         result = self.read()['tasks'][0]
         self.assertIsNone(result['codex'])
-        self.assertEqual(result['codex_reason'], 'no_matching_session_today_or_yesterday')
+        self.assertEqual(result['codex_reason'], 'no_matching_session')
 
     def test_no_hung_worker_timeout(self):
-        self.log('quiet', events=['task_started'], days=1, age=30 * 3600)
+        self.log('quiet', events=['task_started'], days=20, age=30 * 3600)
         self.assertIs(self.read()['tasks'][0]['codex']['turn_open'], True)
 
     def test_truncated_tail_and_missing_events(self):
@@ -85,7 +85,7 @@ class CollectorTests(unittest.TestCase):
         path.write_text('{bad header\n')
         self.assertIsNone(self.read()['tasks'][0]['codex'])
         path = self.log('deleted', events=['task_started'])
-        index = collector.session_index(self.sessions, NOW)
+        index = collector.session_index(self.sessions)
         path.unlink()
         result = collector.augment(self.snapshot(), index, NOW)['tasks'][0]
         self.assertEqual(result['codex_reason'], 'session_unreadable')
@@ -117,10 +117,31 @@ class CollectorTests(unittest.TestCase):
         command.chmod(0o755)
         return home
 
+    def test_concurrent_run_exits_without_snapshot_work(self):
+        home = self.home('fm')
+        marker = self.root / 'called'
+        command = home / 'bin/fm-fleet-snapshot.sh'
+        command.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 1\n')
+        state = self.root / 'state'
+        state.mkdir()
+        config = self.root / 'config.json'
+        config.write_text(json.dumps({'homes': [{'home': str(home)}]}))
+        with (state / 'codex-activity.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for arguments in [['--home', str(home)], ['--config', str(config)]]:
+                result = subprocess.run([sys.executable, str(SCRIPT), '--state-dir', str(state)] + arguments,
+                                        capture_output=True, text=True)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
+                self.assertFalse(marker.exists())
+        result = subprocess.run([sys.executable, str(SCRIPT), '--state-dir', str(state), '--home', str(home)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(marker.exists())
+
     def test_cli_runs_home_snapshot_and_config_isolates_failures(self):
         home = self.home('fm')
         output = self.root / 'published.json'
-        command = [sys.executable, str(SCRIPT), '--sessions-root', str(self.sessions)]
+        command = [sys.executable, str(SCRIPT), '--state-dir', str(self.root / 'state'), '--sessions-root', str(self.sessions)]
         result = subprocess.run(command + ['--home', str(home), '--output', str(output)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(output.read_text())['fm_home'], str(home))

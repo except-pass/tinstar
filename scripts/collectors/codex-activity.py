@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Read First Mate snapshots and Codex turn metadata; never operate workers."""
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -14,16 +15,13 @@ def iso(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
-def session_index(root, now):
-    """Only today's and yesterday's UTC directories, newest modified file first."""
+def session_index(root):
     files = []
-    for offset in (0, 1):
-        directory = root / (now - timedelta(days=offset)).strftime('%Y/%m/%d')
-        for path in directory.glob('rollout-*.jsonl'):
-            try:
-                files.append((path.stat().st_mtime, path))
-            except OSError:
-                continue
+    for path in root.glob('*/*/*/rollout-*.jsonl'):
+        try:
+            files.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
     index = {}
     for modified, path in sorted(files, key=lambda item: item[0], reverse=True):
         try:
@@ -73,7 +71,7 @@ def augment(snapshot, index, now):
             continue
         match = index.get(folder)
         if not match:
-            task['codex_reason'] = 'no_matching_session_today_or_yesterday'
+            task['codex_reason'] = 'no_matching_session'
             continue
         path, modified = match
         try:
@@ -122,13 +120,25 @@ def main():
     parser.add_argument('--home', help='one First Mate home; prints JSON unless --output is supplied')
     parser.add_argument('--output', help='atomically replace this snapshot file')
     parser.add_argument('--sessions-root', help='defaults to $CODEX_HOME/sessions or ~/.codex/sessions')
+    parser.add_argument('--state-dir', default=str(Path.home() / '.local/state/tinstar'))
     args = parser.parse_args()
     if bool(args.config) == bool(args.home) or (args.config and args.output):
         parser.error('use --config, or --home [--output]')
+    state = Path(args.state_dir).expanduser()
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / 'codex-activity.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        return run(args)
+
+
+def run(args):
     config = json.loads(Path(args.config).read_text()) if args.config else {'homes': [{'home': args.home, 'output': args.output}]}
     root = args.sessions_root or config.get('sessions_root') or str(Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser() / 'sessions')
     now = datetime.now(timezone.utc)
-    index = session_index(Path(root).expanduser(), now)
+    index = session_index(Path(root).expanduser())
     failed = False
     for entry in config['homes']:
         try:
