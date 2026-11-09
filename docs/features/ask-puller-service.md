@@ -146,8 +146,10 @@ If polling receives the upgrade error, status records
 explicit install action. An incompatible server bootstrap API leaves the current
 adapter running; if the server has retired that adapter, install its current
 release tarball and rerun `tinstar ask-puller install`. Installing an older
-package and rerunning install also restores that package's service for an
-operator-directed rollback. Disabled services perform no download or poll.
+package and rerunning install restores that package's service, but a service
+with automatic updates still loads the configured server's adapter. To roll
+back that adapter, roll back the server package supplying it. Disabled services
+perform no download or poll.
 
 ## Rejected-action receipts for First Mate
 

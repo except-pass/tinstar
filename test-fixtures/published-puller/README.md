@@ -21,7 +21,8 @@ check; it does not emulate TLS or macOS launchd.
 
 Assertions read the same owner API as the Desk Ask panel. They cover a plain
 answer, structured content with an invalid action and unsafe reference, capture
-and wake failures, and an empty repeat pass. State, credentials and command PATH
+and wake failures, and an empty repeat pass. For updated pullers they also check
+the warning inbox receipt and replayed POST warnings. State, credentials and command PATH
 are private; telemetry downloads and reach are disabled, with no real Notion,
 clavis or First Mate calls. Any failure exits nonzero and fails the job.
 
