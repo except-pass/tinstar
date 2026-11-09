@@ -254,7 +254,13 @@ session. All also clears the pattern; other search/facet, donut and base-scope
 conditions remain. Pattern selection uses the existing search-filter reducer and persists
 with the ordinary view preferences. Non-matches are hidden. Matches retain only
 their direct linked counterparts as secondary context; uncertain cards stay
-visible with a Can't tell marker and a tooltip explaining the missing evidence.
+visible. One line above the list counts unchecked cards and names the missing
+evidence. Cards show known worker facts in their existing metadata, such as
+Worker running or Worker state unknown (codex pane); a wait's report age is
+shown only when the published event reports that same state.
+No worker requires a supported per-card execution-gap finding and fresh source
+coverage. Fresh configured homes alone do not establish absence on an unknown
+home; when absence remains unknown, the card omits that fact.
 An empty result names the selected pattern, for example No blocked work. See the
 [shared execution-health contract](#shared-execution-health-contract) for pattern
 evidence requirements.
