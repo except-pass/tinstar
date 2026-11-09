@@ -12,6 +12,7 @@ import { secretEquals } from '../reconciliation/sessions'
 import type { ReconciliationSources } from '../reconciliation'
 import { artifactContext, type AskArtifactSources } from './artifacts'
 import { AskConflict, AskNotFound, AskStore } from './store'
+import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
 export type AskConfig = z.infer<typeof askConfigSchema>
@@ -53,15 +54,25 @@ export class AskApi {
     if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     const settings = await this.getConfig()
     if (!settings) return fail(res, 'CONFIG_UNAVAILABLE', 'Ask is not configured', { headers })
-    if (path === '/api/ask/bridge') {
+    if (path === '/api/ask/bridge' || path === '/api/ask/bridge/puller') {
       if (req.headers.origin || !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`)) return fail(res, 'FORBIDDEN', 'Bridge authorization required', { headers, status: 401 })
+      Object.assign(headers, bridgeHeaders)
       try {
+        // Updating must remain available even to an obsolete client.
+        if (path === '/api/ask/bridge/puller') {
+          if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Use GET', { headers, status: 405 })
+          return ok(res, await pullerRelease(), { headers })
+        }
+        if (!supportedPuller(req.headers['x-tinstar-puller-version'] as string | undefined)) {
+          return fail(res, 'puller-upgrade-required', 'Upgrade the Tin Star Ask puller', { headers, details: bridgeContract })
+        }
         const query = new URL(req.url!, 'http://localhost').searchParams
         const syntheticId = query.has('synthetic_id') ? z.string().uuid().parse(query.get('synthetic_id')) : undefined
         if (req.method === 'DELETE' && syntheticId) { await this.store.removeSynthetic(syntheticId); return ok(res, { removed: true }, { headers }) }
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
-          return ok(res, conversation ? await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId) : await this.store.bridgeWork(syntheticId), { headers })
+          const data = conversation ? await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId) : await this.store.bridgeWork(syntheticId)
+          return ok(res, conversation ? data : { ...data, ...bridgeContract }, { headers })
         }
         if (req.method === 'POST') {
           const row = await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req)), syntheticId)

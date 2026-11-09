@@ -1,7 +1,8 @@
 # Published Ask puller
 
 `6.0.0/ask-puller.py` is the unmodified script from the released Tin Star 6.0.0 package (`package/scripts/ask-puller.py`).
-Its version and SHA-256 are pinned in `latest.json`. The shared contract checks
+Its version and SHA-256 remain pinned in `supported.json`; `latest.json`
+identifies the newest packaged release. The shared contract checks
 the digest before execution so editing the fixture cannot silently turn this
 into a test of today's client. The fixture was compared byte-for-byte with
 `package/scripts/ask-puller.py` in the released `tinstar-6.0.0.tgz`, whose
@@ -34,6 +35,11 @@ npm run test:published-puller
 At each release, extract `package/scripts/ask-puller.py` from the **released
 package** into a new version directory. Read `package/package.json` in that
 archive to verify the release version, compute the script's `sha256sum`, and
-update both fields in `latest.json`. Run the commands above and commit the new
+update both fields in `latest.json` and append the version/digest to
+`supported.json`. Run the commands above and commit the new
 fixture and manifest together. Do not copy the repository's current script.
-Keep older fixtures while those installed clients remain supported.
+Keep older fixtures while those installed clients remain supported. Both the
+HTTP suite and built-server CI run every entry in `supported.json`, including
+unversioned 6.0.0. The 6.0.1 fixture is extracted from the release tarball
+prepared for the one-time Mac bootstrap upgrade, not copied from source.
+Tin Star is distributed by tarball; no npm registry publication is needed.

@@ -6,6 +6,13 @@ notes = json.loads(path.read_text()) if path.exists() else []
 if sys.argv[1] == 'note':
     request = sys.argv[sys.argv.index('--request-id') + 1]
     content = json.loads(sys.stdin.read().splitlines()[1])
+    if 'reply_warnings' in content:
+        path = home / 'warning-receipts.json'
+        records = json.loads(path.read_text()) if path.exists() else {}
+        records.setdefault(request, content)
+        path.write_text(json.dumps(records))
+        print(json.dumps({'saved': True, 'request_id': request, 'id': 'warning-' + content['request_id']}))
+        sys.exit(0)
     question = content['question']
     if question == 'Capture failure':
         sys.exit(1)

@@ -134,6 +134,120 @@ except m.PullerError:
                 self.assertNotIn('private', result.stdout + result.stderr)
                 self.assertNotIn('isolated-token', result.stdout + result.stderr)
 
+    def test_reply_warnings_are_durable_idempotent_followup_notes(self):
+        for failure in ('lost-post-response', 'inbox-wake', 'none'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                receipt = {'id': 'note-1', 'request_id': 'tinstar-ask-request-1',
+                           'reply': {'id': 'note-1', 'body': 'Answer', 'cursor': '1'}}
+                accepted = False
+                posts = 0
+                notes = {}
+                attempts = []
+                warnings = [{'index': 0, 'reason': 'rejected action'}]
+                def api(base, token, payload=None):
+                    nonlocal accepted, posts
+                    if payload is None:
+                        return {'pending': [], 'tracked': [] if accepted else [{'request_id': 'request-1', 'note_id': 'note-1'}]}
+                    accepted = True
+                    posts += 1
+                    if failure == 'lost-post-response' and posts == 1:
+                        raise puller.PullerError('Lost response', 'network')
+                    return {'accepted': True, 'reply_warnings': warnings}
+                def inbox(home, args, body=None):
+                    if args[0] == 'receipts':
+                        return {'schema': 'fm-inbox-receipts.v1', 'pending': [receipt], 'handled': [], 'omitted': []}, 0
+                    self.assertEqual(args[0], 'note')
+                    self.assertEqual(args[3:], ['--json', '-'])
+                    key = args[2]
+                    attempts.append(key)
+                    notes.setdefault(key, body)
+                    return {'saved': True, 'request_id': key, 'id': 'receipt-note'}, 3 if failure == 'inbox-wake' and len(attempts) == 1 else 0
+                with patch.object(puller, 'api', side_effect=api), patch.object(puller, 'inbox', side_effect=inbox):
+                    if failure != 'none':
+                        with self.assertRaises(puller.PullerError):
+                            puller.pull_once('https://example.test', 'private-token', home)
+                        journal = list((home / 'state' / 'tinstar-ask-reply-receipts').glob('*.json'))
+                        self.assertEqual(len(journal), 1)
+                        self.assertEqual(journal[0].stat().st_mode & 0o777, 0o600)
+                        self.assertNotIn('private-token', journal[0].read_text())
+                    puller.pull_once('https://example.test', 'private-token', home)
+                    puller.pull_once('https://example.test', 'private-token', home)
+                self.assertEqual(posts, 2 if failure == 'lost-post-response' else 1)
+                self.assertEqual(len(notes), 1)
+                body = next(iter(notes.values()))
+                content = json.loads(body.splitlines()[1])
+                self.assertEqual(content, {'request_id': 'request-1', 'note_id': 'note-1', 'reply_warnings': warnings})
+                self.assertTrue(all(key == attempts[0] for key in attempts))
+                self.assertFalse(list((home / 'state' / 'tinstar-ask-reply-receipts').glob('*.json')))
+
+    def test_post_warning_response_reaches_executable_inbox_over_http(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            (home / 'bin').mkdir()
+            receipt = {'id': 'note-1', 'request_id': 'tinstar-ask-request-1',
+                       'reply': {'id': 'note-1', 'body': 'Answer', 'cursor': '1'}}
+            receipts = {'schema': 'fm-inbox-receipts.v1', 'pending': [receipt], 'handled': [], 'omitted': []}
+            (home / 'receipts.json').write_text(json.dumps(receipts))
+            command = home / 'bin' / 'fm-inbox.sh'
+            command.write_text('#!' + sys.executable + '\n' + """import json,os,pathlib,sys
+home=pathlib.Path(os.environ['FM_HOME'])
+if sys.argv[1]=='receipts':
+    print((home/'receipts.json').read_text())
+else:
+    assert sys.argv[1:3]==['note','--request-id'] and sys.argv[4:]==['--json','-']
+    (home/'warning-note.txt').write_text(sys.stdin.read())
+    print(json.dumps({'saved':True,'request_id':sys.argv[3],'id':'warning-note'}))
+""")
+            command.chmod(0o700)
+            accepted = []
+            versions = []
+            warnings = [{'id': 'unsafe', 'reason': 'Action rejected'}]
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, *args):
+                    pass
+                def respond(self, data):
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'ok': True, 'data': data}).encode())
+                def do_GET(self):
+                    versions.append(self.headers.get('X-Tinstar-Puller-Version'))
+                    self.respond({'pending': [], 'tracked': [] if accepted else [{'request_id': 'request-1', 'note_id': 'note-1'}]})
+                def do_POST(self):
+                    accepted.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                    self.respond({'accepted': True, 'reply_warnings': warnings})
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                base = 'http://127.0.0.1:' + str(server.server_port)
+                self.assertEqual(puller.pull_once(base, 'private-token', home)['replied'], 1)
+                self.assertEqual(puller.pull_once(base, 'private-token', home)['replied'], 0)
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+            content = json.loads((home / 'warning-note.txt').read_text().splitlines()[1])
+            self.assertEqual(content['reply_warnings'], warnings)
+            self.assertEqual(versions, [puller.VERSION, puller.VERSION])
+            self.assertEqual(accepted, [{'request_id': 'request-1', 'reply': receipt['reply']}])
+
+    def test_http_sends_version_and_parses_upgrade_header_without_logging_body(self):
+        import urllib.error
+        from email.message import Message
+        headers = Message()
+        headers['X-Tinstar-Minimum-Puller-Version'] = '7.0.0'
+        error = urllib.error.HTTPError('https://example.test', 426, 'Upgrade', headers, io.BytesIO(b'private-token'))
+        with patch.object(puller.urllib.request, 'build_opener') as build:
+            build.return_value.open.side_effect = error
+            with self.assertRaises(puller.PullerError) as caught:
+                puller.api('https://example.test', 'private-token')
+            request = build.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_header('X-tinstar-puller-version'), puller.VERSION)
+        self.assertEqual(caught.exception.code, 'puller-upgrade-required')
+        self.assertEqual(caught.exception.minimum_version, '7.0.0')
+        self.assertNotIn('private-token', str(caught.exception))
+
     def test_redirect_cannot_forward_the_bearer(self):
         self.assertIsNone(puller.NoRedirect().redirect_request(None, None, 302, 'Found', {}, 'https://another.example.test'))
 

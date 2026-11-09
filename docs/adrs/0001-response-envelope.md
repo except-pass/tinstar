@@ -64,6 +64,12 @@ export type ErrorCode =
   | 'LIST_FAILED'           // a list/enumerate operation failed mid-flight
 ```
 
+The Ask bridge additionally uses `puller-upgrade-required` (HTTP 426), with
+`minimum_puller_version` and `contract_version` in error details and version
+headers. This fixed code lets an incompatible Mac adapter report an actionable
+upgrade instead of silently losing delivery. The lowercase wire spelling is
+part of the bridge contract.
+
 This list is **closed** — every error must map to one of these. New error categories need an ADR amendment. The TS string union enforces it at compile time.
 
 ALL_CAPS_WITH_UNDERSCORES matches the existing majority pattern in routes.ts; no renames needed for the 30+ sites that already use these names.

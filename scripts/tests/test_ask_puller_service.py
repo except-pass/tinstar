@@ -33,6 +33,11 @@ class ServiceTests(unittest.TestCase):
         self.agent = self.root / 'LaunchAgents' / (service.LABEL + '.plist')
         self.options = argparse.Namespace(url=None, home=None, token_key=None)
         service.write_json(self.root / 'ask-puller.json', self.settings)
+        # Existing poll/lifecycle cases isolate reconciliation from downloads;
+        # UpdateTests exercises the updater and cache separately below.
+        updater = patch.object(service, 'update_adapter', return_value=service.puller)
+        updater.start()
+        self.addCleanup(updater.stop)
 
     def health(self):
         return service.read_json(self.root / 'ask-puller-health.json')
@@ -308,6 +313,88 @@ else:
         result = subprocess.run([shutil.which('node'), str(package / 'bin' / 'ask-puller-postinstall.js')], env={**os.environ, 'PATH': '/nonexistent'}, text=True, capture_output=True)
         # node is already located by the caller; test with an absolute node path.
         self.assertEqual(result.returncode, 0)
+
+
+class UpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.settings = {'url': 'https://isolated.example.test'}
+        self.health = {}
+        self.source = "VERSION = '6.0.2'\nclass PullerError(Exception): pass\ndef pull_once(*args): return {'captured': 2, 'replied': 0, 'queued': 0}\n"
+        self.release = {'version': '6.0.2', 'bootstrap_api': 1, 'source': self.source,
+                        'sha256': service.hashlib.sha256(self.source.encode()).hexdigest()}
+
+    def update(self):
+        return service.update_adapter(self.root, self.settings, 'private-token', self.health)
+
+    def test_verified_update_atomic_cache_and_offline_fallback(self):
+        with patch.object(service.puller, 'api', return_value=self.release) as download:
+            adapter = self.update()
+            self.assertEqual(adapter.VERSION, '6.0.2')
+            self.assertEqual(adapter.pull_once()['captured'], 2)
+            download.assert_called_once_with(self.settings['url'], 'private-token', path='/api/ask/bridge/puller', timeout=5)
+        cache = self.root / 'ask-puller-release.json'
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.health['puller_version'], '6.0.2')
+        before = cache.read_bytes()
+        with patch.object(service.puller, 'api', side_effect=service.puller.PullerError('private-token')):
+            self.assertEqual(self.update().VERSION, '6.0.2')
+        self.assertEqual(cache.read_bytes(), before)
+        self.assertEqual(self.health['last_update_error_class'], 'update-failed')
+        self.assertNotIn('private-token', json.dumps(self.health))
+
+    def test_digest_schema_syntax_and_download_failure_keep_current(self):
+        marker = self.root / 'unverified-code-ran'
+        unverified = "from pathlib import Path\nPath(" + repr(str(marker)) + ").touch()"
+        for release in ({**self.release, 'source': unverified},
+                        {**self.release, 'bootstrap_api': 2},
+                        {**self.release, 'source': 'invalid python !', 'sha256': service.hashlib.sha256(b'invalid python !').hexdigest()},
+                        {**self.release, 'version': '9.9.9'},
+                        {**self.release, 'source': 'raise RuntimeError()', 'sha256': service.hashlib.sha256(b'raise RuntimeError()').hexdigest()}):
+            with self.subTest(release=release), patch.object(service.puller, 'api', return_value=release):
+                self.assertIs(self.update(), service.puller)
+                self.assertFalse((self.root / 'ask-puller-release.json').exists())
+        self.assertFalse(marker.exists())
+        with patch.object(service.puller, 'api', side_effect=TimeoutError('private-token')):
+            self.assertIs(self.update(), service.puller)
+
+    def test_failed_swap_retains_previous_cached_release(self):
+        with patch.object(service.puller, 'api', return_value=self.release):
+            self.update()
+        before = (self.root / 'ask-puller-release.json').read_bytes()
+        newer = self.source.replace('6.0.2', '6.0.3')
+        release = {**self.release, 'version': '6.0.3', 'source': newer, 'sha256': service.hashlib.sha256(newer.encode()).hexdigest()}
+        with patch.object(service.puller, 'api', return_value=release), patch.object(service, 'write_json', side_effect=OSError()):
+            self.assertEqual(self.update().VERSION, '6.0.2')
+        self.assertEqual((self.root / 'ask-puller-release.json').read_bytes(), before)
+
+    def test_corrupt_cache_recovers_and_http_cannot_download_code(self):
+        cache = self.root / 'ask-puller-release.json'
+        service.write_json(cache, {**self.release, 'source': 'corrupt', 'origin': self.settings['url']})
+        with patch.object(service.puller, 'api', return_value=self.release):
+            self.assertEqual(self.update().VERSION, '6.0.2')
+        self.settings['url'] = 'http://example.test'
+        with patch.object(service.puller, 'api') as download:
+            self.assertIs(self.update(), service.puller)
+            download.assert_not_called()
+
+    def test_upgrade_required_in_status_survives_failed_update(self):
+        home = self.root / 'home'
+        settings = {**self.settings, 'home': str(home), 'enabled': True, 'token_key': 'isolated.ask', 'clavis': '/isolated/clavis'}
+        service.write_json(self.root / 'ask-puller.json', settings)
+        error = service.puller.PullerError('Upgrade', 'puller-upgrade-required', '7.0.0')
+        with patch.object(service.puller, 'api', side_effect=error), patch.object(service.puller, 'read_token', return_value='private-token'):
+            self.assertEqual(service.tick(self.root, now=100), 'error')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            service.manage('status', self.root, argparse.Namespace())
+        status = json.loads(output.getvalue())
+        self.assertEqual(status['health']['last_error_class'], 'puller-upgrade-required')
+        self.assertEqual(status['health']['minimum_puller_version'], '7.0.0')
+        self.assertIn('minimum puller 7.0.0', status['next_action'])
+        self.assertNotIn('private-token', output.getvalue())
 
 
 if __name__ == '__main__':
