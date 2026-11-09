@@ -9,6 +9,24 @@ on:
   pull_request:
 
 jobs:
+  published-puller-contract:
+    name: Published Mac puller contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build PR server
+        run: npm run build:server
+      - name: Verify published puller version, digest and owner round trip
+        # Fixture and stubs are local; no clavis, First Mate, or external APIs.
+        run: npm run test:published-puller
+
   typecheck-and-test:
     # noble, not jammy: jammy's archive ttyd is 1.6.3, which predates the `-H`
     # auth-header flag entirely and sits below TTYD_MIN_VERSION. The live proofs

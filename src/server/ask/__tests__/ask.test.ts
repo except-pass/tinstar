@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
+import { publishedPullerContract } from '../../../../test-fixtures/published-puller/contract'
 import type { AskArtifactSources } from '../artifacts'
 import { releaseAssociations } from '../../../shared/releases'
 import type { PullsRead } from '../../../shared/pulls'
@@ -89,62 +90,14 @@ describe('6.0.0 bridge content compatibility', () => {
     expect((await bridge({ request_id: id, reply: { ...reply, cursor: '000000000002' } })).status).toBe(409)
   })
 
-  it('runs the published 6.0.0 puller through GET work and POST note, reply and error over HTTP', async () => {
+  it('runs the published puller through GET work and POST note, reply and error over HTTP', async () => {
     const { call, bridge, base, reload } = await setup()
-    const questions = ['Malformed structured answer', 'Independent answer', 'Capture failure', 'Wake failure']
-    const ids: string[] = []
-    for (const question of questions) ids.push((await call('requests', { ...input(), question })).data.data.request_id)
-    const home = join(root, 'published-puller-home')
-    await mkdir(join(home, 'bin'), { recursive: true })
-    const script = join(home, 'bin', 'fm-inbox.sh')
-    await writeFile(script, `#!/usr/bin/env python3
-import json, os, pathlib, sys
-home = pathlib.Path(os.environ['FM_HOME'])
-path = home / 'notes.json'
-notes = json.loads(path.read_text()) if path.exists() else []
-if sys.argv[1] == 'note':
-    request = sys.argv[sys.argv.index('--request-id') + 1]
-    content = json.loads(sys.stdin.read().splitlines()[1])
-    question = content['question']
-    if question == 'Capture failure':
-        sys.exit(1)
-    note_id = 'published-' + content['request_id']
-    body = 'Independent reply survives an unrelated malformed answer'
-    if question == 'Malformed structured answer':
-        body = json.dumps({'schema':'tinstar.ask-reply.v1','request_id':content['request_id'],
-            'summary':'Preserved answer','detail':'Preserved evidence',
-            'references':[{'label':'Evidence','url':'https://example.test'},{'label':'Unsafe','url':'javascript:alert(1)'}],
-            'suggested_actions':[{'id':'unsafe','label':'Run code','instruction':'eval(source)'}]})
-    reply = {'id':note_id,'at':'2026-11-09T16:31:00.000Z','body':body,'cursor':str(len(notes) + 1)}
-    notes.append({'id':note_id,'request_id':request,'reply':reply})
-    path.write_text(json.dumps(notes))
-    print(json.dumps({'schema':'fm-inbox-note.v1','outcome':'created','id':note_id,'request_id':request,
-        'saved':True,'announced':question != 'Wake failure','acknowledged':False}))
-    sys.exit(3 if question == 'Wake failure' else 0)
-elif sys.argv[1:] == ['receipts','--all-pending','--all-handled','--all-replies']:
-    print(json.dumps({'schema':'fm-inbox-receipts.v1','pending':notes,'handled':[],'omitted':[]}))
-else:
-    sys.exit(1)
-`)
-    await chmod(script, 0o700)
-    // Frozen released code, rather than today's scripts/ask-puller.py: the old
-    // client's envelope/read bounds and incomplete-pass behavior are the contract.
-    const driver = `import importlib.util,json,pathlib,sys
-s=importlib.util.spec_from_file_location('published',sys.argv[1])
-m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-print(json.dumps(m.pull_once(sys.argv[2],sys.argv[3],pathlib.Path(sys.argv[4]))))`
-    const run = () => exec('python3', ['-B', '-c', driver, resolve('test-fixtures/published-puller/6.0.0/ask-puller.py'), base, token, home])
-    const result = await run()
-    expect(JSON.parse(result.stdout)).toEqual({ captured: 3, replied: 3, failed: 1, queued: 1 })
-    reload()
-    const rows = (await call('requests')).data.data
-    expect(rows[0]).toMatchObject({ request_id: ids[0], status: 'answered', reply: { degraded: true,
-      summary: 'Preserved answer', detail: 'Preserved evidence', references: [{ label: 'Evidence', url: 'https://example.test' }], suggested_actions: [] } })
-    expect(rows[1]).toMatchObject({ request_id: ids[1], status: 'answered', reply: { detail: 'Independent reply survives an unrelated malformed answer' } })
-    expect(rows[2]).toMatchObject({ request_id: ids[2], status: 'failed', error: expect.any(String) })
-    expect(rows[3]).toMatchObject({ request_id: ids[3], status: 'answered', error: null })
-    expect((await bridge()).data.data).toEqual({ pending: [], tracked: [] })
-    expect(JSON.parse((await run()).stdout)).toEqual({ captured: 0, replied: 0, failed: 0, queued: 0 })
+    await publishedPullerContract({
+      root, base, token, reload,
+      create: async question => (await call('requests', { ...input(), question })).data.data.request_id,
+      list: async () => (await call('requests')).data.data,
+      work: async () => (await bridge()).data.data,
+    })
   })
 })
 

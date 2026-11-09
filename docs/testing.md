@@ -15,6 +15,12 @@ The test home and socket are created in a temporary directory and removed after 
 
 ## Unit tests (vitest)
 
+Every PR also runs the **Published Mac puller contract** job against the built
+standalone server. To reproduce it, run `npm run build:server` followed by
+`npm run test:published-puller`. It uses the released client, temporary state and
+stub commands, with no external services. See the [fixture notes](../test-fixtures/published-puller/README.md)
+for coverage and the fixture update required at each release.
+
 ```bash
 # Full suite
 npx vitest run --exclude='e2e/**'
