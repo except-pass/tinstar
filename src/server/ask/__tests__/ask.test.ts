@@ -48,6 +48,106 @@ async function setup(artifacts?: AskArtifactSources) {
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
 
+describe('6.0.0 bridge content compatibility', () => {
+  const action = { id: 'continue', label: 'Continue', instruction: 'Investigate the outage' }
+  const reference = { label: 'Evidence', url: 'https://example.test/evidence' }
+  const content = { summary: 'An answer', detail: 'The evidence is retained.', references: [reference], suggested_actions: [] }
+  it.each([
+    { suggested_actions: [{ ...action, instruction: 'Open https://example.test' }] },
+    { suggested_actions: [{ ...action, instruction: 'eval(source)' }] },
+    { suggested_actions: [{ ...action, instruction: 'First\nSecond' }] },
+    { suggested_actions: [{ ...action, id: 'invalid id' }] },
+    { suggested_actions: [{ ...action, label: 'x'.repeat(65) }] },
+    { suggested_actions: [action, action] },
+    { suggested_actions: Array.from({ length: 11 }, (_, index) => ({ ...action, id: `choice-${index}` })) },
+    { suggested_actions: [{ ...action, execute: true }] },
+    { suggested_actions: ['x'.repeat(2001)] },
+    { suggested_actions: null },
+    { references: [reference, { label: 'Unsafe', url: 'javascript:alert(1)' }, { url: 'https://example.test' }] },
+    { references: Array.from({ length: 21 }, () => reference) },
+    { references: 'invalid', summary: null, detail: { unexpected: true } },
+    { summary: '', detail: null },
+    { summary: 'x'.repeat(2001) },
+  ])('accepts and persists degraded content without creating invalid buttons: %j', async invalid => {
+    const { call, bridge, reload } = await setup()
+    const id = (await call('requests', input())).data.data.request_id
+    await bridge({ request_id: id, note: note(id) })
+    const reply = { id: 'note-1', at: new Date().toISOString(), cursor: '000000000001',
+      body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: id, ...content, ...invalid }) }
+    expect(await bridge({ request_id: id, reply })).toEqual({ status: 200, data: { ok: true, data: { accepted: true } } })
+    reload()
+    const saved = (await call('requests')).data.data[0]
+    expect(saved).toMatchObject({ status: 'answered', error: null, reply: { degraded: true } })
+    if (!('summary' in invalid)) expect(saved.reply.summary).toBe(content.summary)
+    if (!('detail' in invalid)) expect(saved.reply.detail).toBe(content.detail)
+    if (!('references' in invalid)) expect(saved.reply.references).toEqual([reference])
+    if (Array.isArray(invalid.references) && invalid.references.length === 3) expect(saved.reply.references).toEqual([reference])
+    expect(saved.reply.suggested_actions.every((value: unknown) => typeof value === 'string')).toBe(true)
+    expect((await call('selections', { answer_id: id, action_id: action.id, client_key: randomUUID() })).status).toBe(404)
+    expect((await bridge()).data.data.tracked).toEqual([])
+    expect((await bridge({ request_id: id, reply })).status).toBe(200)
+    expect((await bridge({ request_id: id, reply: { ...reply, cursor: '000000000002' } })).status).toBe(409)
+  })
+
+  it('runs the published 6.0.0 puller through GET work and POST note, reply and error over HTTP', async () => {
+    const { call, bridge, base, reload } = await setup()
+    const questions = ['Malformed structured answer', 'Independent answer', 'Capture failure', 'Wake failure']
+    const ids: string[] = []
+    for (const question of questions) ids.push((await call('requests', { ...input(), question })).data.data.request_id)
+    const home = join(root, 'published-puller-home')
+    await mkdir(join(home, 'bin'), { recursive: true })
+    const script = join(home, 'bin', 'fm-inbox.sh')
+    await writeFile(script, `#!/usr/bin/env python3
+import json, os, pathlib, sys
+home = pathlib.Path(os.environ['FM_HOME'])
+path = home / 'notes.json'
+notes = json.loads(path.read_text()) if path.exists() else []
+if sys.argv[1] == 'note':
+    request = sys.argv[sys.argv.index('--request-id') + 1]
+    content = json.loads(sys.stdin.read().splitlines()[1])
+    question = content['question']
+    if question == 'Capture failure':
+        sys.exit(1)
+    note_id = 'published-' + content['request_id']
+    body = 'Independent reply survives an unrelated malformed answer'
+    if question == 'Malformed structured answer':
+        body = json.dumps({'schema':'tinstar.ask-reply.v1','request_id':content['request_id'],
+            'summary':'Preserved answer','detail':'Preserved evidence',
+            'references':[{'label':'Evidence','url':'https://example.test'},{'label':'Unsafe','url':'javascript:alert(1)'}],
+            'suggested_actions':[{'id':'unsafe','label':'Run code','instruction':'eval(source)'}]})
+    reply = {'id':note_id,'at':'2026-11-09T16:31:00.000Z','body':body,'cursor':str(len(notes) + 1)}
+    notes.append({'id':note_id,'request_id':request,'reply':reply})
+    path.write_text(json.dumps(notes))
+    print(json.dumps({'schema':'fm-inbox-note.v1','outcome':'created','id':note_id,'request_id':request,
+        'saved':True,'announced':question != 'Wake failure','acknowledged':False}))
+    sys.exit(3 if question == 'Wake failure' else 0)
+elif sys.argv[1:] == ['receipts','--all-pending','--all-handled','--all-replies']:
+    print(json.dumps({'schema':'fm-inbox-receipts.v1','pending':notes,'handled':[],'omitted':[]}))
+else:
+    sys.exit(1)
+`)
+    await chmod(script, 0o700)
+    // Frozen released code, rather than today's scripts/ask-puller.py: the old
+    // client's envelope/read bounds and incomplete-pass behavior are the contract.
+    const driver = `import importlib.util,json,pathlib,sys
+s=importlib.util.spec_from_file_location('published',sys.argv[1])
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(json.dumps(m.pull_once(sys.argv[2],sys.argv[3],pathlib.Path(sys.argv[4]))))`
+    const run = () => exec('python3', ['-B', '-c', driver, resolve('test-fixtures/published-puller/6.0.0/ask-puller.py'), base, token, home])
+    const result = await run()
+    expect(JSON.parse(result.stdout)).toEqual({ captured: 3, replied: 3, failed: 1, queued: 1 })
+    reload()
+    const rows = (await call('requests')).data.data
+    expect(rows[0]).toMatchObject({ request_id: ids[0], status: 'answered', reply: { degraded: true,
+      summary: 'Preserved answer', detail: 'Preserved evidence', references: [{ label: 'Evidence', url: 'https://example.test' }], suggested_actions: [] } })
+    expect(rows[1]).toMatchObject({ request_id: ids[1], status: 'answered', reply: { detail: 'Independent reply survives an unrelated malformed answer' } })
+    expect(rows[2]).toMatchObject({ request_id: ids[2], status: 'failed', error: expect.any(String) })
+    expect(rows[3]).toMatchObject({ request_id: ids[3], status: 'answered', error: null })
+    expect((await bridge()).data.data).toEqual({ pending: [], tracked: [] })
+    expect(JSON.parse((await run()).stdout)).toEqual({ captured: 0, replied: 0, failed: 0, queued: 0 })
+  })
+})
+
 describe('authenticated recommendation selections over the existing Ask bridge', () => {
   const close: AskAction = { id: 'close-done', label: 'Close as Done', instruction: 'Post the #3194 Feed verdict and set the linked Notion card Done' }
   const keep: AskAction = { id: 'keep-open', label: 'Keep open', instruction: 'Retain card until a real DEV stall exhibits Feed recovery.' }
@@ -186,16 +286,24 @@ describe('authenticated recommendation selections over the existing Ask bridge',
   it.each([
     { ...close, instruction: 'Open https://evil.test' }, { ...close, instruction: 'eval(source)' },
     { ...close, execute: true }, { label: 'Missing ID', instruction: 'Close the card' },
-  ])('rejects malformed structured recommendations without breaking previously stored string history: %j', async invalid => {
+  ])('degrades malformed recommendations without creating selectable actions: %j', async invalid => {
     const { call, bridge, reload } = await setup()
     const first = (await call('requests', input())).data.data
     await bridge({ request_id: first.request_id, note: note(first.request_id) })
     const update = (suggested_actions: unknown[]) => bridge({ request_id: first.request_id, reply: { id: 'note-1', at: new Date().toISOString(), cursor: '1', body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: first.request_id, ...reply, suggested_actions }) } })
-    expect((await update([invalid])).status).toBe(400)
-    expect((await update([close, close])).status).toBe(400)
-    expect((await update(['Legacy https://example.test', '<script>alert(1)</script>'])).status).toBe(200)
+    expect((await update([invalid])).status).toBe(200)
     reload()
-    expect((await call('requests')).data.data[0].reply.suggested_actions).toEqual(['Legacy https://example.test', '<script>alert(1)</script>'])
+    expect((await call('requests')).data.data[0].reply).toMatchObject({ degraded: true, suggested_actions: [] })
+    expect((await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).status).toBe(404)
+  })
+
+  it('preserves legacy string suggestions as inert history', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    const suggestions = ['Legacy https://example.test', '<script>alert(1)</script>']
+    await answer(bridge, first.request_id, 'legacy-note', { ...reply, suggested_actions: suggestions })
+    reload()
+    expect((await call('requests')).data.data[0].reply.suggested_actions).toEqual(suggestions)
     expect((await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).status).toBe(404)
   })
 
