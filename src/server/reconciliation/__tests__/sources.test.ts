@@ -200,9 +200,13 @@ describe('fleet collection', () => {
     expect(result.data?.tasks.map(row => [row.identity.task_id, row.kind, row.identity.spawn_gen])).toEqual([
       ['worker', null, 'attempt-1'],
       ['catalog', 'secondmate', null],
-      ['cmsh', null, null],
-      ['kdf', null, ''],
+      ['cmsh', 'secondmate', null],
+      ['kdf', 'secondmate', ''],
     ])
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const scene = reconcileScene(await sources.snapshot(), Date.parse(timestamp))
+    expect(scene.counts.workers).toBe(1)
+    expect(scene.executions.filter(row => row.kind === 'secondmate').map(row => row.identity.task_id)).toEqual(['catalog', 'cmsh', 'kdf'])
   })
 
   it('stays partial when a normal task row lacks a spawn generation', async () => {

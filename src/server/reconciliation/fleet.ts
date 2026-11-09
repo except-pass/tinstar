@@ -59,10 +59,12 @@ export function fleetObservation(source: FleetSource) {
         ledger = { bytes: info.size, modifiedAt: info.mtime.toISOString() }
       } catch { /* optional change signal; not execution history */ }
     }
+    const mates = secondMateIds(snapshot)
     const tasks = snapshot.tasks.map(task => ({
       ...queueSignals(task),
       ...collectedDispatch(record(task.backlog), 'task.backlog.body_lines'),
       ...fields(task, ['id', 'kind', 'harness', 'model', 'branch', 'project', 'spawn_gen', 'backend']),
+      kind: secondMateRow(task, mates) ? 'secondmate' : fields(task, ['kind']).kind,
       remote: task.remote ? fields(task.remote, ['host', 'root']) : null,
       // Identity uses a tuple, never delimiter concatenation or array position.
       identity: { fm_home: source.home, task_id: text(task.id), spawn_gen: text(task.spawn_gen) },
@@ -76,8 +78,7 @@ export function fleetObservation(source: FleetSource) {
       backlog: { ...fields(task.backlog, ['id', 'title', 'state', 'hold_reason', 'blocked_by', 'hold_until']), ...readinessFields(task.backlog) },
     }))
     const backlog = snapshot.backlog?.records
-    const mates = secondMateIds(snapshot)
-    const spawned = tasks.filter((_, index) => !secondMateRow(snapshot.tasks[index], mates))
+    const spawned = tasks.filter(task => task.kind !== 'secondmate')
     // Duplicate backlog IDs can hide contradictory dispatch notes behind a first-match join.
     // Second-mate rows stay in the snapshot and do not count against task-link completeness.
     const complete = Array.isArray(backlog) && snapshot.backlog?.present === true &&
