@@ -448,6 +448,8 @@ it('forces a source read past its TTL while coalescing concurrent manual refresh
 })
 
 it('retains missing cards on an incomplete Notion read while accepting changed status, then removes them on a complete read', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(timestamp))
   let generation = 0
   const other = { ...page, id: '30950ce6d42280d3a541cbd66c274f6a' }
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
@@ -462,29 +464,56 @@ it('retains missing cards on an incomplete Notion read while accepting changed s
   const initial = await cache.get()
   expect(initial.coverage).toBe('complete')
   generation++
+  vi.setSystemTime(Date.parse(timestamp) + 30_000)
   const partial = await cache.get(true)
-  expect(partial).toMatchObject({ status: 'partial', coverage: 'partial' })
+  expect(partial).toMatchObject({ status: 'stale', coverage: 'partial', observedAt: initial.observedAt, expiresAt: initial.expiresAt })
   expect(partial.data!.cards).toHaveLength(2)
   expect(partial.data!.cards.find(card => card.id === initial.data!.cards[0]!.id)!.properties.Status!.value).toBe('Done')
+  vi.setSystemTime(Date.parse(timestamp) + 60_000)
+  const repeated = await cache.get(true)
+  expect(repeated).toMatchObject({ status: 'stale', observedAt: initial.observedAt, expiresAt: initial.expiresAt })
+  expect(repeated.data!.cards).toHaveLength(2)
   generation++
-  expect((await cache.get(true)).data!.cards.map(card => card.id)).toEqual([other.id])
+  const recovered = await cache.get(true)
+  expect(recovered.status).toBe('fresh')
+  expect(recovered.observedAt).not.toBe(initial.observedAt)
+  expect(recovered.data!.cards.map(card => card.id)).toEqual([other.id])
 })
 
 it('retains workers omitted by a partial home publication and accepts a complete removal', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(timestamp))
   const dir = await temp(), file = join(dir, 'fleet.json')
-  const initial = snapshot()
+  const initial = { ...snapshot(), backlog: { records: [{ id: 'retained-wait', state: 'waiting' }] } }
+  initial.tasks[0]!.current_state.state = 'running'
   initial.generated = new Date().toISOString()
   initial.tasks.push({ ...initial.tasks[0]!, id: 'other-task' })
   await writeFile(file, JSON.stringify(initial))
   const cache = fleetObservation({ home: '/farm/hulk', snapshotFile: file })
-  expect((await cache.get()).data!.tasks).toHaveLength(2)
-  const next = { ...initial, tasks: [initial.tasks[0]!], main_inventory: { valid: false } }
+  const first = await cache.get()
+  expect(first.data!.tasks).toHaveLength(2)
+  vi.setSystemTime(Date.parse(timestamp) + 30_000)
+  const next = { ...initial, generated: new Date().toISOString(), tasks: [], backlog: { records: [] }, main_inventory: { valid: false } }
   await writeFile(file, JSON.stringify(next))
   const partial = await cache.get(true)
-  expect(partial.coverage).toBe('partial')
+  expect(partial).toMatchObject({ status: 'stale', coverage: 'partial', observedAt: first.observedAt, expiresAt: first.expiresAt })
   expect(partial.data!.tasks).toHaveLength(2)
+  expect(partial.data!.backlog).toHaveLength(1)
+  vi.setSystemTime(Date.parse(timestamp) + 60_000)
+  await writeFile(file, JSON.stringify({ ...next, generated: new Date().toISOString() }))
+  const repeated = await cache.get(true)
+  expect(repeated).toMatchObject({ status: 'stale', observedAt: first.observedAt, expiresAt: first.expiresAt })
+  expect(repeated.data!.tasks).toHaveLength(2)
+  expect(repeated.data!.backlog).toHaveLength(1)
+  const empty = await new ReconciliationSources({ fleet: [], warnings: [] }).snapshot()
+  const scene = reconcileScene({ ...empty, fleet: [{ source: { home: '/farm/hulk', machineBasis: 'unknown' }, observation: repeated }] })
+  expect(scene.executions).toHaveLength(2)
+  expect(scene.executions.every(worker => worker.liveness === 'liveness-not-observed' && worker.observation.status === 'stale')).toBe(true)
   await writeFile(file, JSON.stringify({ ...next, main_inventory: { valid: true } }))
-  expect((await cache.get(true)).data!.tasks).toHaveLength(1)
+  const recovered = await cache.get(true)
+  expect(recovered.status).toBe('fresh')
+  expect(recovered.data!.tasks).toHaveLength(0)
+  expect(recovered.data!.backlog).toHaveLength(0)
 })
 
 it('routes a manual refresh through the existing scene endpoint', async () => {

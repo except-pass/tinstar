@@ -41,9 +41,13 @@ export class CachedObservation<T> {
       const result = await this.read()
       const observed = Date.parse(result.observedAt)
       if (!Number.isFinite(observed) || observed > this.now() + 60_000) throw new Error('invalid source timestamp')
+      const previous = this.cached
+      const merged = result.coverage === 'partial' && previous?.data != null && !!this.mergePartial
       this.cached = {
-        ...result, data: result.coverage === 'partial' && this.cached?.data && this.mergePartial ? this.mergePartial(this.cached.data, result.data) : result.data, status: result.coverage === 'complete' ? 'fresh' : 'partial',
-        attemptedAt, expiresAt: new Date(observed + this.maxAgeMs).toISOString(), error: null,
+        ...result, data: merged ? this.mergePartial!(previous.data!, result.data) : result.data,
+        status: merged ? 'stale' : result.coverage === 'complete' ? 'fresh' : 'partial',
+        observedAt: merged ? previous.observedAt : result.observedAt,
+        attemptedAt, expiresAt: merged ? previous.expiresAt : new Date(observed + this.maxAgeMs).toISOString(), error: null,
       }
     } catch {
       // Never turn a failed read into a successful empty collection, or leak
