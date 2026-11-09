@@ -20,6 +20,25 @@ const selected = () => document.querySelector<HTMLButtonElement>('.ov-pattern-se
 const state = () => JSON.parse(screen.getByTestId('view').textContent!) as PresentationState
 
 describe('Pattern Dial', () => {
+  it('keeps keyboard navigation on the listbox and selects its active option', () => {
+    mount({ ...initialPresentation(), search: { ...emptySearch(), patterns: ['blocked'] } })
+    fireEvent.keyDown(selected(), { key: 'Enter' })
+    const list = screen.getByRole('listbox')
+    expect(list).toHaveFocus()
+    for (const option of screen.getAllByRole('option')) expect(option.tabIndex).toBe(-1)
+    for (const [key, pattern] of [
+      ['ArrowDown', 'decision'], ['ArrowRight', 'unstaffed'],
+      ['ArrowUp', 'decision'], ['ArrowLeft', 'blocked'], ['ArrowUp', 'stalled'],
+    ]) {
+      fireEvent.keyDown(list, { key })
+      expect(list).toHaveFocus()
+      expect(list).toHaveAttribute('aria-activedescendant', `ov-pattern-option-${pattern}`)
+    }
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(state().search?.patterns).toEqual(['stalled'])
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(selected()).toHaveFocus()
+  })
   it('steps circularly with one click or arrow, and All removes only the pattern', () => {
     const saved = { ...initialPresentation(), donutFilter: { cards: ['In Progress'], workers: ['Running'] }, search: { query: 'release', facets: [{ field: 'machine' as const, value: 'Hulk' }], patterns: ['stalled' as const] } }
     mount(saved)
